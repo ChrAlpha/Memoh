@@ -87,6 +87,31 @@ Memoh Bot can distinguish and remember requests from multiple humans and bots, w
 - 🖥️ **Web UI**: Modern dashboard (Vue 3 + Tailwind CSS) with real-time streaming chat, tool call visualization, in-chat file manager, container filesystem browser, and visual configuration for all settings. Dark/light theme, i18n.
 - 🚀 **One-Click Deploy**: Docker Compose with automatic migration, containerd setup, and CNI networking. Interactive install script included.
 
+## Gallery
+
+<table>
+  <tr>
+    <td><img src="./assets/gallery/01.png" alt="Gallery 1" width="100%"></td>
+    <td><img src="./assets/gallery/02.png" alt="Gallery 2" width="100%"></td>
+    <td><img src="./assets/gallery/03.png" alt="Gallery 3" width="100%"></td>
+  </tr>
+  <tr>
+    <td><strong text-align="center">Chat with Bots</strong></td>
+    <td><strong text-align="center">Container & Bot Management</strong></td>
+    <td><strong text-align="center">Provider & Model Configuration</strong></td>
+  </tr>
+  <tr>
+    <td><img src="./assets/gallery/04.png" alt="Gallery 4" width="100%"></td>
+    <td><img src="./assets/gallery/05.png" alt="Gallery 5" width="100%"></td>
+    <td><img src="./assets/gallery/06.png" alt="Gallery 6" width="100%"></td>
+  </tr>
+  <tr>
+    <td><strong text-align="center">Container File Manager</strong></td>
+    <td><strong text-align="center">Scheduled Tasks</strong></td>
+    <td><strong text-align="center">Token Usage Tracking</strong></td>
+  </tr>
+</table>
+
 ## Tech Stack
 
 | Layer | Stack |
