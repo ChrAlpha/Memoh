@@ -487,6 +487,7 @@
       "heartbeatModelPlaceholder": "Use chat model (default)",
       "allowGuest": "Allow Guest Access",
       "allowGuestPersonalHint": "Personal bots do not support guest access. Use a public bot instead.",
+      "loopDetectionTitle": "Detect and auto-block output loops",
       "searchModel": "Search models…",
       "noModel": "No models available",
       "saveSuccess": "Settings saved",
