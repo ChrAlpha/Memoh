@@ -1,7 +1,6 @@
 package command
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -91,5 +90,5 @@ func buildPermString(read, write, del bool) string {
 	if len(parts) == 0 {
 		return "none"
 	}
-	return fmt.Sprintf("%s", strings.Join(parts, ", "))
+	return strings.Join(parts, ", ")
 }

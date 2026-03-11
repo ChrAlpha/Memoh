@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/memohai/memoh/internal/schedule"
@@ -45,7 +46,7 @@ func (h *Handler) buildScheduleGroup() *CommandGroup {
 			}
 			maxCalls := "unlimited"
 			if item.MaxCalls != nil {
-				maxCalls = fmt.Sprintf("%d", *item.MaxCalls)
+				maxCalls = strconv.Itoa(*item.MaxCalls)
 			}
 			return formatKV([]kv{
 				{"Name", item.Name},
@@ -54,7 +55,7 @@ func (h *Handler) buildScheduleGroup() *CommandGroup {
 				{"Command", item.Command},
 				{"Enabled", boolStr(item.Enabled)},
 				{"Max Calls", maxCalls},
-				{"Current Calls", fmt.Sprintf("%d", item.CurrentCalls)},
+				{"Current Calls", strconv.Itoa(item.CurrentCalls)},
 				{"Created", item.CreatedAt.Format("2006-01-02 15:04:05")},
 				{"Updated", item.UpdatedAt.Format("2006-01-02 15:04:05")},
 			}), nil

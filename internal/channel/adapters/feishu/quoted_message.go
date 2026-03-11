@@ -57,7 +57,7 @@ func (a *FeishuAdapter) enrichQuotedMessage(ctx context.Context, cfg channel.Cha
 			a.logger.Debug("feishu quoted message fetch empty",
 				slog.String("parent_id", parentID),
 				slog.Int("code", code),
-				slog.String("msg", respMsg),
+				slog.String("response_msg", respMsg),
 			)
 		}
 		return

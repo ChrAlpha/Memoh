@@ -13,7 +13,7 @@ type ParsedCommand struct {
 }
 
 // Parse parses a raw command string into its components.
-// Expected format: /resource [action] [args...]
+// Expected format: /resource [action] [args...].
 func Parse(text string) (ParsedCommand, error) {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "/") {

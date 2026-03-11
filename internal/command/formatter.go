@@ -11,13 +11,13 @@ import (
 //
 // Example output:
 //
-//	- mybot
-//	  Description: A helpful assistant
-//	  ID: abc123
+//   - mybot
+//     Description: A helpful assistant
+//     ID: abc123
 //
-//	- another
-//	  Description: Something else
-//	  ID: def456
+//   - another
+//     Description: Something else
+//     ID: def456
 func formatItems(items [][]kv) string {
 	if len(items) == 0 {
 		return ""
@@ -42,8 +42,8 @@ func formatItems(items [][]kv) string {
 //
 // Example output:
 //
-//	- ID: abc123
-//	- Name: mybot
+//   - ID: abc123
+//   - Name: mybot
 func formatKV(pairs []kv) string {
 	var b strings.Builder
 	for _, p := range pairs {

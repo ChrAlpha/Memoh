@@ -29,10 +29,6 @@ type fakeSubagentService struct {
 	items []subagent.Subagent
 }
 
-func (f *fakeSubagentService) list() []subagent.Subagent {
-	return f.items
-}
-
 type fakeScheduleService struct {
 	items []schedule.Schedule
 }
@@ -325,7 +321,7 @@ func TestNewCommands_NilServices(t *testing.T) {
 	}
 }
 
-// suppress unused warnings
+// suppress unused warnings.
 var (
 	_ = fakeSubagentService{items: []subagent.Subagent{{ID: "1", Name: "test", CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
 	_ = fakeScheduleService{items: []schedule.Schedule{{ID: "1", Name: "test"}}}

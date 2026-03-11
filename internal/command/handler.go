@@ -49,17 +49,17 @@ type Handler struct {
 	mcpConnService  *mcp.ConnectionService
 	inboxService    *inbox.Service
 
-	modelsService    *models.Service
-	providersService *providers.Service
-	memProvService   *memprovider.Service
-	searchProvService *searchproviders.Service
-	browserCtxService *browsercontexts.Service
-	emailService      *emailpkg.Service
+	modelsService      *models.Service
+	providersService   *providers.Service
+	memProvService     *memprovider.Service
+	searchProvService  *searchproviders.Service
+	browserCtxService  *browsercontexts.Service
+	emailService       *emailpkg.Service
 	emailOutboxService *emailpkg.OutboxService
-	heartbeatService  *heartbeat.Service
-	queries           *dbsqlc.Queries
-	skillLoader       SkillLoader
-	containerFS       ContainerFS
+	heartbeatService   *heartbeat.Service
+	queries            *dbsqlc.Queries
+	skillLoader        SkillLoader
+	containerFS        ContainerFS
 
 	logger *slog.Logger
 }

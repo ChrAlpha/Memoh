@@ -19,6 +19,7 @@ import (
 	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/route"
+	"github.com/memohai/memoh/internal/command"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/conversation/flow"
 	"github.com/memohai/memoh/internal/inbox"
@@ -55,18 +56,19 @@ type mediaIngestor interface {
 
 // ChannelInboundProcessor routes channel inbound messages to the chat gateway.
 type ChannelInboundProcessor struct {
-	runner        flow.Runner
-	routeResolver RouteResolver
-	message       messagepkg.Writer
-	mediaService  mediaIngestor
-	reactor       channelReactor
-	inboxService  *inbox.Service
-	registry      *channel.Registry
-	logger        *slog.Logger
-	jwtSecret     string
-	tokenTTL      time.Duration
-	identity      *IdentityResolver
-	observer      channel.StreamObserver
+	runner         flow.Runner
+	routeResolver  RouteResolver
+	message        messagepkg.Writer
+	mediaService   mediaIngestor
+	reactor        channelReactor
+	inboxService   *inbox.Service
+	commandHandler *command.Handler
+	registry       *channel.Registry
+	logger         *slog.Logger
+	jwtSecret      string
+	tokenTTL       time.Duration
+	identity       *IdentityResolver
+	observer       channel.StreamObserver
 }
 
 // NewChannelInboundProcessor creates a processor with channel identity-based resolution.
@@ -146,6 +148,15 @@ func (p *ChannelInboundProcessor) SetInboxService(service *inbox.Service) {
 	p.inboxService = service
 }
 
+// SetCommandHandler configures the slash command handler for intercepting
+// /command messages before they reach the LLM.
+func (p *ChannelInboundProcessor) SetCommandHandler(handler *command.Handler) {
+	if p == nil {
+		return
+	}
+	p.commandHandler = handler
+}
+
 // HandleInbound processes an inbound channel message through identity resolution and chat gateway.
 func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel.ChannelConfig, msg channel.InboundMessage, sender channel.StreamReplySender) error {
 	if p.runner == nil {
@@ -195,6 +206,19 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	}
 
 	identity := state.Identity
+
+	// Intercept slash commands before they reach the LLM.
+	if p.commandHandler != nil && p.commandHandler.IsCommand(text) {
+		reply, err := p.commandHandler.Execute(ctx, strings.TrimSpace(identity.BotID), strings.TrimSpace(identity.ChannelIdentityID), text)
+		if err != nil {
+			reply = "Error: " + err.Error()
+		}
+		return sender.Send(ctx, channel.OutboundMessage{
+			Target:  strings.TrimSpace(msg.ReplyTarget),
+			Message: channel.Message{Text: reply},
+		})
+	}
+
 	resolvedAttachments := p.ingestInboundAttachments(ctx, cfg, msg, strings.TrimSpace(identity.BotID), msg.Message.Attachments)
 	attachments := mapChannelToChatAttachments(resolvedAttachments)
 	text = buildInboundQuery(msg.Message, attachments)
@@ -836,7 +860,6 @@ func buildChannelMessage(output conversation.AssistantOutput, capabilities chann
 	}
 	return msg
 }
-
 
 func contentPartHasValue(part conversation.ContentPart) bool {
 	if strings.TrimSpace(part.Text) != "" {

@@ -23,8 +23,8 @@ func (h *Handler) buildSettingsGroup() *CommandGroup {
 				{"Language", s.Language},
 				{"Allow Guest", boolStr(s.AllowGuest)},
 				{"Max Context Load Time", fmt.Sprintf("%d min", s.MaxContextLoadTime)},
-				{"Max Context Tokens", fmt.Sprintf("%d", s.MaxContextTokens)},
-				{"Max Inbox Items", fmt.Sprintf("%d", s.MaxInboxItems)},
+				{"Max Context Tokens", strconv.Itoa(s.MaxContextTokens)},
+				{"Max Inbox Items", strconv.Itoa(s.MaxInboxItems)},
 				{"Reasoning Enabled", boolStr(s.ReasoningEnabled)},
 				{"Reasoning Effort", s.ReasoningEffort},
 				{"Heartbeat Enabled", boolStr(s.HeartbeatEnabled)},
@@ -124,13 +124,6 @@ func settingsUpdateUsage() string {
 		"- --max_context_tokens <count>\n" +
 		"- --chat_model_id <id>\n" +
 		"- --heartbeat_model_id <id>"
-}
-
-func valueOrNone(s string) string {
-	if s == "" {
-		return "(none)"
-	}
-	return s
 }
 
 // resolveModelName resolves a model UUID to "model_name (provider_name)".
