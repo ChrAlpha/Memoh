@@ -403,10 +403,6 @@ func extractThreadID(msg channel.InboundMessage) string {
 	return ""
 }
 
-func isGroupConversationType(conversationType string) bool {
-	return channel.NormalizeConversationType(conversationType) != channel.ConversationTypePrivate
-}
-
 func (r *IdentityResolver) tryLinkConfiglessChannelIdentityToUser(ctx context.Context, msg channel.InboundMessage, channelIdentityID string) string {
 	if r.registry == nil || !r.registry.IsConfigless(msg.Channel) {
 		return ""

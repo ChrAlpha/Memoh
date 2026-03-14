@@ -25,7 +25,7 @@ type Service struct {
 
 var (
 	ErrModelIDAmbiguous = errors.New("model_id is ambiguous across providers")
-	ErrInvalidModelRef                   = errors.New("invalid model reference")
+	ErrInvalidModelRef  = errors.New("invalid model reference")
 )
 
 func NewService(log *slog.Logger, queries *sqlc.Queries, aclService *acl.Service) *Service {

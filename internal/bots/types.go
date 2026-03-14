@@ -75,7 +75,6 @@ type RuntimeChecker interface {
 	ListChecks(ctx context.Context, botID string) []BotCheck
 }
 
-
 const (
 	BotStatusCreating = "creating"
 	BotStatusReady    = "ready"
