@@ -75,7 +75,7 @@ func (*FeishuAdapter) lookupSenderProfile(ctx context.Context, cfg channel.Chann
 	if err != nil {
 		return feishuSenderProfile{}, err
 	}
-	client := lark.NewClient(feishuCfg.AppID, feishuCfg.AppSecret, lark.WithOpenBaseUrl(feishuCfg.openBaseURL()))
+	client := feishuCfg.newClient()
 
 	var lastErr error
 	chatID = strings.TrimSpace(chatID)
