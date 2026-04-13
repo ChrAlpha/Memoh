@@ -28,8 +28,8 @@ func TestParseFileFallbacks(t *testing.T) {
 func TestResolveSupportsDisabledFallbackAndShadowing(t *testing.T) {
 	items := []Entry{
 		{Name: "alpha", SourcePath: "/data/skills/alpha/SKILL.md", Managed: true, SourceKind: SourceKindManaged},
-		{Name: "alpha", SourcePath: "/data/.openclaw/skills/alpha/SKILL.md", SourceKind: SourceKindCompat},
-		{Name: "beta", SourcePath: "/data/.openclaw/skills/beta/SKILL.md", SourceKind: SourceKindCompat},
+		{Name: "alpha", SourcePath: "/data/.agents/skills/alpha/SKILL.md", SourceKind: SourceKindCompat},
+		{Name: "beta", SourcePath: "/data/.agents/skills/beta/SKILL.md", SourceKind: SourceKindCompat},
 	}
 
 	resolved := resolve(items, map[string]indexOverride{
@@ -43,14 +43,14 @@ func TestResolveSupportsDisabledFallbackAndShadowing(t *testing.T) {
 	if managedAlpha.State != StateDisabled {
 		t.Fatalf("managed alpha state = %q, want disabled", managedAlpha.State)
 	}
-	compatAlpha, ok := findBySourcePath(resolved, "/data/.openclaw/skills/alpha/SKILL.md")
+	compatAlpha, ok := findBySourcePath(resolved, "/data/.agents/skills/alpha/SKILL.md")
 	if !ok {
 		t.Fatalf("compat alpha not found in resolved items")
 	}
 	if compatAlpha.State != StateEffective {
 		t.Fatalf("compat alpha state = %q, want effective", compatAlpha.State)
 	}
-	beta, ok := findBySourcePath(resolved, "/data/.openclaw/skills/beta/SKILL.md")
+	beta, ok := findBySourcePath(resolved, "/data/.agents/skills/beta/SKILL.md")
 	if !ok {
 		t.Fatalf("beta not found in resolved items")
 	}
@@ -81,8 +81,8 @@ func TestListReadsFullRawContentAndWritesIndex(t *testing.T) {
 
 func TestApplyActionAdoptAndDisable(t *testing.T) {
 	client := newFakeClient()
-	externalPath := pathJoin("/data/.openclaw/skills", "alpha", "SKILL.md")
-	client.listings["/data/.openclaw/skills"] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
+	externalPath := pathJoin("/data/.agents/skills", "alpha", "SKILL.md")
+	client.listings["/data/.agents/skills"] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
 	client.files[externalPath] = "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha"
 
 	if err := ApplyAction(context.Background(), client, ActionRequest{
@@ -107,16 +107,41 @@ func TestApplyActionAdoptAndDisable(t *testing.T) {
 	}
 }
 
-func TestDiscoveryRootsStartWithManagedAndLegacy(t *testing.T) {
+func TestDiscoveryRootsMatchCurrentPolicy(t *testing.T) {
 	roots := DiscoveryRoots()
-	if len(roots) < 2 {
-		t.Fatalf("expected at least 2 discovery roots, got %d", len(roots))
+	want := []Root{
+		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
+		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
+		{Path: "/data/.agents/skills", Kind: SourceKindCompat, Managed: false},
+		{Path: "/root/.agents/skills", Kind: SourceKindCompat, Managed: false},
 	}
-	if roots[0].Path != ManagedDirPath || !roots[0].Managed {
-		t.Fatalf("first root = %+v, want managed %q", roots[0], ManagedDirPath)
+	if !slices.Equal(roots, want) {
+		t.Fatalf("DiscoveryRoots() = %+v, want %+v", roots, want)
 	}
-	if roots[1].Path != LegacyDirPath || roots[1].Managed {
-		t.Fatalf("second root = %+v, want legacy %q", roots[1], LegacyDirPath)
+}
+
+func TestListScansConfiguredDiscoveryRootsInOrder(t *testing.T) {
+	client := newFakeClient()
+	for _, root := range DiscoveryRoots() {
+		client.listings[root.Path] = nil
+	}
+	client.listings[ManagedDirPath] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
+	client.files[pathJoin(ManagedDirPath, "alpha", "SKILL.md")] = "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha"
+
+	items, err := List(context.Background(), client)
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+	if len(items) != 1 || items[0].SourceRoot != ManagedDirPath {
+		t.Fatalf("List() items = %+v, want managed alpha only", items)
+	}
+
+	wantCalls := make([]string, 0, len(DiscoveryRoots()))
+	for _, root := range DiscoveryRoots() {
+		wantCalls = append(wantCalls, root.Path)
+	}
+	if !slices.Equal(client.listCalls, wantCalls) {
+		t.Fatalf("ListDirAll calls = %+v, want %+v", client.listCalls, wantCalls)
 	}
 }
 
@@ -135,8 +160,9 @@ func TestContainerEnvUsesDataHomeAndXDGDirs(t *testing.T) {
 }
 
 type fakeClient struct {
-	listings map[string][]*pb.FileEntry
-	files    map[string]string
+	listings  map[string][]*pb.FileEntry
+	files     map[string]string
+	listCalls []string
 }
 
 func newFakeClient() *fakeClient {
@@ -147,6 +173,7 @@ func newFakeClient() *fakeClient {
 }
 
 func (f *fakeClient) ListDirAll(_ context.Context, p string, _ bool) ([]*pb.FileEntry, error) {
+	f.listCalls = append(f.listCalls, p)
 	items, ok := f.listings[p]
 	if !ok {
 		return nil, io.EOF

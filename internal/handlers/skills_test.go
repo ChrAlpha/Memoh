@@ -39,8 +39,8 @@ import (
 func TestListSkillsAPIReportsEffectiveShadowedAndSourceMetadata(t *testing.T) {
 	env := newSkillsTestEnv(t)
 	env.writeSkillFile(t, path.Join(skillset.ManagedDir(), "alpha", "SKILL.md"), managedSkillRaw("alpha", "Managed Alpha"))
-	env.writeSkillFile(t, path.Join("/data/.openclaw/skills", "alpha", "SKILL.md"), managedSkillRaw("alpha", "Compat Alpha"))
-	env.writeSkillFile(t, path.Join("/data/.openclaw/skills", "beta", "SKILL.md"), managedSkillRaw("beta", "Compat Beta"))
+	env.writeSkillFile(t, path.Join("/data/.agents/skills", "alpha", "SKILL.md"), managedSkillRaw("alpha", "Compat Alpha"))
+	env.writeSkillFile(t, path.Join("/data/.agents/skills", "beta", "SKILL.md"), managedSkillRaw("beta", "Compat Beta"))
 
 	rec, err := env.callJSON(t, http.MethodGet, "/bots/:bot_id/container/skills", nil, env.handler.ListSkills)
 	if err != nil {
@@ -69,7 +69,7 @@ func TestListSkillsAPIReportsEffectiveShadowedAndSourceMetadata(t *testing.T) {
 		t.Fatalf("managed alpha source_kind = %q, want %q", alphaManaged.SourceKind, skillset.SourceKindManaged)
 	}
 
-	alphaCompatPath := path.Join("/data/.openclaw/skills", "alpha", "SKILL.md")
+	alphaCompatPath := path.Join("/data/.agents/skills", "alpha", "SKILL.md")
 	alphaCompat := mustFindSkillByPath(t, resp.Skills, alphaCompatPath)
 	if alphaCompat.Managed {
 		t.Fatalf("compat alpha should not be managed: %+v", alphaCompat)
@@ -84,7 +84,7 @@ func TestListSkillsAPIReportsEffectiveShadowedAndSourceMetadata(t *testing.T) {
 		t.Fatalf("compat alpha source_kind = %q, want %q", alphaCompat.SourceKind, skillset.SourceKindCompat)
 	}
 
-	betaCompat := mustFindSkillByPath(t, resp.Skills, path.Join("/data/.openclaw/skills", "beta", "SKILL.md"))
+	betaCompat := mustFindSkillByPath(t, resp.Skills, path.Join("/data/.agents/skills", "beta", "SKILL.md"))
 	if betaCompat.State != skillset.StateEffective {
 		t.Fatalf("beta compat state = %q, want %q", betaCompat.State, skillset.StateEffective)
 	}
@@ -96,7 +96,7 @@ func TestListSkillsAPIReportsEffectiveShadowedAndSourceMetadata(t *testing.T) {
 
 func TestSkillsActionsAPIAdoptDisableEnableAndDeleteManaged(t *testing.T) {
 	env := newSkillsTestEnv(t)
-	externalPath := path.Join("/data/.openclaw/skills", "alpha", "SKILL.md")
+	externalPath := path.Join("/data/.agents/skills", "alpha", "SKILL.md")
 	managedPath := path.Join(skillset.ManagedDir(), "alpha", "SKILL.md")
 	env.writeSkillFile(t, externalPath, managedSkillRaw("alpha", "Compat Alpha"))
 
@@ -188,7 +188,7 @@ func TestSkillsActionsAPIAdoptDisableEnableAndDeleteManaged(t *testing.T) {
 
 func TestDeleteSkillsAPIRejectsExternalOnlySkill(t *testing.T) {
 	env := newSkillsTestEnv(t)
-	env.writeSkillFile(t, path.Join("/data/.openclaw/skills", "alpha", "SKILL.md"), managedSkillRaw("alpha", "Compat Alpha"))
+	env.writeSkillFile(t, path.Join("/data/.agents/skills", "alpha", "SKILL.md"), managedSkillRaw("alpha", "Compat Alpha"))
 
 	_, err := env.callJSON(t, http.MethodDelete, "/bots/:bot_id/container/skills", SkillsDeleteRequest{
 		Names: []string{"alpha"},
@@ -208,10 +208,10 @@ func TestDeleteSkillsAPIRejectsExternalOnlySkill(t *testing.T) {
 func TestLoadSkillsUsesEffectiveSetAndPromptReflectsOverrideFallback(t *testing.T) {
 	env := newSkillsTestEnv(t)
 	managedPath := path.Join(skillset.ManagedDir(), "alpha", "SKILL.md")
-	compatPath := path.Join("/data/.openclaw/skills", "alpha", "SKILL.md")
+	compatPath := path.Join("/data/.agents/skills", "alpha", "SKILL.md")
 	env.writeSkillFile(t, managedPath, managedSkillRaw("alpha", "Managed Alpha"))
 	env.writeSkillFile(t, compatPath, managedSkillRaw("alpha", "Compat Alpha"))
-	env.writeSkillFile(t, path.Join("/data/.openclaw/skills", "beta", "SKILL.md"), managedSkillRaw("beta", "Compat Beta"))
+	env.writeSkillFile(t, path.Join("/data/.agents/skills", "beta", "SKILL.md"), managedSkillRaw("beta", "Compat Beta"))
 
 	loaded, err := env.handler.LoadSkills(context.Background(), env.botID)
 	if err != nil {

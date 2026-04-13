@@ -115,14 +115,8 @@ func DiscoveryRoots() []Root {
 	return []Root{
 		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
 		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
-		{Path: path.Join(config.DefaultDataMount, ".agent", "skills"), Kind: SourceKindCompat, Managed: false},
 		{Path: path.Join(config.DefaultDataMount, ".agents", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join(config.DefaultDataMount, ".openclaw", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join(config.DefaultDataMount, ".claude", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join("/root", ".agent", "skills"), Kind: SourceKindCompat, Managed: false},
 		{Path: path.Join("/root", ".agents", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join("/root", ".openclaw", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join("/root", ".claude", "skills"), Kind: SourceKindCompat, Managed: false},
 	}
 }
 
