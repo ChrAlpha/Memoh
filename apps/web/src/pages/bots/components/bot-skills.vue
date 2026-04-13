@@ -158,26 +158,21 @@
             {{ skill.description || '-' }}
           </CardDescription>
         </CardHeader>
-        <CardContent class="pt-0 mt-auto space-y-2">
+        <CardContent class="pt-0 mt-auto space-y-1.5">
           <div class="flex flex-wrap items-center gap-1.5">
             <Badge
               variant="secondary"
-              class="text-[10px]"
+              size="sm"
+              class="rounded-full"
             >
               {{ skill.managed ? $t('bots.skills.managedBadge') : $t('bots.skills.discoveredBadge') }}
             </Badge>
             <Badge
               variant="outline"
-              class="text-[10px]"
+              size="sm"
+              class="rounded-full"
             >
               {{ stateLabel(skill.state) }}
-            </Badge>
-            <Badge
-              v-if="skill.source_kind && skill.source_kind !== 'managed'"
-              variant="outline"
-              class="text-[10px]"
-            >
-              {{ sourceKindLabel(skill.source_kind) }}
             </Badge>
           </div>
           <p
@@ -190,9 +185,9 @@
           <p
             v-if="skill.source_path"
             class="text-[11px] text-muted-foreground truncate"
-            :title="skill.source_path"
+            :title="sourceSummary(skill)"
           >
-            {{ skill.source_path }}
+            {{ sourceSummary(skill) }}
           </p>
         </CardContent>
       </Card>
@@ -344,6 +339,15 @@ function sourceKindLabel(kind?: string) {
     default:
       return t('bots.skills.managedBadge')
   }
+}
+
+function sourceSummary(skill: SkillItem) {
+  const sourcePath = skill.source_path || ''
+  if (!sourcePath) return ''
+  if (!skill.source_kind || skill.source_kind === 'managed') {
+    return sourcePath
+  }
+  return `${sourceKindLabel(skill.source_kind)} · ${sourcePath}`
 }
 
 function stateLabel(state?: string) {
