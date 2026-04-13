@@ -68,7 +68,7 @@
                 variant="ghost"
                 size="sm"
                 class="size-8 p-0"
-                :title="skill.managed === false ? $t('bots.skills.overrideTitle') : $t('common.edit')"
+                :title="!skill.managed ? $t('bots.skills.overrideTitle') : $t('common.edit')"
                 @click="handleEdit(skill)"
               >
                 <SquarePen
@@ -112,7 +112,7 @@
                 />
               </Button>
               <Button
-                v-if="skill.managed === false"
+                v-if="!skill.managed"
                 variant="ghost"
                 size="sm"
                 class="size-8 p-0"
