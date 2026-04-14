@@ -175,7 +175,11 @@ func assertInjectedReadMediaMessage(t *testing.T, msg sdk.Message, expectedImage
 func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 	t.Parallel()
 
-	pngBytes := []byte("\x89PNG\r\n\x1a\npayload")
+	// The PNG data must contain a null byte (\x00) so that the execRead
+	// binary probe (bytes.IndexByte(probe, 0)) detects it as binary and
+	// delegates to ReadImageFromContainer. Real PNG files always contain
+	// null bytes in their IHDR and other chunks.
+	pngBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00payload")
 	expectedDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
 
 	modelProvider := &agentReadMediaMockProvider{
@@ -256,7 +260,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		agenttools.NewContainerProvider(nil, bp, "/data"),
+		agenttools.NewContainerProvider(nil, bp, nil, "/data"),
 	})
 
 	result, err := a.Generate(context.Background(), RunConfig{
@@ -289,7 +293,7 @@ func TestAgentGenerateReadMediaInjectsImageIntoNextStep(t *testing.T) {
 func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.T) {
 	t.Parallel()
 
-	pngBytes := []byte("\x89PNG\r\n\x1a\npayload")
+	pngBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00payload")
 	expectedBase64 := base64.StdEncoding.EncodeToString(pngBytes)
 
 	modelProvider := &agentReadMediaMockProvider{
@@ -336,7 +340,7 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		agenttools.NewContainerProvider(nil, bp, "/data"),
+		agenttools.NewContainerProvider(nil, bp, nil, "/data"),
 	})
 
 	_, err := a.Generate(context.Background(), RunConfig{
@@ -356,7 +360,7 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.T) {
 	t.Parallel()
 
-	pngBytes := []byte("\x89PNG\r\n\x1a\npayload")
+	pngBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00payload")
 	expectedDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
 
 	modelProvider := &agentReadMediaMockProvider{
@@ -386,7 +390,7 @@ func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.
 
 	a := New(Deps{})
 	a.SetToolProviders([]agenttools.ToolProvider{
-		agenttools.NewContainerProvider(nil, bp, "/data"),
+		agenttools.NewContainerProvider(nil, bp, nil, "/data"),
 	})
 
 	var terminal StreamEvent

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/agent/background"
 )
 
 // SessionContext carries request-scoped identity and routing information.
@@ -70,6 +72,18 @@ type RunConfig struct {
 	Identity           SessionContext
 	Skills             []SkillEntry
 	LoopDetection      LoopDetectionConfig
+	Retry              RetryConfig
+
+	// MidTaskPruneThreshold is the minimum number of messages before mid-task
+	// pruning kicks in. When the accumulated message count reaches this
+	// threshold, older tool-result pairs are pruned to keep the context
+	// within budget. Defaults to MidTaskPruneThresholdDefault (20).
+	MidTaskPruneThreshold int
+
+	// MidTaskPruneKeepSteps is the number of recent tool-call cycles to
+	// preserve when mid-task pruning is triggered. Defaults to
+	// MidTaskPruneKeepStepsDefault (4).
+	MidTaskPruneKeepSteps int
 
 	// InjectCh receives user messages to inject between tool rounds.
 	// When non-nil, a PrepareStep hook drains this channel and appends
@@ -81,6 +95,12 @@ type RunConfig struct {
 	// output messages that preceded the injection. Used by the resolver
 	// to interleave injected messages at the correct position in storeRound.
 	InjectedRecorder func(headerifiedText string, insertAfter int)
+
+	// BackgroundManager provides access to the background task system.
+	// When non-nil, the agent loop drains pending notifications at step
+	// boundaries and injects them as user messages so the model learns
+	// about completed background work.
+	BackgroundManager *background.Manager
 }
 
 // GenerateResult holds the result of a non-streaming agent invocation.

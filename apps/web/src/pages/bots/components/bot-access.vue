@@ -63,7 +63,7 @@
     </section>
 
     <!-- Rules -->
-    <section class="rounded-lg border border-border bg-card p-4 space-y-4">
+    <section class="rounded-lg border border-border bg-card p-4 [&>:nth-of-type(n+2)]:mt-4">
       <div class="flex items-center justify-between">
         <div>
           <h3 class="text-sm font-semibold text-foreground">
@@ -83,7 +83,6 @@
           {{ $t('bots.access.addRule') }}
         </Button>
       </div>
-
       <div
         v-if="isLoadingRules"
         class="flex justify-center py-8"
@@ -93,6 +92,7 @@
       <Empty
         v-else-if="rules.length === 0"
         :title="$t('bots.access.rulesEmpty')"
+        class="empty:hidden"
         :description="$t('bots.access.rulesEmptyDescription')"
       />
       <div
@@ -833,7 +833,7 @@ function onConversationSourceChange(routeId: string) {
 
 // ---- default effect ----
 
-const defaultEffectDraft = ref('deny')
+const defaultEffectDraft = ref('allow')
 const isSavingDefaultEffect = ref(false)
 
 watch(defaultEffectData, (data) => {
@@ -843,7 +843,7 @@ watch(defaultEffectData, (data) => {
 }, { immediate: true })
 
 const hasDefaultEffectChanges = computed(
-  () => defaultEffectDraft.value !== (defaultEffectData.value?.default_effect ?? 'deny'),
+  () => defaultEffectDraft.value !== (defaultEffectData.value?.default_effect ?? 'allow'),
 )
 
 async function handleSaveDefaultEffect() {

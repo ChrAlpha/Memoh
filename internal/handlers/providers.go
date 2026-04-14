@@ -9,7 +9,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/providers"
 )
 
@@ -272,7 +274,12 @@ func (h *ProvidersHandler) Test(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
 	}
 
-	resp, err := h.service.Test(c.Request().Context(), id)
+	ctx := c.Request().Context()
+	if userID, err := auth.UserIDFromContext(c); err == nil {
+		ctx = oauthctx.WithUserID(ctx, userID)
+	}
+
+	resp, err := h.service.Test(ctx, id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid") {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -301,7 +308,20 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
 	}
 
-	remoteModels, err := h.service.FetchRemoteModels(c.Request().Context(), id)
+	ctx := c.Request().Context()
+	if userID, err := auth.UserIDFromContext(c); err == nil {
+		ctx = oauthctx.WithUserID(ctx, userID)
+	}
+
+	provider, err := h.service.Get(ctx, id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("provider not found: %v", err))
+	}
+	if !models.IsLLMClientType(models.ClientType(provider.ClientType)) {
+		return echo.NewHTTPError(http.StatusBadRequest, "import models is not supported for speech providers")
+	}
+
+	remoteModels, err := h.service.FetchRemoteModels(ctx, id)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("fetch remote models: %v", err))
 	}

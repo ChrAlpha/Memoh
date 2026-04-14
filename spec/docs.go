@@ -4447,6 +4447,51 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/compact": {
+            "post": {
+                "description": "Run context compaction synchronously for a session",
+                "tags": [
+                    "compaction"
+                ],
+                "summary": "Trigger immediate context compaction",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.TriggerCompactResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/status": {
             "get": {
                 "description": "Get aggregated info for a chat session including message count, context usage, cache stats, and used skills",
@@ -7439,10 +7484,44 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/providers.OAuthAuthorizeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/providers/{id}/oauth/poll": {
+            "post": {
+                "tags": [
+                    "providers-oauth"
+                ],
+                "summary": "Poll OAuth device authorization for an LLM provider",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.OAuthStatus"
                         }
                     },
                     "400": {
@@ -9510,6 +9589,9 @@ const docTemplate = `{
         "bots.CreateBotRequest": {
             "type": "object",
             "properties": {
+                "acl_preset": {
+                    "type": "string"
+                },
                 "avatar_url": {
                     "type": "string"
                 },
@@ -11401,6 +11483,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.TriggerCompactResponse": {
+            "type": "object",
+            "properties": {
+                "message_count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.createSessionRequest": {
             "type": "object",
             "properties": {
@@ -12237,14 +12333,77 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.OAuthAccount": {
+            "type": "object",
+            "properties": {
+                "avatar_url": {
+                    "type": "string"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "login": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "profile_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.OAuthAuthorizeResponse": {
+            "type": "object",
+            "properties": {
+                "auth_url": {
+                    "type": "string"
+                },
+                "device": {
+                    "$ref": "#/definitions/providers.OAuthDeviceStatus"
+                },
+                "mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.OAuthDeviceStatus": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "pending": {
+                    "type": "boolean"
+                },
+                "user_code": {
+                    "type": "string"
+                },
+                "verification_uri": {
+                    "type": "string"
+                }
+            }
+        },
         "providers.OAuthStatus": {
             "type": "object",
             "properties": {
+                "account": {
+                    "$ref": "#/definitions/providers.OAuthAccount"
+                },
                 "callback_url": {
                     "type": "string"
                 },
                 "configured": {
                     "type": "boolean"
+                },
+                "device": {
+                    "$ref": "#/definitions/providers.OAuthDeviceStatus"
                 },
                 "expired": {
                     "type": "boolean"
@@ -12254,6 +12413,9 @@ const docTemplate = `{
                 },
                 "has_token": {
                     "type": "boolean"
+                },
+                "mode": {
+                    "type": "string"
                 }
             }
         },
@@ -12677,6 +12839,9 @@ const docTemplate = `{
                 "memory_provider_id": {
                     "type": "string"
                 },
+                "persist_full_tool_results": {
+                    "type": "boolean"
+                },
                 "reasoning_effort": {
                     "type": "string"
                 },
@@ -12684,6 +12849,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "search_provider_id": {
+                    "type": "string"
+                },
+                "timezone": {
                     "type": "string"
                 },
                 "title_model_id": {
@@ -12739,6 +12907,9 @@ const docTemplate = `{
                 "memory_provider_id": {
                     "type": "string"
                 },
+                "persist_full_tool_results": {
+                    "type": "boolean"
+                },
                 "reasoning_effort": {
                     "type": "string"
                 },
@@ -12746,6 +12917,9 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "search_provider_id": {
+                    "type": "string"
+                },
+                "timezone": {
                     "type": "string"
                 },
                 "title_model_id": {

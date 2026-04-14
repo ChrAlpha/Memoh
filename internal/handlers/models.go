@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
+	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/oauthctx"
 )
 
 type ModelsHandler struct {
@@ -85,7 +87,11 @@ func (h *ModelsHandler) List(c echo.Context) error {
 	case modelType != "":
 		resp, err = h.service.ListEnabledByType(c.Request().Context(), models.ModelType(modelType))
 	case clientType != "":
-		resp, err = h.service.ListEnabledByProviderClientType(c.Request().Context(), models.ClientType(clientType))
+		ct := models.ClientType(clientType)
+		if !models.IsLLMClientType(ct) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid client type for LLM models endpoint")
+		}
+		resp, err = h.service.ListEnabledByProviderClientType(c.Request().Context(), ct)
 	default:
 		resp, err = h.service.ListEnabled(c.Request().Context())
 	}
@@ -301,7 +307,12 @@ func (h *ModelsHandler) Test(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
 	}
 
-	resp, err := h.service.Test(c.Request().Context(), id)
+	ctx := c.Request().Context()
+	if userID, err := auth.UserIDFromContext(c); err == nil {
+		ctx = oauthctx.WithUserID(ctx, userID)
+	}
+
+	resp, err := h.service.Test(ctx, id)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid") {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())

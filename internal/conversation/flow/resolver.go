@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	agentpkg "github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/compaction"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/sqlc"
@@ -26,6 +29,7 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/message"
 	messageevent "github.com/memohai/memoh/internal/message/event"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/oauthctx"
 	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/providers"
 	"github.com/memohai/memoh/internal/settings"
@@ -69,11 +73,18 @@ type Resolver struct {
 	settingsService   *settings.Service
 	accountService    *accounts.Service
 	sessionService    SessionService
+	routeService      RouteService
 	compactionService *compaction.Service
 	eventPublisher    messageevent.Publisher
 	skillLoader       SkillLoader
 	assetLoader       gatewayAssetLoader
 	pipeline          *pipelinepkg.Pipeline
+	streamHTTPClient  *http.Client
+	bgManager         *background.Manager
+	outboundFn        func(ctx context.Context, botID, channelType, target, text string) error
+	bgNotifDeferred   sync.Map // key: "botID:sessionID" → wake arrived while a session turn was active
+	sessionTurnMu     sync.Mutex
+	sessionTurnRefs   map[string]int // key: "botID:sessionID" → active turn refcount
 	timeout           time.Duration
 	clockLocation     *time.Location
 	logger            *slog.Logger
@@ -98,17 +109,38 @@ func NewResolver(
 	if clockLocation == nil {
 		clockLocation = time.UTC
 	}
+	// HTTP client with timeouts for LLM provider streaming.
+	// - DialTimeout: fail fast on connection issues
+	// - ResponseHeaderTimeout: catch servers that accept TCP but never respond
+	// - Timeout: overall request lifetime cap (prevents stuck SSE body reads)
+	streamHTTPClient := &http.Client{
+		Timeout: 10 * time.Minute, // overall cap, matches resolver timeout
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+
 	return &Resolver{
-		agent:           a,
-		modelsService:   modelsService,
-		queries:         queries,
-		conversationSvc: conversationSvc,
-		messageService:  messageService,
-		settingsService: settingsService,
-		accountService:  accountService,
-		timeout:         timeout,
-		clockLocation:   clockLocation,
-		logger:          log.With(slog.String("service", "conversation_resolver")),
+		agent:            a,
+		modelsService:    modelsService,
+		queries:          queries,
+		conversationSvc:  conversationSvc,
+		messageService:   messageService,
+		settingsService:  settingsService,
+		accountService:   accountService,
+		streamHTTPClient: streamHTTPClient,
+		sessionTurnRefs:  make(map[string]int),
+		timeout:          timeout,
+		clockLocation:    clockLocation,
+		logger:           log.With(slog.String("service", "conversation_resolver")),
 	}
 }
 
@@ -131,6 +163,19 @@ func (r *Resolver) SetGatewayAssetLoader(loader gatewayAssetLoader) {
 // SetCompactionService configures the compaction service for context compaction.
 func (r *Resolver) SetCompactionService(s *compaction.Service) {
 	r.compactionService = s
+}
+
+// SetBackgroundManager configures the background task manager so that
+// background exec notifications are injected into the agent loop.
+func (r *Resolver) SetBackgroundManager(m *background.Manager) {
+	r.bgManager = m
+}
+
+// SetOutboundFn configures the function used to deliver background notification
+// responses to the user. The agent's text output is delivered through the same
+// path as normal responses.
+func (r *Resolver) SetOutboundFn(fn func(ctx context.Context, botID, channelType, target, text string) error) {
+	r.outboundFn = fn
 }
 
 // SetPipeline configures the DCP pipeline for RC-based context assembly.
@@ -189,6 +234,7 @@ type resolvedContext struct {
 	provider        sqlc.Provider
 	query           string // headerified query
 	injectedRecords *[]conversation.InjectedMessageRecord
+	estimatedTokens int // estimated input token count for compaction
 }
 
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
@@ -217,9 +263,12 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		ReasoningEffort:   req.ReasoningEffort,
 	})
 	if err != nil {
+		r.logger.Error("resolve: buildBaseRunConfig failed",
+			slog.String("bot_id", req.BotID),
+			slog.Any("error", err),
+		)
 		return resolvedContext{}, err
 	}
-
 	memoryMsg := r.loadMemoryContextMessage(ctx, req)
 	reqMessages := pruneMessagesForGateway(nonNilModelMessages(req.Messages))
 	if memoryMsg != nil {
@@ -238,18 +287,64 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		}
 	}
 
+	contextTokenBudget := 0
+	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
+		contextTokenBudget = *chatModel.Config.ContextWindow
+	}
+
 	var messages []conversation.ModelMessage
+	var estimatedTokens int
 	if usePipeline {
-		messages = r.buildMessagesFromPipeline(ctx, req)
+		messages = r.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 	} else if r.conversationSvc != nil {
 		loaded, loadErr := r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
 		if loadErr != nil {
+			r.logger.Error("resolve: loadMessages failed",
+				slog.String("bot_id", req.BotID),
+				slog.Any("error", loadErr),
+			)
 			return resolvedContext{}, loadErr
 		}
 		loaded = pruneHistoryForGateway(loaded)
 		loaded = dedupePersistedCurrentUserMessage(loaded, req)
 		loaded = r.replaceCompactedMessages(ctx, loaded)
-		messages = trimMessagesByTokens(r.logger, loaded, 0)
+		messages, estimatedTokens = trimMessagesByTokens(r.logger, loaded, contextTokenBudget)
+		// When context reaches 70% of the contextTokenBudget (the user-configured
+		// budget cap), run synchronous compaction before sending the request.
+		// contextTokenBudget is the authoritative limit for how much context
+		// the user wants to send to the LLM. We compact at 70% to keep the
+		// context healthy and avoid edge-case timeouts.
+		compactionThreshold := 0
+		if contextTokenBudget > 0 {
+			compactionThreshold = contextTokenBudget * 70 / 100
+		}
+		if compactionThreshold > 0 && estimatedTokens >= compactionThreshold {
+			r.logger.Warn("resolve: context reached compaction threshold, running synchronous compaction",
+				slog.String("bot_id", req.BotID),
+				slog.Int("estimated_tokens", estimatedTokens),
+				slog.Int("context_token_budget", contextTokenBudget),
+				slog.Int("compaction_threshold", compactionThreshold),
+			)
+			r.runCompactionSync(ctx, req, estimatedTokens)
+			// Reload messages after compaction.
+			loaded, loadErr = r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
+			if loadErr != nil {
+				r.logger.Error("resolve: reload messages after compaction failed",
+					slog.String("bot_id", req.BotID),
+					slog.Any("error", loadErr),
+				)
+				return resolvedContext{}, loadErr
+			}
+			loaded = pruneHistoryForGateway(loaded)
+			loaded = dedupePersistedCurrentUserMessage(loaded, req)
+			loaded = r.replaceCompactedMessages(ctx, loaded)
+			messages, estimatedTokens = trimMessagesByTokens(r.logger, loaded, contextTokenBudget)
+			// Remove tool messages from the recent context — they are large
+			// and unnecessary when we already have a summary. Keep only
+			// user/assistant conversation turns.
+			messages = stripToolMessages(messages)
+		}
+		_ = estimatedTokens
 	}
 	if memoryMsg != nil {
 		messages = append(messages, *memoryMsg)
@@ -258,6 +353,13 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		messages = append(messages, reqMessages...)
 	}
 	messages = sanitizeMessages(messages)
+	// Strip tool messages and tool-call-only assistant messages from context.
+	// Tool outputs are large and waste tokens; the LLM doesn't need raw tool
+	// results when summaries and memory tools are available for lookup.
+	if len(messages) > 10 {
+		messages = stripToolMessages(messages)
+	}
+	messages = repairToolCallClosures(messages, syntheticToolClosureError)
 
 	displayName := r.resolveDisplayName(ctx, req)
 	mergedAttachments := r.routeAndMergeAttachments(ctx, chatModel, req)
@@ -326,11 +428,15 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		provider:        provider,
 		query:           headerifiedQuery,
 		injectedRecords: injectedRecords,
+		estimatedTokens: estimatedTokens,
 	}, nil
 }
 
 // Chat sends a synchronous chat request and stores the result.
 func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conversation.ChatResponse, error) {
+	doneTurn := r.enterSessionTurn(ctx, req.BotID, req.SessionID)
+	defer doneTurn()
+
 	rc, err := r.resolve(ctx, req)
 	if err != nil {
 		return conversation.ChatResponse{}, err
@@ -418,7 +524,8 @@ func (r *Resolver) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams
 	}
 
 	authResolver := providers.NewService(nil, r.queries, "")
-	creds, err := authResolver.ResolveModelCredentials(ctx, provider)
+	authCtx := oauthctx.WithUserID(ctx, p.UserID)
+	creds, err := authResolver.ResolveModelCredentials(authCtx, provider)
 	if err != nil {
 		return agentpkg.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, fmt.Errorf("resolve provider credentials: %w", err)
 	}
@@ -429,6 +536,7 @@ func (r *Resolver) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams
 		APIKey:          creds.APIKey,
 		CodexAccountID:  creds.CodexAccountID,
 		BaseURL:         providers.ProviderConfigString(provider, "base_url"),
+		HTTPClient:      r.streamHTTPClient,
 		ReasoningConfig: reasoningConfig,
 	})
 
@@ -467,8 +575,9 @@ func (r *Resolver) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams
 			TimezoneLocation:  userClockLocation,
 			SessionToken:      p.SessionToken,
 		},
-		Skills:        agentSkills,
-		LoopDetection: agentpkg.LoopDetectionConfig{Enabled: loopDetectionEnabled},
+		Skills:            agentSkills,
+		LoopDetection:     agentpkg.LoopDetectionConfig{Enabled: loopDetectionEnabled},
+		BackgroundManager: r.bgManager,
 	}
 
 	return cfg, chatModel, provider, nil

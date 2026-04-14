@@ -20,6 +20,11 @@ export const CLIENT_TYPE_META: Record<string, ClientTypeMeta> = {
     label: 'OpenAI Codex',
     hint: 'Codex API (OAuth, coding-optimized)',
   },
+  'github-copilot': {
+    value: 'github-copilot',
+    label: 'GitHub Copilot',
+    hint: 'Device OAuth with GitHub account',
+  },
   'anthropic-messages': {
     value: 'anthropic-messages',
     label: 'Anthropic Messages',
@@ -38,3 +43,6 @@ export const CLIENT_TYPE_META: Record<string, ClientTypeMeta> = {
 }
 
 export const CLIENT_TYPE_LIST: ClientTypeMeta[] = Object.values(CLIENT_TYPE_META)
+
+export const LLM_CLIENT_TYPE_LIST: ClientTypeMeta[] = CLIENT_TYPE_LIST
+  .filter(ct => ct.value !== 'edge-speech')

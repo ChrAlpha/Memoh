@@ -37,6 +37,7 @@ const channelIcons: Record<string, Component> = {
   wechatoa: Wechatoa,
   wecom: Wecom,
   matrix: Matrix,
+  // misskey: Misskey,
   dingtalk: Dingtalk,
 }
 

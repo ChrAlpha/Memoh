@@ -144,6 +144,8 @@
   },
   "chat": {
     "greeting": "Hi! How can I help you today?",
+    "emptySubagent": "No messages recorded for this subagent task",
+    "emptySystemSession": "No messages recorded for this system session",
     "selectBot": "Select a Bot",
     "selectBotHint": "Choose a bot from the sidebar to start chatting",
     "thinking": "Thinking…",
@@ -227,7 +229,10 @@
     "infoCacheWrite": "Cache Write",
     "infoSkills": "Skills",
     "infoNoSkills": "No skills used in this session",
-    "infoNoData": "No data available"
+    "infoNoData": "No data available",
+    "compactNow": "Compact Now",
+    "compactSuccess": "Context compaction completed",
+    "compactFailed": "Context compaction failed"
   },
   "models": {
     "title": "Models",
@@ -290,20 +295,35 @@
     "enable": "Enable",
     "enableHint": "Only models from enabled providers appear in the available model list",
     "oauth": {
-      "title": "OpenAI OAuth",
-      "description": "Authorize this provider with your ChatGPT account for Codex-compatible OpenAI access.",
-      "createHint": "Save the provider first, then authorize it from the provider details panel.",
+      "openaiTitle": "OpenAI OAuth",
+      "openaiDescription": "Authorize this provider with your ChatGPT account for Codex-compatible OpenAI access.",
+      "openaiCreateHint": "Save the provider first, then authorize it from the provider details panel.",
+      "githubTitle": "GitHub Copilot OAuth",
+      "githubDescription": "Connect the current Memoh account with GitHub Copilot.",
+      "githubDeviceTitle": "GitHub Copilot Device Authorization",
+      "githubDeviceDescription": "Start device authorization, open GitHub's verification page, and enter the user code shown below.",
+      "githubCreateHint": "Save the provider first, then start device authorization from the provider details panel.",
+      "githubDeviceHint": "Open the verification URL below and enter this user code to authorize the current Memoh account.",
       "authorize": "Authorize",
+      "deviceAuthorize": "Start Device Authorization",
       "authorizeFailed": "Failed to start authorization",
       "authorizeSuccess": "Authorization successful",
       "revoke": "Revoke",
       "revokeFailed": "Failed to revoke authorization",
       "revokeSuccess": "Authorization revoked",
+      "copyFailed": "Failed to copy device code",
+      "connectedAccount": "Connected Account",
       "callback": "Callback URL",
+      "deviceVerificationUri": "Verification URL",
+      "deviceUserCode": "User Code",
+      "deviceExpiresAt": "Expires At",
       "statusFailed": "Failed to load OAuth status",
       "status": {
         "checking": "Checking authorization status...",
         "authorized": "Authorized",
+        "authorizedCurrent": "Current account connected",
+        "oauthing": "OAuthing...",
+        "pendingDevice": "Waiting for device authorization to complete...",
         "expired": "Authorization expired. Re-authorize to continue.",
         "missing": "Not authorized yet.",
         "notConfigured": "This provider is not configured for OAuth."
@@ -597,6 +617,32 @@
     "timezonePlaceholder": "e.g. America/New_York",
     "timezoneInherited": "Inherited from user/system",
     "timezoneInheritedHint": "Leave empty to inherit the user's timezone, or fall back to the system timezone.",
+    "aclPreset": "Security Policy",
+    "aclPresetDescription": "Choose a common ACL starting point during creation. You can fine-tune it later in Access Control.",
+    "aclPresetHint": "Recommendation: use Private Only for personal assistants, Group Only or Group and Thread for community bots, and Allow All when you want the broadest default.",
+    "aclPresetHelp": "This initializes the bot ACL default effect and preset rules at creation time. You can still edit them later in Access Control.",
+    "aclPresets": {
+      "allowAll": {
+        "title": "Allow All",
+        "description": "Adds no extra restriction and allows all conversation types by default."
+      },
+      "privateOnly": {
+        "title": "Private Only",
+        "description": "Defaults to deny and only allows private conversations."
+      },
+      "groupOnly": {
+        "title": "Group Only",
+        "description": "Defaults to deny and only allows group conversations."
+      },
+      "groupAndThreadOnly": {
+        "title": "Group and Thread",
+        "description": "Defaults to deny and allows group conversations plus threads."
+      },
+      "denyAll": {
+        "title": "Deny All",
+        "description": "Defaults to deny and adds no rules, so you can configure access manually later."
+      }
+    },
     "editAvatar": "Edit Avatar",
     "editAvatarDescription": "Set the image URL for the bot avatar.",
     "editTimezone": "Edit Timezone",
@@ -1022,6 +1068,7 @@
         "discord": "Discord",
         "qq": "QQ",
         "matrix": "Matrix",
+        "misskey": "Misskey",
         "telegram": "Telegram",
         "weixin": "WeChat",
         "wechatoa": "WeChat Official Account",
@@ -1036,6 +1083,7 @@
         "discord": "DC",
         "qq": "QQ",
         "matrix": "MX",
+        "misskey": "MK",
         "telegram": "TG",
         "weixin": "WX",
         "wechatoa": "OA",

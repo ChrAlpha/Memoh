@@ -341,6 +341,7 @@ export type BotsBotCheck = {
 };
 
 export type BotsCreateBotRequest = {
+    acl_preset?: string;
     avatar_url?: string;
     display_name?: string;
     is_active?: boolean;
@@ -1064,6 +1065,12 @@ export type HandlersTokenUsageResponse = {
     schedule?: Array<HandlersDailyTokenUsage>;
 };
 
+export type HandlersTriggerCompactResponse = {
+    message_count?: number;
+    status?: string;
+    summary?: string;
+};
+
 export type HandlersCreateSessionRequest = {
     channel_type?: string;
     metadata?: {
@@ -1404,12 +1411,38 @@ export type ProvidersImportModelsResponse = {
     skipped?: number;
 };
 
+export type ProvidersOAuthAccount = {
+    avatar_url?: string;
+    email?: string;
+    label?: string;
+    login?: string;
+    name?: string;
+    profile_url?: string;
+};
+
+export type ProvidersOAuthAuthorizeResponse = {
+    auth_url?: string;
+    device?: ProvidersOAuthDeviceStatus;
+    mode?: string;
+};
+
+export type ProvidersOAuthDeviceStatus = {
+    expires_at?: string;
+    interval_seconds?: number;
+    pending?: boolean;
+    user_code?: string;
+    verification_uri?: string;
+};
+
 export type ProvidersOAuthStatus = {
+    account?: ProvidersOAuthAccount;
     callback_url?: string;
     configured?: boolean;
+    device?: ProvidersOAuthDeviceStatus;
     expired?: boolean;
     expires_at?: string;
     has_token?: boolean;
+    mode?: string;
 };
 
 export type ProvidersTestResponse = {
@@ -1576,9 +1609,11 @@ export type SettingsSettings = {
     image_model_id?: string;
     language?: string;
     memory_provider_id?: string;
+    persist_full_tool_results?: boolean;
     reasoning_effort?: string;
     reasoning_enabled?: boolean;
     search_provider_id?: string;
+    timezone?: string;
     title_model_id?: string;
     tts_model_id?: string;
 };
@@ -1598,9 +1633,11 @@ export type SettingsUpsertRequest = {
     image_model_id?: string;
     language?: string;
     memory_provider_id?: string;
+    persist_full_tool_results?: boolean;
     reasoning_effort?: string;
     reasoning_enabled?: boolean;
     search_provider_id?: string;
+    timezone?: string;
     title_model_id?: string;
     tts_model_id?: string;
 };
@@ -5303,6 +5340,44 @@ export type PatchBotsByBotIdSessionsBySessionIdResponses = {
 
 export type PatchBotsByBotIdSessionsBySessionIdResponse = PatchBotsByBotIdSessionsBySessionIdResponses[keyof PatchBotsByBotIdSessionsBySessionIdResponses];
 
+export type PostBotsByBotIdSessionsBySessionIdCompactData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/compact';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdCompactErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdCompactError = PostBotsByBotIdSessionsBySessionIdCompactErrors[keyof PostBotsByBotIdSessionsBySessionIdCompactErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
+    /**
+     * OK
+     */
+    200: HandlersTriggerCompactResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
+
 export type GetBotsByBotIdSessionsBySessionIdStatusData = {
     body?: never;
     path: {
@@ -7771,12 +7846,44 @@ export type GetProvidersByIdOauthAuthorizeResponses = {
     /**
      * OK
      */
-    200: {
-        [key: string]: string;
-    };
+    200: ProvidersOAuthAuthorizeResponse;
 };
 
 export type GetProvidersByIdOauthAuthorizeResponse = GetProvidersByIdOauthAuthorizeResponses[keyof GetProvidersByIdOauthAuthorizeResponses];
+
+export type PostProvidersByIdOauthPollData = {
+    body?: never;
+    path: {
+        /**
+         * Provider ID (UUID)
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/providers/{id}/oauth/poll';
+};
+
+export type PostProvidersByIdOauthPollErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PostProvidersByIdOauthPollError = PostProvidersByIdOauthPollErrors[keyof PostProvidersByIdOauthPollErrors];
+
+export type PostProvidersByIdOauthPollResponses = {
+    /**
+     * OK
+     */
+    200: ProvidersOAuthStatus;
+};
+
+export type PostProvidersByIdOauthPollResponse = PostProvidersByIdOauthPollResponses[keyof PostProvidersByIdOauthPollResponses];
 
 export type GetProvidersByIdOauthStatusData = {
     body?: never;
