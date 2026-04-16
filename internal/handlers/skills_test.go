@@ -253,7 +253,11 @@ func TestLoadSkillsUsesEffectiveSetAndPromptReflectsOverrideFallback(t *testing.
 	if err != nil {
 		t.Fatalf("get bridge client: %v", err)
 	}
-	if err := skillset.ApplyAction(context.Background(), client, skillset.ActionRequest{
+	roots, err := env.handler.skillDiscoveryRoots(context.Background(), env.botID)
+	if err != nil {
+		t.Fatalf("resolve skill discovery roots: %v", err)
+	}
+	if err := skillset.ApplyAction(context.Background(), client, roots, skillset.ActionRequest{
 		Action:     skillset.ActionDisable,
 		TargetPath: managedPath,
 	}); err != nil {
@@ -280,6 +284,27 @@ func TestLoadSkillsUsesEffectiveSetAndPromptReflectsOverrideFallback(t *testing.
 	}
 }
 
+func TestListSkillsAPIUsesConfiguredDiscoveryRoots(t *testing.T) {
+	env := newSkillsTestEnvWithMetadata(t, map[string]any{
+		"workspace": map[string]any{
+			"skill_discovery_roots": []string{"/root/.openclaw/skills"},
+		},
+	})
+	env.writeSkillFile(t, path.Join("/root/.openclaw/skills", "alpha", "SKILL.md"), managedSkillRaw("alpha", "OpenClaw Alpha"))
+	env.writeSkillFile(t, path.Join("/data/.agents/skills", "beta", "SKILL.md"), managedSkillRaw("beta", "Ignored Beta"))
+
+	skills := env.listSkills(t)
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 configured-discovery skill, got %d", len(skills))
+	}
+	if got := skills[0].SourceRoot; got != "/root/.openclaw/skills" {
+		t.Fatalf("source_root = %q, want %q", got, "/root/.openclaw/skills")
+	}
+	if got := skills[0].Name; got != "alpha" {
+		t.Fatalf("skill name = %q, want %q", got, "alpha")
+	}
+}
+
 type skillsTestEnv struct {
 	handler  *ContainerdHandler
 	dataRoot string
@@ -288,6 +313,10 @@ type skillsTestEnv struct {
 }
 
 func newSkillsTestEnv(t *testing.T) *skillsTestEnv {
+	return newSkillsTestEnvWithMetadata(t, nil)
+}
+
+func newSkillsTestEnvWithMetadata(t *testing.T, metadata map[string]any) *skillsTestEnv {
 	t.Helper()
 
 	dataRoot, err := newSkillsTestDataRoot()
@@ -300,7 +329,18 @@ func newSkillsTestEnv(t *testing.T) *skillsTestEnv {
 	startSkillsTestBridgeServer(t, dataRoot, botID)
 
 	cfg := config.WorkspaceConfig{DataRoot: dataRoot}
-	db := &skillsTestDB{userID: userID, botID: botID}
+	var metadataJSON []byte
+	if metadata != nil {
+		var err error
+		metadataJSON, err = json.Marshal(metadata)
+		if err != nil {
+			t.Fatalf("marshal bot metadata: %v", err)
+		}
+	} else {
+		metadataJSON = []byte(`{}`)
+	}
+	cfg.DataRoot = dataRoot
+	db := &skillsTestDB{userID: userID, botID: botID, metadataJSON: metadataJSON}
 	manager := workspace.NewManager(slog.Default(), nil, cfg, "", nil)
 	handler := NewContainerdHandler(
 		slog.Default(),
@@ -395,8 +435,9 @@ func newSkillsTestDataRoot() (string, error) {
 }
 
 type skillsTestDB struct {
-	userID string
-	botID  string
+	userID       string
+	botID        string
+	metadataJSON []byte
 }
 
 func (*skillsTestDB) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
@@ -412,7 +453,7 @@ func (d *skillsTestDB) QueryRow(_ context.Context, sql string, _ ...interface{})
 	case strings.Contains(sql, "FROM users WHERE id = $1"):
 		return makeUserRow(mustParseUUID(d.userID), "user")
 	case strings.Contains(sql, "FROM bots"):
-		return makeBotRow(mustParseUUID(d.botID), mustParseUUID(d.userID))
+		return makeBotRow(mustParseUUID(d.botID), mustParseUUID(d.userID), d.metadataJSON)
 	default:
 		return &skillsTestRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
 	}
@@ -451,7 +492,7 @@ func makeUserRow(userID pgtype.UUID, role string) *skillsTestRow {
 	}
 }
 
-func makeBotRow(botID, ownerUserID pgtype.UUID) *skillsTestRow {
+func makeBotRow(botID, ownerUserID pgtype.UUID, metadataJSON []byte) *skillsTestRow {
 	return &skillsTestRow{
 		scanFunc: func(dest ...any) error {
 			if len(dest) < 23 {
@@ -477,7 +518,7 @@ func makeBotRow(botID, ownerUserID pgtype.UUID) *skillsTestRow {
 			*dest[17].(*int32) = 100000
 			*dest[18].(*int32) = 80
 			*dest[19].(*pgtype.UUID) = pgtype.UUID{}
-			*dest[20].(*[]byte) = []byte(`{}`)
+			*dest[20].(*[]byte) = metadataJSON
 			*dest[21].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
 			*dest[22].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
 			return nil

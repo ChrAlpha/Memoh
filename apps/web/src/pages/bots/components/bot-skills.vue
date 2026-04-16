@@ -7,15 +7,31 @@
           {{ $t('bots.skills.title') }}
         </h3>
       </div>
-      <Button
-        size="sm"
-        @click="handleCreate"
-      >
-        <Plus
-          class="mr-2"
-        />
-        {{ $t('bots.skills.addSkill') }}
-      </Button>
+      <div class="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          class="text-muted-foreground"
+          :title="$t('bots.skills.discoveryTitle')"
+          @click="isDiscoveryDialogOpen = true"
+        >
+          <SlidersHorizontal class="mr-2 size-4" />
+          {{ $t('bots.skills.discoveryTitle') }}
+          <span
+            v-if="showDiscoveryIndicator"
+            class="ml-2 inline-block size-2 shrink-0 rounded-full bg-primary/80"
+          />
+        </Button>
+        <Button
+          size="sm"
+          @click="handleCreate"
+        >
+          <Plus
+            class="mr-2"
+          />
+          {{ $t('bots.skills.addSkill') }}
+        </Button>
+      </div>
     </div>
 
     <!-- Loading State -->
@@ -230,26 +246,94 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <Dialog v-model:open="isDiscoveryDialogOpen">
+      <DialogContent class="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{{ $t('bots.skills.discoveryTitle') }}</DialogTitle>
+          <DialogDescription class="text-xs">
+            {{ $t('bots.skills.discoveryDescription') }}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div class="space-y-4 py-2">
+          <div class="space-y-2">
+            <Label class="text-xs font-medium">
+              {{ $t('bots.skills.discoveryPathsLabel') }}
+            </Label>
+            <p class="text-xs text-muted-foreground">
+              {{ $t('bots.skills.discoveryPathsDescription') }}
+            </p>
+            <Textarea
+              v-model="discoveryRootsDraft"
+              :disabled="discoveryControlsDisabled"
+              :placeholder="$t('bots.skills.discoveryPathPlaceholder')"
+              class="min-h-32 font-mono text-xs"
+            />
+            <p
+              v-if="discoveryRootError"
+              class="text-xs text-destructive"
+            >
+              {{ discoveryRootError }}
+            </p>
+          </div>
+
+          <p class="text-xs text-muted-foreground">
+            {{ $t('bots.skills.discoveryDefaultHint', { paths: DEFAULT_DISCOVERY_ROOTS.join(', ') }) }}
+          </p>
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            :disabled="discoveryControlsDisabled || !isDiscoveryRootsDirty"
+            @click="resetDiscoveryRoots"
+          >
+            {{ $t('bots.skills.discoveryReset') }}
+          </Button>
+          <Button
+            variant="outline"
+            :disabled="isSavingDiscoveryRoots"
+            @click="closeDiscoveryDialog"
+          >
+            {{ $t('common.cancel') }}
+          </Button>
+          <Button
+            :disabled="!canSaveDiscoveryRoots"
+            @click="handleSaveDiscoveryRoots"
+          >
+            <Spinner
+              v-if="isSavingDiscoveryRoots"
+              class="mr-2 size-4"
+            />
+            {{ $t('common.save') }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ArrowDownToLine, Eye, EyeOff, Plus, Zap, SquarePen, Trash2 } from 'lucide-vue-next'
-import { ref, computed, onMounted } from 'vue'
+import { ArrowDownToLine, Eye, EyeOff, Plus, SlidersHorizontal, Zap, SquarePen, Trash2 } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import { useQuery, useQueryCache } from '@pinia/colada'
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle, CardDescription,
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose,
-  Spinner,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
+  Label, Spinner, Textarea,
 } from '@memohai/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import MonacoEditor from '@/components/monaco-editor/index.vue'
 import {
+  getBotsById,
   getBotsByBotIdContainerSkills,
   postBotsByBotIdContainerSkills,
   postBotsByBotIdContainerSkillsActions,
   deleteBotsByBotIdContainerSkills,
+  putBotsById,
   type HandlersSkillItem,
 } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
@@ -268,6 +352,12 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const queryCache = useQueryCache()
+
+const DEFAULT_DISCOVERY_ROOTS = ['/data/.agents/skills', '/root/.agents/skills']
+const RESERVED_DISCOVERY_ROOTS = new Set(['/data/skills', '/data/.skills'])
+const WORKSPACE_METADATA_KEY = 'workspace'
+const SKILL_DISCOVERY_ROOTS_METADATA_KEY = 'skill_discovery_roots'
 
 const isLoading = ref(false)
 const isSaving = ref(false)
@@ -277,6 +367,10 @@ const isActioning = ref(false)
 const actionTargetPath = ref('')
 const actionName = ref('')
 const skills = ref<SkillItem[]>([])
+const isSavingDiscoveryRoots = ref(false)
+const isDiscoveryDialogOpen = ref(false)
+const discoveryRootsDraft = ref(DEFAULT_DISCOVERY_ROOTS.join('\n'))
+const savedDiscoveryRoots = ref<string[]>([...DEFAULT_DISCOVERY_ROOTS])
 
 const isDialogOpen = ref(false)
 const isEditing = ref(false)
@@ -294,6 +388,29 @@ const canSave = computed(() => {
   return draftRaw.value.trim().length > 0
 })
 
+const { data: bot, refetch: refetchBot } = useQuery({
+  key: () => ['bot', props.botId],
+  query: async () => {
+    const { data } = await getBotsById({ path: { id: props.botId }, throwOnError: true })
+    return data
+  },
+  enabled: () => !!props.botId,
+})
+
+const discoveryRootErrors = computed(() => validateDiscoveryRoots(discoveryRootsDraft.value))
+const discoveryRootError = computed(() => discoveryRootErrors.value[0] || '')
+const hasDiscoveryRootErrors = computed(() => discoveryRootErrors.value.length > 0)
+const normalizedDiscoveryRootDrafts = computed(() => normalizeDiscoveryRoots(parseDiscoveryRoots(discoveryRootsDraft.value)))
+const isDiscoveryRootsDirty = computed(() => !areStringListsEqual(normalizedDiscoveryRootDrafts.value, savedDiscoveryRoots.value))
+const savedDiscoveryRootsText = computed(() => savedDiscoveryRoots.value.join('\n'))
+const isDiscoveryDraftModified = computed(() => discoveryRootsDraft.value !== savedDiscoveryRootsText.value)
+const usesDefaultDiscoveryRoots = computed(() => areStringListsEqual(savedDiscoveryRoots.value, DEFAULT_DISCOVERY_ROOTS))
+const showDiscoveryIndicator = computed(() => !usesDefaultDiscoveryRoots.value || isDiscoveryRootsDirty.value)
+const discoveryControlsDisabled = computed(() => isSavingDiscoveryRoots.value || !bot.value)
+const canSaveDiscoveryRoots = computed(() => {
+  return !!bot.value && isDiscoveryRootsDirty.value && !hasDiscoveryRootErrors.value && !isSavingDiscoveryRoots.value
+})
+
 async function fetchSkills() {
   if (!props.botId) return
   isLoading.value = true
@@ -308,6 +425,128 @@ async function fetchSkills() {
   } finally {
     isLoading.value = false
   }
+}
+
+function cleanDiscoveryRoot(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('/')) {
+    return trimmed
+  }
+
+  const parts = trimmed.split('/')
+  const stack: string[] = []
+  for (const part of parts) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      stack.pop()
+      continue
+    }
+    stack.push(part)
+  }
+  return `/${stack.join('/')}`
+}
+
+function parseDiscoveryRoots(value: string) {
+  return value
+    .split('\n')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeDiscoveryRoots(values: string[]) {
+  const normalized: string[] = []
+  const seen = new Set<string>()
+
+  for (const value of values) {
+    const cleaned = cleanDiscoveryRoot(value)
+    if (!cleaned || !cleaned.startsWith('/')) continue
+    if (RESERVED_DISCOVERY_ROOTS.has(cleaned) || seen.has(cleaned)) continue
+    seen.add(cleaned)
+    normalized.push(cleaned)
+  }
+
+  return normalized
+}
+
+function validateDiscoveryRoots(value: string) {
+  const seen = new Set<string>()
+  const errors: string[] = []
+
+  for (const item of parseDiscoveryRoots(value)) {
+    const trimmed = item.trim()
+
+    const cleaned = cleanDiscoveryRoot(trimmed)
+    if (!cleaned.startsWith('/')) {
+      errors.push(t('bots.skills.discoveryPathAbsolute'))
+      continue
+    }
+    if (RESERVED_DISCOVERY_ROOTS.has(cleaned)) {
+      errors.push(t('bots.skills.discoveryPathReserved'))
+      continue
+    }
+    if (seen.has(cleaned)) {
+      errors.push(t('bots.skills.discoveryPathDuplicate'))
+      continue
+    }
+
+    seen.add(cleaned)
+  }
+
+  return [...new Set(errors)]
+}
+
+function areStringListsEqual(left: string[], right: string[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index])
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function readDiscoveryRoots(metadata: Record<string, unknown> | undefined) {
+  const workspace = metadata?.[WORKSPACE_METADATA_KEY]
+  if (!isRecord(workspace)) {
+    return [...DEFAULT_DISCOVERY_ROOTS]
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(workspace, SKILL_DISCOVERY_ROOTS_METADATA_KEY)) {
+    return [...DEFAULT_DISCOVERY_ROOTS]
+  }
+
+  const rawRoots = workspace[SKILL_DISCOVERY_ROOTS_METADATA_KEY]
+  if (!Array.isArray(rawRoots)) {
+    return []
+  }
+
+  return normalizeDiscoveryRoots(
+    rawRoots.filter((value): value is string => typeof value === 'string'),
+  )
+}
+
+function withDiscoveryRootsMetadata(metadata: Record<string, unknown> | undefined, roots: string[]) {
+  const nextMetadata = isRecord(metadata) ? { ...metadata } : {}
+  const workspaceSection = isRecord(nextMetadata[WORKSPACE_METADATA_KEY])
+    ? { ...(nextMetadata[WORKSPACE_METADATA_KEY] as Record<string, unknown>) }
+    : {}
+
+  workspaceSection[SKILL_DISCOVERY_ROOTS_METADATA_KEY] = normalizeDiscoveryRoots(roots)
+  nextMetadata[WORKSPACE_METADATA_KEY] = workspaceSection
+  return nextMetadata
+}
+
+function syncDiscoveryRoots(roots: string[]) {
+  const nextRoots = [...roots]
+  discoveryRootsDraft.value = nextRoots.join('\n')
+  savedDiscoveryRoots.value = nextRoots
+}
+
+function resetDiscoveryRoots() {
+  syncDiscoveryRoots(savedDiscoveryRoots.value)
+}
+
+function closeDiscoveryDialog() {
+  resetDiscoveryRoots()
+  isDiscoveryDialogOpen.value = false
 }
 
 function handleCreate() {
@@ -420,6 +659,41 @@ async function handleSave() {
   }
 }
 
+async function handleSaveDiscoveryRoots() {
+  if (!canSaveDiscoveryRoots.value) return
+
+  isSavingDiscoveryRoots.value = true
+  try {
+    const metadata = withDiscoveryRootsMetadata(
+      bot.value?.metadata as Record<string, unknown> | undefined,
+      normalizedDiscoveryRootDrafts.value,
+    )
+
+    await putBotsById({
+      path: { id: props.botId },
+      body: { metadata },
+      throwOnError: true,
+    })
+
+    void queryCache.invalidateQueries({ key: ['bot', props.botId] })
+    void queryCache.invalidateQueries({ key: ['bot'] })
+    void queryCache.invalidateQueries({ key: ['bots'] })
+
+    syncDiscoveryRoots(normalizedDiscoveryRootDrafts.value)
+    isDiscoveryDialogOpen.value = false
+    toast.success(t('bots.skills.discoverySaveSuccess'))
+
+    await Promise.all([
+      refetchBot(),
+      fetchSkills(),
+    ])
+  } catch (error) {
+    toast.error(resolveApiErrorMessage(error, t('bots.skills.discoverySaveFailed')))
+  } finally {
+    isSavingDiscoveryRoots.value = false
+  }
+}
+
 async function handleDelete(name?: string) {
   if (!name) return
   isDeleting.value = true
@@ -442,7 +716,22 @@ async function handleDelete(name?: string) {
   }
 }
 
-onMounted(() => {
-  fetchSkills()
+watch(() => props.botId, () => {
+  if (!props.botId) return
+  isDiscoveryDialogOpen.value = false
+  syncDiscoveryRoots(DEFAULT_DISCOVERY_ROOTS)
+  void fetchSkills()
+}, { immediate: true })
+
+watch(bot, (value) => {
+  if (!value) return
+  if (isDiscoveryRootsDirty.value && !isSavingDiscoveryRoots.value) return
+  syncDiscoveryRoots(readDiscoveryRoots(value.metadata as Record<string, unknown> | undefined))
+}, { immediate: true })
+
+watch(isDiscoveryDialogOpen, (open, prevOpen) => {
+  if (!open && prevOpen && !isSavingDiscoveryRoots.value && (isDiscoveryDraftModified.value || hasDiscoveryRootErrors.value)) {
+    resetDiscoveryRoots()
+  }
 })
 </script>

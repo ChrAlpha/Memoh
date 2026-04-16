@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	ManagedDirPath = config.DefaultDataMount + "/skills"
-	LegacyDirPath  = config.DefaultDataMount + "/.skills"
-	IndexDirPath   = config.DefaultDataMount + "/.memoh/skills"
-	IndexFilePath  = IndexDirPath + "/index.json"
+	ManagedDirPath            = config.DefaultDataMount + "/skills"
+	LegacyDirPath             = config.DefaultDataMount + "/.skills"
+	IndexDirPath              = config.DefaultDataMount + "/.memoh/skills"
+	IndexFilePath             = IndexDirPath + "/index.json"
+	SkillDiscoveryRootsEnvVar = "MEMOH_SKILL_DISCOVERY_ROOTS"
 
 	SourceKindManaged = "managed"
 	SourceKindLegacy  = "legacy"
@@ -115,34 +116,39 @@ func ManagedSkillDirForName(name string) (string, error) {
 	return dirPath, nil
 }
 
-func ContainerEnv() []string {
-	return []string{
+func ContainerEnv(rawCompatRoots []string) []string {
+	compatRoots := compatDiscoveryRoots(rawCompatRoots)
+	env := []string{
 		"HOME=" + config.DefaultDataMount,
 		"XDG_CONFIG_HOME=" + path.Join(config.DefaultDataMount, ".config"),
 		"XDG_DATA_HOME=" + path.Join(config.DefaultDataMount, ".local", "share"),
 		"XDG_CACHE_HOME=" + path.Join(config.DefaultDataMount, ".cache"),
 	}
+	env = append(env, SkillDiscoveryRootsEnvVar+"="+strings.Join(compatRoots, ":"))
+	return env
 }
 
-func DiscoveryRoots() []Root {
-	return []Root{
+func DiscoveryRoots(rawCompatRoots []string) []Root {
+	roots := []Root{
 		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
 		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
-		{Path: path.Join(config.DefaultDataMount, ".agents", "skills"), Kind: SourceKindCompat, Managed: false},
-		{Path: path.Join("/root", ".agents", "skills"), Kind: SourceKindCompat, Managed: false},
 	}
+	for _, compatRoot := range compatDiscoveryRoots(rawCompatRoots) {
+		roots = append(roots, Root{Path: compatRoot, Kind: SourceKindCompat, Managed: false})
+	}
+	return roots
 }
 
-func List(ctx context.Context, client fileClient) ([]Entry, error) {
+func List(ctx context.Context, client fileClient, rawCompatRoots []string) ([]Entry, error) {
 	idx := readIndex(ctx, client)
-	items := scan(ctx, client, DiscoveryRoots())
+	items := scan(ctx, client, DiscoveryRoots(rawCompatRoots))
 	resolved := resolve(items, idx.Overrides)
 	writeIndex(ctx, client, idx.withItems(resolved))
 	return resolved, nil
 }
 
-func LoadEffective(ctx context.Context, client fileClient) ([]Entry, error) {
-	items, err := List(ctx, client)
+func LoadEffective(ctx context.Context, client fileClient, rawCompatRoots []string) ([]Entry, error) {
+	items, err := List(ctx, client, rawCompatRoots)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +161,7 @@ func LoadEffective(ctx context.Context, client fileClient) ([]Entry, error) {
 	return out, nil
 }
 
-func ApplyAction(ctx context.Context, client fileClient, req ActionRequest) error {
+func ApplyAction(ctx context.Context, client fileClient, rawCompatRoots []string, req ActionRequest) error {
 	targetPath := strings.TrimSpace(req.TargetPath)
 	if targetPath == "" {
 		return bridge.ErrBadRequest
@@ -164,7 +170,7 @@ func ApplyAction(ctx context.Context, client fileClient, req ActionRequest) erro
 	switch strings.TrimSpace(req.Action) {
 	case ActionDisable:
 		idx := readIndex(ctx, client)
-		items := scan(ctx, client, DiscoveryRoots())
+		items := scan(ctx, client, DiscoveryRoots(rawCompatRoots))
 		if !containsSourcePath(items, targetPath) {
 			return bridge.ErrNotFound
 		}
@@ -176,7 +182,7 @@ func ApplyAction(ctx context.Context, client fileClient, req ActionRequest) erro
 		return nil
 	case ActionEnable:
 		idx := readIndex(ctx, client)
-		items := scan(ctx, client, DiscoveryRoots())
+		items := scan(ctx, client, DiscoveryRoots(rawCompatRoots))
 		if !containsSourcePath(items, targetPath) {
 			return bridge.ErrNotFound
 		}
@@ -184,7 +190,7 @@ func ApplyAction(ctx context.Context, client fileClient, req ActionRequest) erro
 		writeIndex(ctx, client, idx.withItems(resolve(items, idx.Overrides)))
 		return nil
 	case ActionAdopt:
-		items := scan(ctx, client, DiscoveryRoots())
+		items := scan(ctx, client, DiscoveryRoots(rawCompatRoots))
 		target, ok := findBySourcePath(items, targetPath)
 		if !ok {
 			return bridge.ErrNotFound
@@ -208,11 +214,49 @@ func ApplyAction(ctx context.Context, client fileClient, req ActionRequest) erro
 			return err
 		}
 		idx := readIndex(ctx, client)
-		writeIndex(ctx, client, idx.withItems(resolve(scan(ctx, client, DiscoveryRoots()), idx.Overrides)))
+		writeIndex(ctx, client, idx.withItems(resolve(scan(ctx, client, DiscoveryRoots(rawCompatRoots)), idx.Overrides)))
 		return nil
 	default:
 		return bridge.ErrBadRequest
 	}
+}
+
+func compatDiscoveryRoots(rawRoots []string) []string {
+	if rawRoots == nil {
+		rawRoots = defaultCompatDiscoveryRoots()
+	}
+	return normalizeCompatDiscoveryRoots(rawRoots)
+}
+
+func defaultCompatDiscoveryRoots() []string {
+	return []string{
+		path.Join(config.DefaultDataMount, ".agents", "skills"),
+		path.Join("/root", ".agents", "skills"),
+	}
+}
+
+func normalizeCompatDiscoveryRoots(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		p = path.Clean(p)
+		if !strings.HasPrefix(p, "/") {
+			continue
+		}
+		if p == ManagedDirPath || p == LegacyDirPath {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 func ParseFile(raw string, fallbackName string) Parsed {

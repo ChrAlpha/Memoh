@@ -66,7 +66,7 @@ func TestListReadsFullRawContentAndWritesIndex(t *testing.T) {
 	client.listings[ManagedDirPath] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
 	client.files[pathJoin(ManagedDirPath, "alpha", "SKILL.md")] = "---\nname: alpha\ndescription: Alpha\n---\n\n" + strings.Repeat("A", 7000)
 
-	items, err := List(context.Background(), client)
+	items, err := List(context.Background(), client, nil)
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestApplyActionAdoptAndDisable(t *testing.T) {
 	client.listings["/data/.agents/skills"] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
 	client.files[externalPath] = "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha"
 
-	if err := ApplyAction(context.Background(), client, ActionRequest{
+	if err := ApplyAction(context.Background(), client, nil, ActionRequest{
 		Action:     ActionAdopt,
 		TargetPath: externalPath,
 	}); err != nil {
@@ -97,7 +97,7 @@ func TestApplyActionAdoptAndDisable(t *testing.T) {
 		t.Fatalf("expected managed copy after adopt")
 	}
 
-	if err := ApplyAction(context.Background(), client, ActionRequest{
+	if err := ApplyAction(context.Background(), client, nil, ActionRequest{
 		Action:     ActionDisable,
 		TargetPath: externalPath,
 	}); err != nil {
@@ -115,7 +115,7 @@ func TestApplyActionAdoptRejectsInvalidManagedName(t *testing.T) {
 	client.listings["/data/.agents/skills"] = []*pb.FileEntry{{Path: "escape", IsDir: true}}
 	client.files[externalPath] = "---\nname: ..\ndescription: Escape\n---\n\n# Escape"
 
-	err := ApplyAction(context.Background(), client, ActionRequest{
+	err := ApplyAction(context.Background(), client, nil, ActionRequest{
 		Action:     ActionAdopt,
 		TargetPath: externalPath,
 	})
@@ -165,8 +165,8 @@ func TestManagedSkillDirForNameRejectsEscapingNames(t *testing.T) {
 	}
 }
 
-func TestDiscoveryRootsMatchCurrentPolicy(t *testing.T) {
-	roots := DiscoveryRoots()
+func TestDiscoveryRootsMatchDefaultPolicy(t *testing.T) {
+	roots := DiscoveryRoots(nil)
 	want := []Root{
 		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
 		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
@@ -178,15 +178,46 @@ func TestDiscoveryRootsMatchCurrentPolicy(t *testing.T) {
 	}
 }
 
+func TestDiscoveryRootsUseConfiguredCompatRoots(t *testing.T) {
+	roots := DiscoveryRoots([]string{
+		" /custom/skills ",
+		"/data/skills",
+		"/custom/skills",
+		"relative/skills",
+		"/root/.openclaw/skills",
+	})
+	want := []Root{
+		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
+		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
+		{Path: "/custom/skills", Kind: SourceKindCompat, Managed: false},
+		{Path: "/root/.openclaw/skills", Kind: SourceKindCompat, Managed: false},
+	}
+	if !slices.Equal(roots, want) {
+		t.Fatalf("DiscoveryRoots(custom) = %+v, want %+v", roots, want)
+	}
+}
+
+func TestDiscoveryRootsAllowExplicitEmptyCompatRoots(t *testing.T) {
+	roots := DiscoveryRoots([]string{})
+	want := []Root{
+		{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true},
+		{Path: LegacyDirPath, Kind: SourceKindLegacy, Managed: false},
+	}
+	if !slices.Equal(roots, want) {
+		t.Fatalf("DiscoveryRoots(empty) = %+v, want %+v", roots, want)
+	}
+}
+
 func TestListScansConfiguredDiscoveryRootsInOrder(t *testing.T) {
 	client := newFakeClient()
-	for _, root := range DiscoveryRoots() {
+	rawCompatRoots := []string(nil)
+	for _, root := range DiscoveryRoots(rawCompatRoots) {
 		client.listings[root.Path] = nil
 	}
 	client.listings[ManagedDirPath] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
 	client.files[pathJoin(ManagedDirPath, "alpha", "SKILL.md")] = "---\nname: alpha\ndescription: Alpha\n---\n\n# Alpha"
 
-	items, err := List(context.Background(), client)
+	items, err := List(context.Background(), client, rawCompatRoots)
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
@@ -194,8 +225,8 @@ func TestListScansConfiguredDiscoveryRootsInOrder(t *testing.T) {
 		t.Fatalf("List() items = %+v, want managed alpha only", items)
 	}
 
-	wantCalls := make([]string, 0, len(DiscoveryRoots()))
-	for _, root := range DiscoveryRoots() {
+	wantCalls := make([]string, 0, len(DiscoveryRoots(rawCompatRoots)))
+	for _, root := range DiscoveryRoots(rawCompatRoots) {
 		wantCalls = append(wantCalls, root.Path)
 	}
 	if !slices.Equal(client.listCalls, wantCalls) {
@@ -204,16 +235,25 @@ func TestListScansConfiguredDiscoveryRootsInOrder(t *testing.T) {
 }
 
 func TestContainerEnvUsesDataHomeAndXDGDirs(t *testing.T) {
-	env := ContainerEnv()
+	env := ContainerEnv(nil)
 	for _, want := range []string{
 		"HOME=/data",
 		"XDG_CONFIG_HOME=/data/.config",
 		"XDG_DATA_HOME=/data/.local/share",
 		"XDG_CACHE_HOME=/data/.cache",
+		"MEMOH_SKILL_DISCOVERY_ROOTS=/data/.agents/skills:/root/.agents/skills",
 	} {
 		if !slices.Contains(env, want) {
 			t.Fatalf("env %+v does not contain %q", env, want)
 		}
+	}
+}
+
+func TestContainerEnvUsesConfiguredSkillDiscoveryRoots(t *testing.T) {
+	env := ContainerEnv([]string{"/custom/skills", "/root/.openclaw/skills"})
+	want := SkillDiscoveryRootsEnvVar + "=/custom/skills:/root/.openclaw/skills"
+	if !slices.Contains(env, want) {
+		t.Fatalf("env %+v does not contain %q", env, want)
 	}
 }
 

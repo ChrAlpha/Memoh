@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	skillset "github.com/memohai/memoh/internal/skills"
+	"github.com/memohai/memoh/internal/workspace"
 )
 
 type SkillItem struct {
@@ -190,8 +191,12 @@ func (h *ContainerdHandler) ApplySkillAction(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("container not reachable: %v", err))
 	}
+	roots, err := h.skillDiscoveryRoots(ctx, botID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+	}
 
-	if err := skillset.ApplyAction(ctx, client, skillset.ActionRequest{
+	if err := skillset.ApplyAction(ctx, client, roots, skillset.ActionRequest{
 		Action:     req.Action,
 		TargetPath: req.TargetPath,
 	}); err != nil {
@@ -207,7 +212,11 @@ func (h *ContainerdHandler) LoadSkills(ctx context.Context, botID string) ([]Ski
 	if err != nil {
 		return nil, err
 	}
-	items, err := skillset.LoadEffective(ctx, client)
+	roots, err := h.skillDiscoveryRoots(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := skillset.LoadEffective(ctx, client, roots)
 	if err != nil {
 		return nil, err
 	}
@@ -219,11 +228,28 @@ func (h *ContainerdHandler) listSkillsFromContainer(ctx context.Context, botID s
 	if err != nil {
 		return nil, err
 	}
-	items, err := skillset.List(ctx, client)
+	roots, err := h.skillDiscoveryRoots(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := skillset.List(ctx, client, roots)
 	if err != nil {
 		return nil, err
 	}
 	return skillItemsFromEntries(items), nil
+}
+
+func (h *ContainerdHandler) skillDiscoveryRoots(ctx context.Context, botID string) ([]string, error) {
+	if h.botService != nil {
+		bot, err := h.botService.Get(ctx, botID)
+		if err == nil {
+			return workspace.SkillDiscoveryRootsFromMetadata(bot.Metadata), nil
+		}
+	}
+	if h.manager == nil {
+		return nil, nil
+	}
+	return h.manager.ResolveWorkspaceSkillDiscoveryRoots(ctx, botID)
 }
 
 func skillItemsFromEntries(entries []skillset.Entry) []SkillItem {
