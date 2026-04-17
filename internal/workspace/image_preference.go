@@ -138,7 +138,11 @@ func workspaceSkillDiscoveryRootsFromMetadata(metadata map[string]any) ([]string
 		return []string{}, true
 	}
 
-	return normalizeWorkspaceSkillDiscoveryRoots(roots), true
+	normalized := normalizeWorkspaceSkillDiscoveryRoots(roots)
+	if normalized == nil {
+		return []string{}, true
+	}
+	return normalized, true
 }
 
 func withWorkspaceImagePreference(metadata map[string]any, image string) map[string]any {
