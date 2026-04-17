@@ -163,6 +163,9 @@ func TestWorkspaceSkillDiscoveryRootsExplicitDisableRemainsPresent(t *testing.T)
 	if !ok {
 		t.Fatal("expected skill discovery roots key to remain present")
 	}
+	if roots == nil {
+		t.Fatal("expected explicit disable to return a non-nil empty slice")
+	}
 	if len(roots) != 0 {
 		t.Fatalf("expected explicit disable with no roots, got %#v", roots)
 	}
