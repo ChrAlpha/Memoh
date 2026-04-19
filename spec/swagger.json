@@ -8088,6 +8088,141 @@
                 }
             }
         },
+        "/speech-providers/{id}": {
+            "get": {
+                "description": "Get a speech provider with masked config values",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "speech-providers"
+                ],
+                "summary": "Get speech provider",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/tts.SpeechProviderResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/speech-providers/{id}/import-models": {
+            "post": {
+                "description": "Fetch models using the configured speech provider and import them into the unified models table",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "speech-providers"
+                ],
+                "summary": "Import speech models from provider",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/tts.ImportModelsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/speech-providers/{id}/models": {
+            "get": {
+                "description": "List models of type 'speech' for a specific speech provider",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "speech-providers"
+                ],
+                "summary": "List speech models by provider",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/tts.SpeechModelResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/supermarket/mcps": {
             "get": {
                 "tags": [
@@ -12921,12 +13056,82 @@
                 }
             }
         },
+        "tts.ConfigSchema": {
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/tts.FieldSchema"
+                    }
+                }
+            }
+        },
+        "tts.FieldSchema": {
+            "type": "object",
+            "properties": {
+                "advanced": {
+                    "type": "boolean"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enum": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "example": {},
+                "key": {
+                    "type": "string"
+                },
+                "order": {
+                    "type": "integer"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "tts.ImportModelsResponse": {
+            "type": "object",
+            "properties": {
+                "created": {
+                    "type": "integer"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipped": {
+                    "type": "integer"
+                }
+            }
+        },
         "tts.ModelCapabilities": {
             "type": "object",
             "properties": {
+                "config_schema": {
+                    "$ref": "#/definitions/tts.ConfigSchema"
+                },
                 "formats": {
                     "type": "array",
                     "items": {
+                        "type": "string"
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
                         "type": "string"
                     }
                 },
@@ -12949,6 +13154,9 @@
             "properties": {
                 "capabilities": {
                     "$ref": "#/definitions/tts.ModelCapabilities"
+                },
+                "config_schema": {
+                    "$ref": "#/definitions/tts.ConfigSchema"
                 },
                 "description": {
                     "type": "string"
@@ -12984,6 +13192,9 @@
         "tts.ProviderMetaResponse": {
             "type": "object",
             "properties": {
+                "config_schema": {
+                    "$ref": "#/definitions/tts.ConfigSchema"
+                },
                 "default_model": {
                     "type": "string"
                 },
@@ -13040,11 +13251,18 @@
                 "client_type": {
                     "type": "string"
                 },
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
                 "created_at": {
                     "type": "string"
                 },
                 "enable": {
                     "type": "boolean"
+                },
+                "icon": {
+                    "type": "string"
                 },
                 "id": {
                     "type": "string"

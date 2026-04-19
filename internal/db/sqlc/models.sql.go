@@ -35,8 +35,19 @@ func (q *Queries) CountModelsByType(ctx context.Context, type_ string) (int64, e
 }
 
 const countProviders = `-- name: CountProviders :one
-SELECT COUNT(*) FROM providers
-WHERE client_type NOT IN ('edge-speech')
+SELECT COUNT(*)
+FROM providers
+WHERE client_type NOT IN (
+  'edge-speech',
+  'openai-speech',
+  'openrouter-speech',
+  'elevenlabs-speech',
+  'deepgram-speech',
+  'minimax-speech',
+  'volcengine-speech',
+  'alibabacloud-speech',
+  'microsoft-speech'
+)
 `
 
 func (q *Queries) CountProviders(ctx context.Context) (int64, error) {
@@ -187,6 +198,22 @@ DELETE FROM models WHERE model_id = $1
 
 func (q *Queries) DeleteModelByModelID(ctx context.Context, modelID string) error {
 	_, err := q.db.Exec(ctx, deleteModelByModelID, modelID)
+	return err
+}
+
+const deleteModelByProviderIDAndModelID = `-- name: DeleteModelByProviderIDAndModelID :exec
+DELETE FROM models
+WHERE provider_id = $1
+  AND model_id = $2
+`
+
+type DeleteModelByProviderIDAndModelIDParams struct {
+	ProviderID pgtype.UUID `json:"provider_id"`
+	ModelID    string      `json:"model_id"`
+}
+
+func (q *Queries) DeleteModelByProviderIDAndModelID(ctx context.Context, arg DeleteModelByProviderIDAndModelIDParams) error {
+	_, err := q.db.Exec(ctx, deleteModelByProviderIDAndModelID, arg.ProviderID, arg.ModelID)
 	return err
 }
 
@@ -717,7 +744,17 @@ func (q *Queries) ListModelsByType(ctx context.Context, type_ string) ([]Model, 
 
 const listProviders = `-- name: ListProviders :many
 SELECT id, name, client_type, icon, enable, config, metadata, created_at, updated_at FROM providers
-WHERE client_type NOT IN ('edge-speech')
+WHERE client_type NOT IN (
+  'edge-speech',
+  'openai-speech',
+  'openrouter-speech',
+  'elevenlabs-speech',
+  'deepgram-speech',
+  'minimax-speech',
+  'volcengine-speech',
+  'alibabacloud-speech',
+  'microsoft-speech'
+)
 ORDER BY created_at DESC
 `
 
@@ -840,7 +877,17 @@ func (q *Queries) ListSpeechModelsByProviderID(ctx context.Context, providerID p
 
 const listSpeechProviders = `-- name: ListSpeechProviders :many
 SELECT id, name, client_type, icon, enable, config, metadata, created_at, updated_at FROM providers
-WHERE client_type IN ('edge-speech')
+WHERE client_type IN (
+  'edge-speech',
+  'openai-speech',
+  'openrouter-speech',
+  'elevenlabs-speech',
+  'deepgram-speech',
+  'minimax-speech',
+  'volcengine-speech',
+  'alibabacloud-speech',
+  'microsoft-speech'
+)
 ORDER BY created_at DESC
 `
 

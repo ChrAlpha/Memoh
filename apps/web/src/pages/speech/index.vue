@@ -18,6 +18,12 @@ import type { TtsSpeechProviderResponse } from '@memohai/sdk'
 import ProviderSetting from './components/provider-setting.vue'
 import { Volume2 } from 'lucide-vue-next'
 import MasterDetailSidebarLayout from '@/components/master-detail-sidebar-layout/index.vue'
+import ProviderIcon from '@/components/provider-icon/index.vue'
+
+function getInitials(name: string | undefined) {
+  const label = name?.trim() ?? ''
+  return label ? label.slice(0, 2).toUpperCase() : '?'
+}
 
 const { data: providerData } = useQuery({
   key: () => ['speech-providers'],
@@ -79,9 +85,17 @@ watch(filteredProviders, (list) => {
             >
               <span class="relative shrink-0">
                 <span class="flex size-7 items-center justify-center rounded-full bg-muted">
-                  <Volume2
-                    class="size-3.5 text-muted-foreground"
+                  <ProviderIcon
+                    v-if="item.icon"
+                    :icon="item.icon"
+                    size="1.25em"
                   />
+                  <span
+                    v-else
+                    class="text-xs font-medium text-muted-foreground"
+                  >
+                    {{ getInitials(item.name) }}
+                  </span>
                 </span>
                 <span
                   v-if="item.enable !== false"

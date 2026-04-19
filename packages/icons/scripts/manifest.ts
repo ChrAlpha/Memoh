@@ -18,6 +18,8 @@ const llmProviders: string[] = [
   ...withVariants('anthropic', []),
   ...withVariants('google', ['color', 'brand-color']),
   ...withVariants('deepseek', ['color']),
+  ...withVariants('deepgram', []),
+  ...withVariants('elevenlabs', []),
   ...withVariants('groq', []),
   ...withVariants('huggingface', ['color']),
   ...withVariants('lmstudio', []),

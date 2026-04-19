@@ -1,6 +1,6 @@
 name: Edge
 client_type: edge-speech
-icon: edge
+icon: microsoft
 
 models:
   - model_id: edge-read-aloud

@@ -4,21 +4,24 @@ import "time"
 
 // ProviderMetaResponse exposes adapter metadata (from the registry, not DB).
 type ProviderMetaResponse struct {
-	Provider     string      `json:"provider"`
-	DisplayName  string      `json:"display_name"`
-	Description  string      `json:"description"`
-	DefaultModel string      `json:"default_model"`
-	Models       []ModelInfo `json:"models"`
+	Provider     string       `json:"provider"`
+	DisplayName  string       `json:"display_name"`
+	Description  string       `json:"description"`
+	ConfigSchema ConfigSchema `json:"config_schema,omitempty"`
+	DefaultModel string       `json:"default_model"`
+	Models       []ModelInfo  `json:"models"`
 }
 
 // SpeechProviderResponse represents a speech-capable provider from the unified providers table.
 type SpeechProviderResponse struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	ClientType string    `json:"client_type"`
-	Enable     bool      `json:"enable"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	ClientType string         `json:"client_type"`
+	Icon       string         `json:"icon,omitempty"`
+	Enable     bool           `json:"enable"`
+	Config     map[string]any `json:"config,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 // SpeechModelResponse represents a speech model from the unified models table.
@@ -49,4 +52,11 @@ type UpdateSpeechModelRequest struct {
 type TestSynthesizeRequest struct {
 	Text   string         `json:"text"`
 	Config map[string]any `json:"config,omitempty"`
+}
+
+// ImportModelsResponse represents the response for importing speech models.
+type ImportModelsResponse struct {
+	Created int      `json:"created"`
+	Skipped int      `json:"skipped"`
+	Models  []string `json:"models"`
 }

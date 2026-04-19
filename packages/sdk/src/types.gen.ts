@@ -1642,8 +1642,34 @@ export type SettingsUpsertRequest = {
     tts_model_id?: string;
 };
 
+export type TtsConfigSchema = {
+    fields?: Array<TtsFieldSchema>;
+};
+
+export type TtsFieldSchema = {
+    advanced?: boolean;
+    description?: string;
+    enum?: Array<string>;
+    example?: unknown;
+    key?: string;
+    order?: number;
+    required?: boolean;
+    title?: string;
+    type?: string;
+};
+
+export type TtsImportModelsResponse = {
+    created?: number;
+    models?: Array<string>;
+    skipped?: number;
+};
+
 export type TtsModelCapabilities = {
+    config_schema?: TtsConfigSchema;
     formats?: Array<string>;
+    metadata?: {
+        [key: string]: string;
+    };
     pitch?: TtsParamConstraint;
     speed?: TtsParamConstraint;
     voices?: Array<TtsVoiceInfo>;
@@ -1651,6 +1677,7 @@ export type TtsModelCapabilities = {
 
 export type TtsModelInfo = {
     capabilities?: TtsModelCapabilities;
+    config_schema?: TtsConfigSchema;
     description?: string;
     id?: string;
     name?: string;
@@ -1664,6 +1691,7 @@ export type TtsParamConstraint = {
 };
 
 export type TtsProviderMetaResponse = {
+    config_schema?: TtsConfigSchema;
     default_model?: string;
     description?: string;
     display_name?: string;
@@ -1686,8 +1714,12 @@ export type TtsSpeechModelResponse = {
 
 export type TtsSpeechProviderResponse = {
     client_type?: string;
+    config?: {
+        [key: string]: unknown;
+    };
     created_at?: string;
     enable?: boolean;
+    icon?: string;
     id?: string;
     name?: string;
     updated_at?: string;
@@ -8330,6 +8362,112 @@ export type GetSpeechProvidersMetaResponses = {
 };
 
 export type GetSpeechProvidersMetaResponse = GetSpeechProvidersMetaResponses[keyof GetSpeechProvidersMetaResponses];
+
+export type GetSpeechProvidersByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Provider ID (UUID)
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/speech-providers/{id}';
+};
+
+export type GetSpeechProvidersByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type GetSpeechProvidersByIdError = GetSpeechProvidersByIdErrors[keyof GetSpeechProvidersByIdErrors];
+
+export type GetSpeechProvidersByIdResponses = {
+    /**
+     * OK
+     */
+    200: TtsSpeechProviderResponse;
+};
+
+export type GetSpeechProvidersByIdResponse = GetSpeechProvidersByIdResponses[keyof GetSpeechProvidersByIdResponses];
+
+export type PostSpeechProvidersByIdImportModelsData = {
+    body?: never;
+    path: {
+        /**
+         * Provider ID (UUID)
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/speech-providers/{id}/import-models';
+};
+
+export type PostSpeechProvidersByIdImportModelsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostSpeechProvidersByIdImportModelsError = PostSpeechProvidersByIdImportModelsErrors[keyof PostSpeechProvidersByIdImportModelsErrors];
+
+export type PostSpeechProvidersByIdImportModelsResponses = {
+    /**
+     * OK
+     */
+    200: TtsImportModelsResponse;
+};
+
+export type PostSpeechProvidersByIdImportModelsResponse = PostSpeechProvidersByIdImportModelsResponses[keyof PostSpeechProvidersByIdImportModelsResponses];
+
+export type GetSpeechProvidersByIdModelsData = {
+    body?: never;
+    path: {
+        /**
+         * Provider ID (UUID)
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/speech-providers/{id}/models';
+};
+
+export type GetSpeechProvidersByIdModelsErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetSpeechProvidersByIdModelsError = GetSpeechProvidersByIdModelsErrors[keyof GetSpeechProvidersByIdModelsErrors];
+
+export type GetSpeechProvidersByIdModelsResponses = {
+    /**
+     * OK
+     */
+    200: Array<TtsSpeechModelResponse>;
+};
+
+export type GetSpeechProvidersByIdModelsResponse = GetSpeechProvidersByIdModelsResponses[keyof GetSpeechProvidersByIdModelsResponses];
 
 export type GetSupermarketMcpsData = {
     body?: never;
