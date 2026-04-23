@@ -295,29 +295,166 @@ func extractTextContent(raw []byte) string {
 		return ""
 	}
 
-	if text := msg.TextContent(); text != "" {
+	if text := extractVisibleHistoryText(msg.Content); text != "" {
 		return text
 	}
 
-	// assistant tool_calls: show tool names
-	if len(msg.ToolCalls) > 0 {
-		names := make([]string, 0, len(msg.ToolCalls))
-		for _, tc := range msg.ToolCalls {
-			if tc.Function.Name != "" {
-				names = append(names, tc.Function.Name)
-			}
-		}
-		if len(names) > 0 {
-			return "[tool_call: " + strings.Join(names, ", ") + "]"
-		}
+	if names := extractHistoryToolCallNames(msg); len(names) > 0 {
+		return "[tool_call: " + strings.Join(names, ", ") + "]"
 	}
 
-	// tool result: content may be a JSON object; stringify it
-	if len(msg.Content) > 0 {
-		return string(msg.Content)
+	if names := extractHistoryToolResultNames(msg.Content); len(names) > 0 {
+		return "[tool_result: " + strings.Join(names, ", ") + "]"
 	}
 
 	return ""
+}
+
+type historyContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	URL      string          `json:"url,omitempty"`
+	Emoji    string          `json:"emoji,omitempty"`
+	ToolName string          `json:"toolName,omitempty"`
+	Content  json.RawMessage `json:"content,omitempty"`
+}
+
+func extractVisibleHistoryText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return ""
+		}
+		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+			if nested := extractVisibleHistoryText(json.RawMessage(trimmed)); nested != "" {
+				return nested
+			}
+		}
+		return trimmed
+	}
+
+	parts := extractHistoryContentParts(raw)
+	if len(parts) > 0 {
+		lines := make([]string, 0, len(parts))
+		for _, part := range parts {
+			partType := strings.ToLower(strings.TrimSpace(part.Type))
+			switch {
+			case partType == "reasoning", partType == "tool-call", partType == "tool-result":
+				continue
+			case partType == "text" && strings.TrimSpace(part.Text) != "":
+				lines = append(lines, strings.TrimSpace(part.Text))
+			case partType == "link" && strings.TrimSpace(part.URL) != "":
+				lines = append(lines, strings.TrimSpace(part.URL))
+			case partType == "emoji" && strings.TrimSpace(part.Emoji) != "":
+				lines = append(lines, strings.TrimSpace(part.Emoji))
+			case strings.TrimSpace(part.Text) != "":
+				lines = append(lines, strings.TrimSpace(part.Text))
+			}
+		}
+		return strings.TrimSpace(strings.Join(lines, "\n"))
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err == nil {
+		if value, ok := object["text"].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	}
+
+	return ""
+}
+
+func extractHistoryToolCallNames(msg conversation.ModelMessage) []string {
+	names := make([]string, 0, len(msg.ToolCalls))
+	for _, part := range extractHistoryContentParts(msg.Content) {
+		if strings.ToLower(strings.TrimSpace(part.Type)) != "tool-call" {
+			continue
+		}
+		if name := strings.TrimSpace(part.ToolName); name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) > 0 {
+		return dedupeHistoryNames(names)
+	}
+
+	for _, tc := range msg.ToolCalls {
+		if name := strings.TrimSpace(tc.Function.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return dedupeHistoryNames(names)
+}
+
+func extractHistoryToolResultNames(raw json.RawMessage) []string {
+	parts := extractHistoryContentParts(raw)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.ToLower(strings.TrimSpace(part.Type)) != "tool-result" {
+			continue
+		}
+		if name := strings.TrimSpace(part.ToolName); name != "" {
+			names = append(names, name)
+		}
+	}
+	return dedupeHistoryNames(names)
+}
+
+func extractHistoryContentParts(raw json.RawMessage) []historyContentPart {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var parts []historyContentPart
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		return parts
+	}
+
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err == nil {
+		trimmed := strings.TrimSpace(encoded)
+		if strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{") {
+			return extractHistoryContentParts(json.RawMessage(trimmed))
+		}
+	}
+
+	var object struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &object); err == nil && len(object.Content) > 0 {
+		return extractHistoryContentParts(object.Content)
+	}
+
+	return nil
+}
+
+func dedupeHistoryNames(names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 var timeFormats = []string{

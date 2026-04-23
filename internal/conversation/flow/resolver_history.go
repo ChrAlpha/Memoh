@@ -325,22 +325,11 @@ func (r *Resolver) loadTurnResponses(ctx context.Context, sessionID string) []pi
 	}
 	var trs []pipelinepkg.TurnResponseEntry
 	for _, m := range msgs {
-		if m.Role != "assistant" && m.Role != "tool" {
+		entry, ok := pipelinepkg.DecodeTurnResponseEntry(m)
+		if !ok {
 			continue
 		}
-		var mm conversation.ModelMessage
-		if err := json.Unmarshal(m.Content, &mm); err != nil {
-			continue
-		}
-		contentStr := ""
-		if mm.Content != nil {
-			contentStr = string(mm.Content)
-		}
-		trs = append(trs, pipelinepkg.TurnResponseEntry{
-			RequestedAtMs: m.CreatedAt.UnixMilli(),
-			Role:          m.Role,
-			Content:       contentStr,
-		})
+		trs = append(trs, entry)
 	}
 	return trs
 }
@@ -356,8 +345,10 @@ func stripToolMessages(messages []conversation.ModelMessage) []conversation.Mode
 		if strings.EqualFold(role, "tool") {
 			continue
 		}
-		// Remove assistant messages that contain tool calls (without text content).
-		if strings.EqualFold(role, "assistant") && len(m.ToolCalls) > 0 {
+		// Remove assistant messages that only contain tool calls / reasoning with
+		// no visible text. Tool-call metadata may live either in ToolCalls or in
+		// structured content parts.
+		if strings.EqualFold(role, "assistant") && hasToolCallContent(m) {
 			text := m.TextContent()
 			if strings.TrimSpace(text) == "" {
 				continue

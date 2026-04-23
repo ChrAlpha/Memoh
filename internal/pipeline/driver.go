@@ -12,7 +12,6 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/channel"
-	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 )
@@ -367,22 +366,11 @@ func (d *DiscussDriver) loadTurnResponses(ctx context.Context, sessionID string)
 
 	var trs []TurnResponseEntry
 	for _, m := range msgs {
-		if m.Role != "assistant" && m.Role != "tool" {
+		entry, ok := DecodeTurnResponseEntry(m)
+		if !ok {
 			continue
 		}
-		var mm conversation.ModelMessage
-		if err := json.Unmarshal(m.Content, &mm); err != nil {
-			continue
-		}
-		contentStr := mm.TextContent()
-		if contentStr == "" {
-			continue
-		}
-		trs = append(trs, TurnResponseEntry{
-			RequestedAtMs: m.CreatedAt.UnixMilli(),
-			Role:          m.Role,
-			Content:       contentStr,
-		})
+		trs = append(trs, entry)
 	}
 	return trs
 }

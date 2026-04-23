@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/memohai/memoh/internal/conversation"
@@ -168,5 +169,35 @@ func TestTrimMessagesByTokens_EstimatesFallback(t *testing.T) {
 	// The key check is that the long user message was removed.
 	if len(trimmed) != 2 || trimmed[0].Role != "system" || trimmed[1].Role != "assistant" {
 		t.Fatalf("expected [system notice, assistant message], got %d messages: %+v", len(trimmed), trimmed)
+	}
+}
+
+func TestStripToolMessages_RemovesAssistantToolCallContentParts(t *testing.T) {
+	t.Parallel()
+
+	content, err := json.Marshal([]map[string]any{
+		{"type": "reasoning", "text": "thinking"},
+		{"type": "tool-call", "toolName": "read", "toolCallId": "call-1", "input": map[string]any{"path": "/tmp/a.txt"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal content: %v", err)
+	}
+
+	filtered := stripToolMessages([]conversation.ModelMessage{
+		{
+			Role:    "assistant",
+			Content: content,
+		},
+		{
+			Role:    "assistant",
+			Content: conversation.NewTextContent("保留这条消息"),
+		},
+	})
+
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 message after filtering, got %d", len(filtered))
+	}
+	if filtered[0].TextContent() != "保留这条消息" {
+		t.Fatalf("unexpected remaining message: %+v", filtered[0])
 	}
 }
