@@ -1,91 +1,79 @@
 <template>
   <form @submit="editProvider">
-    <div class="space-y-4">
-      <section class="space-y-2">
-        <FormField
-          v-slot="{ componentField }"
-          name="name"
-        >
-          <FormItem>
-            <FormLabel>{{ $t('common.name') }}</FormLabel>
-            <FormControl>
-              <Input
-                type="text"
-                :placeholder="$t('common.namePlaceholder')"
-                :aria-label="$t('common.name')"
-                v-bind="componentField"
-              />
-            </FormControl>
-          </FormItem>
-        </FormField>
-      </section>
-
-      <section
-        v-if="!['openai-codex', 'github-copilot'].includes(form.values.client_type)"
-        class="space-y-2"
+    <div class="grid gap-4 md:grid-cols-2">
+      <FormField
+        v-slot="{ componentField }"
+        name="name"
       >
-        <FormField
-          v-slot="{ componentField }"
-          name="api_key"
-        >
-          <FormItem>
-            <FormLabel>{{ $t('provider.apiKey') }}</FormLabel>
-            <FormControl>
-              <Input
-                type="password"
-                :placeholder="getStoredSecret(props.provider?.config as Record<string, unknown> | undefined) || $t('provider.apiKeyPlaceholder')"
-                :aria-label="$t('provider.apiKey')"
-                v-bind="componentField"
-              />
-            </FormControl>
-          </FormItem>
-        </FormField>
-      </section>
+        <FormItem>
+          <FormLabel>{{ $t('common.name') }}</FormLabel>
+          <FormControl>
+            <Input
+              type="text"
+              :placeholder="$t('common.namePlaceholder')"
+              :aria-label="$t('common.name')"
+              v-bind="componentField"
+            />
+          </FormControl>
+        </FormItem>
+      </FormField>
 
-      <section
+      <FormField
+        v-slot="{ value, handleChange }"
+        name="client_type"
+      >
+        <FormItem>
+          <FormLabel>{{ $t('provider.clientType') }}</FormLabel>
+          <FormControl>
+            <SearchableSelectPopover
+              :model-value="value"
+              :options="clientTypeOptions"
+              :placeholder="$t('models.clientTypePlaceholder')"
+              @update:model-value="handleChange"
+            />
+          </FormControl>
+        </FormItem>
+      </FormField>
+
+      <FormField
         v-if="form.values.client_type !== 'github-copilot'"
-        class="space-y-2"
+        v-slot="{ componentField }"
+        name="base_url"
       >
-        <FormField
-          v-slot="{ componentField }"
-          name="base_url"
-        >
-          <FormItem>
-            <FormLabel>{{ $t('provider.url') }}</FormLabel>
-            <FormControl>
-              <Input
-                type="text"
-                :placeholder="$t('provider.urlPlaceholder')"
-                :aria-label="$t('provider.url')"
-                v-bind="componentField"
-              />
-            </FormControl>
-          </FormItem>
-        </FormField>
-      </section>
+        <FormItem class="md:col-span-2">
+          <FormLabel>{{ $t('provider.url') }}</FormLabel>
+          <FormControl>
+            <Input
+              type="text"
+              :placeholder="$t('provider.urlPlaceholder')"
+              :aria-label="$t('provider.url')"
+              v-bind="componentField"
+            />
+          </FormControl>
+        </FormItem>
+      </FormField>
 
-      <section class="space-y-2">
-        <FormField
-          v-slot="{ value, handleChange }"
-          name="client_type"
-        >
-          <FormItem>
-            <FormLabel>{{ $t('provider.clientType') }}</FormLabel>
-            <FormControl>
-              <SearchableSelectPopover
-                :model-value="value"
-                :options="clientTypeOptions"
-                :placeholder="$t('models.clientTypePlaceholder')"
-                @update:model-value="handleChange"
-              />
-            </FormControl>
-          </FormItem>
-        </FormField>
-      </section>
+      <FormField
+        v-if="!['openai-codex', 'github-copilot'].includes(form.values.client_type)"
+        v-slot="{ componentField }"
+        name="api_key"
+      >
+        <FormItem class="md:col-span-2">
+          <FormLabel>{{ $t('provider.apiKey') }}</FormLabel>
+          <FormControl>
+            <Input
+              type="password"
+              :placeholder="getStoredSecret(props.provider?.config as Record<string, unknown> | undefined) || $t('provider.apiKeyPlaceholder')"
+              :aria-label="$t('provider.apiKey')"
+              v-bind="componentField"
+            />
+          </FormControl>
+        </FormItem>
+      </FormField>
 
       <section
         v-if="['openai-codex', 'github-copilot'].includes(form.values.client_type)"
-        class="rounded-lg border p-4 space-y-3 text-xs"
+        class="md:col-span-2 rounded-lg border p-4 space-y-3 text-xs"
       >
         <div class="space-y-1">
           <div class="font-medium">

@@ -1,8 +1,11 @@
 <template>
-  <Item variant="outline">
-    <ItemContent>
-      <ItemTitle class="flex items-center gap-2">
-        {{ model.name || model.model_id }}
+  <Item
+    variant="outline"
+    class="h-full flex-col items-stretch"
+  >
+    <ItemContent class="w-full">
+      <ItemTitle class="flex items-center gap-2 min-w-0">
+        <span class="truncate">{{ model.name || model.model_id }}</span>
         <Badge
           v-if="model.type"
           variant="outline"
@@ -30,7 +33,7 @@
           class="size-3.5"
         />
       </ItemTitle>
-      <ItemDescription class="gap-2 flex flex-wrap items-center mt-3">
+      <ItemDescription class="gap-2 flex flex-wrap items-center mt-3 min-h-6">
         <ModelCapabilities :compatibilities="model.config?.compatibilities || []" />
         <Badge
           v-for="effort in reasoningEfforts"
@@ -49,7 +52,7 @@
         </span>
       </ItemDescription>
     </ItemContent>
-    <ItemActions>
+    <ItemActions class="mt-auto w-full justify-end">
       <Button
         type="button"
         variant="outline"

@@ -1,5 +1,5 @@
 <template>
-  <div class="p-4">
+  <SettingsShell width="standard">
     <section class="flex justify-between items-center">
       <div class="flex items-center gap-2">
         <Mail
@@ -18,35 +18,34 @@
     <Separator class="mt-4 mb-6" />
 
     <form @submit="handleSave">
-      <div class="space-y-4">
-        <section>
-          <FormField
-            v-slot="{ componentField }"
-            name="name"
-          >
-            <FormItem>
-              <Label :for="'email-provider-name'">
-                {{ $t('common.name') }}
-              </Label>
-              <FormControl>
-                <Input
-                  :id="'email-provider-name'"
-                  type="text"
-                  :placeholder="$t('common.namePlaceholder')"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
-        </section>
+      <div class="grid gap-4 md:grid-cols-2">
+        <FormField
+          v-slot="{ componentField }"
+          name="name"
+        >
+          <FormItem class="md:col-span-2">
+            <Label :for="'email-provider-name'">
+              {{ $t('common.name') }}
+            </Label>
+            <FormControl>
+              <Input
+                :id="'email-provider-name'"
+                type="text"
+                :placeholder="$t('common.namePlaceholder')"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
-        <Separator class="my-4" />
+        <Separator class="md:col-span-2" />
 
         <!-- Dynamic config fields from meta schema -->
         <div
           v-for="field in orderedFields"
           :key="field.key"
           class="space-y-2"
+          :class="isWideField(field) ? 'md:col-span-2' : ''"
         >
           <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `email-field-${field.key}`">
             {{ $te(`email.fields.${field.key}`) ? $t(`email.fields.${field.key}`) : (field.title || field.key) }}
@@ -210,7 +209,7 @@
         </LoadingButton>
       </section>
     </form>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -232,6 +231,7 @@ import {
 import { Mail, Eye, EyeOff, KeyRound, Trash2 } from 'lucide-vue-next'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 import { computed, inject, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'
@@ -273,6 +273,14 @@ const orderedFields = computed<EmailFieldSchema[]>(() => {
   if (!Array.isArray(fields)) return []
   return [...fields].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
 })
+
+function isWideField(field: EmailFieldSchema) {
+  if (field.type === 'secret') return true
+  const key = String(field.key ?? '').toLowerCase()
+  if (key.includes('url') || key.includes('endpoint') || key.includes('key') || key.includes('token') || key.includes('path') || key.includes('uri') || key.includes('address') || key.includes('domain') || key.includes('sender') || key.includes('from') || key.includes('to')) return true
+  if ((field.description ?? '').length > 80) return true
+  return false
+}
 
 const isOAuthProvider = computed(() =>
   OAUTH_PROVIDERS.includes(curProvider.value?.provider ?? ''),

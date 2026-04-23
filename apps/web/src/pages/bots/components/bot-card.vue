@@ -1,6 +1,6 @@
 <template>
   <Card
-    class="group relative transition-shadow"
+    class="group relative transition-shadow h-full flex flex-col"
     :class="isPending ? 'opacity-80 cursor-not-allowed' : 'hover:shadow-md cursor-pointer'"
     role="button"
     :tabindex="isPending ? -1 : 0"

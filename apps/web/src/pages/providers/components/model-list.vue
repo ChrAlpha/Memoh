@@ -29,7 +29,7 @@
         />
       </InputGroup>
 
-      <section class="flex flex-col gap-4">
+      <section class="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
         <ModelItem
           v-for="model in displayedModels"
           :key="model.id || `${model.provider_id}:${model.model_id}`"

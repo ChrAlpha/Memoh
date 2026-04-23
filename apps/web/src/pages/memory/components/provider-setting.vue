@@ -1,7 +1,8 @@
 <template>
-  <div
+  <SettingsShell
     v-if="curProvider"
-    class="p-6 space-y-6"
+    width="standard"
+    class="space-y-6"
   >
     <div class="flex items-center justify-between">
       <div>
@@ -179,12 +180,15 @@
       </div>
     </template>
 
-    <!-- Remote provider config (mem0 / openviking) -->
-    <template v-if="curProvider.provider !== 'builtin' && providerSchema">
+    <div
+      v-if="curProvider.provider !== 'builtin' && providerSchema"
+      class="grid gap-4 md:grid-cols-2"
+    >
       <div
         v-for="(fieldSchema, fieldKey) in providerSchema.fields"
         :key="fieldKey"
         class="space-y-2"
+        :class="isWideField(fieldKey, fieldSchema) ? 'md:col-span-2' : ''"
       >
         <Label>
           {{ fieldSchema.title || fieldKey }}
@@ -205,7 +209,7 @@
           :placeholder="fieldSchema.example ? String(fieldSchema.example) : ''"
         />
       </div>
-    </template>
+    </div>
 
     <div class="flex justify-end">
       <Button
@@ -219,7 +223,7 @@
         {{ $t('common.save') }}
       </Button>
     </div>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -238,6 +242,7 @@ import { toast } from 'vue-sonner'
 import { useI18n } from 'vue-i18n'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import ModelSelect from '@/pages/bots/components/model-select.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 
 const { t } = useI18n()
 const queryCache = useQueryCache()
@@ -308,6 +313,16 @@ const builtinModeHighlightClass = computed(() => {
   if (builtinMode.value === 'dense') return 'translate-x-[200%]'
   return 'translate-x-0'
 })
+
+// Heuristic: URL / endpoint / api-key / secret / long descriptions get full width.
+// Short enums / numbers / bools stay in two-column grid.
+function isWideField(key: string | number, schema: { secret?: boolean; type?: string; description?: string }) {
+  const keyStr = String(key).toLowerCase()
+  if (schema.secret) return true
+  if (keyStr.includes('url') || keyStr.includes('endpoint') || keyStr.includes('key') || keyStr.includes('token') || keyStr.includes('path') || keyStr.includes('uri')) return true
+  if ((schema.description ?? '').length > 80) return true
+  return false
+}
 
 watch(curProvider!, (val) => {
   if (val) {

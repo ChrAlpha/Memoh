@@ -1,10 +1,14 @@
 <template>
   <div class="space-y-4">
-    <template v-if="basicFields.length > 0">
+    <div
+      v-if="basicFields.length > 0"
+      class="grid gap-4 md:grid-cols-2"
+    >
       <section
         v-for="field in basicFields"
         :key="field.key"
         class="space-y-2"
+        :class="isWideField(field) ? 'md:col-span-2' : ''"
       >
         <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `tts-field-${field.key}`">
           {{ field.title || field.key }}
@@ -79,10 +83,10 @@
           :placeholder="field.example ? String(field.example) : ''"
         />
       </section>
-    </template>
+    </div>
 
     <div
-      v-else-if="advancedFields.length === 0"
+      v-if="basicFields.length === 0 && advancedFields.length === 0"
       class="text-xs text-muted-foreground"
     >
       {{ mode === 'transcription' ? $t('transcription.noCapabilities') : $t('speech.noCapabilities') }}
@@ -105,89 +109,92 @@
       </button>
       <div
         v-if="showAdvanced"
-        class="space-y-4 border-t border-border px-3 py-3"
+        class="border-t border-border px-3 py-3 space-y-4"
       >
         <p class="text-xs text-muted-foreground">
           {{ mode === 'transcription' ? $t('transcription.advanced.description') : $t('speech.advanced.description') }}
         </p>
-        <section
-          v-for="field in advancedFields"
-          :key="field.key"
-          class="space-y-2"
-        >
-          <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `tts-field-${field.key}`">
-            {{ field.title || field.key }}
-          </Label>
-          <p
-            v-if="field.description"
-            class="text-xs text-muted-foreground"
+        <div class="grid gap-4 md:grid-cols-2">
+          <section
+            v-for="field in advancedFields"
+            :key="field.key"
+            class="space-y-2"
+            :class="isWideField(field) ? 'md:col-span-2' : ''"
           >
-            {{ field.description }}
-          </p>
+            <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `tts-field-${field.key}`">
+              {{ field.title || field.key }}
+            </Label>
+            <p
+              v-if="field.description"
+              class="text-xs text-muted-foreground"
+            >
+              {{ field.description }}
+            </p>
 
-          <div
-            v-if="field.type === 'secret'"
-            class="relative"
-          >
+            <div
+              v-if="field.type === 'secret'"
+              class="relative"
+            >
+              <Input
+                :id="`tts-field-${field.key}`"
+                v-model="configData[field.key] as string"
+                :type="visibleSecrets[field.key] ? 'text' : 'password'"
+                :placeholder="field.example ? String(field.example) : ''"
+              />
+              <button
+                type="button"
+                class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                @click="visibleSecrets[field.key] = !visibleSecrets[field.key]"
+              >
+                <component
+                  :is="visibleSecrets[field.key] ? EyeOff : Eye"
+                  class="size-3.5"
+                />
+              </button>
+            </div>
+
+            <Switch
+              v-else-if="field.type === 'bool'"
+              :model-value="!!configData[field.key]"
+              @update:model-value="(val) => configData[field.key] = !!val"
+            />
+
             <Input
+              v-else-if="field.type === 'number'"
               :id="`tts-field-${field.key}`"
-              v-model="configData[field.key] as string"
-              :type="visibleSecrets[field.key] ? 'text' : 'password'"
+              v-model.number="configData[field.key] as number"
+              type="number"
               :placeholder="field.example ? String(field.example) : ''"
             />
-            <button
-              type="button"
-              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              @click="visibleSecrets[field.key] = !visibleSecrets[field.key]"
+
+            <Select
+              v-else-if="field.type === 'enum' && field.enum"
+              :model-value="String(configData[field.key] ?? '')"
+              @update:model-value="(val) => configData[field.key] = val"
             >
-              <component
-                :is="visibleSecrets[field.key] ? EyeOff : Eye"
-                class="size-3.5"
-              />
-            </button>
-          </div>
+              <SelectTrigger>
+                <SelectValue :placeholder="field.title || field.key" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="opt in field.enum"
+                  :key="opt"
+                  :value="opt"
+                >
+                  {{ opt }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
 
-          <Switch
-            v-else-if="field.type === 'bool'"
-            :model-value="!!configData[field.key]"
-            @update:model-value="(val) => configData[field.key] = !!val"
-          />
-
-          <Input
-            v-else-if="field.type === 'number'"
-            :id="`tts-field-${field.key}`"
-            v-model.number="configData[field.key] as number"
-            type="number"
-            :placeholder="field.example ? String(field.example) : ''"
-          />
-
-          <Select
-            v-else-if="field.type === 'enum' && field.enum"
-            :model-value="String(configData[field.key] ?? '')"
-            @update:model-value="(val) => configData[field.key] = val"
-          >
-            <SelectTrigger>
-              <SelectValue :placeholder="field.title || field.key" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="opt in field.enum"
-                :key="opt"
-                :value="opt"
-              >
-                {{ opt }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Input
-            v-else
-            :id="`tts-field-${field.key}`"
-            v-model="configData[field.key] as string"
-            type="text"
-            :placeholder="field.example ? String(field.example) : ''"
-          />
-        </section>
+            <Input
+              v-else
+              :id="`tts-field-${field.key}`"
+              v-model="configData[field.key] as string"
+              type="text"
+              :placeholder="field.example ? String(field.example) : ''"
+            />
+          </section>
+        </div>
       </div>
     </div>
 
@@ -364,6 +371,14 @@ const orderedFields = computed(() => {
 
 const basicFields = computed(() => orderedFields.value.filter(field => !field.advanced))
 const advancedFields = computed(() => orderedFields.value.filter(field => field.advanced))
+
+function isWideField(field: SpeechFieldSchema) {
+  if (field.type === 'secret') return true
+  const key = field.key.toLowerCase()
+  if (key.includes('url') || key.includes('endpoint') || key.includes('key') || key.includes('token') || key.includes('path') || key.includes('uri')) return true
+  if ((field.description ?? '').length > 80) return true
+  return false
+}
 
 watch(() => props.config, (cfg) => {
   Object.keys(configData).forEach((key) => delete configData[key])

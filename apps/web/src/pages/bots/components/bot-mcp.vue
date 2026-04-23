@@ -102,7 +102,10 @@
         v-if="selectedItem"
         class="max-h-full h-full"
       >
-        <div class="p-6 space-y-6">
+        <SettingsShell
+          width="wide"
+          class="space-y-6"
+        >
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold">
               {{ selectedItem.name }}
@@ -133,7 +136,7 @@
           </div>
 
           <form
-            class="flex flex-col gap-4"
+            class="grid gap-4 md:grid-cols-2"
             @submit.prevent="handleSubmit"
           >
             <div class="space-y-1.5">
@@ -164,14 +167,14 @@
             </div>
 
             <template v-if="connectionType === 'stdio'">
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>{{ $t('mcp.command') }}</Label>
                 <Input
                   v-model="formData.command"
                   :placeholder="$t('mcp.commandPlaceholder')"
                 />
               </div>
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>{{ $t('mcp.arguments') }}</Label>
                 <TagsInput
                   v-model="argsTags"
@@ -192,7 +195,7 @@
                   />
                 </TagsInput>
               </div>
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>{{ $t('mcp.env') }}</Label>
                 <KeyValueEditor
                   v-model="envPairs"
@@ -200,25 +203,24 @@
                   value-placeholder="VALUE"
                 />
               </div>
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>{{ $t('mcp.cwd') }}</Label>
                 <Input
                   v-model="formData.cwd"
-                  class="max-w-85"
                   :placeholder="$t('mcp.cwdPlaceholder')"
                 />
               </div>
             </template>
 
             <template v-else>
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>URL</Label>
                 <Input
                   v-model="formData.url"
                   placeholder="https://example.com/mcp"
                 />
               </div>
-              <div class="space-y-1.5">
+              <div class="space-y-1.5 md:col-span-2">
                 <Label>Headers</Label>
                 <KeyValueEditor
                   v-model="headerPairs"
@@ -231,7 +233,7 @@
                 <Select
                   v-model="formData.transport"
                 >
-                  <SelectTrigger class="min-w-60">
+                  <SelectTrigger class="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -248,7 +250,7 @@
               </div>
             </template>
 
-            <div class="flex items-center justify-between pt-2 border-t">
+            <div class="flex items-center justify-between pt-2 border-t md:col-span-2">
               <div class="flex items-center gap-2">
                 <Label class="text-xs font-normal">{{ $t('mcp.active') }}</Label>
                 <Switch
@@ -494,7 +496,7 @@
               {{ $t('mcp.lastProbed') }}: {{ formatDate(selectedItem.last_probed_at) }}
             </p>
           </div>
-        </div>
+        </SettingsShell>
       </ScrollArea>
 
       <Empty
@@ -683,6 +685,7 @@ import {
   Toggle,
 } from '@memohai/ui'
 import MasterDetailSidebarLayout from '@/components/master-detail-sidebar-layout/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 import MonacoEditor from '@/components/monaco-editor/index.vue'
 import KeyValueEditor from '@/components/key-value-editor/index.vue'
 import type { KeyValuePair } from '@/components/key-value-editor/index.vue'

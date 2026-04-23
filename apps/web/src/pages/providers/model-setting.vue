@@ -1,5 +1,5 @@
 <template>
-  <div class="p-4">
+  <SettingsShell width="wide">
     <section class="flex items-center gap-3">
       <span class="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
         <ProviderIcon
@@ -47,12 +47,13 @@
       @edit="handleEditModel"
       @delete="deleteModel"
     />
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
 import { Separator, Switch } from '@memohai/ui'
 import ProviderIcon from '@/components/provider-icon/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 
 function getInitials(name: string | undefined) {
   const label = name?.trim() ?? ''

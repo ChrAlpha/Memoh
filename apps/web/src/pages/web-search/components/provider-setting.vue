@@ -1,5 +1,5 @@
 <template>
-  <div class="p-4">
+  <SettingsShell width="standard">
     <section class="flex items-center gap-3">
       <SearchProviderLogo
         :provider="curProvider?.provider || ''"
@@ -23,30 +23,28 @@
 
     <form @submit="editProvider">
       <div class="space-y-4">
-        <section>
-          <FormField
-            v-slot="{ componentField }"
-            name="name"
-          >
-            <FormItem>
-              <Label
-                :for="componentField.id || 'search-provider-name'"
-                class="scroll-m-20 font-semibold tracking-tight"
-              >
-                {{ $t('common.name') }}
-              </Label>
-              <FormControl>
-                <Input
-                  :id="componentField.id || 'search-provider-name'"
-                  type="text"
-                  :placeholder="$t('common.namePlaceholder')"
-                  :aria-label="$t('common.name')"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
-        </section>
+        <FormField
+          v-slot="{ componentField }"
+          name="name"
+        >
+          <FormItem>
+            <Label
+              :for="componentField.id || 'search-provider-name'"
+              class="scroll-m-20 font-semibold tracking-tight"
+            >
+              {{ $t('common.name') }}
+            </Label>
+            <FormControl>
+              <Input
+                :id="componentField.id || 'search-provider-name'"
+                type="text"
+                :placeholder="$t('common.namePlaceholder')"
+                :aria-label="$t('common.name')"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
         <Separator class="my-4" />
 
@@ -119,7 +117,7 @@
         </LoadingButton>
       </section>
     </form>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -135,6 +133,7 @@ import {
 } from '@memohai/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 import BraveSettings from './brave-settings.vue'
 import BingSettings from './bing-settings.vue'
 import GoogleSettings from './google-settings.vue'

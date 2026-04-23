@@ -1,5 +1,5 @@
 <template>
-  <div class="p-4">
+  <SettingsShell width="standard">
     <section class="flex justify-between items-center">
       <div class="flex items-center gap-2">
         <AppWindow
@@ -18,12 +18,12 @@
     <Separator class="mt-4 mb-6" />
 
     <form @submit="handleSave">
-      <div class="space-y-4">
+      <div class="grid gap-4 md:grid-cols-2">
         <FormField
           v-slot="{ componentField }"
           name="name"
         >
-          <FormItem>
+          <FormItem class="md:col-span-2">
             <Label>{{ $t('browser.name') }}</Label>
             <FormControl>
               <Input
@@ -35,16 +35,18 @@
           </FormItem>
         </FormField>
 
-        <Separator class="my-4" />
-        <h3 class="text-xs font-medium text-foreground">
-          {{ $t('browser.config') }}
-        </h3>
+        <div class="md:col-span-2">
+          <Separator class="my-2" />
+          <h3 class="text-xs font-medium text-foreground">
+            {{ $t('browser.config') }}
+          </h3>
+        </div>
 
         <FormField
           v-slot="{ value, handleChange }"
           name="core"
         >
-          <FormItem>
+          <FormItem class="md:col-span-2">
             <Label>{{ $t('browser.core') }}</Label>
             <FormControl>
               <div class="flex gap-3">
@@ -65,43 +67,41 @@
           </FormItem>
         </FormField>
 
-        <div class="grid grid-cols-2 gap-4">
-          <FormField
-            v-slot="{ componentField }"
-            name="viewportWidth"
-          >
-            <FormItem>
-              <Label>{{ $t('browser.viewportWidth') }}</Label>
-              <FormControl>
-                <Input
-                  type="number"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
+        <FormField
+          v-slot="{ componentField }"
+          name="viewportWidth"
+        >
+          <FormItem>
+            <Label>{{ $t('browser.viewportWidth') }}</Label>
+            <FormControl>
+              <Input
+                type="number"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
-          <FormField
-            v-slot="{ componentField }"
-            name="viewportHeight"
-          >
-            <FormItem>
-              <Label>{{ $t('browser.viewportHeight') }}</Label>
-              <FormControl>
-                <Input
-                  type="number"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
-        </div>
+        <FormField
+          v-slot="{ componentField }"
+          name="viewportHeight"
+        >
+          <FormItem>
+            <Label>{{ $t('browser.viewportHeight') }}</Label>
+            <FormControl>
+              <Input
+                type="number"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
         <FormField
           v-slot="{ componentField }"
           name="userAgent"
         >
-          <FormItem>
+          <FormItem class="md:col-span-2">
             <Label>{{ $t('browser.userAgent') }}</Label>
             <FormControl>
               <Input
@@ -113,45 +113,43 @@
           </FormItem>
         </FormField>
 
-        <div class="grid grid-cols-2 gap-4">
-          <FormField
-            v-slot="{ componentField }"
-            name="deviceScaleFactor"
-          >
-            <FormItem>
-              <Label>{{ $t('browser.deviceScaleFactor') }}</Label>
-              <FormControl>
-                <Input
-                  type="number"
-                  step="0.1"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
+        <FormField
+          v-slot="{ componentField }"
+          name="deviceScaleFactor"
+        >
+          <FormItem>
+            <Label>{{ $t('browser.deviceScaleFactor') }}</Label>
+            <FormControl>
+              <Input
+                type="number"
+                step="0.1"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
-          <FormField
-            v-slot="{ componentField }"
-            name="locale"
-          >
-            <FormItem>
-              <Label>{{ $t('browser.locale') }}</Label>
-              <FormControl>
-                <Input
-                  type="text"
-                  :placeholder="$t('browser.localePlaceholder')"
-                  v-bind="componentField"
-                />
-              </FormControl>
-            </FormItem>
-          </FormField>
-        </div>
+        <FormField
+          v-slot="{ componentField }"
+          name="locale"
+        >
+          <FormItem>
+            <Label>{{ $t('browser.locale') }}</Label>
+            <FormControl>
+              <Input
+                type="text"
+                :placeholder="$t('browser.localePlaceholder')"
+                v-bind="componentField"
+              />
+            </FormControl>
+          </FormItem>
+        </FormField>
 
         <FormField
           v-slot="{ value, handleChange }"
           name="timezoneId"
         >
-          <FormItem>
+          <FormItem class="md:col-span-2">
             <Label>{{ $t('browser.timezoneId') }}</Label>
             <FormControl>
               <TimezoneSelect
@@ -165,7 +163,7 @@
           </FormItem>
         </FormField>
 
-        <div class="flex items-center gap-4">
+        <div class="md:col-span-2 flex items-center gap-4">
           <FormField
             v-slot="{ value, handleChange }"
             name="isMobile"
@@ -223,7 +221,7 @@
         </LoadingButton>
       </section>
     </form>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -250,6 +248,7 @@ import { toast } from 'vue-sonner'
 import { useDialogMutation } from '@/composables/useDialogMutation'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { AppWindow, Trash2 } from 'lucide-vue-next'
 import { emptyTimezoneValue } from '@/utils/timezones'

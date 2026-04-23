@@ -112,97 +112,100 @@
         {{ $t('bots.channels.feishuWebhookSecurityHint') }}
       </p>
 
-      <div
-        v-for="(field, key) in orderedFields"
-        :key="key"
-        class="space-y-2"
-      >
-        <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `channel-field-${key}`">
-          {{ field.title || key }}
-          <span
-            v-if="!field.required"
-            class="text-xs text-muted-foreground ml-1"
-          >({{ $t('common.optional') }})</span>
-        </Label>
-        <p
-          v-if="field.description"
-          class="text-xs text-muted-foreground"
-        >
-          {{ field.description }}
-        </p>
-
-        <!-- Secret field -->
+      <div class="grid gap-4 md:grid-cols-2">
         <div
-          v-if="field.type === 'secret'"
-          class="relative"
+          v-for="(field, key) in orderedFields"
+          :key="key"
+          class="space-y-2"
+          :class="isWideChannelField(field, String(key)) ? 'md:col-span-2' : ''"
         >
+          <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `channel-field-${key}`">
+            {{ field.title || key }}
+            <span
+              v-if="!field.required"
+              class="text-xs text-muted-foreground ml-1"
+            >({{ $t('common.optional') }})</span>
+          </Label>
+          <p
+            v-if="field.description"
+            class="text-xs text-muted-foreground"
+          >
+            {{ field.description }}
+          </p>
+
+          <!-- Secret field -->
+          <div
+            v-if="field.type === 'secret'"
+            class="relative"
+          >
+            <Input
+              :id="`channel-field-${key}`"
+              :model-value="credentialStringValue(key)"
+              :type="visibleSecrets[key] ? 'text' : 'password'"
+              :placeholder="field.example ? String(field.example) : ''"
+              @update:model-value="(val) => setCredentialStringValue(key, val)"
+            />
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              :aria-label="secretToggleLabel(key, field.title || key)"
+              :aria-pressed="!!visibleSecrets[key]"
+              @click="visibleSecrets[key] = !visibleSecrets[key]"
+            >
+              <component
+                :is="visibleSecrets[key] ? EyeOff : Eye"
+                class="size-3.5"
+              />
+            </button>
+          </div>
+
+          <!-- Boolean field -->
+          <Switch
+            v-else-if="field.type === 'bool'"
+            :model-value="!!form.credentials[key]"
+            @update:model-value="(val) => form.credentials[key] = !!val"
+          />
+
+          <!-- Number field -->
           <Input
+            v-else-if="field.type === 'number'"
+            :id="`channel-field-${key}`"
+            :model-value="credentialNumberValue(key)"
+            type="number"
+            :placeholder="field.example ? String(field.example) : ''"
+            @update:model-value="(val) => setCredentialNumberValue(key, val)"
+          />
+
+          <!-- Enum field -->
+          <Select
+            v-else-if="field.type === 'enum' && field.enum"
+            :model-value="String(form.credentials[key] || '')"
+            @update:model-value="(val) => form.credentials[key] = val"
+          >
+            <SelectTrigger :aria-label="field.title || key">
+              <SelectValue :placeholder="field.title" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="opt in field.enum"
+                :key="opt"
+                :value="opt"
+              >
+                {{ opt }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+
+          <!-- String field (default) -->
+          <Input
+            v-else
             :id="`channel-field-${key}`"
             :model-value="credentialStringValue(key)"
-            :type="visibleSecrets[key] ? 'text' : 'password'"
+            type="text"
             :placeholder="field.example ? String(field.example) : ''"
             @update:model-value="(val) => setCredentialStringValue(key, val)"
           />
-          <button
-            type="button"
-            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            :aria-label="secretToggleLabel(key, field.title || key)"
-            :aria-pressed="!!visibleSecrets[key]"
-            @click="visibleSecrets[key] = !visibleSecrets[key]"
-          >
-            <component
-              :is="visibleSecrets[key] ? EyeOff : Eye"
-              class="size-3.5"
-            />
-          </button>
         </div>
-
-        <!-- Boolean field -->
-        <Switch
-          v-else-if="field.type === 'bool'"
-          :model-value="!!form.credentials[key]"
-          @update:model-value="(val) => form.credentials[key] = !!val"
-        />
-
-        <!-- Number field -->
-        <Input
-          v-else-if="field.type === 'number'"
-          :id="`channel-field-${key}`"
-          :model-value="credentialNumberValue(key)"
-          type="number"
-          :placeholder="field.example ? String(field.example) : ''"
-          @update:model-value="(val) => setCredentialNumberValue(key, val)"
-        />
-
-        <!-- Enum field -->
-        <Select
-          v-else-if="field.type === 'enum' && field.enum"
-          :model-value="String(form.credentials[key] || '')"
-          @update:model-value="(val) => form.credentials[key] = val"
-        >
-          <SelectTrigger :aria-label="field.title || key">
-            <SelectValue :placeholder="field.title" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              v-for="opt in field.enum"
-              :key="opt"
-              :value="opt"
-            >
-              {{ opt }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-
-        <!-- String field (default) -->
-        <Input
-          v-else
-          :id="`channel-field-${key}`"
-          :model-value="credentialStringValue(key)"
-          type="text"
-          :placeholder="field.example ? String(field.example) : ''"
-          @update:model-value="(val) => setCredentialStringValue(key, val)"
-        />
       </div>
     </div>
 
@@ -341,6 +344,14 @@ const form = reactive<{
 const visibleSecrets = reactive<Record<string, boolean>>({})
 
 // Schema fields sorted: required first. Exclude "status"/"disabled" from credential form.
+function isWideChannelField(field: ChannelFieldSchema, key: string): boolean {
+  if (field.type === 'secret') return true
+  const lower = key.toLowerCase()
+  if (lower.includes('url') || lower.includes('endpoint') || lower.includes('key') || lower.includes('token') || lower.includes('path') || lower.includes('uri') || lower.includes('webhook')) return true
+  if ((field.description ?? '').length > 80) return true
+  return false
+}
+
 const orderedFields = computed(() => {
   const fields = props.channelItem.meta.config_schema?.fields ?? {}
   const hiddenFields = new Set(['status', 'disabled'])

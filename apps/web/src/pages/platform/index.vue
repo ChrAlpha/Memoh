@@ -2,7 +2,7 @@
   <section class="p-4">
     <AddPlatform v-model:open="open" />
 
-    <div class="grid grid-cols-4 gap-4">
+    <div class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       <PlatformCard
         v-for="item in platformList"
         :key="item.name"

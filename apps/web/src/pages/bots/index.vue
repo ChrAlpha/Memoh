@@ -23,8 +23,7 @@
     <!-- Bot grid -->
     <div
       v-if="filteredBots.length > 0"
-      class="grid gap-4"
-      style="grid-template-columns:repeat(auto-fill,minmax(400px,calc(25% - 1em)))!important"
+      class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
     >
       <BotCard
         v-for="bot in filteredBots"

@@ -1,6 +1,6 @@
 <template>
-  <div class="space-y-4">
-    <div class="space-y-2">
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="space-y-2 md:col-span-2">
       <Label for="google-api-key">API Key</Label>
       <Input
         id="google-api-key"
@@ -18,14 +18,6 @@
       />
     </div>
     <div class="space-y-2">
-      <Label for="google-base-url">Base URL</Label>
-      <Input
-        id="google-base-url"
-        v-model="localConfig.base_url"
-        aria-label="Base URL"
-      />
-    </div>
-    <div class="space-y-2">
       <Label for="google-timeout-seconds">Timeout (seconds)</Label>
       <Input
         id="google-timeout-seconds"
@@ -33,6 +25,14 @@
         type="number"
         :min="1"
         aria-label="Timeout (seconds)"
+      />
+    </div>
+    <div class="space-y-2 md:col-span-2">
+      <Label for="google-base-url">Base URL</Label>
+      <Input
+        id="google-base-url"
+        v-model="localConfig.base_url"
+        aria-label="Base URL"
       />
     </div>
   </div>

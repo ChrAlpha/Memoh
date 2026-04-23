@@ -1,5 +1,5 @@
 <template>
-  <div class="p-4">
+  <SettingsShell width="wide">
     <section class="flex items-center gap-3">
       <span class="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
         <ProviderIcon
@@ -36,91 +36,93 @@
     <Separator class="mt-4 mb-6" />
 
     <form
-      class="space-y-4"
       @submit.prevent="handleSaveProvider"
     >
-      <section class="space-y-2">
-        <Label for="transcription-provider-name">{{ $t('common.name') }}</Label>
-        <Input
-          id="transcription-provider-name"
-          v-model="providerName"
-          type="text"
-          :placeholder="$t('common.namePlaceholder')"
-        />
-      </section>
-
-      <section
-        v-for="field in orderedProviderFields"
-        :key="field.key"
-        class="space-y-2"
-      >
-        <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `transcription-provider-${field.key}`">
-          {{ field.title || field.key }}
-        </Label>
-        <p
-          v-if="field.description"
-          class="text-xs text-muted-foreground"
-        >
-          {{ field.description }}
-        </p>
-        <div
-          v-if="field.type === 'secret'"
-          class="relative"
-        >
+      <div class="grid gap-4 md:grid-cols-2">
+        <section class="space-y-2 md:col-span-2">
+          <Label for="transcription-provider-name">{{ $t('common.name') }}</Label>
           <Input
+            id="transcription-provider-name"
+            v-model="providerName"
+            type="text"
+            :placeholder="$t('common.namePlaceholder')"
+          />
+        </section>
+
+        <section
+          v-for="field in orderedProviderFields"
+          :key="field.key"
+          class="space-y-2"
+          :class="isWideField(field) ? 'md:col-span-2' : ''"
+        >
+          <Label :for="field.type === 'bool' || field.type === 'enum' ? undefined : `transcription-provider-${field.key}`">
+            {{ field.title || field.key }}
+          </Label>
+          <p
+            v-if="field.description"
+            class="text-xs text-muted-foreground"
+          >
+            {{ field.description }}
+          </p>
+          <div
+            v-if="field.type === 'secret'"
+            class="relative"
+          >
+            <Input
+              :id="`transcription-provider-${field.key}`"
+              v-model="providerConfig[field.key] as string"
+              :type="visibleSecrets[field.key] ? 'text' : 'password'"
+            />
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              @click="visibleSecrets[field.key] = !visibleSecrets[field.key]"
+            >
+              <component
+                :is="visibleSecrets[field.key] ? EyeOff : Eye"
+                class="size-3.5"
+              />
+            </button>
+          </div>
+          <Switch
+            v-else-if="field.type === 'bool'"
+            :model-value="!!providerConfig[field.key]"
+            @update:model-value="(val) => providerConfig[field.key] = !!val"
+          />
+          <Input
+            v-else-if="field.type === 'number'"
+            :id="`transcription-provider-${field.key}`"
+            v-model.number="providerConfig[field.key] as number"
+            type="number"
+          />
+          <Select
+            v-else-if="field.type === 'enum' && field.enum"
+            :model-value="String(providerConfig[field.key] ?? '')"
+            @update:model-value="(val) => providerConfig[field.key] = val"
+          >
+            <SelectTrigger>
+              <SelectValue :placeholder="field.title || field.key" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem
+                v-for="opt in field.enum"
+                :key="opt"
+                :value="opt"
+              >
+                {{ opt }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Input
+            v-else
             :id="`transcription-provider-${field.key}`"
             v-model="providerConfig[field.key] as string"
-            :type="visibleSecrets[field.key] ? 'text' : 'password'"
+            type="text"
           />
-          <button
-            type="button"
-            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            @click="visibleSecrets[field.key] = !visibleSecrets[field.key]"
-          >
-            <component
-              :is="visibleSecrets[field.key] ? EyeOff : Eye"
-              class="size-3.5"
-            />
-          </button>
-        </div>
-        <Switch
-          v-else-if="field.type === 'bool'"
-          :model-value="!!providerConfig[field.key]"
-          @update:model-value="(val) => providerConfig[field.key] = !!val"
-        />
-        <Input
-          v-else-if="field.type === 'number'"
-          :id="`transcription-provider-${field.key}`"
-          v-model.number="providerConfig[field.key] as number"
-          type="number"
-        />
-        <Select
-          v-else-if="field.type === 'enum' && field.enum"
-          :model-value="String(providerConfig[field.key] ?? '')"
-          @update:model-value="(val) => providerConfig[field.key] = val"
-        >
-          <SelectTrigger>
-            <SelectValue :placeholder="field.title || field.key" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem
-              v-for="opt in field.enum"
-              :key="opt"
-              :value="opt"
-            >
-              {{ opt }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <Input
-          v-else
-          :id="`transcription-provider-${field.key}`"
-          v-model="providerConfig[field.key] as string"
-          type="text"
-        />
-      </section>
+        </section>
+      </div>
 
-      <div class="flex justify-end">
+      <div class="flex justify-end mt-4">
         <LoadingButton
           type="submit"
           :loading="saveLoading"
@@ -207,7 +209,7 @@
         </div>
       </div>
     </section>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -236,6 +238,7 @@ import ProviderIcon from '@/components/provider-icon/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
 import ModelConfigEditor from '@/pages/speech/components/model-config-editor.vue'
 import CreateModel from '@/components/create-model/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 
 interface FieldSchema { key: string, type: string, title?: string, description?: string, enum?: string[], order?: number }
 interface ConfigSchema { fields?: FieldSchema[] }
@@ -335,6 +338,14 @@ const { data: metaList } = useQuery({
 
 const currentMeta = computed(() => (metaList.value ?? []).find(m => m.provider === curProvider.value?.client_type) ?? null)
 const orderedProviderFields = computed(() => [...(currentMeta.value?.config_schema?.fields ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
+
+function isWideField(field: FieldSchema) {
+  if (field.type === 'secret') return true
+  const key = field.key.toLowerCase()
+  if (key.includes('url') || key.includes('endpoint') || key.includes('key') || key.includes('token') || key.includes('path') || key.includes('uri')) return true
+  if ((field.description ?? '').length > 80) return true
+  return false
+}
 
 const { data: providerModelData } = useQuery({
   key: () => ['transcription-provider-models', curProviderId.value ?? ''],

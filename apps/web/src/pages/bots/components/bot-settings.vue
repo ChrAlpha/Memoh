@@ -295,6 +295,20 @@
       </Popover>
     </div>
 
+    <!-- Show Tool Calls in IM -->
+    <div class="flex items-center justify-between">
+      <div class="space-y-1">
+        <Label>{{ $t('bots.settings.showToolCallsInIM') }}</Label>
+        <p class="text-xs text-muted-foreground">
+          {{ $t('bots.settings.showToolCallsInIMDescription') }}
+        </p>
+      </div>
+      <Switch
+        :model-value="form.show_tool_calls_in_im"
+        @update:model-value="(val) => form.show_tool_calls_in_im = !!val"
+      />
+    </div>
+
     <!-- Save -->
     <div class="flex justify-end">
       <Button
@@ -351,6 +365,7 @@ import {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  Switch,
 } from '@memohai/ui'
 import { Lightbulb, ChevronDown } from 'lucide-vue-next'
 import { reactive, computed, ref, watch } from 'vue'
@@ -541,6 +556,7 @@ const form = reactive({
   language: '',
   reasoning_enabled: false,
   reasoning_effort: 'medium',
+  show_tool_calls_in_im: false,
 })
 
 const selectedMemoryProvider = computed(() =>
@@ -681,6 +697,7 @@ watch(settings, (val) => {
     form.timezone = val.timezone ?? ''
     form.reasoning_enabled = val.reasoning_enabled ?? false
     form.reasoning_effort = val.reasoning_effort || 'medium'
+    form.show_tool_calls_in_im = val.show_tool_calls_in_im ?? false
   }
 }, { immediate: true })
 
@@ -704,6 +721,7 @@ const hasSettingsChanges = computed(() => {
     || form.timezone !== (s.timezone ?? '')
     || form.reasoning_enabled !== (s.reasoning_enabled ?? false)
     || form.reasoning_effort !== (s.reasoning_effort || 'medium')
+    || form.show_tool_calls_in_im !== (s.show_tool_calls_in_im ?? false)
   )
 })
 

@@ -1,6 +1,6 @@
 <template>
-  <div class="space-y-4">
-    <div class="space-y-2">
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="space-y-2 md:col-span-2">
       <Label for="brave-api-key">API Key</Label>
       <Input
         id="brave-api-key"
@@ -9,7 +9,7 @@
         aria-label="API Key"
       />
     </div>
-    <div class="space-y-2">
+    <div class="space-y-2 md:col-span-2">
       <Label for="brave-base-url">Base URL</Label>
       <Input
         id="brave-base-url"

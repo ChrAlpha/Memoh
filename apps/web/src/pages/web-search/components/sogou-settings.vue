@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-4">
+  <div class="grid gap-4 md:grid-cols-2">
     <div class="space-y-2">
       <Label for="sogou-secret-id">Secret ID</Label>
       <Input
@@ -18,7 +18,7 @@
         aria-label="Secret Key"
       />
     </div>
-    <div class="space-y-2">
+    <div class="space-y-2 md:col-span-2">
       <Label for="sogou-base-url">Base URL</Label>
       <Input
         id="sogou-base-url"

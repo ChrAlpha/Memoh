@@ -1,7 +1,10 @@
 <template>
-  <div class="space-y-6">
+  <SettingsShell
+    width="wide"
+    class="space-y-6"
+  >
     <!-- Settings -->
-    <div class="space-y-4 mx-auto">
+    <div class="space-y-4">
       <div class="flex items-center justify-between">
         <div>
           <Label>{{ $t('bots.settings.compactionEnabled') }}</Label>
@@ -16,7 +19,7 @@
       </div>
       <div
         v-if="settingsForm.compaction_enabled"
-        class="space-y-4"
+        class="grid gap-4 md:grid-cols-2"
       >
         <div class="space-y-2">
           <Label>{{ $t('bots.settings.compactionThreshold') }}</Label>
@@ -45,7 +48,7 @@
             <span class="text-sm text-muted-foreground w-10 text-right tabular-nums">{{ settingsForm.compaction_ratio }}%</span>
           </div>
         </div>
-        <div class="space-y-2">
+        <div class="space-y-2 md:col-span-2">
           <Label>{{ $t('bots.settings.compactionModel') }}</Label>
           <p class="text-xs text-muted-foreground mt-0.5">
             {{ $t('bots.settings.compactionModelDescription') }}
@@ -262,7 +265,7 @@
         </Pagination>
       </div>
     </template>
-  </div>
+  </SettingsShell>
 </template>
 
 <script setup lang="ts">
@@ -277,6 +280,7 @@ import {
   PaginationNext, PaginationPrevious,
 } from '@memohai/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
+import SettingsShell from '@/components/settings-shell/index.vue'
 import ModelSelect from './model-select.vue'
 import {
   getBotsByBotIdSettings, putBotsByBotIdSettings,
