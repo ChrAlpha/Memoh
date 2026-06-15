@@ -143,6 +143,45 @@ func TestParseSlackMessageParts_SpecialMentionHere(t *testing.T) {
 	}
 }
 
+func TestParseSlackMessageParts_SubteamMentionWithLabel(t *testing.T) {
+	t.Parallel()
+	parts := parseSlackMessageParts("<!subteam^S0123|@design>")
+	if len(parts) != 1 || parts[0].Type != channel.MessagePartMention {
+		t.Fatalf("got %+v", parts)
+	}
+	if parts[0].Text != "@design" {
+		t.Fatalf("expected '@design', got %q", parts[0].Text)
+	}
+}
+
+func TestParseSlackMessageParts_DateTokenBecomesFallbackText(t *testing.T) {
+	t.Parallel()
+	// <!date^...|fallback> is Slack's date formatter, NOT a broadcast mention.
+	// The fallback after the pipe is the human-readable rendered date and is
+	// what the LLM should see.
+	parts := parseSlackMessageParts("meet at <!date^1518476400^{date_short}|Feb 18>")
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (lead + date text), got %+v", parts)
+	}
+	if parts[1].Type != channel.MessagePartText {
+		t.Fatalf("expected the date token to render as text, got %+v", parts[1])
+	}
+	if parts[1].Text != "Feb 18" {
+		t.Fatalf("expected 'Feb 18', got %q", parts[1].Text)
+	}
+}
+
+func TestParseSlackMessageParts_UnknownBangTokenFallsToText(t *testing.T) {
+	t.Parallel()
+	parts := parseSlackMessageParts("<!something|whatever>")
+	if len(parts) != 1 {
+		t.Fatalf("got %+v", parts)
+	}
+	if parts[0].Type != channel.MessagePartText || parts[0].Text != "whatever" {
+		t.Fatalf("expected plain 'whatever', got %+v", parts[0])
+	}
+}
+
 func TestParseSlackMessageParts_EmptyReturnsNil(t *testing.T) {
 	t.Parallel()
 	if got := parseSlackMessageParts(""); got != nil {

@@ -163,6 +163,16 @@ func trySlackAngleToken(s string) (channel.MessagePart, int, bool) {
 			return channel.MessagePart{}, 0, false
 		}
 		display := strings.TrimSpace(label)
+		// Slack uses <!…> for both broadcast mentions (here/channel/everyone/
+		// subteam^…) and non-mention controls like <!date^…|fallback>. Only the
+		// broadcast forms should produce a real mention; everything else falls
+		// back to the human-readable label so the LLM doesn't see a fake "@".
+		if !isSlackBroadcastToken(token) {
+			if display == "" {
+				display = token
+			}
+			return channel.MessagePart{Type: channel.MessagePartText, Text: display}, n, true
+		}
 		if display == "" {
 			display = "@" + token
 		} else if !strings.HasPrefix(display, "@") {
@@ -187,6 +197,14 @@ func trySlackAngleToken(s string) (channel.MessagePart, int, bool) {
 			URL:  url,
 		}, n, true
 	}
+}
+
+func isSlackBroadcastToken(token string) bool {
+	switch token {
+	case "here", "channel", "everyone":
+		return true
+	}
+	return strings.HasPrefix(token, "subteam^")
 }
 
 func trySlackStyled(s string) (channel.MessagePart, int, bool) {
