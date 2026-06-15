@@ -146,7 +146,37 @@ func (a *DiscordAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 		return nil, err
 	}
 
-	remove := session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
+	dispatch := func(msg channel.InboundMessage) {
+		go func() {
+			if err := handler(ctx, cfg, msg); err != nil && a.logger != nil {
+				a.logger.Error("handle inbound failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+			}
+		}()
+	}
+
+	removeUpdate := session.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageUpdate) {
+		if ctx.Err() != nil {
+			return
+		}
+		msg, ok := a.buildDiscordEditInbound(m, cfg)
+		if !ok {
+			return
+		}
+		dispatch(msg)
+	})
+
+	removeDelete := session.AddHandler(func(_ *discordgo.Session, m *discordgo.MessageDelete) {
+		if ctx.Err() != nil {
+			return
+		}
+		msg, ok := buildDiscordDeleteInbound(m, cfg)
+		if !ok {
+			return
+		}
+		dispatch(msg)
+	})
+
+	removeCreate := session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if m.Author != nil && m.Author.Bot {
 			return
 		}
@@ -245,6 +275,11 @@ func (a *DiscordAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 		}()
 	})
 
+	remove := func() {
+		removeCreate()
+		removeUpdate()
+		removeDelete()
+	}
 	a.swapHandlerRemover(discordCfg.BotToken, remove)
 
 	if err := session.Open(); err != nil {
