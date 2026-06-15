@@ -102,6 +102,36 @@ func TestParseDiscordMessageParts_Link(t *testing.T) {
 	}
 }
 
+func TestParseDiscordMessageParts_TripleStarIsBoldItalic(t *testing.T) {
+	t.Parallel()
+	// Discord's documented combined emphasis is ***text***. The naive bold
+	// scan grabs the first two stars and the closing pair's first two stars,
+	// leaving a stray inner '*' inside the bold body and a stray trailing '*'.
+	parts := parseDiscordMessageParts("***urgent***")
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 combined part, got %+v", parts)
+	}
+	if parts[0].Type != channel.MessagePartText || parts[0].Text != "urgent" {
+		t.Fatalf("expected text 'urgent', got %+v", parts[0])
+	}
+	if len(parts[0].Styles) != 2 {
+		t.Fatalf("expected bold+italic styles, got %+v", parts[0].Styles)
+	}
+	want := map[channel.MessageTextStyle]bool{channel.MessageStyleBold: true, channel.MessageStyleItalic: true}
+	for _, s := range parts[0].Styles {
+		if !want[s] {
+			t.Fatalf("unexpected style %q in %+v", s, parts[0].Styles)
+		}
+	}
+}
+
+func TestParseDiscordMessageParts_UnterminatedTripleStarFallsThrough(t *testing.T) {
+	t.Parallel()
+	if got := parseDiscordMessageParts("***unterminated"); got != nil {
+		t.Fatalf("expected nil for unterminated triple star, got %+v", got)
+	}
+}
+
 func TestParseDiscordMessageParts_LinkWithBalancedParensInURL(t *testing.T) {
 	t.Parallel()
 	// Wikipedia-style URLs frequently embed unescaped parens. Greedy "first ')'"

@@ -232,6 +232,9 @@ func tryDiscordMention(s string) (channel.MessagePart, int, bool) {
 }
 
 func tryDiscordStyled(s string) (channel.MessagePart, int, bool) {
+	if part, n, ok := tryDiscordTripleStar(s); ok {
+		return part, n, ok
+	}
 	if part, n, ok := tryDiscordDelimited(s, "**", channel.MessageStyleBold); ok {
 		return part, n, ok
 	}
@@ -245,6 +248,29 @@ func tryDiscordStyled(s string) (channel.MessagePart, int, bool) {
 		return part, n, ok
 	}
 	return channel.MessagePart{}, 0, false
+}
+
+// tryDiscordTripleStar handles ***text***, Discord's combined bold+italic
+// emphasis. Without this the **/* parsers grab two stars each and corrupt
+// the span into bold("*text") + literal "*".
+func tryDiscordTripleStar(s string) (channel.MessagePart, int, bool) {
+	if !strings.HasPrefix(s, "***") {
+		return channel.MessagePart{}, 0, false
+	}
+	rest := s[3:]
+	end := strings.Index(rest, "***")
+	if end <= 0 {
+		return channel.MessagePart{}, 0, false
+	}
+	body := rest[:end]
+	if strings.TrimSpace(body) == "" {
+		return channel.MessagePart{}, 0, false
+	}
+	return channel.MessagePart{
+		Type:   channel.MessagePartText,
+		Text:   body,
+		Styles: []channel.MessageTextStyle{channel.MessageStyleBold, channel.MessageStyleItalic},
+	}, 3 + end + 3, true
 }
 
 func tryDiscordDelimited(s, delim string, style channel.MessageTextStyle) (channel.MessagePart, int, bool) {
