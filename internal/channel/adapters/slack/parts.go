@@ -29,6 +29,15 @@ func parseSlackMessageParts(text string) []channel.MessagePart {
 	rich := false
 	for i < len(text) {
 		if !escaped {
+			// Doubled "**" / "~~" markers (typical of pasted GitHub markdown)
+			// aren't Slack syntax. Consume the pair as literal so the trailing
+			// single marker doesn't accidentally open a real bold/strike span.
+			if i+1 < len(text) && (text[i] == '*' || text[i] == '~') && text[i+1] == text[i] {
+				plain.WriteByte(text[i])
+				plain.WriteByte(text[i])
+				i += 2
+				continue
+			}
 			if part, n, ok := trySlackCodeBlock(text[i:]); ok {
 				flush()
 				parts = append(parts, part)

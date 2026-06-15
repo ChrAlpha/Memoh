@@ -182,6 +182,39 @@ func TestParseSlackMessageParts_UnknownBangTokenFallsToText(t *testing.T) {
 	}
 }
 
+func TestParseSlackMessageParts_DoubledBoldStaysPlain(t *testing.T) {
+	t.Parallel()
+	// Pasted GitHub-style "**bold**" uses doubled stars; Slack itself only
+	// recognises single "*" as bold. Without intervention the parser would
+	// reject the first star then re-enter at the second and emit a bold
+	// span containing "bold" surrounded by stray "*" markers, corrupting
+	// the user's original text.
+	if got := parseSlackMessageParts("**bold**"); got != nil {
+		t.Fatalf("expected nil (whole span plain), got %+v", got)
+	}
+}
+
+func TestParseSlackMessageParts_DoubledStrikeStaysPlain(t *testing.T) {
+	t.Parallel()
+	if got := parseSlackMessageParts("~~old~~"); got != nil {
+		t.Fatalf("expected nil (whole span plain), got %+v", got)
+	}
+}
+
+func TestParseSlackMessageParts_DoubledMarkersCoexistWithStyles(t *testing.T) {
+	t.Parallel()
+	parts := parseSlackMessageParts("*hi* **pasted**")
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (bold + trailing plain), got %+v", parts)
+	}
+	if len(parts[0].Styles) != 1 || parts[0].Styles[0] != channel.MessageStyleBold || parts[0].Text != "hi" {
+		t.Fatalf("part 0 wrong: %+v", parts[0])
+	}
+	if parts[1].Type != channel.MessagePartText || parts[1].Text != " **pasted**" {
+		t.Fatalf("expected trailing ' **pasted**' as plain, got %+v", parts[1])
+	}
+}
+
 func TestParseSlackMessageParts_EmptyReturnsNil(t *testing.T) {
 	t.Parallel()
 	if got := parseSlackMessageParts(""); got != nil {
