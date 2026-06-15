@@ -194,6 +194,80 @@ func TestAdaptInbound_SkipsEmptyTextParts(t *testing.T) {
 	}
 }
 
+func TestAdaptInbound_Delete_SingleMessageID(t *testing.T) {
+	msg := channel.InboundMessage{
+		Message:    channel.Message{ID: "m1"},
+		Metadata:   map[string]any{"event_type": "delete"},
+		ReceivedAt: time.Unix(1700000000, 0).UTC(),
+	}
+	ev := AdaptInbound(msg, "sess", "", "")
+	de, ok := ev.(DeleteEvent)
+	if !ok {
+		t.Fatalf("expected DeleteEvent, got %T", ev)
+	}
+	if len(de.MessageIDs) != 1 || de.MessageIDs[0] != "m1" {
+		t.Fatalf("expected [m1], got %+v", de.MessageIDs)
+	}
+	if de.SessionID != "sess" || de.TimestampSec == 0 {
+		t.Fatalf("expected session+timestamp populated, got %+v", de)
+	}
+}
+
+func TestAdaptInbound_Delete_BatchFromMetadata(t *testing.T) {
+	msg := channel.InboundMessage{
+		Metadata: map[string]any{
+			"event_type":          "delete",
+			"deleted_message_ids": []string{"a", "b", "c"},
+		},
+		ReceivedAt: time.Unix(1700000000, 0).UTC(),
+	}
+	de := AdaptInbound(msg, "sess", "", "").(DeleteEvent)
+	if len(de.MessageIDs) != 3 || de.MessageIDs[0] != "a" || de.MessageIDs[2] != "c" {
+		t.Fatalf("expected [a b c], got %+v", de.MessageIDs)
+	}
+}
+
+func TestAdaptInbound_Delete_AnySliceFromJSON(t *testing.T) {
+	msg := channel.InboundMessage{
+		Metadata: map[string]any{
+			"event_type":          "delete",
+			"deleted_message_ids": []any{"x", "y"},
+		},
+	}
+	de := AdaptInbound(msg, "sess", "", "").(DeleteEvent)
+	if len(de.MessageIDs) != 2 || de.MessageIDs[0] != "x" || de.MessageIDs[1] != "y" {
+		t.Fatalf("expected [x y], got %+v", de.MessageIDs)
+	}
+}
+
+func TestAdaptInbound_Delete_DedupesAndKeepsOrder(t *testing.T) {
+	msg := channel.InboundMessage{
+		Message: channel.Message{ID: "a"},
+		Metadata: map[string]any{
+			"event_type":          "delete",
+			"deleted_message_ids": []string{"a", "b"},
+		},
+	}
+	de := AdaptInbound(msg, "sess", "", "").(DeleteEvent)
+	if len(de.MessageIDs) != 2 || de.MessageIDs[0] != "a" || de.MessageIDs[1] != "b" {
+		t.Fatalf("expected [a b] (deduped), got %+v", de.MessageIDs)
+	}
+}
+
+func TestAdaptInbound_Delete_EmptyIDsStillProducesEvent(t *testing.T) {
+	msg := channel.InboundMessage{
+		Metadata: map[string]any{"event_type": "delete"},
+	}
+	ev := AdaptInbound(msg, "sess", "", "")
+	de, ok := ev.(DeleteEvent)
+	if !ok {
+		t.Fatalf("expected DeleteEvent, got %T", ev)
+	}
+	if len(de.MessageIDs) != 0 {
+		t.Fatalf("expected empty IDs, got %+v", de.MessageIDs)
+	}
+}
+
 func TestAdaptInbound_EditEvent_PreservesParts(t *testing.T) {
 	msg := channel.InboundMessage{
 		Message: channel.Message{

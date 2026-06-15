@@ -16,6 +16,8 @@ func AdaptInbound(msg channel.InboundMessage, sessionID, channelIdentityID, disp
 	switch eventType {
 	case "edit":
 		return adaptEdit(msg, sessionID, channelIdentityID, displayName)
+	case "delete":
+		return adaptDelete(msg, sessionID)
 	case "service":
 		return adaptService(msg, sessionID)
 	default:
@@ -281,6 +283,53 @@ func adaptEdit(msg channel.InboundMessage, sessionID, channelIdentityID, display
 		Content:      adaptBody(msg.Message),
 		Attachments:  adaptAttachments(msg.Message.Attachments),
 	}
+}
+
+func adaptDelete(msg channel.InboundMessage, sessionID string) DeleteEvent {
+	now := msg.ReceivedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	_, offset := now.Zone()
+	return DeleteEvent{
+		SessionID:    sessionID,
+		MessageIDs:   collectDeletedMessageIDs(msg),
+		ReceivedAtMs: now.UnixMilli(),
+		TimestampSec: now.Unix(),
+		UTCOffsetMin: offset / 60,
+	}
+}
+
+func collectDeletedMessageIDs(msg channel.InboundMessage) []string {
+	var ids []string
+	seen := make(map[string]struct{})
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		ids = append(ids, s)
+	}
+	if raw, ok := msg.Metadata["deleted_message_ids"]; ok {
+		switch v := raw.(type) {
+		case []string:
+			for _, id := range v {
+				add(id)
+			}
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					add(s)
+				}
+			}
+		}
+	}
+	add(msg.Message.ID)
+	return ids
 }
 
 func adaptService(msg channel.InboundMessage, sessionID string) ServiceEvent {
