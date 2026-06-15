@@ -187,3 +187,57 @@ func TestBuildDiscordDeleteInbound_RejectsEmptyID(t *testing.T) {
 		t.Fatal("expected delete without ID to be rejected")
 	}
 }
+
+func TestDiscordEditDedupKey_DistinguishesEditTimes(t *testing.T) {
+	t.Parallel()
+
+	t1 := time.Unix(1700000000, 0)
+	t2 := time.Unix(1700000005, 0)
+	mu1 := &discordgo.MessageUpdate{Message: &discordgo.Message{ID: "m1", EditedTimestamp: &t1}}
+	mu2 := &discordgo.MessageUpdate{Message: &discordgo.Message{ID: "m1", EditedTimestamp: &t2}}
+
+	k1 := discordEditDedupKey(mu1)
+	k2 := discordEditDedupKey(mu2)
+	if k1 == "" || k2 == "" {
+		t.Fatalf("expected non-empty keys, got %q %q", k1, k2)
+	}
+	if k1 == k2 {
+		t.Fatalf("expected distinct keys for distinct edit times, got %q", k1)
+	}
+}
+
+func TestDiscordEditDedupKey_NilSafeAndDistinctFromDeleteAndCreate(t *testing.T) {
+	t.Parallel()
+
+	if got := discordEditDedupKey(nil); got != "" {
+		t.Fatalf("expected empty key for nil, got %q", got)
+	}
+	if got := discordEditDedupKey(&discordgo.MessageUpdate{}); got != "" {
+		t.Fatalf("expected empty key for empty update, got %q", got)
+	}
+
+	ts := time.Unix(1700000000, 0)
+	mu := &discordgo.MessageUpdate{Message: &discordgo.Message{ID: "m1", EditedTimestamp: &ts}}
+	md := &discordgo.MessageDelete{Message: &discordgo.Message{ID: "m1"}}
+
+	editKey := discordEditDedupKey(mu)
+	deleteKey := discordDeleteDedupKey(md)
+	if editKey == deleteKey {
+		t.Fatalf("edit and delete keys must differ for the same message id, got %q", editKey)
+	}
+	// Both must also differ from the bare message ID used by MessageCreate dedup.
+	if editKey == "m1" || deleteKey == "m1" {
+		t.Fatalf("lifecycle keys must not collide with bare create-side message id")
+	}
+}
+
+func TestDiscordDeleteDedupKey_NilAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	if got := discordDeleteDedupKey(nil); got != "" {
+		t.Fatalf("expected empty for nil, got %q", got)
+	}
+	if got := discordDeleteDedupKey(&discordgo.MessageDelete{Message: &discordgo.Message{}}); got != "" {
+		t.Fatalf("expected empty for empty id, got %q", got)
+	}
+}

@@ -408,11 +408,17 @@ func (a *SlackAdapter) handleMessageEvent(
 	case "", "file_share":
 		// fall through to regular message handling
 	case "message_changed":
+		if a.isDuplicateInbound(cfg.ID, ev.TimeStamp) {
+			return
+		}
 		if msg, ok := buildSlackEditInbound(ev, cfg); ok {
 			a.dispatchSlackInbound(ctx, cfg, handler, msg)
 		}
 		return
 	case "message_deleted":
+		if a.isDuplicateInbound(cfg.ID, ev.TimeStamp) {
+			return
+		}
 		if msg, ok := buildSlackDeleteInbound(ev, cfg); ok {
 			a.dispatchSlackInbound(ctx, cfg, handler, msg)
 		}

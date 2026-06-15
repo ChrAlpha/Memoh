@@ -162,6 +162,9 @@ func (a *DiscordAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 		if !ok {
 			return
 		}
+		if a.isDuplicateInbound(discordCfg.BotToken, discordEditDedupKey(m)) {
+			return
+		}
 		dispatch(msg)
 	})
 
@@ -171,6 +174,9 @@ func (a *DiscordAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 		}
 		msg, ok := buildDiscordDeleteInbound(m, cfg)
 		if !ok {
+			return
+		}
+		if a.isDuplicateInbound(discordCfg.BotToken, discordDeleteDedupKey(m)) {
 			return
 		}
 		dispatch(msg)
