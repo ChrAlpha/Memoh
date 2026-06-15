@@ -404,8 +404,20 @@ func (a *SlackAdapter) handleMessageEvent(
 		return
 	}
 
-	// Skip message subtypes that aren't regular messages
-	if ev.SubType != "" && ev.SubType != "file_share" {
+	switch ev.SubType {
+	case "", "file_share":
+		// fall through to regular message handling
+	case "message_changed":
+		if msg, ok := buildSlackEditInbound(ev, cfg); ok {
+			a.dispatchSlackInbound(ctx, cfg, handler, msg)
+		}
+		return
+	case "message_deleted":
+		if msg, ok := buildSlackDeleteInbound(ev, cfg); ok {
+			a.dispatchSlackInbound(ctx, cfg, handler, msg)
+		}
+		return
+	default:
 		return
 	}
 
