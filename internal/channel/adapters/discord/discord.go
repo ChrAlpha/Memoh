@@ -227,6 +227,10 @@ func (a *DiscordAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 				"raw_text":        rawText,
 			},
 		}
+		if parts := parseDiscordMessageParts(text); len(parts) > 0 {
+			msg.Message.Parts = parts
+			msg.Message.Format = channel.MessageFormatRich
+		}
 
 		if a.logger != nil {
 			a.logger.Info("inbound received",
