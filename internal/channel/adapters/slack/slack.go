@@ -477,6 +477,10 @@ func (a *SlackAdapter) handleMessageEvent(
 			"subtype":      ev.SubType,
 		},
 	}
+	if parts := parseSlackMessageParts(text); len(parts) > 0 {
+		msg.Message.Parts = parts
+		msg.Message.Format = channel.MessageFormatRich
+	}
 
 	if a.logger != nil {
 		a.logger.Info("inbound received",
@@ -556,6 +560,10 @@ func (a *SlackAdapter) handleAppMentionEvent(
 			"is_mentioned": true,
 			"thread_ts":    threadID,
 		},
+	}
+	if parts := parseSlackMessageParts(text); len(parts) > 0 {
+		msg.Message.Parts = parts
+		msg.Message.Format = channel.MessageFormatRich
 	}
 
 	if a.logger != nil {
