@@ -611,7 +611,16 @@ func (a *MatrixAdapter) handleEvent(ctx context.Context, cfg channel.ChannelConf
 		return false, nil
 	}
 	if isMatrixEditEvent(evt.Content) {
-		return false, nil
+		conversationType := a.resolveConversationType(ctx, cfg.ID, parsed, evt.RoomID)
+		msg, ok := buildMatrixEditedInbound(evt, conversationType)
+		if !ok {
+			return false, nil
+		}
+		msg.BotID = cfg.BotID
+		if err := handler(ctx, cfg, msg); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	body, attachments := extractMatrixInboundContent(evt.Content)
 	if body == "" && len(attachments) == 0 {
