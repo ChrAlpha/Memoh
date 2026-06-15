@@ -143,12 +143,30 @@ func tryDiscordLink(s string) (channel.MessagePart, int, bool) {
 	if closeBracket < 1 || closeBracket+1 >= len(s) || s[closeBracket+1] != '(' {
 		return channel.MessagePart{}, 0, false
 	}
-	closeParen := strings.IndexByte(s[closeBracket+2:], ')')
-	if closeParen < 0 {
+	// Scan for the balanced closing paren so URLs with embedded parens (e.g.
+	// Wikipedia's Foo_(bar)) survive intact.
+	urlStart := closeBracket + 2
+	depth := 1
+	end := -1
+	for j := urlStart; j < len(s); j++ {
+		switch s[j] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				end = j
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
 		return channel.MessagePart{}, 0, false
 	}
 	label := s[1:closeBracket]
-	url := s[closeBracket+2 : closeBracket+2+closeParen]
+	url := s[urlStart:end]
 	if label == "" || url == "" {
 		return channel.MessagePart{}, 0, false
 	}
@@ -156,7 +174,7 @@ func tryDiscordLink(s string) (channel.MessagePart, int, bool) {
 		Type: channel.MessagePartLink,
 		Text: label,
 		URL:  url,
-	}, closeBracket + 2 + closeParen + 1, true
+	}, end + 1, true
 }
 
 func tryDiscordMention(s string) (channel.MessagePart, int, bool) {

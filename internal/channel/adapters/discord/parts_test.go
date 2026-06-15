@@ -102,6 +102,39 @@ func TestParseDiscordMessageParts_Link(t *testing.T) {
 	}
 }
 
+func TestParseDiscordMessageParts_LinkWithBalancedParensInURL(t *testing.T) {
+	t.Parallel()
+	// Wikipedia-style URLs frequently embed unescaped parens. Greedy "first ')'"
+	// matching truncates the href and dumps the rest as plain text, so the
+	// LLM sees a broken link target. Track depth instead.
+	parts := parseDiscordMessageParts("see [Foo](https://en.wikipedia.org/wiki/Foo_(bar))")
+	var link *channel.MessagePart
+	for i := range parts {
+		if parts[i].Type == channel.MessagePartLink {
+			link = &parts[i]
+			break
+		}
+	}
+	if link == nil {
+		t.Fatalf("expected a link part, got %+v", parts)
+	}
+	if link.URL != "https://en.wikipedia.org/wiki/Foo_(bar)" {
+		t.Fatalf("expected full URL with parens preserved, got %q", link.URL)
+	}
+	if link.Text != "Foo" {
+		t.Fatalf("expected label 'Foo', got %q", link.Text)
+	}
+}
+
+func TestParseDiscordMessageParts_LinkWithUnbalancedParensFallsThrough(t *testing.T) {
+	t.Parallel()
+	// "[A](https://x.com/foo" never closes the URL paren — emit the input as
+	// plain rather than swallowing it as a corrupted link.
+	if got := parseDiscordMessageParts("[A](https://x.com/foo"); got != nil {
+		t.Fatalf("expected nil for unbalanced link, got %+v", got)
+	}
+}
+
 func TestParseDiscordMessageParts_UserMentionAndNickname(t *testing.T) {
 	t.Parallel()
 	for _, src := range []string{"<@123>", "<@!123>"} {
