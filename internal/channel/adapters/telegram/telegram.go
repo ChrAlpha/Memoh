@@ -422,6 +422,14 @@ func (a *TelegramAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig
 					a.handleTelegramCallback(connCtx, cfg, handler, bot, update)
 					continue
 				}
+				if update.EditedMessage != nil {
+					msg, ok := a.buildTelegramEditedInboundMessage(bot, cfg, update)
+					if !ok {
+						continue
+					}
+					a.dispatchInbound(connCtx, cfg, handler, msg)
+					continue
+				}
 				if update.Message == nil {
 					continue
 				}
@@ -492,7 +500,16 @@ func (a *TelegramAdapter) dispatchInbound(ctx context.Context, cfg channel.Chann
 }
 
 func (a *TelegramAdapter) buildTelegramInboundMessage(bot *tgbotapi.BotAPI, cfg channel.ChannelConfig, update tgbotapi.Update) (channel.InboundMessage, bool) {
-	raw := update.Message
+	return a.buildTelegramInboundFromMessage(bot, cfg, update.Message, update.UpdateID, nil)
+}
+
+func (a *TelegramAdapter) buildTelegramEditedInboundMessage(bot *tgbotapi.BotAPI, cfg channel.ChannelConfig, update tgbotapi.Update) (channel.InboundMessage, bool) {
+	return a.buildTelegramInboundFromMessage(bot, cfg, update.EditedMessage, update.UpdateID, map[string]any{
+		"event_type": "edit",
+	})
+}
+
+func (a *TelegramAdapter) buildTelegramInboundFromMessage(bot *tgbotapi.BotAPI, cfg channel.ChannelConfig, raw *tgbotapi.Message, updateID int, extraMeta map[string]any) (channel.InboundMessage, bool) {
 	if raw == nil {
 		return channel.InboundMessage{}, false
 	}
@@ -502,9 +519,11 @@ func (a *TelegramAdapter) buildTelegramInboundMessage(bot *tgbotapi.BotAPI, cfg 
 		text = caption
 	}
 	attachments := a.collectTelegramAttachments(bot, raw)
-	return a.toInboundTelegramMessage(bot, cfg, raw, text, attachments, map[string]any{
-		"update_id": update.UpdateID,
-	})
+	meta := map[string]any{"update_id": updateID}
+	for k, v := range extraMeta {
+		meta[k] = v
+	}
+	return a.toInboundTelegramMessage(bot, cfg, raw, text, attachments, meta)
 }
 
 // handleTelegramCallback acknowledges and routes an inline-keyboard callback.
