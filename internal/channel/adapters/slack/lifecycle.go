@@ -41,7 +41,7 @@ func buildSlackEditInbound(ev *slackevents.MessageEvent, cfg channel.ChannelConf
 		return channel.InboundMessage{}, false
 	}
 	user := strings.TrimSpace(ev.Message.User)
-	return channel.InboundMessage{
+	msg := channel.InboundMessage{
 		Channel: Type,
 		Message: channel.Message{
 			ID:     ts,
@@ -65,7 +65,12 @@ func buildSlackEditInbound(ev *slackevents.MessageEvent, cfg channel.ChannelConf
 			"channel_type": ev.ChannelType,
 			"event_ts":     ev.TimeStamp,
 		},
-	}, true
+	}
+	if parts := parseSlackMessageParts(text); len(parts) > 0 {
+		msg.Message.Parts = parts
+		msg.Message.Format = channel.MessageFormatRich
+	}
+	return msg, true
 }
 
 func buildSlackDeleteInbound(ev *slackevents.MessageEvent, cfg channel.ChannelConfig) (channel.InboundMessage, bool) {

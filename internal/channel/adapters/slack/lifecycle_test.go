@@ -43,6 +43,30 @@ func TestBuildSlackEditInbound_FlagsEventTypeAndPreservesOriginalTS(t *testing.T
 	}
 }
 
+func TestBuildSlackEditInbound_PopulatesRichParts(t *testing.T) {
+	t.Parallel()
+	ev := &slackevents.MessageEvent{
+		SubType:     "message_changed",
+		Channel:     "C1",
+		ChannelType: "channel",
+		Message: &slack.Msg{
+			User:      "U1",
+			Text:      "now *bold*",
+			Timestamp: "1700.000",
+		},
+	}
+	msg, ok := buildSlackEditInbound(ev, channel.ChannelConfig{})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if len(msg.Message.Parts) == 0 {
+		t.Fatalf("expected rich parts populated, got %+v", msg.Message)
+	}
+	if msg.Message.Format != channel.MessageFormatRich {
+		t.Fatalf("expected rich format, got %q", msg.Message.Format)
+	}
+}
+
 func TestBuildSlackEditInbound_RejectsMissingMessage(t *testing.T) {
 	t.Parallel()
 	ev := &slackevents.MessageEvent{SubType: "message_changed", Channel: "C1"}
