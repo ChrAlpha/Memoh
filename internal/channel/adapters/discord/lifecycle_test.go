@@ -43,6 +43,32 @@ func TestBuildDiscordEditInbound_FlagsEventType(t *testing.T) {
 	}
 }
 
+func TestBuildDiscordEditInbound_PopulatesRichParts(t *testing.T) {
+	t.Parallel()
+
+	ts := time.Now()
+	mu := &discordgo.MessageUpdate{
+		Message: &discordgo.Message{
+			ID:              "m1",
+			ChannelID:       "c1",
+			Content:         "see **bold** now",
+			EditedTimestamp: &ts,
+			Author:          &discordgo.User{ID: "u1", Username: "alice"},
+		},
+	}
+	adapter := &DiscordAdapter{}
+	msg, ok := adapter.buildDiscordEditInbound(mu, channel.ChannelConfig{})
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if len(msg.Message.Parts) == 0 {
+		t.Fatalf("expected Parts populated for edit body, got %+v", msg.Message)
+	}
+	if msg.Message.Format != channel.MessageFormatRich {
+		t.Fatalf("expected rich format, got %q", msg.Message.Format)
+	}
+}
+
 func TestBuildDiscordEditInbound_PrivateConversationWithoutGuild(t *testing.T) {
 	t.Parallel()
 

@@ -28,7 +28,7 @@ func (a *DiscordAdapter) buildDiscordEditInbound(m *discordgo.MessageUpdate, cfg
 	if m.GuildID != "" {
 		chatType = channel.ConversationTypeGroup
 	}
-	return channel.InboundMessage{
+	msg := channel.InboundMessage{
 		Channel: Type,
 		Message: channel.Message{
 			ID:          m.ID,
@@ -56,7 +56,12 @@ func (a *DiscordAdapter) buildDiscordEditInbound(m *discordgo.MessageUpdate, cfg
 			"event_type": "edit",
 			"guild_id":   m.GuildID,
 		},
-	}, true
+	}
+	if parts := parseDiscordMessageParts(text); len(parts) > 0 {
+		msg.Message.Parts = parts
+		msg.Message.Format = channel.MessageFormatRich
+	}
+	return msg, true
 }
 
 func buildDiscordDeleteInbound(m *discordgo.MessageDelete, cfg channel.ChannelConfig) (channel.InboundMessage, bool) {
