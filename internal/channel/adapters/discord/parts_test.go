@@ -141,6 +141,32 @@ func TestParseDiscordMessageParts_CustomEmojiBecomesText(t *testing.T) {
 	}
 }
 
+func TestParseDiscordMessageParts_DoubleUnderscoreStaysPlain(t *testing.T) {
+	t.Parallel()
+	// Discord's __underline__ has no canonical-schema mapping. The previous
+	// parser skipped the first underscore but then matched the second one as
+	// an italic opener and the closing pair's first underscore as its close,
+	// producing a corrupted "_<i>important</i>_" span. Treat the entire
+	// __..__ pair as literal so the LLM at least sees the original text.
+	if got := parseDiscordMessageParts("__important__"); got != nil {
+		t.Fatalf("expected nil (whole span treated as plain), got %+v", got)
+	}
+}
+
+func TestParseDiscordMessageParts_DoubleUnderscoreCoexistsWithItalic(t *testing.T) {
+	t.Parallel()
+	parts := parseDiscordMessageParts("*it* __foo__ bye")
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (italic + trailing plain), got %+v", parts)
+	}
+	if len(parts[0].Styles) != 1 || parts[0].Styles[0] != channel.MessageStyleItalic || parts[0].Text != "it" {
+		t.Fatalf("part 0 wrong: %+v", parts[0])
+	}
+	if parts[1].Type != channel.MessagePartText || parts[1].Text != " __foo__ bye" {
+		t.Fatalf("expected plain ' __foo__ bye', got %+v", parts[1])
+	}
+}
+
 func TestParseDiscordMessageParts_BoldOuterWinsOverItalicAmbiguity(t *testing.T) {
 	t.Parallel()
 	parts := parseDiscordMessageParts("**bold _italic_ end**")

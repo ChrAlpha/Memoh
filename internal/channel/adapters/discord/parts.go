@@ -29,6 +29,15 @@ func parseDiscordMessageParts(text string) []channel.MessagePart {
 	rich := false
 	for i < len(text) {
 		if !escaped {
+			// Discord's __underline__ has no canonical-schema mapping; consume the
+			// "__" pair as plain so the trailing single underscore can't slip into
+			// the italic parser as a stray opener (which would corrupt the span
+			// into "_<i>foo</i>_").
+			if i+1 < len(text) && text[i] == '_' && text[i+1] == '_' {
+				plain.WriteString("__")
+				i += 2
+				continue
+			}
 			if part, n, ok := tryDiscordCodeBlock(text[i:]); ok {
 				flush()
 				parts = append(parts, part)
