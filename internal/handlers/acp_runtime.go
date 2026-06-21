@@ -100,7 +100,7 @@ func (h *ACPRuntimeHandler) CreateRuntime(c echo.Context) error {
 	}
 	projectPath := strings.TrimSpace(req.ProjectPath)
 	if projectPath == "" {
-		projectPath = session.DefaultACPProjectPath
+		projectPath = session.BotProjectPath(bot.Metadata)
 	}
 	status, err := h.pool.CreateRuntime(c.Request().Context(), acpagent.CreateRuntimeInput{
 		BotID:       bot.ID,

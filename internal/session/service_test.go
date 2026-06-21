@@ -353,6 +353,155 @@ func (s *pagedQueriesStub) ListSessionsByBotAndCreatedByUserPaged(_ context.Cont
 	return s.userRows, nil
 }
 
+func TestBotProjectPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		botMeta map[string]any
+		want    string
+	}{
+		{
+			name:    "returns bot project_path",
+			botMeta: map[string]any{"project_path": "/home/user/my-project"},
+			want:    "/home/user/my-project",
+		},
+		{
+			name:    "falls back to default when absent",
+			botMeta: map[string]any{},
+			want:    DefaultACPProjectPath,
+		},
+		{
+			name:    "falls back to default when nil",
+			botMeta: nil,
+			want:    DefaultACPProjectPath,
+		},
+		{
+			name:    "trims whitespace",
+			botMeta: map[string]any{"project_path": "  /data/app  "},
+			want:    "/data/app",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BotProjectPath(tc.botMeta)
+			if got != tc.want {
+				t.Fatalf("BotProjectPath() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyACPMetadataDefaultsUsesBotProjectPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		sessionMeta map[string]any
+		botMeta     map[string]any
+		wantPath    string
+	}{
+		{
+			name:        "session project_path wins over bot",
+			sessionMeta: map[string]any{"acp_agent_id": "codex", "project_path": "/data/app"},
+			botMeta:     map[string]any{"project_path": "/home/user/other"},
+			wantPath:    "/data/app",
+		},
+		{
+			name:        "falls back to bot project_path",
+			sessionMeta: map[string]any{"acp_agent_id": "codex"},
+			botMeta:     map[string]any{"project_path": "/home/user/my-project"},
+			wantPath:    "/home/user/my-project",
+		},
+		{
+			name:        "falls back to default when both empty",
+			sessionMeta: map[string]any{"acp_agent_id": "codex"},
+			botMeta:     map[string]any{},
+			wantPath:    DefaultACPProjectPath,
+		},
+		{
+			name:        "falls back to default when bot meta nil",
+			sessionMeta: map[string]any{"acp_agent_id": "codex"},
+			botMeta:     nil,
+			wantPath:    DefaultACPProjectPath,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := ApplyACPMetadataDefaults(tc.sessionMeta, tc.botMeta)
+			if got := out["project_path"]; got != tc.wantPath {
+				t.Fatalf("project_path = %q, want %q", got, tc.wantPath)
+			}
+		})
+	}
+}
+
+func TestCreateACPAgentSessionInheritsBotProjectPath(t *testing.T) {
+	botID := "00000000-0000-0000-0000-000000000001"
+	botUUID := mustPGUUID(botID)
+	queries := &createACPQueries{
+		bot: sqlc.GetBotByIDRow{
+			ID: botUUID,
+			Metadata: mustSessionJSON(map[string]any{
+				"project_path": "/home/user/my-project",
+				acpprofile.MetadataKeyACP: map[string]any{
+					"agents": map[string]any{
+						acpprofile.AgentCodexID: map[string]any{"enabled": true},
+					},
+				},
+			}),
+		},
+	}
+	svc := NewService(nil, queries, nil)
+
+	created, err := svc.Create(context.Background(), CreateInput{
+		BotID: botID,
+		Type:  TypeACPAgent,
+		Title: "Codex",
+		Metadata: map[string]any{
+			"acp_agent_id": acpprofile.AgentCodexID,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(acp_agent) error = %v", err)
+	}
+	if created.Metadata["project_path"] != "/home/user/my-project" {
+		t.Fatalf("project_path = %v, want /home/user/my-project", created.Metadata["project_path"])
+	}
+}
+
+func TestUpdateTypeAndMetadataInheritsBotProjectPath(t *testing.T) {
+	botID := "00000000-0000-0000-0000-000000000001"
+	sessionID := "00000000-0000-0000-0000-000000000002"
+	botUUID := mustPGUUID(botID)
+	sessionUUID := mustPGUUID(sessionID)
+	queries := &updateACPQueries{
+		bot: sqlc.GetBotByIDRow{
+			ID: botUUID,
+			Metadata: mustSessionJSON(map[string]any{
+				"project_path": "/home/user/my-project",
+				acpprofile.MetadataKeyACP: map[string]any{
+					"agents": map[string]any{
+						acpprofile.AgentCodexID: map[string]any{"enabled": true},
+					},
+				},
+			}),
+		},
+		session: sqlc.BotSession{
+			ID:    sessionUUID,
+			BotID: botUUID,
+			Type:  TypeChat,
+		},
+	}
+	svc := NewService(nil, queries, nil)
+
+	updated, err := svc.UpdateTypeAndMetadata(context.Background(), sessionID, TypeACPAgent, map[string]any{
+		"acp_agent_id": acpprofile.AgentCodexID,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTypeAndMetadata error = %v", err)
+	}
+	if updated.Metadata["project_path"] != "/home/user/my-project" {
+		t.Fatalf("project_path = %v, want /home/user/my-project", updated.Metadata["project_path"])
+	}
+}
+
 func TestListByBotPagedForwardsParams(t *testing.T) {
 	stub := &pagedQueriesStub{}
 	svc := NewService(nil, stub, nil)

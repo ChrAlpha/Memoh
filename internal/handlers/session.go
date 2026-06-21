@@ -105,7 +105,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 		return err
 	}
 	if sessionType == session.TypeACPAgent {
-		req.Metadata = session.ApplyACPMetadataDefaults(req.Metadata)
+		req.Metadata = session.ApplyACPMetadataDefaults(req.Metadata, bot.Metadata)
 		if err := validateACPCreate(bot, req.Metadata); err != nil {
 			return err
 		}
@@ -416,7 +416,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			targetMetadata = cloneSessionMetadata(req.Metadata)
 		}
 		if targetType == session.TypeACPAgent {
-			targetMetadata = session.ApplyACPMetadataDefaults(targetMetadata)
+			targetMetadata = session.ApplyACPMetadataDefaults(targetMetadata, bot.Metadata)
 		}
 		agentChanged := sessionAgentConfigChanged(existing.Type, existing.Metadata, targetType, targetMetadata)
 		if agentChanged {

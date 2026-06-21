@@ -151,7 +151,12 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Session, error
 		return Session{}, fmt.Errorf("unknown session type %q", sessionType)
 	}
 	if sessionType == TypeACPAgent {
-		meta = ApplyACPMetadataDefaults(meta)
+		bot, err := s.queries.GetBotByID(ctx, pgBotID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load bot: %w", err)
+		}
+		botMeta := parseJSONMap(bot.Metadata)
+		meta = ApplyACPMetadataDefaults(meta, botMeta)
 		if err := validateACPMetadata(meta); err != nil {
 			return Session{}, err
 		}
@@ -265,7 +270,12 @@ func (s *Service) UpdateTypeAndMetadata(ctx context.Context, sessionID, typ stri
 		return Session{}, err
 	}
 	if sessionType == TypeACPAgent {
-		metadata = ApplyACPMetadataDefaults(metadata)
+		bot, err := s.queries.GetBotByID(ctx, existing.BotID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load bot: %w", err)
+		}
+		botMeta := parseJSONMap(bot.Metadata)
+		metadata = ApplyACPMetadataDefaults(metadata, botMeta)
 		if err := validateACPMetadata(metadata); err != nil {
 			return Session{}, err
 		}
@@ -667,14 +677,25 @@ func validateACPMetadata(meta map[string]any) error {
 	return nil
 }
 
+// BotProjectPath returns the bot-level project_path from bot metadata,
+// falling back to DefaultACPProjectPath when absent.
+func BotProjectPath(botMeta map[string]any) string {
+	if p := metadataString(botMeta, "project_path"); p != "" {
+		return p
+	}
+	return DefaultACPProjectPath
+}
+
 // ApplyACPMetadataDefaults fills omitted ACP session project fields.
-func ApplyACPMetadataDefaults(meta map[string]any) map[string]any {
+// When the session metadata lacks a project_path, botMeta is consulted
+// before falling back to DefaultACPProjectPath.
+func ApplyACPMetadataDefaults(meta map[string]any, botMeta map[string]any) map[string]any {
 	out := make(map[string]any, len(meta)+2)
 	for key, value := range meta {
 		out[key] = value
 	}
 	if strings.TrimSpace(metadataString(out, "project_path")) == "" {
-		out["project_path"] = DefaultACPProjectPath
+		out["project_path"] = BotProjectPath(botMeta)
 	}
 	if strings.TrimSpace(metadataString(out, "acp_project_mode")) == "" {
 		out["acp_project_mode"] = DefaultACPProjectMode
