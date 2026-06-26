@@ -549,6 +549,7 @@ func (r *Resolver) LoadCompactionSummary(ctx context.Context, messages []message
 	var summaries []string
 	var coveredHistoryIDs []string
 	var coveredMessageIDs []string
+	coveredMessageCutoffMs := make(map[string]int64)
 	for _, compactID := range order {
 		cUUID, err := db.ParseUUID(compactID)
 		if err != nil {
@@ -563,6 +564,10 @@ func (r *Resolver) LoadCompactionSummary(ctx context.Context, messages []message
 		if log.Status != "ok" || summary == "" {
 			continue
 		}
+		var cutoffMs int64
+		if log.CompletedAt.Valid {
+			cutoffMs = log.CompletedAt.Time.UnixMilli()
+		}
 		summaries = append(summaries, summary)
 		for _, msg := range groups[compactID] {
 			if id := strings.TrimSpace(msg.ID); id != "" {
@@ -570,15 +575,23 @@ func (r *Resolver) LoadCompactionSummary(ctx context.Context, messages []message
 			}
 			if externalID := strings.TrimSpace(msg.ExternalMessageID); externalID != "" {
 				coveredMessageIDs = append(coveredMessageIDs, externalID)
+				if cutoffMs > coveredMessageCutoffMs[externalID] {
+					coveredMessageCutoffMs[externalID] = cutoffMs
+				}
 			}
 		}
 	}
 	if len(summaries) == 0 {
 		return pipelinepkg.CompactSummary{}
 	}
+	if len(coveredMessageCutoffMs) == 0 {
+		coveredMessageCutoffMs = nil
+	}
 	return pipelinepkg.CompactSummary{
-		Text:                     strings.Join(summaries, "\n\n"),
-		CoveredMessageIDs:        coveredMessageIDs,
+		Text:                   strings.Join(summaries, "\n\n"),
+		CoveredMessageIDs:      coveredMessageIDs,
+		CoveredMessageCutoffMs: coveredMessageCutoffMs,
+
 		CoveredHistoryMessageIDs: coveredHistoryIDs,
 	}
 }
