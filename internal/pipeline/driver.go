@@ -242,19 +242,24 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		sess.lastProcessedMs = anchorFromTRs(trs)
 	}
 
-	// Re-evaluate the trigger condition now that lastProcessedMs is anchored.
-	// The outer loop used lastProcessedMs=0 to allow first-time dispatch into
-	// this function; after initialisation, we must verify there's actually a
-	// new external event past the anchor before spending an LLM call.
-	if LatestExternalEventMs(rc, sess.lastProcessedMs) == 0 {
-		return
-	}
-
 	compactSummary := CompactSummary{}
 	if d.deps.Resolver != nil {
 		compactSummary = d.deps.Resolver.LoadCompactionSummary(ctx, historyMessages)
 	}
-	composed := ComposeContextWithSummary(rc, trs, compactSummary)
+	activeRC := filterCoveredRenderedContext(rc, compactSummary)
+
+	// Re-evaluate the trigger condition now that lastProcessedMs is anchored.
+	// The outer loop used lastProcessedMs=0 to allow first-time dispatch into
+	// this function; after initialisation, we must verify there's actually a
+	// new external event past the anchor before spending an LLM call.
+	if LatestExternalEventMs(activeRC, sess.lastProcessedMs) == 0 {
+		if LatestExternalEventMs(rc, sess.lastProcessedMs) > 0 {
+			advanceCursorToLatestRC(sess, rc)
+		}
+		return
+	}
+
+	composed := ComposeContextWithSummary(activeRC, trs, compactSummary)
 	if composed == nil {
 		return
 	}
@@ -284,14 +289,14 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	// them as native vision input (ImagePart) on the first encounter.
 	// Subsequent turns only see the file path in the XML rendering.
 	if runConfig.SupportsImageInput && d.deps.Resolver != nil {
-		imageRefs := extractNewImageRefs(rc, sess.lastProcessedMs)
+		imageRefs := extractNewImageRefs(activeRC, sess.lastProcessedMs)
 		if len(imageRefs) > 0 {
 			imageParts := d.deps.Resolver.InlineImageAttachments(ctx, cfg.BotID, imageRefs)
 			injectImagePartsIntoLastUserMessage(runConfig.Messages, imageParts)
 		}
 	}
 
-	isMentioned := wasRecentlyMentioned(rc, sess.lastProcessedMs)
+	isMentioned := wasRecentlyMentioned(activeRC, sess.lastProcessedMs)
 	lateBinding := buildLateBindingPrompt(isMentioned)
 	runConfig.Messages = append(runConfig.Messages, sdk.UserMessage(lateBinding))
 	runConfig = runConfig.RefreshContextFrag()
@@ -326,10 +331,7 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	// turn (not wall-clock time). Messages that arrive DURING LLM generation
 	// will land in a newer RC with ReceivedAtMs > this cursor and correctly
 	// trigger another round; wall-clock would wrongly mark them processed.
-	consumedMs := latestRCReceivedAtMs(rc)
-	if consumedMs > sess.lastProcessedMs {
-		sess.lastProcessedMs = consumedMs
-	}
+	advanceCursorToLatestRC(sess, rc)
 }
 
 // latestRCReceivedAtMs returns the maximum ReceivedAtMs across all segments
@@ -342,6 +344,13 @@ func latestRCReceivedAtMs(rc RenderedContext) int64 {
 		}
 	}
 	return latest
+}
+
+func advanceCursorToLatestRC(sess *discussSession, rc RenderedContext) {
+	consumedMs := latestRCReceivedAtMs(rc)
+	if consumedMs > sess.lastProcessedMs {
+		sess.lastProcessedMs = consumedMs
+	}
 }
 
 // anchorFromTRs returns the maximum RequestedAtMs across a TR slice. Used
