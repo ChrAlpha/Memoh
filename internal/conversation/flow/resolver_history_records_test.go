@@ -3,9 +3,12 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -14,10 +17,11 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/historyfrag"
 	messagepkg "github.com/memohai/memoh/internal/message"
+	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 	"github.com/memohai/memoh/internal/toolapproval"
 	"github.com/memohai/memoh/internal/userinput"
 )
@@ -200,7 +204,7 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryWithoutRecentRows(t *testing
 	sessionID := "00000000-0000-0000-0000-00000000f003"
 	compactID := "00000000-0000-0000-0000-00000000c003"
 	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+		logs: []dbsqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -239,7 +243,7 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 	sessionID := "00000000-0000-0000-0000-00000000f004"
 	compactID := "00000000-0000-0000-0000-00000000c004"
 	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+		logs: []dbsqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -247,7 +251,7 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 				Summary:   "older condensed context",
 			},
 		},
-		covered: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{
+		covered: map[pgtype.UUID][]dbsqlc.ListMessagesByCompactIDRow{
 			mustPGUUID(t, compactID): {
 				{
 					ID:      mustPGUUID(t, "00000000-0000-0000-0000-000000000401"),
@@ -281,6 +285,78 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 	frags := historyContextFragsForMessages(historyfrag.ToModelMessages(got), got)
 	if len(frags) != 1 || frags[0].Coverage == nil || len(frags[0].Coverage.CoveredRefs) != 2 {
 		t.Fatalf("summary frag lost loaded coverage: %#v", frags)
+	}
+}
+
+func TestBuildMessagesFromPipelineUsesCompactionSummaryAndSkipsCoveredReplay(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "sess-1"
+	const compactID = "11111111-1111-1111-1111-111111111111"
+
+	p := pipelinepkg.NewPipeline(pipelinepkg.RenderParams{})
+	p.PushEvent(sessionID, pipelinepkg.MessageEvent{
+		SessionID:    sessionID,
+		MessageID:    "external-old",
+		ReceivedAtMs: 100,
+		TimestampSec: 100,
+		Content:      []pipelinepkg.ContentNode{{Type: "text", Text: "old user"}},
+		Conversation: pipelinepkg.ConversationMeta{Channel: "telegram", ConversationType: "group"},
+	})
+	p.PushEvent(sessionID, pipelinepkg.MessageEvent{
+		SessionID:    sessionID,
+		MessageID:    "external-new",
+		ReceivedAtMs: 300,
+		TimestampSec: 300,
+		Content:      []pipelinepkg.ContentNode{{Type: "text", Text: "new user"}},
+		Conversation: pipelinepkg.ConversationMeta{Channel: "telegram", ConversationType: "group"},
+	})
+
+	resolver := &Resolver{
+		logger:   slog.New(slog.DiscardHandler),
+		pipeline: p,
+		messageService: &pipelineHistoryMessageService{rows: []messagepkg.Message{
+			dbHistoryRow(t, "row-old-user", "user", conversation.NewTextContent("old user"), func(msg *messagepkg.Message) {
+				msg.SessionID = sessionID
+				msg.ExternalMessageID = "external-old"
+				msg.CompactID = compactID
+				msg.CreatedAt = time.UnixMilli(100).UTC()
+			}),
+			dbHistoryRow(t, "row-old-assistant", "assistant", mustRawJSON(t, conversation.ModelMessage{
+				Role:    "assistant",
+				Content: conversation.NewTextContent("old assistant"),
+			}), func(msg *messagepkg.Message) {
+				msg.SessionID = sessionID
+				msg.CompactID = compactID
+				msg.CreatedAt = time.UnixMilli(200).UTC()
+			}),
+			dbHistoryRow(t, "row-new-assistant", "assistant", mustRawJSON(t, conversation.ModelMessage{
+				Role:    "assistant",
+				Content: conversation.NewTextContent("new assistant"),
+			}), func(msg *messagepkg.Message) {
+				msg.SessionID = sessionID
+				msg.CreatedAt = time.UnixMilli(400).UTC()
+			}),
+		}},
+		queries: pipelineCompactionQueries{
+			logs: map[string]dbsqlc.BotHistoryMessageCompact{
+				compactID: {ID: flowTestUUID(compactID), Status: "ok", Summary: "old user and assistant summarized"},
+			},
+		},
+	}
+
+	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0)
+	got := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		got = append(got, msg.TextContent())
+	}
+	want := []string{
+		"[Conversation summary]\nold user and assistant summarized",
+		`<message id="external-new" t="1970-01-01T00:05:00+00:00" channel="telegram" type="group">` + "\nnew user\n</message>",
+		"new assistant",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pipeline messages mismatch:\ngot  %#v\nwant %#v", got, want)
 	}
 }
 
@@ -456,6 +532,29 @@ func assertSameJSON(t *testing.T, got any, want any) {
 	}
 }
 
+type pipelineHistoryMessageService struct {
+	recordingMessageService
+	rows []messagepkg.Message
+}
+
+func (s *pipelineHistoryMessageService) ListActiveSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
+	return s.rows, nil
+}
+
+type pipelineCompactionQueries struct {
+	dbstore.Queries
+	logs map[string]dbsqlc.BotHistoryMessageCompact
+}
+
+func (q pipelineCompactionQueries) GetCompactionLogByID(_ context.Context, id pgtype.UUID) (dbsqlc.BotHistoryMessageCompact, error) {
+	for compactID, log := range q.logs {
+		if flowTestUUID(compactID) == id {
+			return log, nil
+		}
+	}
+	return dbsqlc.BotHistoryMessageCompact{}, errors.New("compact log not found")
+}
+
 func historyRecord(id string, msg conversation.ModelMessage, mutate func(*historyfrag.HistoryRecord)) historyfrag.HistoryRecord {
 	record := historyfrag.HistoryRecord{
 		Ref: contextfrag.ContextRef{
@@ -479,17 +578,17 @@ func historyRecord(id string, msg conversation.ModelMessage, mutate func(*histor
 
 type recordingCompactionLogQueries struct {
 	dbstore.Queries
-	logs      []sqlc.BotHistoryMessageCompact
-	covered   map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow
+	logs      []dbsqlc.BotHistoryMessageCompact
+	covered   map[pgtype.UUID][]dbsqlc.ListMessagesByCompactIDRow
 	sessionID pgtype.UUID
 }
 
-func (q *recordingCompactionLogQueries) ListCompactionLogsBySession(_ context.Context, sessionID pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
+func (q *recordingCompactionLogQueries) ListCompactionLogsBySession(_ context.Context, sessionID pgtype.UUID) ([]dbsqlc.BotHistoryMessageCompact, error) {
 	q.sessionID = sessionID
 	return q.logs, nil
 }
 
-func (q *recordingCompactionLogQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {
+func (q *recordingCompactionLogQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]dbsqlc.ListMessagesByCompactIDRow, error) {
 	return q.covered[compactID], nil
 }
 

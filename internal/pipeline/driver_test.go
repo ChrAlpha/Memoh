@@ -9,6 +9,7 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
+	messagepkg "github.com/memohai/memoh/internal/message"
 )
 
 func TestExtractNewImageRefs(t *testing.T) {
@@ -349,6 +350,59 @@ func TestHandleReplyWithAgentRefreshesContextFragAfterLateBinding(t *testing.T) 
 	}
 }
 
+func TestHandleReplyWithAgentUsesCompactionSummary(t *testing.T) {
+	rc := RenderedContext{
+		{
+			MessageID:    "external-old",
+			ReceivedAtMs: 100,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="external-old">old</message>`}},
+		},
+		{
+			MessageID:    "external-new",
+			ReceivedAtMs: 300,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="external-new">new</message>`}},
+		},
+	}
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: agentpkg.RunConfig{System: "base system"},
+			ModelID:   "model-1",
+		},
+		compactionSummary: CompactSummary{
+			Text:              "old summarized",
+			CoveredMessageIDs: []string{"external-old"},
+		},
+	}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline: NewPipeline(RenderParams{}),
+		Resolver: resolver,
+	})
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "b", SessionID: "s"},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if fakeAgent.lastConfig == nil {
+		t.Fatal("expected agent to be invoked")
+	}
+	got := sdkMessageTexts(fakeAgent.lastConfig.Messages)
+	if len(got) < 2 {
+		t.Fatalf("expected summary and current message, got %#v", got)
+	}
+	if got[0] != "[Conversation summary]\nold summarized" {
+		t.Fatalf("first message = %q, want compaction summary; all=%#v", got[0], got)
+	}
+	if strings.Contains(strings.Join(got, "\n"), "external-old") {
+		t.Fatalf("covered RC replay was not skipped: %#v", got)
+	}
+	if !strings.Contains(strings.Join(got, "\n"), "external-new") {
+		t.Fatalf("uncovered RC replay missing: %#v", got)
+	}
+}
+
 // --- Test helpers ---
 
 type fakeDiscussStreamer struct {
@@ -364,8 +418,9 @@ func (f *fakeDiscussStreamer) Stream(_ context.Context, cfg agentpkg.RunConfig) 
 }
 
 type fakeRunConfigResolver struct {
-	resolveResult ResolveRunConfigResult
-	inlineFn      func(ctx context.Context, botID string, refs []ImageAttachmentRef) []sdk.ImagePart
+	resolveResult     ResolveRunConfigResult
+	inlineFn          func(ctx context.Context, botID string, refs []ImageAttachmentRef) []sdk.ImagePart
+	compactionSummary CompactSummary
 }
 
 func (f *fakeRunConfigResolver) ResolveRunConfig(_ context.Context, _, _, _, _, _, _, _ string) (ResolveRunConfigResult, error) {
@@ -381,6 +436,24 @@ func (f *fakeRunConfigResolver) InlineImageAttachments(ctx context.Context, botI
 
 func (*fakeRunConfigResolver) StoreRound(_ context.Context, _, _, _, _ string, _ []sdk.Message, _ string) error {
 	return nil
+}
+
+func (f *fakeRunConfigResolver) LoadCompactionSummary(context.Context, []messagepkg.Message) CompactSummary {
+	return f.compactionSummary
+}
+
+func sdkMessageTexts(messages []sdk.Message) []string {
+	out := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		var parts []string
+		for _, part := range msg.Content {
+			if text, ok := part.(sdk.TextPart); ok {
+				parts = append(parts, text.Text)
+			}
+		}
+		out = append(out, strings.Join(parts, "\n"))
+	}
+	return out
 }
 
 func lastMessageFragContains(frags []contextfrag.ContextFrag, needle string) bool {
