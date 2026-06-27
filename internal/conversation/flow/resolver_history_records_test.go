@@ -288,7 +288,7 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 	}
 }
 
-func TestBuildMessagesFromPipelineUsesCompactionSummaryAndSkipsCoveredReplay(t *testing.T) {
+func TestBuildPipelineContextUsesCompactionSummaryAndSkipsCoveredReplay(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "sess-1"
@@ -345,7 +345,7 @@ func TestBuildMessagesFromPipelineUsesCompactionSummaryAndSkipsCoveredReplay(t *
 		},
 	}
 
-	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0)
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0).Messages
 	got := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		got = append(got, msg.TextContent())
@@ -424,7 +424,59 @@ func TestBuildPipelineContextCarriesCompactionSummaryCoverage(t *testing.T) {
 	}
 }
 
-func TestBuildMessagesFromPipelineKeepsHistoryWhenRCEmpty(t *testing.T) {
+func TestBuildPipelineContextCarriesMergedCompactionSummaryCoverage(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "sess-pipeline-merged-summary-frag"
+	const compactID1 = "22222222-2222-2222-2222-222222222222"
+	const compactID2 = "33333333-3333-3333-3333-333333333333"
+
+	p := pipelinepkg.NewPipeline(pipelinepkg.RenderParams{})
+	p.ReplaySession(sessionID, nil)
+
+	resolver := &Resolver{
+		logger:   slog.New(slog.DiscardHandler),
+		pipeline: p,
+		messageService: &pipelineHistoryMessageService{rows: []messagepkg.Message{
+			dbHistoryRow(t, "row-old-user-1", "user", conversation.NewTextContent("old user one"), func(msg *messagepkg.Message) {
+				msg.SessionID = sessionID
+				msg.ExternalMessageID = "external-old-1"
+				msg.CompactID = compactID1
+				msg.CreatedAt = time.UnixMilli(100).UTC()
+			}),
+			dbHistoryRow(t, "row-old-user-2", "user", conversation.NewTextContent("old user two"), func(msg *messagepkg.Message) {
+				msg.SessionID = sessionID
+				msg.ExternalMessageID = "external-old-2"
+				msg.CompactID = compactID2
+				msg.CreatedAt = time.UnixMilli(200).UTC()
+			}),
+		}},
+		queries: pipelineCompactionQueries{
+			logs: map[string]dbsqlc.BotHistoryMessageCompact{
+				compactID1: {ID: flowTestUUID(compactID1), Status: "ok", Summary: "summary one"},
+				compactID2: {ID: flowTestUUID(compactID2), Status: "ok", Summary: "summary two"},
+			},
+		},
+	}
+
+	built := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0)
+	frags := historyContextFragsForMessages(built.Messages, built.HistoryRecords)
+
+	if len(built.HistoryRecords) != 1 {
+		t.Fatalf("merged summary records = %d, want 1: %#v", len(built.HistoryRecords), built.HistoryRecords)
+	}
+	if len(frags) != 1 {
+		t.Fatalf("summary frags = %d, want merged summary frag: %#v", len(frags), frags)
+	}
+	if got := len(frags[0].Coverage.CoveredRefs); got != 2 {
+		t.Fatalf("merged summary coverage refs = %d, want 2: %#v", got, frags[0].Coverage)
+	}
+	if len(contextfrag.BuildManifest(frags).CoverageTrace) != 1 {
+		t.Fatalf("manifest lost merged pipeline summary coverage: %#v", contextfrag.BuildManifest(frags))
+	}
+}
+
+func TestBuildPipelineContextKeepsHistoryWhenRCEmpty(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "sess-empty-rc"
@@ -444,10 +496,10 @@ func TestBuildMessagesFromPipelineKeepsHistoryWhenRCEmpty(t *testing.T) {
 		}},
 	}
 
-	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{
 		SessionID: sessionID,
 		Query:     "current user query",
-	}, 0)
+	}, 0).Messages
 	got := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		got = append(got, msg.TextContent())
@@ -459,7 +511,7 @@ func TestBuildMessagesFromPipelineKeepsHistoryWhenRCEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildMessagesFromPipelineAppendsCurrentQueryWhenRCStale(t *testing.T) {
+func TestBuildPipelineContextAppendsCurrentQueryWhenRCStale(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "sess-stale-rc"
@@ -477,11 +529,11 @@ func TestBuildMessagesFromPipelineAppendsCurrentQueryWhenRCStale(t *testing.T) {
 		pipeline: p,
 	}
 
-	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{
 		SessionID:         sessionID,
 		ExternalMessageID: "external-current",
 		Query:             "current user query",
-	}, 0)
+	}, 0).Messages
 
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d, want RC plus current query: %#v", len(messages), messages)
@@ -491,7 +543,7 @@ func TestBuildMessagesFromPipelineAppendsCurrentQueryWhenRCStale(t *testing.T) {
 	}
 }
 
-func TestBuildMessagesFromPipelineAppendsCurrentQueryWithoutExternalMessageID(t *testing.T) {
+func TestBuildPipelineContextAppendsCurrentQueryWithoutExternalMessageID(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "sess-stale-rc-empty-external-id"
@@ -509,10 +561,10 @@ func TestBuildMessagesFromPipelineAppendsCurrentQueryWithoutExternalMessageID(t 
 		pipeline: p,
 	}
 
-	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{
 		SessionID: sessionID,
 		Query:     "current user query",
-	}, 0)
+	}, 0).Messages
 
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d, want RC plus current query: %#v", len(messages), messages)
@@ -522,7 +574,39 @@ func TestBuildMessagesFromPipelineAppendsCurrentQueryWithoutExternalMessageID(t 
 	}
 }
 
-func TestBuildMessagesFromPipelineCompactionEndToEnd(t *testing.T) {
+func TestBuildPipelineContextAppendsCurrentQueryWhenOldRCOnlyContainsSubstring(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "sess-stale-rc-empty-external-id-substring"
+	p := pipelinepkg.NewPipeline(pipelinepkg.RenderParams{})
+	p.PushEvent(sessionID, pipelinepkg.MessageEvent{
+		SessionID:    sessionID,
+		MessageID:    "external-old",
+		ReceivedAtMs: 100,
+		TimestampSec: 100,
+		Content:      []pipelinepkg.ContentNode{{Type: "text", Text: strings.Repeat("old stale filler ", 80) + "current user query"}},
+		Conversation: pipelinepkg.ConversationMeta{Channel: "telegram", ConversationType: "group"},
+	})
+	resolver := &Resolver{
+		logger:   slog.New(slog.DiscardHandler),
+		pipeline: p,
+	}
+
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{
+		SessionID: sessionID,
+		Query:     "current user query",
+	}, 20).Messages
+	joined := strings.Join(modelMessageTexts(messages), "\n")
+
+	if !strings.Contains(joined, "current user query") {
+		t.Fatalf("budgeted pipeline context without external message id lost current query: %#v", messages)
+	}
+	if strings.Contains(joined, "old stale filler") {
+		t.Fatalf("old RC containing current query substring suppressed current turn: %#v", messages)
+	}
+}
+
+func TestBuildPipelineContextCompactionEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	const sessionID = "sess-compact-e2e"
@@ -626,7 +710,7 @@ func TestBuildMessagesFromPipelineCompactionEndToEnd(t *testing.T) {
 		},
 	}
 
-	messages := resolver.buildMessagesFromPipeline(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0)
+	messages := resolver.buildPipelineContext(context.Background(), conversation.ChatRequest{SessionID: sessionID}, 0).Messages
 	got := make([]string, 0, len(messages))
 	for _, msg := range messages {
 		got = append(got, msg.TextContent())
@@ -673,6 +757,30 @@ func TestTrimPipelineMessagesPreservesCompactionSummary(t *testing.T) {
 
 	if len(trimmed) == 0 || trimmed[0].TextContent() != summary.TextContent() {
 		t.Fatalf("trimmed messages lost compaction summary: %#v", trimmed)
+	}
+	if len(trimmed) != 2 || trimmed[1].TextContent() != "fresh reply" {
+		t.Fatalf("trimmed messages should keep summary and newest reply, got %#v", trimmed)
+	}
+}
+
+func TestTrimPipelineMessagesPreservesMidHistoryCompactionSummary(t *testing.T) {
+	t.Parallel()
+
+	summary := conversation.ModelMessage{
+		Role:    "user",
+		Content: conversation.NewTextContent("[Conversation summary]\ncovered history"),
+	}
+	messages := []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("must keep trigger")},
+		summary,
+		{Role: "user", Content: conversation.NewTextContent(strings.Repeat("old filler ", 200))},
+		{Role: "assistant", Content: conversation.NewTextContent("fresh reply")},
+	}
+
+	trimmed := trimPipelineMessagesByTokens(nil, messages, 10)
+
+	if len(trimmed) == 0 || trimmed[0].TextContent() != summary.TextContent() {
+		t.Fatalf("trimmed mid-history messages lost compaction summary: %#v", trimmed)
 	}
 	if len(trimmed) != 2 || trimmed[1].TextContent() != "fresh reply" {
 		t.Fatalf("trimmed messages should keep summary and newest reply, got %#v", trimmed)
@@ -977,6 +1085,14 @@ func historyRecord(id string, msg conversation.ModelMessage, mutate func(*histor
 		mutate(&record)
 	}
 	return record
+}
+
+func modelMessageTexts(messages []conversation.ModelMessage) []string {
+	texts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		texts = append(texts, msg.TextContent())
+	}
+	return texts
 }
 
 type recordingCompactionLogQueries struct {
