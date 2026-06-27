@@ -477,7 +477,7 @@ func (r *Resolver) buildMessagesFromPipeline(ctx context.Context, req conversati
 	}
 	rc := r.pipeline.GetRC(sessionID)
 	if len(rc) == 0 {
-		return nil
+		return appendCurrentPipelineQueryIfMissing(nil, rc, req)
 	}
 
 	historyMessages := r.loadPipelineHistoryMessages(ctx, sessionID)
@@ -504,6 +504,7 @@ func (r *Resolver) buildMessagesFromPipeline(ctx context.Context, req conversati
 			Content: contentJSON,
 		})
 	}
+	messages = appendCurrentPipelineQueryIfMissing(messages, rc, req)
 
 	// Apply context token budget trimming to pipeline path as well.
 	if contextTokenBudget > 0 && len(messages) > 0 {
@@ -511,6 +512,35 @@ func (r *Resolver) buildMessagesFromPipeline(ctx context.Context, req conversati
 	}
 
 	return messages
+}
+
+func appendCurrentPipelineQueryIfMissing(messages []conversation.ModelMessage, rc pipelinepkg.RenderedContext, req conversation.ChatRequest) []conversation.ModelMessage {
+	query := strings.TrimSpace(firstNonEmpty(req.RawQuery, req.Query))
+	if query == "" {
+		return messages
+	}
+	currentMessageID := strings.TrimSpace(req.ExternalMessageID)
+	if len(rc) > 0 {
+		if currentMessageID == "" || renderedContextHasMessageID(rc, currentMessageID) {
+			return messages
+		}
+	}
+	return append(messages, conversation.ModelMessage{
+		Role:    "user",
+		Content: conversation.NewTextContent(query),
+	})
+}
+
+func renderedContextHasMessageID(rc pipelinepkg.RenderedContext, messageID string) bool {
+	if messageID == "" {
+		return false
+	}
+	for _, seg := range rc {
+		if strings.TrimSpace(seg.MessageID) == messageID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Resolver) loadPipelineHistoryMessages(ctx context.Context, sessionID string) []messagepkg.Message {
@@ -564,10 +594,6 @@ func (r *Resolver) LoadCompactionSummary(ctx context.Context, messages []message
 		if log.Status != "ok" || summary == "" {
 			continue
 		}
-		var cutoffMs int64
-		if log.CompletedAt.Valid {
-			cutoffMs = log.CompletedAt.Time.UnixMilli()
-		}
 		summaries = append(summaries, summary)
 		for _, msg := range groups[compactID] {
 			if id := strings.TrimSpace(msg.ID); id != "" {
@@ -575,6 +601,7 @@ func (r *Resolver) LoadCompactionSummary(ctx context.Context, messages []message
 			}
 			if externalID := strings.TrimSpace(msg.ExternalMessageID); externalID != "" {
 				coveredMessageIDs = append(coveredMessageIDs, externalID)
+				cutoffMs := msg.CreatedAt.UnixMilli()
 				if cutoffMs > coveredMessageCutoffMs[externalID] {
 					coveredMessageCutoffMs[externalID] = cutoffMs
 				}

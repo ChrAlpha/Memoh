@@ -456,7 +456,7 @@ func (d *DiscussDriver) loadTurnResponsesWithMessages(ctx context.Context, sessi
 func extractNewImageRefs(rc RenderedContext, afterMs int64) []ImageAttachmentRef {
 	var refs []ImageAttachmentRef
 	for _, seg := range rc {
-		if seg.eventAtMs() > afterMs && !seg.IsMyself {
+		if seg.eventAtMs() > afterMs && isExternalSegment(seg) {
 			refs = append(refs, seg.ImageRefs...)
 		}
 	}
@@ -488,7 +488,7 @@ func injectImagePartsIntoLastUserMessage(msgs []sdk.Message, parts []sdk.ImagePa
 
 func wasRecentlyMentioned(rc RenderedContext, afterMs int64) bool {
 	for _, seg := range rc {
-		if seg.eventAtMs() > afterMs && (seg.MentionsMe || seg.RepliesToMe) {
+		if seg.eventAtMs() > afterMs && isExternalSegment(seg) && (seg.MentionsMe || seg.RepliesToMe) {
 			return true
 		}
 	}
