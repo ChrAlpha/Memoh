@@ -477,6 +477,8 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest, ru
 		}
 	}
 
+	runCfg = applyRunConfigContextAudit(runCfg, req, *run, displayName, usePipeline)
+
 	return resolvedContext{
 		runConfig:                   runCfg,
 		model:                       chatModel,
