@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"context"
+	"log/slog"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -73,6 +75,89 @@ func TestApplyRunConfigContextAuditOmitsPipelineCurrentQuery(t *testing.T) {
 	for _, item := range got.ContextManifest.Items {
 		if item.Kind == contextfrag.KindCurrentUserMessage {
 			t.Fatalf("pipeline audit should not duplicate materialized current query: %#v", item)
+		}
+	}
+}
+
+func TestPrepareRunConfigRefreshesContextAuditAfterFinalMutation(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Resolver{logger: slog.New(slog.DiscardHandler)}
+	cfg := agentpkg.RunConfig{
+		System: "stale system",
+		Messages: []sdk.Message{
+			sdk.UserMessage("history"),
+		},
+		Query:        "current query",
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+		ContextScope: contextfrag.Scope{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+		},
+	}
+	cfg = cfg.RefreshContextFrag()
+
+	got := resolver.prepareRunConfig(context.Background(), cfg)
+
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %#v, want history + materialized query", got.Messages)
+	}
+	if len(got.InlineImages) != 0 {
+		t.Fatalf("inline images = %d, want materialized into message", len(got.InlineImages))
+	}
+	if got.ContextManifest.Counts.Messages != len(got.Messages) {
+		t.Fatalf("manifest messages = %d, want %d", got.ContextManifest.Counts.Messages, len(got.Messages))
+	}
+	if got.ContextManifest.Counts.Images != 1 {
+		t.Fatalf("manifest images = %d, want one materialized image", got.ContextManifest.Counts.Images)
+	}
+	for _, item := range got.ContextManifest.Items {
+		if item.ID == "current_user.message" {
+			t.Fatalf("manifest kept stale pre-materialized query item: %#v", item)
+		}
+		if item.ID == "current_user.images" {
+			t.Fatalf("manifest kept stale pre-materialized images item: %#v", item)
+		}
+		if item.Scope.BotID != "bot-1" || item.Scope.SessionID != "session-1" {
+			t.Fatalf("manifest item lost context scope: %#v", item.Scope)
+		}
+	}
+}
+
+func TestPrepareRunConfigRefreshesContextAuditAfterImageOnlyMutation(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Resolver{logger: slog.New(slog.DiscardHandler)}
+	cfg := agentpkg.RunConfig{
+		Messages:     []sdk.Message{sdk.UserMessage("pipeline text")},
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+		ContextScope: contextfrag.Scope{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+		},
+	}
+	cfg = cfg.RefreshContextFrag()
+
+	got := resolver.prepareRunConfig(context.Background(), cfg)
+
+	if len(got.Messages) != 1 {
+		t.Fatalf("messages = %#v, want existing pipeline message", got.Messages)
+	}
+	if len(got.Messages[0].Content) != 2 {
+		t.Fatalf("message content parts = %#v, want text + image", got.Messages[0].Content)
+	}
+	if len(got.InlineImages) != 0 {
+		t.Fatalf("inline images = %d, want materialized into message", len(got.InlineImages))
+	}
+	if got.ContextManifest.Counts.Messages != len(got.Messages) {
+		t.Fatalf("manifest messages = %d, want %d", got.ContextManifest.Counts.Messages, len(got.Messages))
+	}
+	if got.ContextManifest.Counts.Images != 1 {
+		t.Fatalf("manifest images = %d, want one materialized image", got.ContextManifest.Counts.Images)
+	}
+	for _, item := range got.ContextManifest.Items {
+		if item.ID == "current_user.images" {
+			t.Fatalf("manifest kept stale pre-materialized images item: %#v", item)
 		}
 	}
 }

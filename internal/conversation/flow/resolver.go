@@ -1170,6 +1170,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		cfg.System += "\n\n" + formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
 	}
 
+	inlineImagesMaterialized := false
 	if cfg.Query != "" {
 		var extra []sdk.MessagePart
 		for _, img := range cfg.InlineImages {
@@ -1178,6 +1179,8 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 			}
 		}
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query, extra...))
+		cfg.ContextQueryMaterialized = true
+		inlineImagesMaterialized = len(cfg.InlineImages) > 0
 	} else if len(cfg.InlineImages) > 0 {
 		// Pipeline path: the user query is already embedded in the RC messages,
 		// but image parts are not rendered by the pipeline renderer. Inject the
@@ -1200,10 +1203,14 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 			if !injected {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 			}
+			inlineImagesMaterialized = true
 		}
 	}
+	if inlineImagesMaterialized {
+		cfg.InlineImages = nil
+	}
 
-	return cfg
+	return cfg.RefreshContextFrag()
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (agentpkg.SkillEntry, bool) {
