@@ -2483,10 +2483,45 @@ WITH RECURSIVE visible_turns AS (
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
 )
-SELECT m.id, m.bot_id, m.session_id, m.role, m.content, m.usage, m.sender_channel_identity_id, m.compact_id, m.created_at
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.turn_id,
+  bs_view.default_head_turn_id AS view_head_turn_id,
+  m.turn_message_seq,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.event_id,
+  m.display_text,
+  m.compact_id,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  r.conversation_type AS conversation_type,
+  COALESCE(
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_name', '')), ''),
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_handle', '')), ''),
+    ''
+  )::text AS conversation_name,
+  r.default_reply_target AS reply_target
 FROM visible_turns vt
 JOIN bot_history_messages m ON m.turn_id = vt.id
+JOIN bot_sessions bs_view ON bs_view.id = $1
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+LEFT JOIN bot_channel_routes r ON r.id = s.route_id
 WHERE m.compact_id IS NULL
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC
 `
 
@@ -2494,12 +2529,29 @@ type ListUncompactedMessagesBySessionRow struct {
 	ID                      pgtype.UUID        `json:"id"`
 	BotID                   pgtype.UUID        `json:"bot_id"`
 	SessionID               pgtype.UUID        `json:"session_id"`
+	TurnID                  pgtype.UUID        `json:"turn_id"`
+	ViewHeadTurnID          pgtype.UUID        `json:"view_head_turn_id"`
+	TurnMessageSeq          pgtype.Int8        `json:"turn_message_seq"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
 	Role                    string             `json:"role"`
 	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
 	Usage                   []byte             `json:"usage"`
-	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
 	CompactID               pgtype.UUID        `json:"compact_id"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+	ConversationType        pgtype.Text        `json:"conversation_type"`
+	ConversationName        string             `json:"conversation_name"`
+	ReplyTarget             pgtype.Text        `json:"reply_target"`
 }
 
 // Compaction uses the session's server-canonical default head, not a client's
@@ -2517,12 +2569,29 @@ func (q *Queries) ListUncompactedMessagesBySession(ctx context.Context, sessionI
 			&i.ID,
 			&i.BotID,
 			&i.SessionID,
+			&i.TurnID,
+			&i.ViewHeadTurnID,
+			&i.TurnMessageSeq,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
 			&i.Role,
 			&i.Content,
+			&i.Metadata,
 			&i.Usage,
-			&i.SenderChannelIdentityID,
+			&i.SessionMode,
+			&i.RuntimeType,
+			&i.EventID,
+			&i.DisplayText,
 			&i.CompactID,
 			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+			&i.ConversationType,
+			&i.ConversationName,
+			&i.ReplyTarget,
 		); err != nil {
 			return nil, err
 		}

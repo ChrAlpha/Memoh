@@ -949,8 +949,43 @@ WITH RECURSIVE visible_turns(id, parent_turn_id, depth) AS (
   FROM bot_history_turns p
   JOIN visible_turns vt ON vt.parent_turn_id = p.id
 )
-SELECT m.id, m.bot_id, m.session_id, m.role, m.content, m.usage, m.sender_channel_identity_id, m.compact_id, m.created_at
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.turn_id,
+  bs_view.default_head_turn_id AS view_head_turn_id,
+  m.turn_message_seq,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.event_id,
+  m.display_text,
+  NULLIF(TRIM(COALESCE(m.compact_id, '')), '') AS compact_id,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  r.conversation_type AS conversation_type,
+  COALESCE(
+    NULLIF(TRIM(COALESCE(json_extract(r.metadata, '$.conversation_name'), '')), ''),
+    NULLIF(TRIM(COALESCE(json_extract(r.metadata, '$.conversation_handle'), '')), ''),
+    ''
+  ) AS conversation_name,
+  r.default_reply_target AS reply_target
 FROM visible_turns vt
 JOIN bot_history_messages m ON m.turn_id = vt.id
-WHERE m.compact_id IS NULL
+JOIN bot_sessions bs_view ON bs_view.id = sqlc.arg(session_id)
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id
+LEFT JOIN bot_sessions s ON s.id = m.session_id
+LEFT JOIN bot_channel_routes r ON r.id = s.route_id
+WHERE NULLIF(TRIM(COALESCE(m.compact_id, '')), '') IS NULL
+  AND (json_extract(m.metadata, '$.trigger_mode') IS NULL OR json_extract(m.metadata, '$.trigger_mode') != 'passive_sync')
 ORDER BY vt.depth DESC, COALESCE(m.turn_message_seq, 0) ASC, m.created_at ASC, m.id ASC;

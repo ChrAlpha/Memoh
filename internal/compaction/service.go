@@ -141,14 +141,26 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		return nil
 	}
 
-	var toCompact []sqlc.ListUncompactedMessagesBySessionRow
+	candidates, skipped := recordCandidatesFromRows(messages, "")
+	if skipped > 0 {
+		s.logger.Warn("compaction: skipped unparseable history rows",
+			slog.Int("skipped", skipped),
+			slog.String("session_id", cfg.SessionID),
+		)
+	}
+	if len(candidates) == 0 {
+		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
+	}
+
+	var toCompact []RecordCompactionCandidate
 	if cfg.TargetTokens > 0 {
 		// Sync compaction: compress enough messages to bring context
 		// down to TargetTokens. Calculate how many tokens to keep
 		// (newest messages) and compact everything older.
-		toCompact = splitByTarget(messages, cfg.TargetTokens)
+		toCompact = splitRecordCandidatesByTarget(candidates, cfg.TargetTokens)
 	} else {
-		toCompact = splitByRatio(messages, cfg.TotalInputTokens, cfg.Ratio)
+		toCompact = splitRecordCandidatesByRatio(candidates, cfg.TotalInputTokens, cfg.Ratio)
 	}
 	if len(toCompact) == 0 {
 		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
@@ -164,10 +176,10 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 	}
 	s.logger.Info("compaction: before trim",
 		slog.Int("messages", len(toCompact)),
-		slog.Int("total_uncompacted", len(messages)),
+		slog.Int("total_uncompacted", len(candidates)),
 		slog.Int("max_compact_tokens", maxCompactTokens),
 	)
-	toCompact = trimCompactMessages(toCompact, maxCompactTokens)
+	toCompact = trimRecordCompactCandidates(toCompact, maxCompactTokens)
 	s.logger.Info("compaction: after trim",
 		slog.Int("messages", len(toCompact)),
 	)
@@ -183,14 +195,16 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		}
 	}
 
-	entries := make([]messageEntry, 0, len(toCompact))
-	messageIDs := make([]pgtype.UUID, 0, len(toCompact))
-	for _, m := range toCompact {
-		entries = append(entries, messageEntry{
-			Role:    m.Role,
-			Content: string(m.Content),
-		})
-		messageIDs = append(messageIDs, m.ID)
+	entries, refs := buildRecordEntriesAndRefs(toCompact)
+	if len(entries) == 0 {
+		// Every selected message rendered empty (e.g. reasoning-only): summarizing
+		// nothing would destroy them for a junk summary. Leave them in history.
+		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
+	}
+	messageIDs, err := messageIDsFromRecordRefs(refs)
+	if err != nil {
+		return err
 	}
 
 	userPrompt := buildUserPrompt(priorSummaries, entries)
