@@ -11,6 +11,7 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/channel"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 )
@@ -209,6 +210,62 @@ func TestHandleReplyWithAgent_NoInlineWhenNoVision(t *testing.T) {
 			if _, ok := part.(sdk.ImagePart); ok {
 				t.Fatal("should not have image parts when vision is not supported")
 			}
+		}
+	}
+}
+
+func TestHandleReplyWithAgentRefreshesContextManifestAfterPipelineOverride(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 200,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="1">pipeline text</message>`}},
+		},
+	}
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: agentpkg.RunConfig{
+				System:   "system prompt",
+				Query:    "stale resolver query",
+				Messages: []sdk.Message{sdk.UserMessage("stale resolver message")},
+				ContextScope: contextfrag.Scope{
+					BotID:     "bot-1",
+					SessionID: "sess-1",
+				},
+			},
+			ModelID: "model-1",
+		},
+	}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline: NewPipeline(RenderParams{}),
+		Resolver: resolver,
+	})
+	sess := &discussSession{
+		config: DiscussSessionConfig{
+			BotID:     "bot-1",
+			SessionID: "sess-1",
+		},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if fakeAgent.lastConfig == nil {
+		t.Fatal("expected agent to be called")
+	}
+	cfg := fakeAgent.lastConfig
+	if len(cfg.Messages) != 2 {
+		t.Fatalf("messages = %#v, want pipeline message + late-binding message", cfg.Messages)
+	}
+	if cfg.ContextManifest.Counts.Messages != len(cfg.Messages) {
+		t.Fatalf("manifest messages = %d, want %d", cfg.ContextManifest.Counts.Messages, len(cfg.Messages))
+	}
+	for _, item := range cfg.ContextManifest.Items {
+		if item.ID == "current_user.message" {
+			t.Fatalf("manifest kept stale resolver query item: %#v", item)
+		}
+		if item.Scope.BotID != "bot-1" || item.Scope.SessionID != "sess-1" {
+			t.Fatalf("manifest item lost context scope: %#v", item.Scope)
 		}
 	}
 }
