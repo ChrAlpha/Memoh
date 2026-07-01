@@ -6,43 +6,55 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
+type CollectRequest struct {
+	Scope  contextfrag.Scope
+	Intent contextfrag.Intent
+	Config map[string]any
+}
+
+type RenderInput struct {
+	Target    contextfrag.RenderTarget
+	Intent    contextfrag.Intent
+	Selected  []contextfrag.ContextFrag
+	Placement PlacementPlan
+	Manifest  contextfrag.Manifest
+}
+
 type Collector interface {
-	Collect(context.Context, BuildInput, SourceSpec) ([]contextfrag.ContextFrag, error)
+	Name() string
+	Collect(context.Context, CollectRequest) ([]contextfrag.ContextFrag, error)
 }
 
 type CollectorRegistry interface {
-	Collector(name string) (Collector, bool)
+	Get(name string) (Collector, bool)
 	Names() []string
 }
 
 type Selector interface {
 	ProfileFor(contextfrag.Intent) IntentProfile
-	Select(context.Context, IntentProfile, BuildInput, []contextfrag.ContextFrag) (SelectionResult, error)
+	Select([]contextfrag.ContextFrag, IntentProfile, BudgetEnvelope) SelectionResult
 }
 
 type SelectionResult struct {
-	Frags    []contextfrag.ContextFrag
+	Selected []contextfrag.ContextFrag
 	Summary  SelectionSummary
-	Drops    []DropRecord
-	Warnings []string
+	Warnings []contextfrag.ValidationWarning
 }
 
 type IntentProfile struct {
-	Intent        contextfrag.Intent
-	View          contextfrag.ManifestView
-	Budget        BudgetEnvelope
-	RenderTargets []contextfrag.RenderTarget
+	Intent contextfrag.Intent
+	View   contextfrag.ManifestView
 }
 
 type Placer interface {
-	Place(context.Context, IntentProfile, BuildInput, []contextfrag.ContextFrag) (PlacementPlan, error)
+	Place([]contextfrag.ContextFrag, contextfrag.Intent) PlacementPlan
 }
 
 type Renderer interface {
-	Render(context.Context, contextfrag.RenderTarget, BuildInput, ContextView) (RenderedPayload, error)
+	Target() contextfrag.RenderTarget
+	Render(context.Context, RenderInput) (RenderedPayload, error)
 }
 
 type RendererRegistry interface {
-	Renderer(contextfrag.RenderTarget) (Renderer, bool)
-	Names() []contextfrag.RenderTarget
+	Get(contextfrag.RenderTarget) (Renderer, bool)
 }

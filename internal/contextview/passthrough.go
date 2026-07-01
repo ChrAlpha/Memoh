@@ -2,7 +2,10 @@ package contextview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
+	"strings"
 
 	"github.com/memohai/memoh/internal/contextfrag"
 )
@@ -12,41 +15,62 @@ type PassthroughSelector struct{}
 func (PassthroughSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	return IntentProfile{
 		Intent: intent,
-		View:   manifestViewForIntent(intent),
+		View:   contextfrag.ManifestView(intent),
 	}
 }
 
-func (PassthroughSelector) Select(_ context.Context, _ IntentProfile, _ BuildInput, frags []contextfrag.ContextFrag) (SelectionResult, error) {
+func (PassthroughSelector) Select(frags []contextfrag.ContextFrag, _ IntentProfile, _ BudgetEnvelope) SelectionResult {
 	selected := append([]contextfrag.ContextFrag(nil), frags...)
 	return SelectionResult{
-		Frags: selected,
+		Selected: selected,
 		Summary: SelectionSummary{
-			InputCount:    len(frags),
-			SelectedCount: len(selected),
+			TotalCollected: len(frags),
+			TotalSelected:  len(selected),
 		},
-	}, nil
+	}
 }
 
 type IdentityPlacer struct{}
 
-func (IdentityPlacer) Place(_ context.Context, _ IntentProfile, _ BuildInput, frags []contextfrag.ContextFrag) (PlacementPlan, error) {
-	items := make([]PlacementItem, 0, len(frags))
-	for i, frag := range frags {
+func (IdentityPlacer) Place(selected []contextfrag.ContextFrag, _ contextfrag.Intent) PlacementPlan {
+	items := make([]PlacementItem, 0, len(selected))
+	firstVolatile := -1
+	for i, frag := range selected {
+		if firstVolatile < 0 && frag.CacheClass != contextfrag.CacheStable {
+			firstVolatile = i
+		}
 		items = append(items, PlacementItem{
-			Index: i,
-			Frag:  frag,
-			Slot:  frag.Slot,
+			FragID:    frag.ID,
+			Slot:      frag.Slot,
+			Position:  i,
+			CacheHint: frag.CacheClass,
+			Ref:       frag.Ref,
 		})
 	}
+	stablePrefix := firstVolatile
+	if stablePrefix < 0 {
+		stablePrefix = len(items)
+	}
 	return PlacementPlan{
-		Items:   items,
-		Summary: PlacementSummary{ItemCount: len(items)},
-	}, nil
+		StablePrefixHash:   stablePrefixHash(items[:stablePrefix]),
+		FirstVolatileIndex: firstVolatile,
+		Items:              items,
+	}
 }
 
-type NoopRenderer struct{}
+type NoopRenderer struct {
+	TargetName contextfrag.RenderTarget
+}
 
-func (NoopRenderer) Render(_ context.Context, target contextfrag.RenderTarget, _ BuildInput, _ ContextView) (RenderedPayload, error) {
+func (r NoopRenderer) Target() contextfrag.RenderTarget {
+	return r.TargetName
+}
+
+func (r NoopRenderer) Render(_ context.Context, input RenderInput) (RenderedPayload, error) {
+	target := r.TargetName
+	if target == "" {
+		target = input.Target
+	}
 	return RenderedPayload{Target: target}, nil
 }
 
@@ -54,15 +78,21 @@ type MapCollectorRegistry struct {
 	collectors map[string]Collector
 }
 
-func NewMapCollectorRegistry(collectors map[string]Collector) MapCollectorRegistry {
-	cloned := make(map[string]Collector, len(collectors))
-	for name, collector := range collectors {
-		cloned[name] = collector
+func NewMapCollectorRegistry(collectors ...Collector) *MapCollectorRegistry {
+	registry := &MapCollectorRegistry{collectors: make(map[string]Collector, len(collectors))}
+	for _, collector := range collectors {
+		if collector == nil {
+			continue
+		}
+		registry.collectors[collector.Name()] = collector
 	}
-	return MapCollectorRegistry{collectors: cloned}
+	return registry
 }
 
-func (r MapCollectorRegistry) Collector(name string) (Collector, bool) {
+func (r *MapCollectorRegistry) Get(name string) (Collector, bool) {
+	if r == nil {
+		return nil, false
+	}
 	collector, ok := r.collectors[name]
 	if !ok || collector == nil {
 		return nil, false
@@ -70,7 +100,10 @@ func (r MapCollectorRegistry) Collector(name string) (Collector, bool) {
 	return collector, true
 }
 
-func (r MapCollectorRegistry) Names() []string {
+func (r *MapCollectorRegistry) Names() []string {
+	if r == nil {
+		return nil
+	}
 	names := make([]string, 0, len(r.collectors))
 	for name := range r.collectors {
 		names = append(names, name)
@@ -83,15 +116,21 @@ type MapRendererRegistry struct {
 	renderers map[contextfrag.RenderTarget]Renderer
 }
 
-func NewMapRendererRegistry(renderers map[contextfrag.RenderTarget]Renderer) MapRendererRegistry {
-	cloned := make(map[contextfrag.RenderTarget]Renderer, len(renderers))
-	for target, renderer := range renderers {
-		cloned[target] = renderer
+func NewMapRendererRegistry(renderers ...Renderer) *MapRendererRegistry {
+	registry := &MapRendererRegistry{renderers: make(map[contextfrag.RenderTarget]Renderer, len(renderers))}
+	for _, renderer := range renderers {
+		if renderer == nil {
+			continue
+		}
+		registry.renderers[renderer.Target()] = renderer
 	}
-	return MapRendererRegistry{renderers: cloned}
+	return registry
 }
 
-func (r MapRendererRegistry) Renderer(target contextfrag.RenderTarget) (Renderer, bool) {
+func (r *MapRendererRegistry) Get(target contextfrag.RenderTarget) (Renderer, bool) {
+	if r == nil {
+		return nil, false
+	}
 	renderer, ok := r.renderers[target]
 	if !ok || renderer == nil {
 		return nil, false
@@ -99,25 +138,27 @@ func (r MapRendererRegistry) Renderer(target contextfrag.RenderTarget) (Renderer
 	return renderer, true
 }
 
-func (r MapRendererRegistry) Names() []contextfrag.RenderTarget {
-	names := make([]contextfrag.RenderTarget, 0, len(r.renderers))
-	for target := range r.renderers {
-		names = append(names, target)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		return names[i] < names[j]
-	})
-	return names
-}
-
 type StaticCollector struct {
-	Frags []contextfrag.ContextFrag
-	Err   error
+	CollectorName string
+	Frags         []contextfrag.ContextFrag
 }
 
-func (c StaticCollector) Collect(_ context.Context, _ BuildInput, _ SourceSpec) ([]contextfrag.ContextFrag, error) {
-	if c.Err != nil {
-		return nil, c.Err
-	}
+func (c StaticCollector) Name() string {
+	return c.CollectorName
+}
+
+func (c StaticCollector) Collect(_ context.Context, _ CollectRequest) ([]contextfrag.ContextFrag, error) {
 	return append([]contextfrag.ContextFrag(nil), c.Frags...), nil
+}
+
+func stablePrefixHash(items []PlacementItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, item := range items {
+		parts = append(parts, item.FragID, item.Ref.StableKey())
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
 }

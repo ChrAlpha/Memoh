@@ -12,26 +12,29 @@ import (
 func TestBuildEndToEnd_PassthroughProfile(t *testing.T) {
 	frags := testFrags()
 	builder := NewBuilder(
-		NewMapCollectorRegistry(map[string]Collector{
-			"static": StaticCollector{Frags: frags},
-		}),
+		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: frags}),
 		PassthroughSelector{},
 		IdentityPlacer{},
-		NewMapRendererRegistry(map[contextfrag.RenderTarget]Renderer{
-			contextfrag.RenderAuditManifest: NoopRenderer{},
-		}),
+		NewMapRendererRegistry(NoopRenderer{TargetName: contextfrag.RenderAuditManifest}),
 	)
 
 	got, err := builder.Build(context.Background(), BuildInput{
-		Intent:        contextfrag.IntentRunConfigPreProvider,
-		Sources:       []SourceSpec{{Name: "static"}},
-		RenderTargets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
+		Scope:   contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"},
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: "static", Config: map[string]any{"kind": "fixture"}}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
-	if len(got.Frags) != 3 {
-		t.Fatalf("selected frags: got %d, want 3", len(got.Frags))
+	if got == nil {
+		t.Fatal("Build returned nil ContextView")
+	}
+	if len(got.SourceFrags) != 3 {
+		t.Fatalf("source frags: got %d, want 3", len(got.SourceFrags))
+	}
+	if len(got.Selected) != 3 {
+		t.Fatalf("selected frags: got %d, want 3", len(got.Selected))
 	}
 	if got.Manifest.Counts.Fragments != 3 {
 		t.Fatalf("manifest fragments: got %d, want 3", got.Manifest.Counts.Fragments)
@@ -39,38 +42,45 @@ func TestBuildEndToEnd_PassthroughProfile(t *testing.T) {
 	if got.Manifest.View != contextfrag.ViewRunConfigPreProvider {
 		t.Fatalf("manifest view: got %q, want %q", got.Manifest.View, contextfrag.ViewRunConfigPreProvider)
 	}
-	if len(got.Rendered) != 1 || got.Rendered[0].Target != contextfrag.RenderAuditManifest {
+	if _, ok := got.Rendered[contextfrag.RenderAuditManifest]; !ok {
 		t.Fatalf("rendered targets: got %#v, want audit_manifest", got.Rendered)
 	}
 	if _, ok := got.Trace.CollectDurations["static"]; !ok {
 		t.Fatalf("missing collect duration for static: %#v", got.Trace.CollectDurations)
 	}
-	if got.Trace.Selection.SelectedCount != 3 {
-		t.Fatalf("trace selected count: got %d, want 3", got.Trace.Selection.SelectedCount)
+	if got.Trace.SelectionSummary.TotalCollected != 3 {
+		t.Fatalf("trace collected count: got %d, want 3", got.Trace.SelectionSummary.TotalCollected)
 	}
-	if got.Trace.Placement.ItemCount != 3 {
-		t.Fatalf("trace placement count: got %d, want 3", got.Trace.Placement.ItemCount)
+	if got.Trace.SelectionSummary.TotalSelected != 3 {
+		t.Fatalf("trace selected count: got %d, want 3", got.Trace.SelectionSummary.TotalSelected)
 	}
-	if len(got.Trace.Render) != 1 || got.Trace.Render[0].Target != contextfrag.RenderAuditManifest {
-		t.Fatalf("trace render summary: got %#v, want audit_manifest", got.Trace.Render)
+	if got.Trace.PlacementSummary.StablePrefixFrags != 1 {
+		t.Fatalf("stable prefix count: got %d, want 1", got.Trace.PlacementSummary.StablePrefixFrags)
+	}
+	if got.Trace.PlacementSummary.DynamicFrags != 2 {
+		t.Fatalf("dynamic count: got %d, want 2", got.Trace.PlacementSummary.DynamicFrags)
+	}
+	if len(got.Trace.RenderSummaries) != 1 || got.Trace.RenderSummaries[0].Target != contextfrag.RenderAuditManifest {
+		t.Fatalf("trace render summary: got %#v, want audit_manifest", got.Trace.RenderSummaries)
+	}
+	if got.Trace.RenderSummaries[0].ItemCount != 3 {
+		t.Fatalf("render item count: got %d, want 3", got.Trace.RenderSummaries[0].ItemCount)
 	}
 }
 
 func TestBuildDryRun_SkipsRender(t *testing.T) {
 	builder := NewBuilder(
-		NewMapCollectorRegistry(map[string]Collector{
-			"static": StaticCollector{Frags: testFrags()[:1]},
-		}),
+		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: testFrags()[:1]}),
 		PassthroughSelector{},
 		IdentityPlacer{},
-		NewMapRendererRegistry(nil),
+		NewMapRendererRegistry(),
 	)
 
 	got, err := builder.Build(context.Background(), BuildInput{
-		Intent:        contextfrag.IntentRunConfigPreProvider,
-		Sources:       []SourceSpec{{Name: "static"}},
-		RenderTargets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
-		Options:       BuildOptions{DryRun: true},
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: "static"}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
+		Options: BuildOptions{DryRun: true},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -78,17 +88,17 @@ func TestBuildDryRun_SkipsRender(t *testing.T) {
 	if len(got.Rendered) != 0 {
 		t.Fatalf("rendered output: got %#v, want none", got.Rendered)
 	}
-	if len(got.Trace.Render) != 0 {
-		t.Fatalf("render trace: got %#v, want none", got.Trace.Render)
+	if len(got.Trace.RenderSummaries) != 0 {
+		t.Fatalf("render trace: got %#v, want none", got.Trace.RenderSummaries)
 	}
 }
 
 func TestBuildUnknownCollector_ReturnsError(t *testing.T) {
 	builder := NewBuilder(
-		NewMapCollectorRegistry(nil),
+		NewMapCollectorRegistry(),
 		PassthroughSelector{},
 		IdentityPlacer{},
-		NewMapRendererRegistry(nil),
+		NewMapRendererRegistry(),
 	)
 
 	_, err := builder.Build(context.Background(), BuildInput{
@@ -106,18 +116,16 @@ func TestBuildUnknownCollector_ReturnsError(t *testing.T) {
 
 func TestBuildUnknownRenderer_ReturnsError(t *testing.T) {
 	builder := NewBuilder(
-		NewMapCollectorRegistry(map[string]Collector{
-			"static": StaticCollector{Frags: testFrags()[:1]},
-		}),
+		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: testFrags()[:1]}),
 		PassthroughSelector{},
 		IdentityPlacer{},
-		NewMapRendererRegistry(nil),
+		NewMapRendererRegistry(),
 	)
 
 	_, err := builder.Build(context.Background(), BuildInput{
-		Intent:        contextfrag.IntentRunConfigPreProvider,
-		Sources:       []SourceSpec{{Name: "static"}},
-		RenderTargets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: "static"}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderAuditManifest},
 	})
 	if err == nil {
 		t.Fatal("Build returned nil error")
@@ -130,12 +138,10 @@ func TestBuildUnknownRenderer_ReturnsError(t *testing.T) {
 func TestManifestTracksAllFragments(t *testing.T) {
 	frags := testFrags()
 	builder := NewBuilder(
-		NewMapCollectorRegistry(map[string]Collector{
-			"static": StaticCollector{Frags: frags},
-		}),
+		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: frags}),
 		PassthroughSelector{},
 		IdentityPlacer{},
-		NewMapRendererRegistry(nil),
+		NewMapRendererRegistry(),
 	)
 
 	got, err := builder.Build(context.Background(), BuildInput{
