@@ -24,6 +24,24 @@ const (
 
 const CurrentSchemaVersion = 1
 
+type Intent string
+
+const (
+	IntentRunConfigPreProvider Intent = "run_config_pre_provider"
+	IntentCompactionCandidates Intent = "compaction_candidates"
+	IntentDiscussReply         Intent = "discuss_reply"
+	IntentACPRuntimePrompt     Intent = "acp_runtime_prompt"
+)
+
+type RenderTarget string
+
+const (
+	RenderSDKMessages      RenderTarget = "sdk_messages"
+	RenderCompactionPrompt RenderTarget = "compaction_prompt"
+	RenderACPFullContext   RenderTarget = "acp_full_context"
+	RenderAuditManifest    RenderTarget = "audit_manifest"
+)
+
 const (
 	SchemaContextManifest = "context_manifest"
 	SchemaContextFrag     = "context_frag"
@@ -246,6 +264,9 @@ type ManifestView string
 
 const (
 	ViewRunConfigPreProvider ManifestView = "run_config_pre_provider"
+	ViewCompactionCandidates ManifestView = "compaction_candidates"
+	ViewDiscussReply         ManifestView = "discuss_reply"
+	ViewACPRuntimePrompt     ManifestView = "acp_runtime_prompt"
 )
 
 type DynamicMutator string
