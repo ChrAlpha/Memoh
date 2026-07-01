@@ -97,6 +97,21 @@ func TestSDKRenderer_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestSDKRenderer_SelectedWithoutPlacementReturnsError(t *testing.T) {
+	t.Parallel()
+
+	renderer := &SDKMessagesRenderer{}
+	_, err := renderer.Render(context.Background(), RenderInput{
+		Intent:   contextfrag.IntentRunConfigPreProvider,
+		Selected: []contextfrag.ContextFrag{textFrag("sys", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "system")},
+		Scope:    contextfrag.Scope{BotID: "bot-1"},
+		Target:   contextfrag.RenderSDKMessages,
+	})
+	if err == nil {
+		t.Fatal("expected error for selected fragments without placement")
+	}
+}
+
 func renderSDK(t *testing.T, frags []contextfrag.ContextFrag, placement PlacementPlan) *SDKRenderedPayload {
 	t.Helper()
 	payload, _ := renderSDKPayload(t, frags, placement)
