@@ -135,6 +135,44 @@ func TestBuildUsesExactCollectorName(t *testing.T) {
 	}
 }
 
+func TestBuildNormalizesCollectedContextRefs(t *testing.T) {
+	t.Parallel()
+
+	frag := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:        "system.prompt",
+		Kind:      contextfrag.KindSystemPrompt,
+		Role:      sdk.MessageRoleSystem,
+		Slot:      contextfrag.SlotSystem,
+		Text:      "system prompt",
+		Source:    "static",
+		Collector: "static",
+	})
+	builder := NewBuilder(
+		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: []contextfrag.ContextFrag{frag}}),
+		PassthroughSelector{},
+		IdentityPlacer{},
+		NewMapRendererRegistry(),
+	)
+
+	view, err := builder.Build(context.Background(), BuildInput{
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: "static"}},
+		Options: BuildOptions{DryRun: true},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if view.SourceFrags[0].Ref.ID == "" {
+		t.Fatal("SourceFrags should contain normalized refs")
+	}
+	if view.Selected[0].Ref.ContentHash == "" {
+		t.Fatal("Selected should contain normalized refs before selection output")
+	}
+	if view.Placement.Items[0].Ref.Schema != contextfrag.SchemaContextRef {
+		t.Fatalf("Placement ref schema = %q, want %q", view.Placement.Items[0].Ref.Schema, contextfrag.SchemaContextRef)
+	}
+}
+
 func TestBuildUnknownRenderer_ReturnsError(t *testing.T) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: testFrags()[:1]}),

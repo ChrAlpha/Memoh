@@ -89,7 +89,7 @@ func Compile(input CompileInput) AssembledContext {
 		}
 	}
 
-	frags = normalizeContextRefs(frags)
+	frags = NormalizeContextRefs(frags)
 	assembled := Render(frags)
 	assembled.Frags = frags
 	assembled.Manifest = BuildManifest(frags)
@@ -383,7 +383,7 @@ func normalizeScope(scope Scope) Scope {
 	return scope
 }
 
-func normalizeContextRefs(frags []ContextFrag) []ContextFrag {
+func NormalizeContextRefs(frags []ContextFrag) []ContextFrag {
 	if len(frags) == 0 {
 		return nil
 	}

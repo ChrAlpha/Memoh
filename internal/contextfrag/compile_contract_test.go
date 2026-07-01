@@ -60,3 +60,39 @@ func TestCompilePreservesTurnDAGScopeAndRenderedLegacyView(t *testing.T) {
 		}
 	}
 }
+
+func TestIntentProjectsToManifestView(t *testing.T) {
+	t.Parallel()
+
+	if got := IntentDiscussReply.ManifestView(); got != ViewDiscussReply {
+		t.Fatalf("IntentDiscussReply.ManifestView() = %q, want %q", got, ViewDiscussReply)
+	}
+}
+
+func TestNormalizeContextRefsFillsFragmentRefs(t *testing.T) {
+	t.Parallel()
+
+	frag := TextFrag(TextFragInput{
+		ID:        "system.prompt",
+		Kind:      KindSystemPrompt,
+		Role:      sdk.MessageRoleSystem,
+		Slot:      SlotSystem,
+		Text:      "system prompt",
+		Source:    "test",
+		Collector: "test_collector",
+	})
+
+	got := NormalizeContextRefs([]ContextFrag{frag})
+	if len(got) != 1 {
+		t.Fatalf("NormalizeContextRefs returned %d frags, want 1", len(got))
+	}
+	if got[0].Ref.ID == "" {
+		t.Fatal("normalized ref ID should not be empty")
+	}
+	if got[0].Ref.Schema != SchemaContextRef {
+		t.Fatalf("normalized ref schema = %q, want %q", got[0].Ref.Schema, SchemaContextRef)
+	}
+	if got[0].Ref.ContentHash == "" {
+		t.Fatal("normalized ref content hash should not be empty")
+	}
+}

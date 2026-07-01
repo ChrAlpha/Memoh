@@ -59,6 +59,7 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 		}
 		sourceFrags = append(sourceFrags, frags...)
 	}
+	sourceFrags = contextfrag.NormalizeContextRefs(sourceFrags)
 
 	profile := b.selector.ProfileFor(input.Intent)
 	result := b.selector.Select(sourceFrags, profile, input.Budget)
@@ -68,7 +69,7 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	trace.PlacementSummary = summarizePlacement(placement)
 
 	manifest := contextfrag.BuildManifest(result.Selected)
-	manifest.View = contextfrag.ManifestView(input.Intent)
+	manifest.View = input.Intent.ManifestView()
 	trace.Warnings = append(trace.Warnings, manifest.ValidationWarnings...)
 
 	view := &ContextView{

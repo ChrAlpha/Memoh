@@ -33,6 +33,10 @@ const (
 	IntentACPRuntimePrompt     Intent = "acp_runtime_prompt"
 )
 
+func (i Intent) ManifestView() ManifestView {
+	return ManifestView(i)
+}
+
 type RenderTarget string
 
 const (
