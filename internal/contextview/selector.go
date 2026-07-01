@@ -11,25 +11,32 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 			Intent:        intent,
 			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
 		}
+	case contextfrag.IntentDiscussReply:
+		return IntentProfile{
+			Intent:        intent,
+			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+		}
 	default:
 		return IntentProfile{Intent: intent}
 	}
 }
 
-func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, _ BudgetEnvelope) SelectionResult {
+func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
-		selected := append([]contextfrag.ContextFrag(nil), frags...)
-		return SelectionResult{
-			Selected: selected,
-			Summary: SelectionSummary{
-				TotalCollected: len(frags),
-				TotalSelected:  len(selected),
-			},
+		tagged := tagFragments(frags, profile)
+		if hasSelectionBudget(budget) {
+			selectedIndexes := retentionSelectedIndexes(tagged)
+			return selectionResultFromTagged(tagged, selectedIndexes)
 		}
+		return selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
 	}
 
 	tagged := tagFragments(frags, profile)
 	selectedIndexes := compactionSelectedIndexes(tagged)
+	return selectionResultFromTagged(tagged, selectedIndexes)
+}
+
+func selectionResultFromTagged(tagged []TaggedFrag, selectedIndexes map[int]bool) SelectionResult {
 	selected := make([]contextfrag.ContextFrag, 0, len(selectedIndexes))
 	dropped := make([]contextfrag.ContextFrag, 0, len(tagged)-len(selectedIndexes))
 	dropRecords := make([]DropRecord, 0, len(tagged)-len(selectedIndexes))
@@ -51,12 +58,34 @@ func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile Inten
 		Selected: selected,
 		Dropped:  dropped,
 		Summary: SelectionSummary{
-			TotalCollected: len(frags),
+			TotalCollected: len(tagged),
 			TotalSelected:  len(selected),
 			TotalDropped:   len(dropped),
 			DropReasons:    dropRecords,
 		},
 	}
+}
+
+func hasSelectionBudget(budget BudgetEnvelope) bool {
+	return budget.MaxTokens > 0 || budget.MaxChars > 0 || budget.MaxImages > 0 || budget.MaxToolSchema > 0
+}
+
+func allSelectedIndexes(tagged []TaggedFrag) map[int]bool {
+	selected := make(map[int]bool, len(tagged))
+	for i := range tagged {
+		selected[i] = true
+	}
+	return selected
+}
+
+func retentionSelectedIndexes(tagged []TaggedFrag) map[int]bool {
+	selected := make(map[int]bool)
+	for i, taggedFrag := range tagged {
+		if taggedFrag.HasTag(TagMustKeep) || taggedFrag.HasTag(TagPreserveRecent) || taggedFrag.HasTag(TagPreserveToolClosure) {
+			selected[i] = true
+		}
+	}
+	return selected
 }
 
 func compactionSelectedIndexes(tagged []TaggedFrag) map[int]bool {
