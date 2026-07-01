@@ -24,7 +24,7 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
-		if hasSelectionBudget(budget) {
+		if profile.Intent == contextfrag.IntentDiscussReply && hasSelectionBudget(budget) {
 			selectedIndexes := retentionSelectedIndexes(tagged)
 			return selectionResultFromTagged(tagged, selectedIndexes)
 		}
