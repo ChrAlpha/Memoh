@@ -57,14 +57,28 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 
 func orderedSelectedFrags(selected []contextfrag.ContextFrag, placement PlacementPlan) ([]contextfrag.ContextFrag, error) {
 	if len(placement.Items) == 0 {
+		if len(selected) > 0 {
+			return nil, fmt.Errorf("placement is empty for %d selected fragments", len(selected))
+		}
 		return nil, nil
+	}
+	if len(placement.Items) != len(selected) {
+		return nil, fmt.Errorf("placement item count %d does not match selected fragment count %d", len(placement.Items), len(selected))
 	}
 	byID := make(map[string]contextfrag.ContextFrag, len(selected))
 	for _, frag := range selected {
+		if _, ok := byID[frag.ID]; ok {
+			return nil, fmt.Errorf("selected fragments contain duplicate id %q", frag.ID)
+		}
 		byID[frag.ID] = frag
 	}
 	ordered := make([]contextfrag.ContextFrag, 0, len(placement.Items))
+	seenPlacement := make(map[string]bool, len(placement.Items))
 	for _, item := range placement.Items {
+		if seenPlacement[item.FragID] {
+			return nil, fmt.Errorf("placement contains duplicate fragment %q", item.FragID)
+		}
+		seenPlacement[item.FragID] = true
 		frag, ok := byID[item.FragID]
 		if !ok {
 			return nil, fmt.Errorf("placement references unknown fragment %q", item.FragID)
