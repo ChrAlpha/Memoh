@@ -81,10 +81,12 @@ func fragmentID(record HistoryRecord) string {
 func modelMessageToSDKMessage(mm conversation.ModelMessage) sdk.Message {
 	var s string
 	if err := json.Unmarshal(mm.Content, &s); err == nil {
-		return sdk.Message{
+		msg := sdk.Message{
 			Role:    sdk.MessageRole(mm.Role),
 			Content: []sdk.MessagePart{sdk.TextPart{Text: s}},
 		}
+		appendTopLevelToolParts(&msg, mm)
+		return msg
 	}
 
 	envelope, _ := json.Marshal(struct {
@@ -96,8 +98,59 @@ func modelMessageToSDKMessage(mm conversation.ModelMessage) sdk.Message {
 	})
 	var msg sdk.Message
 	if err := json.Unmarshal(envelope, &msg); err == nil {
+		appendTopLevelToolParts(&msg, mm)
 		return msg
 	}
 
-	return sdk.Message{Role: sdk.MessageRole(mm.Role)}
+	msg = sdk.Message{Role: sdk.MessageRole(mm.Role)}
+	appendTopLevelToolParts(&msg, mm)
+	return msg
+}
+
+func appendTopLevelToolParts(msg *sdk.Message, mm conversation.ModelMessage) {
+	for _, call := range mm.ToolCalls {
+		if hasToolCallPart(msg.Content, call.ID) {
+			continue
+		}
+		var input any
+		if strings.TrimSpace(call.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(call.Function.Arguments), &input); err != nil {
+				input = call.Function.Arguments
+			}
+		}
+		msg.Content = append(msg.Content, sdk.ToolCallPart{
+			ToolCallID: strings.TrimSpace(call.ID),
+			ToolName:   strings.TrimSpace(call.Function.Name),
+			Input:      input,
+		})
+	}
+	if name := strings.TrimSpace(mm.Name); name != "" {
+		propagateToolName(msg, name, strings.TrimSpace(mm.ToolCallID))
+	}
+}
+
+func hasToolCallPart(parts []sdk.MessagePart, callID string) bool {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return false
+	}
+	for _, part := range parts {
+		if tcp, ok := part.(sdk.ToolCallPart); ok && tcp.ToolCallID == callID {
+			return true
+		}
+	}
+	return false
+}
+
+func propagateToolName(msg *sdk.Message, name, toolCallID string) {
+	for i, part := range msg.Content {
+		if trp, ok := part.(sdk.ToolResultPart); ok && strings.TrimSpace(trp.ToolName) == "" {
+			trp.ToolName = name
+			if toolCallID != "" && strings.TrimSpace(trp.ToolCallID) == "" {
+				trp.ToolCallID = toolCallID
+			}
+			msg.Content[i] = trp
+			return
+		}
+	}
 }

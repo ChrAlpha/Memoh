@@ -271,6 +271,118 @@ func TestHistoryRecordsRenderLegacyModelAndSDKMessages(t *testing.T) {
 	})
 }
 
+func TestModelMessageToSDKPreservesTopLevelToolCalls(t *testing.T) {
+	t.Parallel()
+
+	mm := conversation.ModelMessage{
+		Role:    "assistant",
+		Content: conversation.NewTextContent("I will look that up."),
+		ToolCalls: []conversation.ToolCall{{
+			ID:   "call-42",
+			Type: "function",
+			Function: conversation.ToolCallFunction{
+				Name:      "ask_user",
+				Arguments: `{"question":"Are you sure?"}`,
+			},
+		}},
+	}
+
+	record := HistoryRecord{
+		Ref:          contextfrag.ContextRef{Namespace: "test", ID: "tc-1", Schema: contextfrag.SchemaContextRef},
+		Kind:         contextfrag.KindConversationEvent,
+		SourceKind:   SourceDBMessage,
+		ModelMessage: mm,
+	}
+	frag := ToFrag(record)
+
+	var foundToolCall bool
+	for _, part := range frag.Parts {
+		msg := part.SDKMessage
+		if msg == nil {
+			msg = part.Message
+		}
+		if msg == nil {
+			continue
+		}
+		for _, cp := range msg.Content {
+			if tcp, ok := cp.(sdk.ToolCallPart); ok {
+				foundToolCall = true
+				if tcp.ToolCallID != "call-42" {
+					t.Fatalf("ToolCallID = %q, want call-42", tcp.ToolCallID)
+				}
+				if tcp.ToolName != "ask_user" {
+					t.Fatalf("ToolName = %q, want ask_user", tcp.ToolName)
+				}
+			}
+		}
+	}
+	if !foundToolCall {
+		t.Fatal("frag should contain a ToolCallPart from top-level ToolCalls")
+	}
+}
+
+func TestModelMessageToSDKPreservesTopLevelToolResultName(t *testing.T) {
+	t.Parallel()
+
+	mm := conversation.ModelMessage{
+		Role:       "tool",
+		Content:    conversation.NewTextContent("42"),
+		ToolCallID: "call-42",
+		Name:       "calculator",
+	}
+
+	msg := ToSDKMessages([]HistoryRecord{{
+		Ref:          contextfrag.ContextRef{Namespace: "test", ID: "tr-1", Schema: contextfrag.SchemaContextRef},
+		Kind:         contextfrag.KindConversationEvent,
+		SourceKind:   SourceDBMessage,
+		ModelMessage: mm,
+	}})
+
+	if len(msg) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msg))
+	}
+	if msg[0].Role != sdk.MessageRoleTool {
+		t.Fatalf("role = %q, want tool", msg[0].Role)
+	}
+}
+
+func TestModelMessageToSDKDoesNotDuplicateContentToolCalls(t *testing.T) {
+	t.Parallel()
+
+	mm := conversation.ModelMessage{
+		Role: "assistant",
+		Content: mustJSON(t, []map[string]any{
+			{"type": "text", "text": "checking"},
+			{"type": "tool-call", "toolCallId": "call-1", "toolName": "lookup", "input": map[string]any{"q": "memoh"}},
+		}),
+		ToolCalls: []conversation.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: conversation.ToolCallFunction{
+				Name:      "lookup",
+				Arguments: `{"q":"memoh"}`,
+			},
+		}},
+	}
+
+	msg := ToSDKMessages([]HistoryRecord{{
+		Ref:          contextfrag.ContextRef{Namespace: "test", ID: "dup-1", Schema: contextfrag.SchemaContextRef},
+		Kind:         contextfrag.KindConversationEvent,
+		SourceKind:   SourceDBMessage,
+		ModelMessage: mm,
+	}})
+
+	toolCallCount := 0
+	for _, part := range msg[0].Content {
+		if _, ok := part.(sdk.ToolCallPart); ok {
+			toolCallCount++
+		}
+	}
+	if toolCallCount != 1 {
+		t.Fatalf("tool call parts = %d, want 1 (no duplicates)", toolCallCount)
+	}
+}
+
 func persistedModelMessage(t *testing.T, msg conversation.ModelMessage) json.RawMessage {
 	t.Helper()
 	return mustJSON(t, msg)
