@@ -16,6 +16,11 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 			Intent:        intent,
 			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
 		}
+	case contextfrag.IntentACPRuntimePrompt:
+		return IntentProfile{
+			Intent:        intent,
+			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+		}
 	default:
 		return IntentProfile{Intent: intent}
 	}
@@ -24,16 +29,19 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
-		if profile.Intent == contextfrag.IntentDiscussReply && hasSelectionBudget(budget) {
+		if isRetentionIntent(profile.Intent) && hasSelectionBudget(budget) {
 			selectedIndexes := retentionSelectedIndexes(tagged)
 			return selectionResultFromTagged(tagged, selectedIndexes)
 		}
 		return selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
 	}
-
 	tagged := tagFragments(frags, profile)
 	selectedIndexes := compactionSelectedIndexes(tagged)
 	return selectionResultFromTagged(tagged, selectedIndexes)
+}
+
+func isRetentionIntent(intent contextfrag.Intent) bool {
+	return intent == contextfrag.IntentDiscussReply || intent == contextfrag.IntentACPRuntimePrompt
 }
 
 func selectionResultFromTagged(tagged []TaggedFrag, selectedIndexes map[int]bool) SelectionResult {
