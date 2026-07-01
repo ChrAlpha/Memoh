@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/memohai/memoh/internal/contextfrag"
@@ -43,10 +42,9 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	}
 	sourceFrags := make([]contextfrag.ContextFrag, 0)
 	for _, spec := range input.Sources {
-		name := strings.TrimSpace(spec.Name)
-		collector, ok := b.collectors.Get(name)
+		collector, ok := b.collectors.Get(spec.Name)
 		if !ok {
-			return nil, fmt.Errorf("unknown collector %q", name)
+			return nil, fmt.Errorf("unknown collector %q", spec.Name)
 		}
 
 		start := time.Now()
@@ -55,9 +53,9 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 			Intent: input.Intent,
 			Config: spec.Config,
 		})
-		trace.CollectDurations[name] = time.Since(start).Microseconds()
+		trace.CollectDurations[spec.Name] = time.Since(start).Microseconds()
 		if err != nil {
-			return nil, fmt.Errorf("collector %q: %w", name, err)
+			return nil, fmt.Errorf("collector %q: %w", spec.Name, err)
 		}
 		sourceFrags = append(sourceFrags, frags...)
 	}

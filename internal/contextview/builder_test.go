@@ -112,6 +112,29 @@ func TestBuildUnknownCollector_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestBuildUsesExactCollectorName(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder(
+		NewMapCollectorRegistry(StaticCollector{CollectorName: " spaced ", Frags: testFrags()[:1]}),
+		PassthroughSelector{},
+		IdentityPlacer{},
+		NewMapRendererRegistry(),
+	)
+
+	view, err := builder.Build(context.Background(), BuildInput{
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: " spaced "}},
+		Options: BuildOptions{DryRun: true},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	if _, ok := view.Trace.CollectDurations[" spaced "]; !ok {
+		t.Fatalf("collect durations should use exact source name: %#v", view.Trace.CollectDurations)
+	}
+}
+
 func TestBuildUnknownRenderer_ReturnsError(t *testing.T) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(StaticCollector{CollectorName: "static", Frags: testFrags()[:1]}),
