@@ -1,0 +1,158 @@
+package contextview
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/contextfrag"
+)
+
+type SDKRenderedPayload struct {
+	System       string
+	Messages     []sdk.Message
+	Query        string
+	InlineImages []sdk.ImagePart
+}
+
+type SDKMessagesRenderer struct{}
+
+func (*SDKMessagesRenderer) Target() contextfrag.RenderTarget {
+	return contextfrag.RenderSDKMessages
+}
+
+func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (RenderedPayload, error) {
+	ordered, err := orderedSelectedFrags(input.Selected, input.Placement)
+	if err != nil {
+		return RenderedPayload{}, err
+	}
+
+	payload := &SDKRenderedPayload{}
+	for _, frag := range ordered {
+		switch frag.Slot {
+		case contextfrag.SlotSystem:
+			renderSystemFrag(payload, frag)
+		case contextfrag.SlotCurrentUser:
+			renderCurrentUserFrag(payload, frag)
+		default:
+			renderMessageFrag(payload, frag)
+		}
+	}
+
+	contentHash, err := sdkRenderedPayloadHash(payload)
+	if err != nil {
+		return RenderedPayload{}, err
+	}
+	return RenderedPayload{
+		Target:      contextfrag.RenderSDKMessages,
+		ContentHash: contentHash,
+		Data:        payload,
+	}, nil
+}
+
+func orderedSelectedFrags(selected []contextfrag.ContextFrag, placement PlacementPlan) ([]contextfrag.ContextFrag, error) {
+	if len(placement.Items) == 0 {
+		return nil, nil
+	}
+	byID := make(map[string]contextfrag.ContextFrag, len(selected))
+	for _, frag := range selected {
+		byID[frag.ID] = frag
+	}
+	ordered := make([]contextfrag.ContextFrag, 0, len(placement.Items))
+	for _, item := range placement.Items {
+		frag, ok := byID[item.FragID]
+		if !ok {
+			return nil, fmt.Errorf("placement references unknown fragment %q", item.FragID)
+		}
+		ordered = append(ordered, frag)
+	}
+	return ordered, nil
+}
+
+func renderSystemFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag) {
+	for _, part := range frag.Parts {
+		if part.Type != contextfrag.PartText || strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		if payload.System != "" {
+			payload.System += "\n\n"
+		}
+		payload.System += strings.TrimSpace(part.Text)
+	}
+}
+
+func renderCurrentUserFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag) {
+	for _, part := range frag.Parts {
+		switch part.Type {
+		case contextfrag.PartText:
+			if text := strings.TrimSpace(part.Text); text != "" {
+				payload.Query = text
+			}
+		case contextfrag.PartImage:
+			if image := sdkImagePart(part); image != nil && strings.TrimSpace(image.Image) != "" {
+				payload.InlineImages = append(payload.InlineImages, *image)
+			}
+		case contextfrag.PartSDKMessage:
+			if msg := sdkMessagePart(part); msg != nil {
+				payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+			}
+		}
+	}
+}
+
+func renderMessageFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag) {
+	for _, part := range frag.Parts {
+		if part.Type != contextfrag.PartSDKMessage {
+			continue
+		}
+		if msg := sdkMessagePart(part); msg != nil {
+			payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+		}
+	}
+}
+
+func sdkMessagePart(part contextfrag.Part) *sdk.Message {
+	if part.SDKMessage != nil {
+		return part.SDKMessage
+	}
+	return part.Message
+}
+
+func sdkImagePart(part contextfrag.Part) *sdk.ImagePart {
+	if part.SDKImage != nil {
+		return part.SDKImage
+	}
+	return part.ImagePart
+}
+
+func cloneSDKMessage(msg sdk.Message) sdk.Message {
+	out := msg
+	if len(msg.Content) > 0 {
+		out.Content = append([]sdk.MessagePart(nil), msg.Content...)
+	}
+	return out
+}
+
+func sdkRenderedPayloadHash(payload *SDKRenderedPayload) (string, error) {
+	data, err := json.Marshal(struct {
+		System       string          `json:"system"`
+		Messages     []sdk.Message   `json:"messages"`
+		Query        string          `json:"query"`
+		InlineImages []sdk.ImagePart `json:"inline_images"`
+	}{
+		System:       payload.System,
+		Messages:     payload.Messages,
+		Query:        payload.Query,
+		InlineImages: payload.InlineImages,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal sdk rendered payload: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
