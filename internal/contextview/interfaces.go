@@ -9,15 +9,15 @@ import (
 type CollectRequest struct {
 	Scope  contextfrag.Scope
 	Intent contextfrag.Intent
-	Config map[string]any
+	Config any
 }
 
 type RenderInput struct {
-	Target    contextfrag.RenderTarget
 	Intent    contextfrag.Intent
 	Selected  []contextfrag.ContextFrag
 	Placement PlacementPlan
-	Manifest  contextfrag.Manifest
+	Scope     contextfrag.Scope
+	Target    contextfrag.RenderTarget
 }
 
 type Collector interface {
@@ -37,13 +37,14 @@ type Selector interface {
 
 type SelectionResult struct {
 	Selected []contextfrag.ContextFrag
+	Dropped  []contextfrag.ContextFrag
 	Summary  SelectionSummary
-	Warnings []contextfrag.ValidationWarning
 }
 
 type IntentProfile struct {
-	Intent contextfrag.Intent
-	View   contextfrag.ManifestView
+	Intent        contextfrag.Intent
+	RequiredKinds []contextfrag.Kind
+	MustKeepSlots []contextfrag.Slot
 }
 
 type Placer interface {

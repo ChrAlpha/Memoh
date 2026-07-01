@@ -2,10 +2,7 @@ package contextview
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"sort"
-	"strings"
 
 	"github.com/memohai/memoh/internal/contextfrag"
 )
@@ -13,10 +10,7 @@ import (
 type PassthroughSelector struct{}
 
 func (PassthroughSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
-	return IntentProfile{
-		Intent: intent,
-		View:   contextfrag.ManifestView(intent),
-	}
+	return IntentProfile{Intent: intent}
 }
 
 func (PassthroughSelector) Select(frags []contextfrag.ContextFrag, _ IntentProfile, _ BudgetEnvelope) SelectionResult {
@@ -34,11 +28,7 @@ type IdentityPlacer struct{}
 
 func (IdentityPlacer) Place(selected []contextfrag.ContextFrag, _ contextfrag.Intent) PlacementPlan {
 	items := make([]PlacementItem, 0, len(selected))
-	firstVolatile := -1
 	for i, frag := range selected {
-		if firstVolatile < 0 && frag.CacheClass != contextfrag.CacheStable {
-			firstVolatile = i
-		}
 		items = append(items, PlacementItem{
 			FragID:    frag.ID,
 			Slot:      frag.Slot,
@@ -47,13 +37,8 @@ func (IdentityPlacer) Place(selected []contextfrag.ContextFrag, _ contextfrag.In
 			Ref:       frag.Ref,
 		})
 	}
-	stablePrefix := firstVolatile
-	if stablePrefix < 0 {
-		stablePrefix = len(items)
-	}
 	return PlacementPlan{
-		StablePrefixHash:   stablePrefixHash(items[:stablePrefix]),
-		FirstVolatileIndex: firstVolatile,
+		FirstVolatileIndex: len(items),
 		Items:              items,
 	}
 }
@@ -149,16 +134,4 @@ func (c StaticCollector) Name() string {
 
 func (c StaticCollector) Collect(_ context.Context, _ CollectRequest) ([]contextfrag.ContextFrag, error) {
 	return append([]contextfrag.ContextFrag(nil), c.Frags...), nil
-}
-
-func stablePrefixHash(items []PlacementItem) string {
-	if len(items) == 0 {
-		return ""
-	}
-	var parts []string
-	for _, item := range items {
-		parts = append(parts, item.FragID, item.Ref.StableKey())
-	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(sum[:])
 }

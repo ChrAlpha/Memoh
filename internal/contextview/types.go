@@ -13,7 +13,7 @@ type BuildInput struct {
 
 type SourceSpec struct {
 	Name   string
-	Config map[string]any
+	Config any
 }
 
 type BudgetEnvelope struct {
@@ -62,7 +62,7 @@ type BuildTrace struct {
 	CollectDurations map[string]int64
 	SelectionSummary SelectionSummary
 	PlacementSummary PlacementSummary
-	RenderSummaries  []RenderSummary
+	RenderSummaries  map[contextfrag.RenderTarget]RenderSummary
 	Warnings         []contextfrag.ValidationWarning
 }
 

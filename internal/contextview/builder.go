@@ -37,7 +37,10 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 		return nil, errors.New("placer is required")
 	}
 
-	trace := BuildTrace{CollectDurations: make(map[string]int64, len(input.Sources))}
+	trace := BuildTrace{
+		CollectDurations: make(map[string]int64, len(input.Sources)),
+		RenderSummaries:  make(map[contextfrag.RenderTarget]RenderSummary, len(input.Targets)),
+	}
 	sourceFrags := make([]contextfrag.ContextFrag, 0)
 	for _, spec := range input.Sources {
 		name := strings.TrimSpace(spec.Name)
@@ -60,9 +63,6 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	}
 
 	profile := b.selector.ProfileFor(input.Intent)
-	if profile.Intent == "" {
-		profile.Intent = input.Intent
-	}
 	result := b.selector.Select(sourceFrags, profile, input.Budget)
 	trace.SelectionSummary = result.Summary
 
@@ -71,7 +71,6 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 
 	manifest := contextfrag.BuildManifest(result.Selected)
 	manifest.View = contextfrag.ManifestView(input.Intent)
-	trace.Warnings = append(trace.Warnings, result.Warnings...)
 	trace.Warnings = append(trace.Warnings, manifest.ValidationWarnings...)
 
 	view := &ContextView{
@@ -97,11 +96,11 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 			return nil, fmt.Errorf("unknown renderer %q", target)
 		}
 		payload, err := renderer.Render(ctx, RenderInput{
-			Target:    target,
 			Intent:    input.Intent,
 			Selected:  result.Selected,
 			Placement: placement,
-			Manifest:  manifest,
+			Scope:     input.Scope,
+			Target:    target,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("renderer %q: %w", target, err)
@@ -110,11 +109,11 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 			payload.Target = target
 		}
 		view.Rendered[target] = payload
-		view.Trace.RenderSummaries = append(view.Trace.RenderSummaries, RenderSummary{
+		view.Trace.RenderSummaries[target] = RenderSummary{
 			Target:      payload.Target,
 			ContentHash: payload.ContentHash,
 			ItemCount:   len(placement.Items),
-		})
+		}
 	}
 
 	return view, nil

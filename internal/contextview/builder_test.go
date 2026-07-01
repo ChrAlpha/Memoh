@@ -54,17 +54,15 @@ func TestBuildEndToEnd_PassthroughProfile(t *testing.T) {
 	if got.Trace.SelectionSummary.TotalSelected != 3 {
 		t.Fatalf("trace selected count: got %d, want 3", got.Trace.SelectionSummary.TotalSelected)
 	}
-	if got.Trace.PlacementSummary.StablePrefixFrags != 1 {
-		t.Fatalf("stable prefix count: got %d, want 1", got.Trace.PlacementSummary.StablePrefixFrags)
+	if got.Trace.SelectionSummary.TotalDropped != 0 {
+		t.Fatalf("trace dropped count: got %d, want 0", got.Trace.SelectionSummary.TotalDropped)
 	}
-	if got.Trace.PlacementSummary.DynamicFrags != 2 {
-		t.Fatalf("dynamic count: got %d, want 2", got.Trace.PlacementSummary.DynamicFrags)
-	}
-	if len(got.Trace.RenderSummaries) != 1 || got.Trace.RenderSummaries[0].Target != contextfrag.RenderAuditManifest {
+	summary, ok := got.Trace.RenderSummaries[contextfrag.RenderAuditManifest]
+	if !ok {
 		t.Fatalf("trace render summary: got %#v, want audit_manifest", got.Trace.RenderSummaries)
 	}
-	if got.Trace.RenderSummaries[0].ItemCount != 3 {
-		t.Fatalf("render item count: got %d, want 3", got.Trace.RenderSummaries[0].ItemCount)
+	if summary.ItemCount != 3 {
+		t.Fatalf("render item count: got %d, want 3", summary.ItemCount)
 	}
 }
 
