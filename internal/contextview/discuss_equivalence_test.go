@@ -117,6 +117,25 @@ func TestDiscussSelector_BudgetedSelectionDropsCanDropHistory(t *testing.T) {
 	assertDroppedReason(t, result, "old-assistant", string(TagCanDrop))
 }
 
+func TestSelector_NonDiscussBudgetedIntentPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		messageFrag("old-user", sdk.UserMessage("old question")),
+		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+		messageFrag("latest", sdk.UserMessage("latest question")),
+	}
+	selector := &FragmentSelector{}
+	profile := selector.ProfileFor(contextfrag.IntentRunConfigPreProvider)
+
+	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
+
+	assertSelectedIDs(t, result, []string{"old-user", "old-assistant", "latest"})
+	if len(result.Dropped) != 0 {
+		t.Fatalf("dropped = %#v, want none", fragIDs(result.Dropped))
+	}
+}
+
 type discussLegacyInput struct {
 	system  string
 	rc      pipeline.RenderedContext
