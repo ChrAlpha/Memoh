@@ -211,33 +211,37 @@ func TextFrag(input TextFragInput) ContextFrag {
 
 // MessageFragInput describes an SDK message fragment.
 type MessageFragInput struct {
-	ID         string
-	Message    sdk.Message
-	Kind       Kind
-	Slot       Slot
-	Priority   int
-	CacheClass CacheClass
-	Trust      TrustLevel
-	Scope      Scope
-	Source     string
-	SourceID   string
-	Collector  string
-	Index      int
+	ID            string
+	Message       sdk.Message
+	Kind          Kind
+	Slot          Slot
+	Priority      int
+	CacheClass    CacheClass
+	Trust         TrustLevel
+	Scope         Scope
+	Source        string
+	SourceID      string
+	Collector     string
+	Index         int
+	TokenEstimate int
+	Budget        BudgetPolicy
 }
 
 // MessageFrag creates a message-backed fragment.
 func MessageFrag(input MessageFragInput) ContextFrag {
 	msg := cloneMessage(input.Message)
 	return ContextFrag{
-		ID:         strings.TrimSpace(input.ID),
-		Kind:       input.Kind,
-		Role:       input.Message.Role,
-		Slot:       input.Slot,
-		Priority:   input.Priority,
-		CacheClass: input.CacheClass,
-		Trust:      input.Trust,
-		Scope:      normalizeScope(input.Scope),
-		Render:     RenderPolicy{Format: RenderSDKMessage},
+		TokenEstimate: input.TokenEstimate,
+		Budget:        input.Budget,
+		ID:            strings.TrimSpace(input.ID),
+		Kind:          input.Kind,
+		Role:          input.Message.Role,
+		Slot:          input.Slot,
+		Priority:      input.Priority,
+		CacheClass:    input.CacheClass,
+		Trust:         input.Trust,
+		Scope:         normalizeScope(input.Scope),
+		Render:        RenderPolicy{Format: RenderSDKMessage},
 		Provenance: Provenance{
 			Source:    strings.TrimSpace(input.Source),
 			SourceID:  strings.TrimSpace(input.SourceID),

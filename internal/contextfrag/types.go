@@ -175,6 +175,8 @@ type Scope struct {
 	BotID                     string            `json:"bot_id,omitempty"`
 	ChatID                    string            `json:"chat_id,omitempty"`
 	SessionID                 string            `json:"session_id,omitempty"`
+	SessionMode               string            `json:"session_mode,omitempty"`
+	RuntimeType               string            `json:"runtime_type,omitempty"`
 	ChannelIdentityID         string            `json:"channel_identity_id,omitempty"`
 	DisplayName               string            `json:"display_name,omitempty"`
 	Platform                  string            `json:"platform,omitempty"`
@@ -223,19 +225,21 @@ type Part struct {
 
 // ContextFrag is the typed context fragment abstraction.
 type ContextFrag struct {
-	ID         string          `json:"id"`
-	Ref        ContextRef      `json:"ref,omitempty"`
-	Kind       Kind            `json:"kind"`
-	Role       sdk.MessageRole `json:"role,omitempty"`
-	Slot       Slot            `json:"slot"`
-	Priority   int             `json:"priority,omitempty"`
-	CacheClass CacheClass      `json:"cache_class,omitempty"`
-	Trust      TrustLevel      `json:"trust,omitempty"`
-	Scope      Scope           `json:"scope,omitempty"`
-	Budget     BudgetPolicy    `json:"budget,omitempty"`
-	Render     RenderPolicy    `json:"render,omitempty"`
-	Provenance Provenance      `json:"provenance,omitempty"`
-	Parts      []Part          `json:"parts,omitempty"`
+	ID            string           `json:"id"`
+	Ref           ContextRef       `json:"ref,omitempty"`
+	Kind          Kind             `json:"kind"`
+	Role          sdk.MessageRole  `json:"role,omitempty"`
+	Slot          Slot             `json:"slot"`
+	Priority      int              `json:"priority,omitempty"`
+	CacheClass    CacheClass       `json:"cache_class,omitempty"`
+	Trust         TrustLevel       `json:"trust,omitempty"`
+	Scope         Scope            `json:"scope,omitempty"`
+	Budget        BudgetPolicy     `json:"budget,omitempty"`
+	Render        RenderPolicy     `json:"render,omitempty"`
+	Provenance    Provenance       `json:"provenance,omitempty"`
+	TokenEstimate int              `json:"token_estimate,omitempty"`
+	Coverage      *SummaryCoverage `json:"coverage,omitempty"`
+	Parts         []Part           `json:"parts,omitempty"`
 }
 
 // AssembledContext is the compiled view produced from fragments.
