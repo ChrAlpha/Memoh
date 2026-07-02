@@ -44,15 +44,24 @@ func (*ACPFullContextRenderer) Target() contextfrag.RenderTarget {
 	return contextfrag.RenderACPFullContext
 }
 
-func (r *ACPFullContextRenderer) Render(_ context.Context, _ RenderInput) (RenderedPayload, error) {
+func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (RenderedPayload, error) {
 	cfg := r.Config
 	markdown, uri := cfg.ContextMarkdown, cfg.ContextURI
 
 	if acpRenderMode(cfg) == ACPRenderModeDiscuss {
 		markdown = buildDiscussACPFullContextPrompt(cfg.DiscussMessages, cfg.DiscussLateBinding)
 		uri = defaultDiscussACPContextURI
-	} else if uri == "" {
-		uri = defaultACPContextURI
+	} else {
+		if len(input.Selected) > 0 {
+			rendered, err := renderACPSelectedMarkdown(input)
+			if err != nil {
+				return RenderedPayload{}, err
+			}
+			markdown = rendered
+		}
+		if uri == "" {
+			uri = defaultACPContextURI
+		}
 	}
 
 	hash := textContentHash(markdown)
@@ -66,6 +75,25 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, _ RenderInput) (Rende
 		ContentHash: hash,
 		Data:        payload,
 	}, nil
+}
+
+func renderACPSelectedMarkdown(input RenderInput) (string, error) {
+	ordered, err := orderedSelectedFrags(input.Selected, input.Placement)
+	if err != nil {
+		return "", err
+	}
+	blocks := make([]string, 0, len(ordered))
+	for _, frag := range ordered {
+		for _, part := range frag.Parts {
+			if part.Type != contextfrag.PartText {
+				continue
+			}
+			if text := strings.TrimSpace(part.Text); text != "" {
+				blocks = append(blocks, text)
+			}
+		}
+	}
+	return FinalizeACPContextMarkdown(blocks), nil
 }
 
 func acpRenderMode(cfg ACPRenderConfig) ACPRenderMode {

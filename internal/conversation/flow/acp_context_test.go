@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 func TestRenderACPContextMarkdownIncludesDynamicRuntimeAndMemory(t *testing.T) {
 	t.Parallel()
 
-	got := renderACPContextMarkdown(acpContextRenderInput{
+	got := acpMarkdownViaSections(t, acpContextRenderInput{
 		Now:                     time.Date(2026, 6, 1, 9, 30, 0, 0, time.FixedZone("PDT", -7*3600)),
 		Timezone:                "America/Los_Angeles",
 		BotID:                   "bot-1",
@@ -75,7 +76,7 @@ func TestRenderACPContextMarkdownRespectsSystemFilesBudget(t *testing.T) {
 	t.Parallel()
 
 	large := "HEAD\n" + strings.Repeat("0123456789", 200) + "\nTAIL"
-	got := renderACPContextMarkdown(acpContextRenderInput{
+	got := acpMarkdownViaSections(t, acpContextRenderInput{
 		Now:                 time.Date(2026, 6, 1, 9, 30, 0, 0, time.UTC),
 		Timezone:            "UTC",
 		BotID:               "bot-1",
@@ -95,4 +96,13 @@ func TestRenderACPContextMarkdownRespectsSystemFilesBudget(t *testing.T) {
 	if strings.Contains(got, "SECOND_FILE_SHOULD_NOT_FIT") {
 		t.Fatalf("context included system file content beyond budget:\n%s", got)
 	}
+}
+
+func acpMarkdownViaSections(t *testing.T, input acpContextRenderInput) string {
+	t.Helper()
+	markdown, uri := acpContextViaContextView(context.Background(), nil, buildACPContextSections(input))
+	if uri != acpContextURI {
+		t.Fatalf("uri = %q, want %q", uri, acpContextURI)
+	}
+	return markdown
 }

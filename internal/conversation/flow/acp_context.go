@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/prune"
 )
@@ -36,7 +37,7 @@ type acpContextRenderInput struct {
 	PlatformIdentitiesSection string
 }
 
-func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string) string {
+func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string) []contextview.ACPSection {
 	timezoneName, timezoneLocation := r.resolveTimezone(ctx, req.BotID, req.UserID)
 	now := time.Now().UTC()
 	if timezoneLocation != nil {
@@ -67,7 +68,7 @@ func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation
 		}
 	}
 
-	return renderACPContextMarkdown(acpContextRenderInput{
+	return buildACPContextSections(acpContextRenderInput{
 		Now:                       now,
 		Timezone:                  timezoneName,
 		BotID:                     req.BotID,
@@ -90,7 +91,7 @@ func (r *Resolver) buildACPContextMarkdown(ctx context.Context, req conversation
 	})
 }
 
-func renderACPContextMarkdown(input acpContextRenderInput) string {
+func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSection {
 	now := input.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -100,11 +101,26 @@ func renderACPContextMarkdown(input acpContextRenderInput) string {
 		timezoneName = "UTC"
 	}
 
-	var sb strings.Builder
-	sb.WriteString("# Memoh ACP Context\n\n")
-	sb.WriteString("This virtual resource is already embedded in the current ACP prompt. It is not a workspace file and no file lookup is needed. Use it for identity, memory, user preferences, and session background. The user prompt outside this resource is the actual task.\n\n")
+	sections := make([]contextview.ACPSection, 0, 8)
+	add := func(id, title, content string) {
+		content = strings.TrimSpace(content)
+		if content == "" {
+			return
+		}
+		block := content
+		if title != "" {
+			block = "## " + title + "\n\n" + content
+		}
+		sections = append(sections, contextview.ACPSection{ID: id, Text: block})
+	}
 
-	writeACPContextSection(&sb, "Current Runtime", acpContextMetadataLines([][2]string{
+	sections = append(sections, contextview.ACPSection{
+		ID: "acp.preamble",
+		Text: "# Memoh ACP Context\n\n" +
+			"This virtual resource is already embedded in the current ACP prompt. It is not a workspace file and no file lookup is needed. Use it for identity, memory, user preferences, and session background. The user prompt outside this resource is the actual task.",
+	})
+
+	add("acp.section.current-runtime", "Current Runtime", acpContextMetadataLines([][2]string{
 		{"Current time", now.Format(time.RFC3339)},
 		{"Timezone", timezoneName},
 		{"Bot ID", input.BotID},
@@ -114,7 +130,7 @@ func renderACPContextMarkdown(input acpContextRenderInput) string {
 		{"Workspace", input.ProjectPath},
 	}))
 
-	writeACPContextSection(&sb, "Current Conversation", acpContextMetadataLines([][2]string{
+	add("acp.section.current-conversation", "Current Conversation", acpContextMetadataLines([][2]string{
 		{"Sender", input.DisplayName},
 		{"Channel identity ID", input.SourceChannelIdentityID},
 		{"Channel", input.CurrentChannel},
@@ -125,34 +141,22 @@ func renderACPContextMarkdown(input acpContextRenderInput) string {
 		{"Reply target", input.ReplyTarget},
 	}))
 
-	if attachments := formatACPContextAttachments(input.Attachments); attachments != "" {
-		writeACPContextSection(&sb, "Attachments", attachments)
-	}
-	if section := strings.TrimSpace(input.PlatformIdentitiesSection); section != "" {
-		sb.WriteString(section)
-		sb.WriteString("\n\n")
-	}
+	add("acp.section.attachments", "Attachments", formatACPContextAttachments(input.Attachments))
+	add("acp.section.platform-identities", "", input.PlatformIdentitiesSection)
 
 	files := acpContextSystemFiles(input.Files, input.SystemFilesMaxBytes)
-	for _, file := range files {
-		writeACPContextSection(&sb, file.Title, file.Content)
+	for i, file := range files {
+		add(fmt.Sprintf("acp.section.file.%03d", i), file.Title, file.Content)
 	}
 
-	writeACPContextSection(&sb, "Memoh Runtime Notes", strings.TrimSpace(`
+	add("acp.section.runtime-notes", "Memoh Runtime Notes", strings.TrimSpace(`
 - This context is generated dynamically for the current ACP turn.
 - Prefer the latest user prompt over stale memory when they conflict.
 - Treat secrets, OAuth tokens, API keys, and private configuration as sensitive.
 - Keep code changes scoped to the current task and preserve existing user changes.
 `))
 
-	return prune.PruneWithEdges(sb.String(), "ACP context", prune.Config{
-		MaxBytes:  64 * 1024,
-		MaxLines:  1600,
-		HeadBytes: 48 * 1024,
-		TailBytes: 12 * 1024,
-		HeadLines: 1200,
-		TailLines: 300,
-	})
+	return sections
 }
 
 type acpContextFileSection struct {
@@ -315,16 +319,4 @@ func formatACPContextAttachments(attachments []conversation.ChatAttachment) stri
 		lines = append(lines, strings.Join(parts, ", "))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func writeACPContextSection(sb *strings.Builder, title, content string) {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return
-	}
-	sb.WriteString("## ")
-	sb.WriteString(strings.TrimSpace(title))
-	sb.WriteString("\n\n")
-	sb.WriteString(content)
-	sb.WriteString("\n\n")
 }

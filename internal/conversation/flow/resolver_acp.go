@@ -107,7 +107,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	if err := r.requireACPRuntimeOwnerWorkspaceExec(ctx, req.BotID, runtimeOwnerAccountID); err != nil {
 		return err
 	}
-	contextMarkdown, contextURI := acpContextViaContextView(ctx, r.logger, r.buildACPContextMarkdown(ctx, req, agentID, projectPath))
+	contextMarkdown, contextURI := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath))
 
 	doneTurn, entered := r.tryEnterIdleSessionTurn(ctx, req.BotID, req.SessionID)
 	if !entered {
