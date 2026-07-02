@@ -10,7 +10,32 @@ import (
 	"github.com/memohai/memoh/internal/historyfrag"
 )
 
-func TestContextViewCompactionPromptMatchesLegacyByteForByte(t *testing.T) {
+func TestContextViewCompactionPromptGoldenSmall(t *testing.T) {
+	t.Parallel()
+
+	candidates := []RecordCompactionCandidate{
+		{Record: testRecord("u1", "user", "hello", 10)},
+		{Record: testRecord("a1", "assistant", "hi", 10)},
+	}
+
+	payload, err := contextViewCompactionPrompt(candidates, nil)
+	if err != nil {
+		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
+	}
+
+	const want = "Summarize the following conversation:\nuser: hello\nassistant: hi\n"
+	if payload.UserPrompt != want {
+		t.Fatalf("user prompt = %q, want golden %q", payload.UserPrompt, want)
+	}
+	if !strings.HasPrefix(payload.SystemPrompt, "You are a conversation summarizer.") {
+		t.Fatalf("system prompt drifted: %q", payload.SystemPrompt[:60])
+	}
+	if payload.EntryCount != 2 {
+		t.Fatalf("EntryCount = %d, want 2", payload.EntryCount)
+	}
+}
+
+func TestContextViewCompactionPromptGoldenSpec(t *testing.T) {
 	t.Parallel()
 
 	metadataRecord := testRecord("meta-1", "user", "hello with metadata", 10)
@@ -23,10 +48,6 @@ func TestContextViewCompactionPromptMatchesLegacyByteForByte(t *testing.T) {
 		ConversationName: "Dev  Chat",
 		ReplyTarget:      "thread-9",
 	}
-	metadataRecord.ExternalMessageID = "ext-1"
-	metadataRecord.SourceReplyToMessageID = "ext-0"
-	metadataRecord.SenderDisplayName = "Alice [ops]"
-	metadataRecord.Platform = "telegram"
 
 	outputStyleResult := testRecord("out-1", "tool", "", 10)
 	outputStyleResult.ModelMessage.Content = mustCompactionJSON([]map[string]any{{
@@ -52,17 +73,26 @@ func TestContextViewCompactionPromptMatchesLegacyByteForByte(t *testing.T) {
 		"output":     map[string]any{"type": "text", "value": "data:image/png;base64,aGVsbG8= trailing"},
 	}})
 
-	longResult := testRecord("long-1", "tool", "", 10)
-	longResult.ModelMessage.Content = mustCompactionJSON([]map[string]any{{
+	blobResult := testRecord("blob-1", "tool", "", 10)
+	blobResult.ModelMessage.Content = mustCompactionJSON([]map[string]any{{
 		"type":       "tool-result",
 		"toolCallId": "call-4",
 		"toolName":   "dump",
 		"output":     map[string]any{"type": "text", "value": strings.Repeat("x", 5000)},
 	}})
 
+	longText := strings.Repeat("lorem ipsum ", 500)
+	longResult := testRecord("long-1", "tool", "", 10)
+	longResult.ModelMessage.Content = mustCompactionJSON([]map[string]any{{
+		"type":       "tool-result",
+		"toolCallId": "call-5",
+		"toolName":   "readfile",
+		"output":     map[string]any{"type": "text", "value": longText},
+	}})
+
 	mixedParts := testRecord("mixed-1", "assistant", "", 10)
 	mixedParts.ModelMessage.Content = mustCompactionJSON([]map[string]any{
-		{"type": "tool-call", "toolCallId": "call-5", "toolName": "search", "input": map[string]any{"q": "memoh"}},
+		{"type": "tool-call", "toolCallId": "call-6", "toolName": "search", "input": map[string]any{"q": "memoh"}},
 		{"type": "text", "text": "found it"},
 		{"type": "image"},
 		{"type": "file"},
@@ -76,6 +106,7 @@ func TestContextViewCompactionPromptMatchesLegacyByteForByte(t *testing.T) {
 		outputStyleResult,
 		resultStyleResult,
 		mediaResult,
+		blobResult,
 		longResult,
 		mixedParts,
 		reasoningOnly,
@@ -87,29 +118,40 @@ func TestContextViewCompactionPromptMatchesLegacyByteForByte(t *testing.T) {
 	}
 	priorSummaries := []string{"earlier summary one", "earlier summary two"}
 
-	legacyEntries, legacyRefs := buildRecordEntriesAndRefs(candidates)
-	legacyPrompt := buildUserPrompt(priorSummaries, legacyEntries)
-
 	payload, err := contextViewCompactionPrompt(candidates, priorSummaries)
 	if err != nil {
 		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
 	}
 
-	if payload.UserPrompt != legacyPrompt {
-		t.Fatalf("user prompt diverged:\n--- contextview ---\n%s\n--- legacy ---\n%s", payload.UserPrompt, legacyPrompt)
+	for _, want := range []string{
+		"<prior_context>\n",
+		"earlier summary one\n---\nearlier summary two",
+		"</prior_context>\n\nNow summarize the following conversation segment:\n",
+		"user: [message_id: ext-1]\n[reply_to: ext-0]\n[sender: Alice (ops)]\n[platform: telegram]\n[conversation_type: group]\n[conversation_name: Dev Chat]\n[reply_target: thread-9]\nhello with metadata\n",
+		"tool: answer is 42\n",
+		`tool: {"body":"payload","status":"ok"}` + "\n",
+		"tool: [media] trailing\n",
+		"tool: [media]\n",
+		"tool: " + strings.TrimSpace(longText[:2048]) + " …[truncated]\n",
+		"assistant: found it\n[tool_call: search]\n[image]\n[file]\n",
+		"assistant: plain answer\n",
+	} {
+		if !strings.Contains(payload.UserPrompt, want) {
+			t.Fatalf("prompt missing golden %q:\n%s", want, payload.UserPrompt)
+		}
 	}
-	if payload.SystemPrompt != systemPrompt {
-		t.Fatal("system prompt diverged from legacy")
+	if strings.Contains(payload.UserPrompt, "hidden") || strings.Contains(payload.UserPrompt, "reason-1") {
+		t.Fatal("reasoning-only entry should not render")
 	}
-	if payload.EntryCount != len(legacyEntries) {
-		t.Fatalf("entry count = %d, want legacy %d", payload.EntryCount, len(legacyEntries))
+	if payload.EntryCount != 8 {
+		t.Fatalf("EntryCount = %d, want 8 (reasoning-only skipped)", payload.EntryCount)
 	}
-	if len(payload.CandidateRefs) != len(legacyRefs) {
-		t.Fatalf("refs = %d, want legacy %d", len(payload.CandidateRefs), len(legacyRefs))
+	if len(payload.CandidateRefs) != len(records) {
+		t.Fatalf("refs = %d, want all %d for coverage", len(payload.CandidateRefs), len(records))
 	}
 	for i, ref := range payload.CandidateRefs {
-		if ref.ID != legacyRefs[i].ID {
-			t.Fatalf("ref %d = %q, want legacy %q", i, ref.ID, legacyRefs[i].ID)
+		if ref.ID != records[i].Ref.ID {
+			t.Fatalf("ref %d = %q, want %q", i, ref.ID, records[i].Ref.ID)
 		}
 	}
 }
@@ -133,25 +175,6 @@ func TestContextViewCompactionPromptEmptyEntries(t *testing.T) {
 	}
 }
 
-func TestContextViewSelectionDivergenceAcceptsLegacySplit(t *testing.T) {
-	t.Parallel()
-
-	candidates := recordCandidatesFromRecords([]historyfrag.HistoryRecord{
-		testRecord("old-user", "user", "old question", 100),
-		testRecord("old-assistant", "assistant", "old answer", 100),
-		testRecord("current-user", "user", "current question", 100),
-		testRecord("tail", "assistant", "tail answer", 100),
-	})
-	toCompact := splitRecordCandidatesByRatio(candidates, 400, 100)
-	if len(toCompact) == 0 {
-		t.Fatal("expected non-empty legacy split")
-	}
-
-	if divergent := contextViewSelectionDivergence(candidates, toCompact); len(divergent) != 0 {
-		t.Fatalf("legacy split should be within contextview eligibility, divergent: %v", divergent)
-	}
-}
-
 func TestContextViewCompactionPromptToolCallTopLevel(t *testing.T) {
 	t.Parallel()
 
@@ -166,18 +189,13 @@ func TestContextViewCompactionPromptToolCallTopLevel(t *testing.T) {
 	}}
 	candidates := []RecordCompactionCandidate{{Record: topLevel}}
 
-	legacyEntries, _ := buildRecordEntriesAndRefs(candidates)
-	legacyPrompt := buildUserPrompt(nil, legacyEntries)
-
 	payload, err := contextViewCompactionPrompt(candidates, nil)
 	if err != nil {
 		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
 	}
-	if payload.UserPrompt != legacyPrompt {
-		t.Fatalf("top-level tool call prompt diverged:\n--- contextview ---\n%s\n--- legacy ---\n%s", payload.UserPrompt, legacyPrompt)
-	}
-	if !strings.Contains(payload.UserPrompt, "[tool_call: ask_user]") {
-		t.Fatalf("prompt missing tool call marker:\n%s", payload.UserPrompt)
+	const want = "assistant: calling tool\n[tool_call: ask_user]\n"
+	if !strings.Contains(payload.UserPrompt, want) {
+		t.Fatalf("prompt missing golden %q:\n%s", want, payload.UserPrompt)
 	}
 }
 

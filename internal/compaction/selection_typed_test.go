@@ -116,7 +116,7 @@ func TestSplitRecordCandidatesDoesNotOrphanToolResult(t *testing.T) {
 	}
 }
 
-func TestBuildRecordEntriesAndRefsKeepsSelectedRefsForCoverage(t *testing.T) {
+func TestCompactionPromptKeepsSelectedRefsForCoverage(t *testing.T) {
 	t.Parallel()
 
 	unrendered := testRecord("reasoning", "assistant", "", 0)
@@ -124,10 +124,14 @@ func TestBuildRecordEntriesAndRefsKeepsSelectedRefsForCoverage(t *testing.T) {
 	rendered := testRecord("visible", "assistant", "visible", 0)
 	candidates := recordCandidatesFromRecords([]historyfrag.HistoryRecord{unrendered, rendered})
 
-	entries, refs := buildRecordEntriesAndRefs(candidates)
-	if len(entries) != 1 || entries[0].Content != "visible" {
-		t.Fatalf("entries = %#v, want only rendered row", entries)
+	payload, err := contextViewCompactionPrompt(candidates, nil)
+	if err != nil {
+		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
 	}
+	if payload.EntryCount != 1 {
+		t.Fatalf("EntryCount = %d, want only rendered row", payload.EntryCount)
+	}
+	refs := payload.CandidateRefs
 	if len(refs) != 2 || refs[0].ID != "reasoning" || refs[1].ID != "visible" {
 		t.Fatalf("refs = %#v, want all selected refs for coverage/marking", refs)
 	}

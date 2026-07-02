@@ -8,19 +8,28 @@ import (
 	"github.com/memohai/memoh/internal/historyfrag"
 )
 
+func renderSingleCandidatePrompt(t *testing.T, record historyfrag.HistoryRecord) string {
+	t.Helper()
+	payload, err := contextViewCompactionPrompt([]RecordCompactionCandidate{{Record: record}}, nil)
+	if err != nil {
+		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
+	}
+	return payload.UserPrompt
+}
+
 func TestRenderRecordEntryIncludesDirectedSignalHeader(t *testing.T) {
 	t.Parallel()
 
 	record := testRecord("row-1", "user", "please handle this", 0)
-	record.ExternalMessageID = "tg-42"
-	record.SourceReplyToMessageID = "tg-41"
-	record.SenderDisplayName = "Alice"
-	record.Platform = "telegram"
+	record.Scope.CurrentMessageID = "tg-42"
+	record.Scope.ReplyToMessageID = "tg-41"
+	record.Scope.DisplayName = "Alice"
+	record.Scope.Platform = "telegram"
 	record.Scope.ConversationType = "group"
 	record.Scope.ConversationName = "Ops Room"
 	record.Scope.ReplyTarget = "thread-9"
 
-	got := renderRecordCandidateEntry(record)
+	got := renderSingleCandidatePrompt(t, record)
 	for _, want := range []string{
 		"[message_id: tg-42]",
 		"[reply_to: tg-41]",
@@ -51,7 +60,7 @@ func TestRenderRecordEntryScrubsMediaAndBoundsToolOutput(t *testing.T) {
 		},
 	}})
 
-	got := renderRecordCandidateEntry(record)
+	got := renderSingleCandidatePrompt(t, record)
 	if strings.Contains(got, blob) || strings.Contains(got, "QUJDQUJDQUJD") {
 		t.Fatalf("base64 media leaked into summarizer input: %q", got[:80])
 	}
@@ -75,8 +84,8 @@ func TestRenderRecordEntryPreservesStructuredToolOutcome(t *testing.T) {
 		},
 	}
 
-	got := renderRecordCandidateEntry(record)
-	if got == "[tool result]" || !strings.Contains(got, "files_changed") {
+	got := renderSingleCandidatePrompt(t, record)
+	if !strings.Contains(got, "files_changed") {
 		t.Fatalf("structured outcome lost: %q", got)
 	}
 }

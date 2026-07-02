@@ -103,7 +103,7 @@ func TestRecordCandidatesFromRowsSkipsInvalidRows(t *testing.T) {
 func TestMessageIDsFromRecordRefsUsesAllSelectedRefs(t *testing.T) {
 	t.Parallel()
 
-	_, refs := buildRecordEntriesAndRefs(recordCandidatesFromRecords([]historyfrag.HistoryRecord{
+	payload, err := contextViewCompactionPrompt(recordCandidatesFromRecords([]historyfrag.HistoryRecord{
 		{
 			Ref:          contextRef("00000000-0000-0000-0000-000000000021"),
 			ModelMessage: conversation.ModelMessage{Role: "assistant", Content: mustCompactionJSON([]map[string]any{{"type": "reasoning", "text": "hidden"}})},
@@ -112,11 +112,15 @@ func TestMessageIDsFromRecordRefsUsesAllSelectedRefs(t *testing.T) {
 			Ref:          contextRef("00000000-0000-0000-0000-000000000022"),
 			ModelMessage: conversation.ModelMessage{Role: "assistant", Content: conversation.NewTextContent("visible")},
 		},
-	}))
-
-	ids, err := messageIDsFromRecordRefs(refs)
+	}), nil)
 	if err != nil {
-		t.Fatalf("messageIDsFromRecordRefs failed: %v", err)
+		t.Fatalf("contextViewCompactionPrompt failed: %v", err)
+	}
+	refs := payload.CandidateRefs
+
+	ids, idsErr := messageIDsFromRecordRefs(refs)
+	if idsErr != nil {
+		t.Fatalf("messageIDsFromRecordRefs failed: %v", idsErr)
 	}
 	if len(ids) != 2 || !ids[0].Valid || !ids[1].Valid {
 		t.Fatalf("ids = %#v, want two valid ids", ids)

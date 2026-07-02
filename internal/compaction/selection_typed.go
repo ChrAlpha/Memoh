@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/historyfrag"
 	"github.com/memohai/memoh/internal/userinput"
 )
@@ -308,23 +307,6 @@ func isRecordToolClosureResult(candidate RecordCompactionCandidate) bool {
 
 func isRecordToolResult(candidate RecordCompactionCandidate) bool {
 	return strings.EqualFold(strings.TrimSpace(candidate.Record.ModelMessage.Role), "tool")
-}
-
-func buildRecordEntriesAndRefs(candidates []RecordCompactionCandidate) ([]messageEntry, []contextfrag.ContextRef) {
-	entries := make([]messageEntry, 0, len(candidates))
-	refs := make([]contextfrag.ContextRef, 0, len(candidates))
-	for _, candidate := range candidates {
-		refs = append(refs, candidate.Record.Ref)
-		content := renderRecordCandidateEntry(candidate.Record)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		entries = append(entries, messageEntry{
-			Role:    candidate.Record.ModelMessage.Role,
-			Content: content,
-		})
-	}
-	return entries, refs
 }
 
 func trimRecordCompactCandidates(candidates []RecordCompactionCandidate, maxTokens int) []RecordCompactionCandidate {
