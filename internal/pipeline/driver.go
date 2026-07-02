@@ -451,17 +451,13 @@ func (d *DiscussDriver) streamDiscussACPRuntime(ctx context.Context, cfg Discuss
 }
 
 func (d *DiscussDriver) discussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string, log *slog.Logger) string {
-	legacy := discussACPFullContextPrompt(messages, lateBinding)
 	if d.deps.ContextBuilder == nil {
-		return legacy
+		return discussACPFullContextPrompt(messages, lateBinding)
 	}
 	prompt, err := d.deps.ContextBuilder.BuildDiscussACPPrompt(ctx, messages, lateBinding)
 	if err != nil {
 		log.Warn("discuss acp context view build failed; using legacy prompt", slog.Any("error", err))
-		return legacy
-	}
-	if prompt != legacy {
-		log.Warn("discuss acp context view diverged from legacy prompt")
+		return discussACPFullContextPrompt(messages, lateBinding)
 	}
 	return prompt
 }

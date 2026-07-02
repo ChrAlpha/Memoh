@@ -31,8 +31,5 @@ func acpContextViaContextView(ctx context.Context, logger *slog.Logger, contextM
 		}
 		return contextMarkdown, acpContextURI
 	}
-	if payload.ContextMarkdown != contextMarkdown && logger != nil {
-		logger.Warn("acp context view diverged from legacy context markdown")
-	}
 	return payload.ContextMarkdown, payload.ContextURI
 }
