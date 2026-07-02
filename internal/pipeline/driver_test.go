@@ -861,6 +861,7 @@ func (f *fakeDiscussCursorStore) UpsertDiscussConsumedCursor(_ context.Context, 
 
 type fakeDiscussContextBuilder struct {
 	messages []sdk.Message
+	prompt   string
 	err      error
 	called   bool
 }
@@ -868,6 +869,11 @@ type fakeDiscussContextBuilder struct {
 func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ RenderedContext, _ []TurnResponseEntry, _ string) ([]sdk.Message, error) {
 	f.called = true
 	return f.messages, f.err
+}
+
+func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ []ContextMessage, _ string) (string, error) {
+	f.called = true
+	return f.prompt, f.err
 }
 
 func TestDiscussSDKMessagesUsesInjectedBuilder(t *testing.T) {
@@ -928,4 +934,55 @@ func discussMessagesJSONEqual(got, want []sdk.Message) bool {
 		return false
 	}
 	return string(gotRaw) == string(wantRaw)
+}
+
+func TestDiscussACPPromptUsesInjectedBuilder(t *testing.T) {
+	t.Parallel()
+
+	messages := []ContextMessage{{Role: "user", Content: "hello"}}
+	builder := &fakeDiscussContextBuilder{prompt: "from builder"}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussACPPrompt(context.Background(), messages, "late", slog.Default())
+
+	if !builder.called {
+		t.Fatal("injected builder should be called")
+	}
+	if got != "from builder" {
+		t.Fatalf("prompt = %q, want builder output", got)
+	}
+}
+
+func TestDiscussACPPromptFallsBackWithoutBuilder(t *testing.T) {
+	t.Parallel()
+
+	messages := []ContextMessage{{Role: "user", Content: "hello"}}
+	driver := NewDiscussDriver(DiscussDriverDeps{Logger: slog.Default()})
+
+	got := driver.discussACPPrompt(context.Background(), messages, "late", slog.Default())
+
+	if got != discussACPFullContextPrompt(messages, "late") {
+		t.Fatalf("prompt = %q, want legacy fallback", got)
+	}
+}
+
+func TestDiscussACPFullContextPromptGoldenFormat(t *testing.T) {
+	t.Parallel()
+
+	got := discussACPFullContextPrompt([]ContextMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+		{Role: "", Content: "anon"},
+		{Role: "tool", Content: ""},
+	}, "Only reply when mentioned.")
+
+	const want = "You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n" +
+		"[user]\nhello\n\n" +
+		"[assistant]\nhi\n\n" +
+		"[user]\nanon\n\n" +
+		"Reply to the latest user-visible message when a response is appropriate.\n\n" +
+		"Only reply when mentioned."
+	if got != want {
+		t.Fatalf("legacy discuss ACP prompt format drifted:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
 }

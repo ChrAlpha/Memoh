@@ -43,3 +43,23 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 	}
 	return payload.Messages, nil
 }
+
+func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, messages []pipeline.ContextMessage, lateBinding string) (string, error) {
+	renderer := &ACPFullContextRenderer{Config: ACPRenderConfig{
+		Mode:               ACPRenderModeDiscuss,
+		DiscussMessages:    messages,
+		DiscussLateBinding: lateBinding,
+	}}
+	rendered, err := renderer.Render(ctx, RenderInput{
+		Intent: contextfrag.IntentACPRuntimePrompt,
+		Target: contextfrag.RenderACPFullContext,
+	})
+	if err != nil {
+		return "", err
+	}
+	payload, ok := rendered.Data.(*ACPRenderedPayload)
+	if !ok {
+		return "", fmt.Errorf("unexpected acp payload type %T", rendered.Data)
+	}
+	return payload.ContextMarkdown, nil
+}

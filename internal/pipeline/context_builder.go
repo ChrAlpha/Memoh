@@ -13,4 +13,5 @@ import (
 // DiscussDriverDeps to avoid a pipeline -> contextview import cycle.
 type DiscussContextBuilder interface {
 	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc RenderedContext, trs []TurnResponseEntry, compactSummary string) ([]sdk.Message, error)
+	BuildDiscussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string) (string, error)
 }

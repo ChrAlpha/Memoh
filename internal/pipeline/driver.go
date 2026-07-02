@@ -387,7 +387,7 @@ func (d *DiscussDriver) streamDiscussACPRuntime(ctx context.Context, cfg Discuss
 		log.Error("discuss ACP runtime: streamer not configured")
 		return false
 	}
-	prompt := discussACPFullContextPrompt(composed.Messages, buildLateBindingPrompt(isMentioned))
+	prompt := d.discussACPPrompt(ctx, composed.Messages, buildLateBindingPrompt(isMentioned), log)
 	if strings.TrimSpace(prompt) == "" {
 		return false
 	}
@@ -448,6 +448,22 @@ func (d *DiscussDriver) streamDiscussACPRuntime(ctx context.Context, cfg Discuss
 		}
 	}
 	return streamed && terminal && !failed
+}
+
+func (d *DiscussDriver) discussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string, log *slog.Logger) string {
+	legacy := discussACPFullContextPrompt(messages, lateBinding)
+	if d.deps.ContextBuilder == nil {
+		return legacy
+	}
+	prompt, err := d.deps.ContextBuilder.BuildDiscussACPPrompt(ctx, messages, lateBinding)
+	if err != nil {
+		log.Warn("discuss acp context view build failed; using legacy prompt", slog.Any("error", err))
+		return legacy
+	}
+	if prompt != legacy {
+		log.Warn("discuss acp context view diverged from legacy prompt")
+	}
+	return prompt
 }
 
 func discussACPFullContextPrompt(messages []ContextMessage, lateBinding string) string {

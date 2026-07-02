@@ -1,6 +1,7 @@
 package contextview
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -88,4 +89,22 @@ func legacyDiscussACPFullContextPrompt(messages []pipeline.ContextMessage, lateB
 		b.WriteString(strings.TrimSpace(lateBinding))
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func TestDiscussSDKContextBuilderACPPromptMatchesLegacy(t *testing.T) {
+	t.Parallel()
+
+	messages := []pipeline.ContextMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	builder := &DiscussSDKContextBuilder{}
+	got, err := builder.BuildDiscussACPPrompt(context.Background(), messages, "Only reply when mentioned.")
+	if err != nil {
+		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
+	}
+	want := legacyDiscussACPFullContextPrompt(messages, "Only reply when mentioned.")
+	if got != want {
+		t.Fatalf("prompt mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
 }
