@@ -44,7 +44,101 @@ func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile Inten
 		}
 		return selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
 	}
-	return selectCompactionCandidates(frags, profile, len(frags))
+	return selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
+}
+
+func selectCompactionCandidatesWindowed(frags []contextfrag.ContextFrag, profile IntentProfile, window *CompactionWindow) SelectionResult {
+	tagged := tagFragments(frags, profile)
+	cutoff := compactionWindowCutoff(tagged, window)
+	selectedIndexes := compactionSelectedIndexes(tagged, cutoff)
+	if window != nil && window.MaxPromptTokens > 0 {
+		selectedIndexes = trimSelectedByPromptBudget(tagged, selectedIndexes, window.MaxPromptTokens)
+	}
+	return selectionResultFromTagged(tagged, selectedIndexes)
+}
+
+// compactionWindowCutoff mirrors the legacy split-by-ratio/target math:
+// accumulate estimated tokens newest to oldest across the whole candidate
+// range and cut where the kept span reaches the window.
+func compactionWindowCutoff(tagged []TaggedFrag, window *CompactionWindow) int {
+	if window == nil {
+		return len(tagged)
+	}
+	if window.TargetTokens > 0 {
+		acc := 0
+		for i := len(tagged) - 1; i >= 0; i-- {
+			acc += fragTokenEstimate(tagged[i].Frag)
+			if acc > window.TargetTokens {
+				return i + 1
+			}
+		}
+		return 0
+	}
+	if window.SweepAll {
+		return len(tagged)
+	}
+	if window.KeepRecentTokens <= 0 {
+		return len(tagged)
+	}
+	acc := 0
+	for i := len(tagged) - 1; i >= 0; i-- {
+		acc += fragTokenEstimate(tagged[i].Frag)
+		if acc >= window.KeepRecentTokens {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// trimSelectedByPromptBudget drops the oldest selected candidates until the
+// estimated prompt cost (content plus rendered metadata header) fits the
+// compaction model budget, extending the cut past tool results so no orphan
+// leads the kept span.
+func trimSelectedByPromptBudget(tagged []TaggedFrag, selectedIndexes map[int]bool, maxTokens int) map[int]bool {
+	selected := make([]int, 0, len(selectedIndexes))
+	for i := range tagged {
+		if selectedIndexes[i] {
+			selected = append(selected, i)
+		}
+	}
+	if len(selected) == 0 {
+		return selectedIndexes
+	}
+	total := 0
+	for _, idx := range selected {
+		total += compactionPromptTokenEstimate(tagged[idx].Frag)
+	}
+	if total <= maxTokens {
+		return selectedIndexes
+	}
+	acc := 0
+	boundary := len(selected)
+	for pos := len(selected) - 1; pos >= 0; pos-- {
+		acc += compactionPromptTokenEstimate(tagged[selected[pos]].Frag)
+		if acc > maxTokens {
+			boundary = pos + 1
+			break
+		}
+	}
+	for boundary < len(selected) && isToolResultFrag(tagged[selected[boundary]].Frag) {
+		boundary++
+	}
+	if boundary >= len(selected) {
+		return selectedIndexes
+	}
+	kept := make(map[int]bool, len(selected)-boundary)
+	for _, idx := range selected[boundary:] {
+		kept[idx] = true
+	}
+	return kept
+}
+
+func compactionPromptTokenEstimate(frag contextfrag.ContextFrag) int {
+	tokens := fragTokenEstimate(frag)
+	if header := renderCompactionFragHeader(frag); header != "" {
+		tokens += (len(header) + 3) / 4
+	}
+	return tokens
 }
 
 func (s *FragmentSelector) SelectCompactionCandidates(frags []contextfrag.ContextFrag, cutoff int) SelectionResult {

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -139,36 +140,28 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		return nil
 	}
 
-	var toCompact []sqlc.ListUncompactedMessagesBySessionRow
-	if cfg.TargetTokens > 0 {
-		// Sync compaction: compress enough messages to bring context
-		// down to TargetTokens. Calculate how many tokens to keep
-		// (newest messages) and compact everything older.
-		toCompact = splitByTarget(messages, cfg.TargetTokens)
-	} else {
-		toCompact = splitByRatio(messages, cfg.TotalInputTokens, cfg.Ratio)
+	candidates, skipped := recordCandidatesFromRows(messages)
+	if skipped > 0 {
+		s.logger.Warn("compaction: skipped unparseable history rows",
+			slog.Int("skipped", skipped),
+			slog.String("session_id", cfg.SessionID),
+		)
 	}
+	window, ok := compactionWindowFromConfig(cfg)
+	if !ok || len(candidates) == 0 {
+		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
+	}
+	toCompact := selectCompactionRecords(candidates, window)
+	s.logger.Info("compaction: candidates selected",
+		slog.Int("messages", len(toCompact)),
+		slog.Int("total_uncompacted", len(candidates)),
+		slog.Int("max_compact_tokens", window.MaxPromptTokens),
+	)
 	if len(toCompact) == 0 {
 		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
 		return nil
 	}
-
-	// Cap the compaction input to avoid exceeding the compaction model's
-	// context window. MaxCompactTokens is typically set to 90% of the model's
-	// window. If not set, use a conservative default of 30K tokens.
-	maxCompactTokens := cfg.MaxCompactTokens
-	if maxCompactTokens <= 0 {
-		maxCompactTokens = 30000
-	}
-	s.logger.Info("compaction: before trim",
-		slog.Int("messages", len(toCompact)),
-		slog.Int("total_uncompacted", len(messages)),
-		slog.Int("max_compact_tokens", maxCompactTokens),
-	)
-	toCompact = trimCompactMessages(toCompact, maxCompactTokens)
-	s.logger.Info("compaction: after trim",
-		slog.Int("messages", len(toCompact)),
-	)
 
 	priorLogs, err := s.queries.ListCompactionLogsBySession(ctx, sessionUUID)
 	if err != nil {
@@ -181,17 +174,21 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		}
 	}
 
-	entries := make([]messageEntry, 0, len(toCompact))
-	messageIDs := make([]pgtype.UUID, 0, len(toCompact))
-	for _, m := range toCompact {
-		entries = append(entries, messageEntry{
-			Role:    m.Role,
-			Content: string(m.Content),
-		})
-		messageIDs = append(messageIDs, m.ID)
+	payload, err := contextViewCompactionPrompt(toCompact, priorSummaries)
+	if err != nil {
+		return err
 	}
-
-	userPrompt := buildUserPrompt(priorSummaries, entries)
+	if payload.EntryCount == 0 {
+		// Every selected message rendered empty (e.g. reasoning-only): summarizing
+		// nothing would destroy them for a junk summary. Leave them in history.
+		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
+	}
+	messageIDs, err := messageIDsFromRecordRefs(payload.CandidateRefs)
+	if err != nil {
+		return err
+	}
+	userPrompt := payload.UserPrompt
 
 	model := models.NewSDKChatModel(models.SDKModelConfig{
 		ClientType:     cfg.ClientType,
@@ -204,7 +201,7 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 
 	systemPromptDecorated, sdkMessages, _ := models.ApplyPromptCache(
 		model, cfg.PromptCacheTTL,
-		systemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
+		payload.SystemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
 	)
 
 	result, err := sdk.GenerateTextResult(ctx,
@@ -321,104 +318,31 @@ func formatUUID(id pgtype.UUID) string {
 	return uuid.UUID(id.Bytes).String()
 }
 
-// splitByRatio splits messages so that roughly the first ratio% (by token weight)
-// are returned for compaction, and the rest are kept as-is.
-// When ratio >= 100, all messages are returned for compaction.
-// When ratio <= 0 or totalInputTokens <= 0 or messages is empty, nil is returned (no compaction).
-func splitByRatio(messages []sqlc.ListUncompactedMessagesBySessionRow, totalInputTokens, ratio int) []sqlc.ListUncompactedMessagesBySessionRow {
-	if ratio <= 0 || totalInputTokens <= 0 || len(messages) == 0 {
-		return nil
+// compactionWindowFromConfig maps the trigger config onto the contextview
+// compaction window. The second return is false when the config asks for no
+// compaction at all (legacy split-by-ratio nil result).
+func compactionWindowFromConfig(cfg TriggerConfig) (*contextview.CompactionWindow, bool) {
+	maxPromptTokens := cfg.MaxCompactTokens
+	if maxPromptTokens <= 0 {
+		// Cap the compaction input to avoid exceeding the compaction model's
+		// context window; default conservatively when unset.
+		maxPromptTokens = 30000
 	}
-	if ratio >= 100 {
-		return messages
-	}
-
-	keepTokens := totalInputTokens * (100 - ratio) / 100
-	if keepTokens <= 0 {
-		return messages
-	}
-
-	accumulated := 0
-	cutoff := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		accumulated += estimateRowTokens(messages[i])
-		if accumulated >= keepTokens {
-			cutoff = i + 1
-			break
+	window := &contextview.CompactionWindow{MaxPromptTokens: maxPromptTokens}
+	switch {
+	case cfg.TargetTokens > 0:
+		window.TargetTokens = cfg.TargetTokens
+	case cfg.Ratio <= 0 || cfg.TotalInputTokens <= 0:
+		return nil, false
+	case cfg.Ratio >= 100:
+		window.SweepAll = true
+	default:
+		keep := cfg.TotalInputTokens * (100 - cfg.Ratio) / 100
+		if keep <= 0 {
+			window.SweepAll = true
+		} else {
+			window.KeepRecentTokens = keep
 		}
 	}
-
-	if cutoff <= 0 {
-		return nil
-	}
-	if cutoff >= len(messages) {
-		return messages
-	}
-	return messages[:cutoff]
-}
-
-// splitByTarget returns the oldest messages to compact so that the remaining
-// newest messages fit within targetTokens. This is used for synchronous
-// compaction where the goal is to reduce context to a specific size.
-func splitByTarget(messages []sqlc.ListUncompactedMessagesBySessionRow, targetTokens int) []sqlc.ListUncompactedMessagesBySessionRow {
-	if targetTokens <= 0 || len(messages) == 0 {
-		return nil
-	}
-	// Scan from newest to oldest, keeping messages that fit within target.
-	accumulated := 0
-	cutoff := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		accumulated += estimateRowTokens(messages[i])
-		if accumulated > targetTokens {
-			cutoff = i + 1
-			break
-		}
-	}
-	if cutoff <= 0 {
-		return nil
-	}
-	return messages[:cutoff]
-}
-
-type usagePayload struct {
-	OutputTokens *int `json:"output_tokens"`
-}
-
-func estimateRowTokens(m sqlc.ListUncompactedMessagesBySessionRow) int {
-	if len(m.Usage) > 0 {
-		var u usagePayload
-		if json.Unmarshal(m.Usage, &u) == nil && u.OutputTokens != nil && *u.OutputTokens > 0 {
-			return *u.OutputTokens
-		}
-	}
-	return len(m.Content) / 4
-}
-
-// trimCompactMessages trims the compaction input from the tail (oldest)
-// so the total estimated tokens stay within maxTokens.
-func trimCompactMessages(messages []sqlc.ListUncompactedMessagesBySessionRow, maxTokens int) []sqlc.ListUncompactedMessagesBySessionRow {
-	if len(messages) == 0 || maxTokens <= 0 {
-		return messages
-	}
-	total := 0
-	for _, m := range messages {
-		total += estimateRowTokens(m)
-	}
-	if total <= maxTokens {
-		return messages
-	}
-	// Drop oldest messages from the tail until within budget.
-	accumulated := 0
-	cutoff := len(messages)
-	for i := len(messages) - 1; i >= 0; i-- {
-		accumulated += estimateRowTokens(messages[i])
-		if accumulated > maxTokens {
-			cutoff = i + 1
-			break
-		}
-	}
-	if cutoff >= len(messages) {
-		return messages
-	}
-	return messages[cutoff:]
+	return window, true
 }

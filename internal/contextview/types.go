@@ -22,6 +22,24 @@ type BudgetEnvelope struct {
 	MaxChars      int
 	MaxImages     int
 	MaxToolSchema int
+	// Compaction carries the compaction-candidate windowing decision inputs;
+	// nil means the whole eligible range is in scope.
+	Compaction *CompactionWindow
+}
+
+// CompactionWindow mirrors the legacy ratio/target/trim windowing that
+// decides how much history enters a compaction pass.
+type CompactionWindow struct {
+	// SweepAll marks a full sweep (legacy ratio >= 100).
+	SweepAll bool
+	// KeepRecentTokens keeps this many newest tokens out of compaction.
+	KeepRecentTokens int
+	// TargetTokens compacts everything older than the newest span that fits
+	// within this many tokens (sync compaction).
+	TargetTokens int
+	// MaxPromptTokens caps the selected candidates' total prompt cost by
+	// dropping the oldest selected entries.
+	MaxPromptTokens int
 }
 
 type BuildOptions struct {
