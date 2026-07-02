@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -852,4 +853,92 @@ func lastMessageFragContains(frags []contextfrag.ContextFrag, needle string) boo
 		return false
 	}
 	return false
+}
+
+type fakeDiscussContextBuilder struct {
+	messages []sdk.Message
+	prompt   string
+	err      error
+	called   bool
+}
+
+func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ RenderedContext, _ []TurnResponseEntry, _ string) ([]sdk.Message, error) {
+	f.called = true
+	return f.messages, f.err
+}
+
+func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ []ContextMessage, _ string) (string, error) {
+	f.called = true
+	return f.prompt, f.err
+}
+
+func TestDiscussSDKMessagesUsesInjectedBuilder(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	if composed == nil {
+		t.Fatal("composed should not be nil")
+	}
+	want := []sdk.Message{sdk.UserMessage("from builder")}
+	builder := &fakeDiscussContextBuilder{messages: want}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+
+	if !builder.called {
+		t.Fatal("injected builder should be called")
+	}
+	if len(got) != 1 {
+		t.Fatalf("messages = %#v, want builder output", got)
+	}
+}
+
+func TestDiscussSDKMessagesFallsBackWithoutBuilder(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	driver := NewDiscussDriver(DiscussDriverDeps{Logger: slog.Default()})
+
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+
+	if len(got) != len(contextMessagesToSDK(composed.Messages)) {
+		t.Fatalf("messages = %#v, want legacy fallback", got)
+	}
+}
+
+func TestDiscussACPPromptUsesInjectedBuilder(t *testing.T) {
+	t.Parallel()
+
+	messages := []ContextMessage{{Role: "user", Content: "hello"}}
+	builder := &fakeDiscussContextBuilder{prompt: "from builder"}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussACPPrompt(context.Background(), messages, "late", slog.Default())
+
+	if got != "from builder" {
+		t.Fatalf("prompt = %q, want builder output", got)
+	}
+}
+
+func TestDiscussACPFullContextPromptGoldenFormat(t *testing.T) {
+	t.Parallel()
+
+	got := discussACPFullContextPrompt([]ContextMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+		{Role: "", Content: "anon"},
+		{Role: "tool", Content: ""},
+	}, "Only reply when mentioned.")
+
+	const want = "You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n" +
+		"[user]\nhello\n\n" +
+		"[assistant]\nhi\n\n" +
+		"[user]\nanon\n\n" +
+		"Reply to the latest user-visible message when a response is appropriate.\n\n" +
+		"Only reply when mentioned."
+	if got != want {
+		t.Fatalf("legacy discuss ACP prompt format drifted:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
 }

@@ -206,6 +206,14 @@ func estimateMessageTokens(msg conversation.ModelMessage) int {
 	return len(text) / 4
 }
 
+func modelMessagesOf(messages []messageWithUsage) []conversation.ModelMessage {
+	result := make([]conversation.ModelMessage, len(messages))
+	for i, m := range messages {
+		result[i] = m.Message
+	}
+	return result
+}
+
 func trimMessagesByTokens(log *slog.Logger, messages []messageWithUsage, maxTokens int) ([]conversation.ModelMessage, int) {
 	if maxTokens == 0 || len(messages) == 0 {
 		result := make([]conversation.ModelMessage, len(messages))
@@ -273,6 +281,14 @@ func trimMessagesByTokens(log *slog.Logger, messages []messageWithUsage, maxToke
 		result = append(result, m.Message)
 	}
 	return result, totalTokens
+}
+
+func estimateModelMessagesTokens(messages []conversation.ModelMessage) int {
+	total := 0
+	for _, m := range messages {
+		total += estimateMessageTokens(m)
+	}
+	return total
 }
 
 func fitRequiredMessagesWithinBudget(messages []messageWithUsage, cutoff int, maxTokens int) (int, int) {

@@ -2,6 +2,8 @@ package models
 
 import (
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 // Prompt cache TTL options accepted in Provider config.
@@ -55,6 +57,22 @@ func ApplyPromptCache(
 	messages []sdk.Message,
 	tools []sdk.Tool,
 ) (string, []sdk.Message, []sdk.Tool) {
+	return ApplyPromptCacheWithPlan(model, ttl, contextfrag.CachePlan{}, system, messages, tools)
+}
+
+// ApplyPromptCacheWithPlan decorates the provider request using the
+// placement-derived cache plan: when the plan marks a stable leading message
+// span, the final message of that span receives a cache breakpoint so the
+// stable prefix is cached across turns. A zero plan preserves the legacy
+// system-and-tools-only layout.
+func ApplyPromptCacheWithPlan(
+	model *sdk.Model,
+	ttl string,
+	plan contextfrag.CachePlan,
+	system string,
+	messages []sdk.Message,
+	tools []sdk.Tool,
+) (string, []sdk.Message, []sdk.Tool) {
 	if model == nil {
 		return system, messages, tools
 	}
@@ -64,7 +82,7 @@ func ApplyPromptCache(
 	}
 	switch ResolveClientType(model) {
 	case string(ClientTypeAnthropicMessages):
-		return applyAnthropicPromptCache(normalized, system, messages, tools)
+		return applyAnthropicPromptCache(normalized, plan, system, messages, tools)
 	default:
 		return system, messages, tools
 	}
@@ -83,6 +101,7 @@ func ApplyPromptCache(
 //     tool.
 func applyAnthropicPromptCache(
 	ttl string,
+	plan contextfrag.CachePlan,
 	system string,
 	messages []sdk.Message,
 	tools []sdk.Tool,
@@ -90,6 +109,10 @@ func applyAnthropicPromptCache(
 	cc := anthropicCacheControl(ttl)
 	if cc == nil {
 		return system, messages, tools
+	}
+
+	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) {
+		messages = withMessageCacheBreakpoint(messages, plan.StableMessageCount-1, cc)
 	}
 
 	newMessages := messages
@@ -115,6 +138,24 @@ func applyAnthropicPromptCache(
 	}
 
 	return newSystem, newMessages, newTools
+}
+
+func withMessageCacheBreakpoint(messages []sdk.Message, index int, cc *sdk.CacheControl) []sdk.Message {
+	out := make([]sdk.Message, len(messages))
+	copy(out, messages)
+	msg := out[index]
+	if len(msg.Content) == 0 {
+		return out
+	}
+	parts := make([]sdk.MessagePart, len(msg.Content))
+	copy(parts, msg.Content)
+	if text, ok := parts[len(parts)-1].(sdk.TextPart); ok {
+		text.CacheControl = cc
+		parts[len(parts)-1] = text
+		msg.Content = parts
+		out[index] = msg
+	}
+	return out
 }
 
 // anthropicCacheControl returns the SDK cache_control payload for Anthropic

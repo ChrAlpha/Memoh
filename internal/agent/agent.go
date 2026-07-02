@@ -14,6 +14,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/userinput"
@@ -166,6 +167,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			// Must run before buildGenerateOptions so prompt caching and
 			// background task summaries see the usage-augmented text.
 			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			cfg.ContextMutations.Record(contextfrag.MutationToolUsageAppend, fmt.Sprintf("bytes=%d", len(toolUsage)))
 			cfg.ContextToolUsage = toolUsage
 		}
 	}
@@ -236,6 +238,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 							}
 						}
 						p.Messages = append(p.Messages, sdk.UserMessage(text, extra...))
+						cfg.ContextMutations.Record(contextfrag.MutationInjectedMessage, fmt.Sprintf("bytes=%d", len(text)))
 						if cfg.InjectedRecorder != nil {
 							cfg.InjectedRecorder(text, insertAfter)
 						}
@@ -256,11 +259,15 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 
 	prepareStep = a.wrapPrepareStepWithModelHook(streamCtx, cfg, prepareStep)
 	var err error
+	systemBeforeHook := cfg.System
 	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
 	if err != nil {
 		turnError = err.Error()
 		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 		return
+	}
+	if cfg.System != systemBeforeHook {
+		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
 	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
@@ -643,6 +650,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 			// Must run before buildGenerateOptions so prompt caching and
 			// background task summaries see the usage-augmented text.
 			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			cfg.ContextMutations.Record(contextfrag.MutationToolUsageAppend, fmt.Sprintf("bytes=%d", len(toolUsage)))
 			cfg.ContextToolUsage = toolUsage
 		}
 	}
@@ -672,9 +680,13 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 
 	prepareStep = a.wrapPrepareStepWithModelHook(genCtx, cfg, prepareStep)
+	systemBeforeHook := cfg.System
 	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.System != systemBeforeHook {
+		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
 	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
@@ -750,9 +762,10 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 }
 
 func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
-	system, messages, tools := models.ApplyPromptCache(
-		cfg.Model, cfg.PromptCacheTTL, cfg.System, cfg.Messages, tools,
+	system, messages, tools := models.ApplyPromptCacheWithPlan(
+		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
 	)
+	cfg.ContextMutations.SetFinalInputHash(contextfrag.ProviderInputHash(system, messages))
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
 		baseSystem := captureBackgroundSystem(system, messages)
@@ -766,6 +779,7 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 					p = override
 				}
 			}
+			cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, "")
 			return injectBackgroundTaskSummary(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, logger)
 		}
 	}
@@ -804,7 +818,12 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 				p = override
 			}
 		}
-		return pruneOldToolResults(p, keepSteps, threshold)
+		before := len(p.Messages)
+		p = pruneOldToolResults(p, keepSteps, threshold)
+		if len(p.Messages) < before {
+			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", before-len(p.Messages)))
+		}
+		return p
 	}
 	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))
 

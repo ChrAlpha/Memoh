@@ -347,6 +347,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
 		contextTokenBudget = *chatModel.Config.ContextWindow
 	}
+	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
 	var messages []conversation.ModelMessage
 	var estimatedTokens int
@@ -373,7 +374,8 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 			return resolvedContext{}, loadErr
 		}
 		loaded = r.replaceCompactedMessages(ctx, loaded)
-		messages, estimatedTokens = trimMessagesByTokens(r.logger, loaded, contextTokenBudget)
+		messages = modelMessagesOf(loaded)
+		estimatedTokens = estimateModelMessagesTokens(messages)
 		// When context reaches 70% of the contextTokenBudget (the user-configured
 		// budget cap), run synchronous compaction before sending the request.
 		// contextTokenBudget is the authoritative limit for how much context
@@ -412,7 +414,8 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 				return resolvedContext{}, loadErr
 			}
 			loaded = r.replaceCompactedMessages(ctx, loaded)
-			messages, estimatedTokens = trimMessagesByTokens(r.logger, loaded, contextTokenBudget)
+			messages = modelMessagesOf(loaded)
+			estimatedTokens = estimateModelMessagesTokens(messages)
 			// Remove tool messages from the recent context — they are large
 			// and unnecessary when we already have a summary. Keep only
 			// user/assistant conversation turns.
@@ -420,23 +423,37 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		}
 		_ = estimatedTokens
 	}
+	tail := make([]conversation.ModelMessage, 0, 1+len(reqMessages))
 	if memoryMsg != nil {
-		messages = append(messages, *memoryMsg)
+		tail = append(tail, *memoryMsg)
 	}
 	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
-		messages = append(messages, *requestedSkillMsg)
+		tail = append(tail, *requestedSkillMsg)
 	}
 	if !usePipeline && !req.ReusePersistedUserMessage {
-		messages = append(messages, reqMessages...)
+		tail = append(tail, reqMessages...)
 	}
 	messages = sanitizeMessages(messages)
+	tail = sanitizeMessages(tail)
 	// Strip tool messages and tool-call-only assistant messages from context.
 	// Tool outputs are large and waste tokens; the LLM doesn't need raw tool
 	// results when summaries and memory tools are available for lookup.
-	if len(messages) > 10 {
+	if len(messages)+len(tail) > 10 {
 		messages = stripToolMessages(messages)
+		tail = stripToolMessages(tail)
 	}
 	messages = repairToolCallClosures(messages, syntheticToolClosureError)
+
+	// Budget trimming is a context-view selection decision now: hand over the
+	// per-message estimates and mark the loaded history prefix as droppable.
+	// The freshly composed tail (memory, current request) stays pinned.
+	historyEstimates := make([]int, len(messages))
+	for i := range messages {
+		historyEstimates[i] = estimateMessageTokens(messages[i])
+	}
+	runCfg.ContextHistoryTokenEstimates = historyEstimates
+	runCfg.ContextTrimmableMessages = len(messages)
+	messages = append(messages, tail...)
 
 	displayName := r.resolveDisplayName(ctx, req)
 	mergedAttachments := r.routeAndMergeAttachments(ctx, chatModel, req)
@@ -1216,7 +1233,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		}
 	}
 
-	return cfg.RefreshContextFrag()
+	return applyProviderContextView(ctx, r.logger, cfg)
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (agentpkg.SkillEntry, bool) {

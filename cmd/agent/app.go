@@ -57,6 +57,7 @@ import (
 	"github.com/memohai/memoh/internal/config"
 	ctr "github.com/memohai/memoh/internal/container"
 	containerprovider "github.com/memohai/memoh/internal/container/provider"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/conversation/flow"
 	"github.com/memohai/memoh/internal/db"
@@ -292,6 +293,7 @@ func provideDiscussDriver(log *slog.Logger, pipeline *pipelinepkg.Pipeline, even
 		Agent:          agent,
 		MessageService: msgService,
 		CursorStore:    eventStore,
+		ContextBuilder: &contextview.DiscussSDKContextBuilder{},
 		Logger:         log,
 	})
 }

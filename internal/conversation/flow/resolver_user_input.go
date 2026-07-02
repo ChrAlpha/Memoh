@@ -295,7 +295,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 	}
 	loaded = pruneHistoryForGateway(loaded)
 	loaded = r.replaceCompactedMessages(ctx, loaded)
-	messages, _ := trimMessagesByTokens(r.logger, loaded, 0)
+	messages := modelMessagesOf(loaded)
 
 	cfg := resolved.RunConfig
 	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(sanitizeMessages(messages)))
