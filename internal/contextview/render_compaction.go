@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -30,6 +32,7 @@ type CompactionRenderedPayload struct {
 	SystemPrompt  string
 	UserPrompt    string
 	CandidateRefs []contextfrag.ContextRef
+	EntryCount    int
 }
 
 type CompactionPromptRenderer struct {
@@ -64,6 +67,9 @@ func (r *CompactionPromptRenderer) Render(_ context.Context, input RenderInput) 
 		if content == "" {
 			continue
 		}
+		if header := renderCompactionFragHeader(frag); header != "" {
+			content = header + "\n" + content
+		}
 		entries = append(entries, compactionMessageEntry{
 			Role:    string(compactionFragRole(frag)),
 			Content: content,
@@ -74,6 +80,7 @@ func (r *CompactionPromptRenderer) Render(_ context.Context, input RenderInput) 
 		SystemPrompt:  compactionSystemPrompt,
 		UserPrompt:    buildCompactionUserPrompt(r.PriorSummaries, entries),
 		CandidateRefs: refs,
+		EntryCount:    len(entries),
 	}
 	hash, err := compactionRenderedPayloadHash(payload)
 	if err != nil {
@@ -99,43 +106,146 @@ func compactionFragRole(frag contextfrag.ContextFrag) sdk.MessageRole {
 }
 
 func renderCompactionFragContent(frag contextfrag.ContextFrag) string {
-	segments := make([]string, 0, len(frag.Parts))
+	texts := make([]string, 0, len(frag.Parts))
+	markers := make([]string, 0, len(frag.Parts))
 	for _, part := range frag.Parts {
 		switch part.Type {
 		case contextfrag.PartText:
-			if text := strings.TrimSpace(part.Text); text != "" {
-				segments = append(segments, text)
+			if strings.TrimSpace(part.Text) != "" {
+				texts = append(texts, part.Text)
 			}
 		case contextfrag.PartImage:
-			segments = append(segments, "[image]")
+			markers = append(markers, "[image]")
 		case contextfrag.PartSDKMessage:
 			if msg := sdkMessagePart(part); msg != nil {
-				segments = append(segments, renderCompactionMessageContent(*msg)...)
+				msgTexts, msgMarkers := splitCompactionMessageContent(*msg)
+				texts = append(texts, msgTexts...)
+				markers = append(markers, msgMarkers...)
 			}
 		}
 	}
+	segments := make([]string, 0, 1+len(markers))
+	if block := strings.TrimSpace(strings.Join(texts, "\n")); block != "" {
+		segments = append(segments, block)
+	}
+	segments = append(segments, markers...)
 	return strings.Join(segments, "\n")
 }
 
-func renderCompactionMessageContent(msg sdk.Message) []string {
-	segments := make([]string, 0, len(msg.Content))
+func splitCompactionMessageContent(msg sdk.Message) ([]string, []string) {
+	texts := make([]string, 0, len(msg.Content))
+	markers := make([]string, 0, len(msg.Content))
 	for _, part := range msg.Content {
 		switch p := part.(type) {
 		case sdk.TextPart:
-			if text := strings.TrimSpace(p.Text); text != "" {
-				segments = append(segments, text)
+			if strings.TrimSpace(p.Text) != "" {
+				texts = append(texts, p.Text)
 			}
 		case sdk.ImagePart:
-			segments = append(segments, "[image]")
+			markers = append(markers, "[image]")
 		case sdk.FilePart:
-			segments = append(segments, "[file]")
+			markers = append(markers, "[file]")
 		case sdk.ToolCallPart:
-			segments = append(segments, compactionToolCallMarker(p.ToolName))
+			markers = append(markers, compactionToolCallMarker(p.ToolName))
 		case sdk.ToolResultPart:
-			segments = append(segments, compactionToolResultText(p.Result))
+			markers = append(markers, compactionToolResultText(p.Result))
 		}
 	}
-	return segments
+	return texts, markers
+}
+
+var (
+	compactionDataURIRe    = regexp.MustCompile(`data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=]+`)
+	compactionBase64BlobRe = regexp.MustCompile(`[A-Za-z0-9+/_-]{256,}={0,2}`)
+
+	compactionMetadataValueEscaper = strings.NewReplacer("[", "(", "]", ")")
+)
+
+const (
+	compactionToolOutputMaxBytes = 2048
+	compactionMetadataMaxBytes   = 256
+)
+
+func renderCompactionFragHeader(frag contextfrag.ContextFrag) string {
+	scope := frag.Scope
+	var lines []string
+	add := func(label, value string) {
+		value = cleanCompactionMetadataValue(value)
+		if value == "" {
+			return
+		}
+		lines = append(lines, "["+label+": "+value+"]")
+	}
+	add("message_id", scope.CurrentMessageID)
+	add("reply_to", scope.ReplyToMessageID)
+	add("sender", scope.DisplayName)
+	add("platform", scope.Platform)
+	add("conversation_type", scope.ConversationType)
+	add("conversation_name", scope.ConversationName)
+	add("reply_target", scope.ReplyTarget)
+	return strings.Join(lines, "\n")
+}
+
+func cleanCompactionMetadataValue(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return ""
+	}
+	value = compactionMetadataValueEscaper.Replace(value)
+	return truncateCompactionBytes(value, compactionMetadataMaxBytes)
+}
+
+func sanitizeCompactionToolText(s string) string {
+	s = compactionDataURIRe.ReplaceAllString(s, "[media]")
+	s = compactionBase64BlobRe.ReplaceAllString(s, "[media]")
+	return truncateCompactionBytes(s, compactionToolOutputMaxBytes)
+}
+
+func truncateCompactionBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut]) + " \u2026[truncated]"
+}
+
+func compactionOutputText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var obj struct {
+		Value   string `json:"value"`
+		Text    string `json:"text"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &obj) == nil {
+		if value := strings.TrimSpace(obj.Value); value != "" {
+			return value
+		}
+		if text := strings.TrimSpace(obj.Text); text != "" {
+			return text
+		}
+		var texts []string
+		for _, content := range obj.Content {
+			if text := strings.TrimSpace(content.Text); text != "" {
+				texts = append(texts, text)
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, "\n")
+		}
+	}
+	return ""
 }
 
 func compactionToolCallMarker(name string) string {
@@ -147,20 +257,18 @@ func compactionToolCallMarker(name string) string {
 }
 
 func compactionToolResultText(value any) string {
-	switch v := value.(type) {
-	case nil:
+	raw, err := json.Marshal(value)
+	if err != nil {
 		return "[tool result]"
-	case string:
-		if text := strings.TrimSpace(v); text != "" {
-			return text
-		}
-	default:
-		raw, err := json.Marshal(v)
-		if err == nil && strings.TrimSpace(string(raw)) != "" && strings.TrimSpace(string(raw)) != "null" {
-			return string(raw)
-		}
 	}
-	return "[tool result]"
+	if s := compactionOutputText(raw); s != "" {
+		return sanitizeCompactionToolText(s)
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return "[tool result]"
+	}
+	return sanitizeCompactionToolText(trimmed)
 }
 
 func buildCompactionUserPrompt(priorSummaries []string, messages []compactionMessageEntry) string {

@@ -195,8 +195,37 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		}
 	}
 
+	if divergent := contextViewSelectionDivergence(candidates, toCompact); len(divergent) > 0 {
+		s.logger.Warn("compaction: legacy selection diverges from contextview selector",
+			slog.Any("refs", divergent),
+			slog.String("session_id", cfg.SessionID),
+		)
+	}
+
+	payload, promptErr := contextViewCompactionPrompt(toCompact, priorSummaries)
+	if promptErr != nil {
+		s.logger.Warn("compaction: contextview prompt render failed; using legacy prompt",
+			slog.Any("error", promptErr),
+			slog.String("session_id", cfg.SessionID),
+		)
+	}
+
 	entries, refs := buildRecordEntriesAndRefs(toCompact)
-	if len(entries) == 0 {
+	userPrompt := buildUserPrompt(priorSummaries, entries)
+	systemPromptText := systemPrompt
+	entryCount := len(entries)
+	if payload != nil {
+		if payload.UserPrompt != userPrompt {
+			s.logger.Warn("compaction: contextview prompt diverged from legacy prompt",
+				slog.String("session_id", cfg.SessionID),
+			)
+		}
+		userPrompt = payload.UserPrompt
+		systemPromptText = payload.SystemPrompt
+		refs = payload.CandidateRefs
+		entryCount = payload.EntryCount
+	}
+	if entryCount == 0 {
 		// Every selected message rendered empty (e.g. reasoning-only): summarizing
 		// nothing would destroy them for a junk summary. Leave them in history.
 		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
@@ -206,8 +235,6 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 	if err != nil {
 		return err
 	}
-
-	userPrompt := buildUserPrompt(priorSummaries, entries)
 
 	model := models.NewSDKChatModel(models.SDKModelConfig{
 		ClientType:     cfg.ClientType,
@@ -220,7 +247,7 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 
 	systemPromptDecorated, sdkMessages, _ := models.ApplyPromptCache(
 		model, cfg.PromptCacheTTL,
-		systemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
+		systemPromptText, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
 	)
 
 	result, err := sdk.GenerateTextResult(ctx,
