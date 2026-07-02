@@ -1210,7 +1210,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		cfg.InlineImages = nil
 	}
 
-	return cfg.RefreshContextFrag()
+	return applyProviderContextView(ctx, r.logger, cfg)
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (agentpkg.SkillEntry, bool) {
