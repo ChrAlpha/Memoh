@@ -12,6 +12,17 @@ import (
 // streams. Implemented by contextview.DiscussSDKContextBuilder; injected via
 // DiscussDriverDeps to avoid a pipeline -> contextview import cycle.
 type DiscussContextBuilder interface {
-	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc RenderedContext, trs []TurnResponseEntry, compactSummary string) ([]sdk.Message, error)
+	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) ([]sdk.Message, error)
 	BuildDiscussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string) (string, error)
+}
+
+// DiscussContextInput carries every discuss source for one turn: the RC/TR
+// streams plus the late-binding instruction and freshly surfaced inline
+// images that previously were appended after context assembly.
+type DiscussContextInput struct {
+	RC             RenderedContext
+	TRs            []TurnResponseEntry
+	CompactSummary string
+	LateBinding    string
+	InlineImages   []sdk.ImagePart
 }

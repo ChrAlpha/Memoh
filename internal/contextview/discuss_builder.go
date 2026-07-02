@@ -14,7 +14,7 @@ import (
 // running the discuss collector through the context view pipeline.
 type DiscussSDKContextBuilder struct{}
 
-func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc pipeline.RenderedContext, trs []pipeline.TurnResponseEntry, compactSummary string) ([]sdk.Message, error) {
+func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) ([]sdk.Message, error) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(&DiscussContextCollector{}),
 		&FragmentSelector{},
@@ -27,9 +27,11 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 		Sources: []SourceSpec{{
 			Name: "discuss_context",
 			Config: DiscussContextConfig{
-				RC:             rc,
-				TRs:            trs,
-				CompactSummary: compactSummary,
+				RC:             input.RC,
+				TRs:            input.TRs,
+				CompactSummary: input.CompactSummary,
+				LateBinding:    input.LateBinding,
+				InlineImages:   input.InlineImages,
 			},
 		}},
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},

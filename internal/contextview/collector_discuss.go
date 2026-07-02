@@ -22,6 +22,12 @@ type DiscussContextConfig struct {
 	RC             pipeline.RenderedContext
 	TRs            []pipeline.TurnResponseEntry
 	CompactSummary string
+	// LateBinding is the per-turn participation instruction that used to be
+	// appended to the message stream after context assembly.
+	LateBinding string
+	// InlineImages are freshly surfaced RC attachments delivered as native
+	// vision input on the latest user message.
+	InlineImages []sdk.ImagePart
 }
 
 type DiscussContextCollector struct{}
@@ -36,7 +42,7 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 		return nil, err
 	}
 
-	if len(cfg.RC) == 0 && len(cfg.TRs) == 0 && cfg.CompactSummary == "" {
+	if len(cfg.RC) == 0 && len(cfg.TRs) == 0 && cfg.CompactSummary == "" && strings.TrimSpace(cfg.LateBinding) == "" {
 		return nil, nil
 	}
 
@@ -71,7 +77,76 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 			frags = append(frags, discussTRFrag(entry.tr, entry.index, req.Scope))
 		}
 	}
+	frags = injectDiscussImages(frags, cfg.InlineImages, req.Scope)
+	if lateBinding := strings.TrimSpace(cfg.LateBinding); lateBinding != "" {
+		frags = append(frags, discussLateBindingFrag(lateBinding, req.Scope))
+	}
 	return frags, nil
+}
+
+// injectDiscussImages mirrors the legacy inject-into-last-user-message
+// behavior at fragment granularity: the freshest user-visible message carries
+// the native image parts; without a user message the images are dropped.
+func injectDiscussImages(frags []contextfrag.ContextFrag, images []sdk.ImagePart, scope contextfrag.Scope) []contextfrag.ContextFrag {
+	extra := make([]sdk.MessagePart, 0, len(images))
+	for _, img := range images {
+		if strings.TrimSpace(img.Image) != "" {
+			extra = append(extra, img)
+		}
+	}
+	if len(extra) == 0 {
+		return frags
+	}
+	for i := len(frags) - 1; i >= 0; i-- {
+		msg := discussFragMessage(frags[i])
+		if msg == nil || msg.Role != sdk.MessageRoleUser {
+			continue
+		}
+		enriched := *msg
+		enriched.Content = append(append([]sdk.MessagePart(nil), msg.Content...), extra...)
+		frags[i] = contextfrag.MessageFrag(contextfrag.MessageFragInput{
+			ID:         frags[i].ID,
+			Message:    enriched,
+			Kind:       frags[i].Kind,
+			Slot:       frags[i].Slot,
+			Priority:   frags[i].Priority,
+			CacheClass: frags[i].CacheClass,
+			Trust:      frags[i].Trust,
+			Scope:      scope,
+			Source:     frags[i].Provenance.Source,
+			SourceID:   frags[i].Provenance.SourceID,
+			Collector:  frags[i].Provenance.Collector,
+			Index:      frags[i].Provenance.Index,
+		})
+		return frags
+	}
+	return frags
+}
+
+func discussFragMessage(frag contextfrag.ContextFrag) *sdk.Message {
+	for _, part := range frag.Parts {
+		if msg := sdkMessagePart(part); msg != nil {
+			return msg
+		}
+	}
+	return nil
+}
+
+func discussLateBindingFrag(lateBinding string, scope contextfrag.Scope) contextfrag.ContextFrag {
+	msg := sdk.UserMessage(lateBinding)
+	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:         "discuss.late_binding",
+		Message:    msg,
+		Kind:       contextfrag.KindSystemPolicy,
+		Slot:       contextfrag.SlotAfterCurrent,
+		Priority:   90,
+		CacheClass: contextfrag.CacheNever,
+		Trust:      contextfrag.TrustSystem,
+		Scope:      scope,
+		Source:     discussContextSource,
+		SourceID:   "late_binding",
+		Collector:  discussContextCollectorName,
+	})
 }
 
 type discussSourceEntry struct {

@@ -257,7 +257,7 @@ func TestDiscussSDKContextBuilderMatchesLegacy(t *testing.T) {
 	}}
 
 	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, rc, trs, "older summary")
+	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{RC: rc, TRs: trs, CompactSummary: "older summary"})
 	if err != nil {
 		t.Fatalf("BuildDiscussSDKMessages failed: %v", err)
 	}

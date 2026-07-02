@@ -158,7 +158,7 @@ func assertDiscussMessages(t *testing.T, frags []contextfrag.ContextFrag, want [
 	t.Helper()
 	got := make([]sdk.Message, 0, len(frags))
 	for _, frag := range frags {
-		got = append(got, discussFragMessage(t, frag))
+		got = append(got, discussFragMessageT(t, frag))
 	}
 	assertMessagesEqual(t, got, want)
 }
@@ -175,7 +175,7 @@ func assertDiscussTrusts(t *testing.T, frags []contextfrag.ContextFrag, want []c
 	}
 }
 
-func discussFragMessage(t *testing.T, frag contextfrag.ContextFrag) sdk.Message {
+func discussFragMessageT(t *testing.T, frag contextfrag.ContextFrag) sdk.Message {
 	t.Helper()
 	if frag.Kind != contextfrag.KindConversationEvent && frag.Kind != contextfrag.KindConversationSummary {
 		t.Fatalf("frag %q Kind = %q, want conversation event or summary", frag.ID, frag.Kind)
@@ -194,4 +194,87 @@ func discussFragMessage(t *testing.T, frag contextfrag.ContextFrag) sdk.Message 
 		t.Fatalf("frag %q has nil SDK message", frag.ID)
 	}
 	return *msg
+}
+
+func TestDiscussCollectorAppendsLateBindingLast(t *testing.T) {
+	t.Parallel()
+
+	frags := collectDiscussContext(t, DiscussContextConfig{
+		RC:          pipeline.RenderedContext{renderedTextSegment(100, "hello")},
+		LateBinding: "Only reply when mentioned.",
+	})
+
+	last := frags[len(frags)-1]
+	if last.ID != "discuss.late_binding" || last.Slot != contextfrag.SlotAfterCurrent {
+		t.Fatalf("last frag = %s/%s, want late binding after current", last.ID, last.Slot)
+	}
+	msg := discussFragMessage(last)
+	if msg == nil {
+		t.Fatal("late binding frag missing sdk message")
+	}
+	text, ok := msg.Content[0].(sdk.TextPart)
+	if !ok || text.Text != "Only reply when mentioned." {
+		t.Fatalf("late binding content = %#v", msg.Content)
+	}
+}
+
+func TestDiscussCollectorInjectsImagesIntoLastUserFrag(t *testing.T) {
+	t.Parallel()
+
+	frags := collectDiscussContext(t, DiscussContextConfig{
+		RC: pipeline.RenderedContext{
+			renderedTextSegment(100, "first"),
+			renderedTextSegment(300, "latest"),
+		},
+		TRs: []pipeline.TurnResponseEntry{{
+			RequestedAtMs: 200,
+			Role:          "assistant",
+			Content:       "reply",
+		}},
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+	})
+
+	// The freshest user message (latest RC) must carry the image part.
+	var lastUser *sdk.Message
+	for i := len(frags) - 1; i >= 0; i-- {
+		msg := discussFragMessageT(t, frags[i])
+		if msg.Role == sdk.MessageRoleUser {
+			lastUser = &msg
+			break
+		}
+	}
+	if lastUser == nil {
+		t.Fatal("no user fragment found")
+	}
+	foundImage := false
+	for _, part := range lastUser.Content {
+		if _, ok := part.(sdk.ImagePart); ok {
+			foundImage = true
+		}
+	}
+	if !foundImage {
+		t.Fatalf("image not injected into last user message: %#v", lastUser.Content)
+	}
+}
+
+func TestDiscussCollectorDropsImagesWithoutUserMessage(t *testing.T) {
+	t.Parallel()
+
+	frags := collectDiscussContext(t, DiscussContextConfig{
+		TRs: []pipeline.TurnResponseEntry{{
+			RequestedAtMs: 100,
+			Role:          "assistant",
+			Content:       "solo assistant",
+		}},
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+	})
+
+	for _, frag := range frags {
+		msg := discussFragMessageT(t, frag)
+		for _, part := range msg.Content {
+			if _, ok := part.(sdk.ImagePart); ok {
+				t.Fatal("images must be dropped when no user message exists (legacy parity)")
+			}
+		}
+	}
 }

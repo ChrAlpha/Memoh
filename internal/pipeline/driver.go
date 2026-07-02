@@ -328,24 +328,28 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	}
 	runConfig := resolved.RunConfig
 
-	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, rc, trs, composed, log)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
 
 	// Inline image attachments from new RC segments so the model receives
 	// them as native vision input (ImagePart) on the first encounter.
 	// Subsequent turns only see the file path in the XML rendering.
+	var imageParts []sdk.ImagePart
 	if runConfig.SupportsImageInput && d.deps.Resolver != nil {
 		imageRefs := extractNewImageRefs(rc, sess.lastProcessedMs)
 		if len(imageRefs) > 0 {
-			imageParts := d.deps.Resolver.InlineImageAttachments(ctx, cfg.BotID, imageRefs)
-			injectImagePartsIntoLastUserMessage(runConfig.Messages, imageParts)
+			imageParts = d.deps.Resolver.InlineImageAttachments(ctx, cfg.BotID, imageRefs)
 		}
 	}
 
 	isMentioned := wasRecentlyMentioned(rc, sess.lastProcessedMs)
 	lateBinding := buildLateBindingPrompt(isMentioned)
-	runConfig.Messages = append(runConfig.Messages, sdk.UserMessage(lateBinding))
+	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, DiscussContextInput{
+		RC:           rc,
+		TRs:          trs,
+		LateBinding:  lateBinding,
+		InlineImages: imageParts,
+	}, composed, log)
 	runConfig = runConfig.RefreshContextFrag()
 
 	eventCh := agent.Stream(ctx, runConfig)
@@ -732,14 +736,23 @@ func buildLateBindingPrompt(isMentioned bool) string {
 	return sb.String()
 }
 
-func (d *DiscussDriver) discussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc RenderedContext, trs []TurnResponseEntry, composed *ComposeContextResult, log *slog.Logger) []sdk.Message {
+func (d *DiscussDriver) discussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput, composed *ComposeContextResult, log *slog.Logger) []sdk.Message {
 	if d.deps.ContextBuilder == nil {
-		return contextMessagesToSDK(composed.Messages)
+		return legacyDiscussSDKMessages(input, composed)
 	}
-	messages, err := d.deps.ContextBuilder.BuildDiscussSDKMessages(ctx, scope, rc, trs, "")
+	messages, err := d.deps.ContextBuilder.BuildDiscussSDKMessages(ctx, scope, input)
 	if err != nil {
 		log.Warn("discuss context view build failed; using legacy context", slog.Any("error", err))
-		return contextMessagesToSDK(composed.Messages)
+		return legacyDiscussSDKMessages(input, composed)
+	}
+	return messages
+}
+
+func legacyDiscussSDKMessages(input DiscussContextInput, composed *ComposeContextResult) []sdk.Message {
+	messages := contextMessagesToSDK(composed.Messages)
+	injectImagePartsIntoLastUserMessage(messages, input.InlineImages)
+	if strings.TrimSpace(input.LateBinding) != "" {
+		messages = append(messages, sdk.UserMessage(input.LateBinding))
 	}
 	return messages
 }

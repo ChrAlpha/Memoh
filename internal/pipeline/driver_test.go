@@ -862,7 +862,7 @@ type fakeDiscussContextBuilder struct {
 	called   bool
 }
 
-func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ RenderedContext, _ []TurnResponseEntry, _ string) ([]sdk.Message, error) {
+func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) ([]sdk.Message, error) {
 	f.called = true
 	return f.messages, f.err
 }
@@ -884,7 +884,7 @@ func TestDiscussSDKMessagesUsesInjectedBuilder(t *testing.T) {
 	builder := &fakeDiscussContextBuilder{messages: want}
 	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
 
-	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, DiscussContextInput{RC: rc}, composed, slog.Default())
 
 	if !builder.called {
 		t.Fatal("injected builder should be called")
@@ -901,7 +901,7 @@ func TestDiscussSDKMessagesFallsBackWithoutBuilder(t *testing.T) {
 	composed := ComposeContext(rc, nil, "")
 	driver := NewDiscussDriver(DiscussDriverDeps{Logger: slog.Default()})
 
-	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, DiscussContextInput{RC: rc}, composed, slog.Default())
 
 	if len(got) != len(contextMessagesToSDK(composed.Messages)) {
 		t.Fatalf("messages = %#v, want legacy fallback", got)
