@@ -224,3 +224,26 @@ func legacyContextMessagesToSDK(messages []pipeline.ContextMessage) []sdk.Messag
 	}
 	return result
 }
+
+func TestDiscussSDKContextBuilderMatchesLegacy(t *testing.T) {
+	t.Parallel()
+
+	rc := pipeline.RenderedContext{
+		renderedTextSegment(100, "first rc"),
+		renderedTextSegment(300, "second rc"),
+	}
+	trs := []pipeline.TurnResponseEntry{{
+		RequestedAtMs: 200,
+		Role:          "assistant",
+		Content:       "assistant turn",
+	}}
+
+	builder := &DiscussSDKContextBuilder{}
+	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, rc, trs, "older summary")
+	if err != nil {
+		t.Fatalf("BuildDiscussSDKMessages failed: %v", err)
+	}
+
+	want := legacyDiscussMessages(rc, trs, "older summary")
+	assertMessagesEqual(t, got, want)
+}

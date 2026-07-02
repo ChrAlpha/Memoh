@@ -733,28 +733,15 @@ func buildLateBindingPrompt(isMentioned bool) string {
 }
 
 func (d *DiscussDriver) discussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc RenderedContext, trs []TurnResponseEntry, composed *ComposeContextResult, log *slog.Logger) []sdk.Message {
-	legacy := contextMessagesToSDK(composed.Messages)
 	if d.deps.ContextBuilder == nil {
-		return legacy
+		return contextMessagesToSDK(composed.Messages)
 	}
 	messages, err := d.deps.ContextBuilder.BuildDiscussSDKMessages(ctx, scope, rc, trs, "")
 	if err != nil {
 		log.Warn("discuss context view build failed; using legacy context", slog.Any("error", err))
-		return legacy
-	}
-	if !discussMessagesJSONEqual(messages, legacy) {
-		log.Warn("discuss context view diverged from legacy context")
+		return contextMessagesToSDK(composed.Messages)
 	}
 	return messages
-}
-
-func discussMessagesJSONEqual(got, want []sdk.Message) bool {
-	gotRaw, gotErr := json.Marshal(got)
-	wantRaw, wantErr := json.Marshal(want)
-	if gotErr != nil || wantErr != nil {
-		return false
-	}
-	return string(gotRaw) == string(wantRaw)
 }
 
 func contextMessagesToSDK(messages []ContextMessage) []sdk.Message {

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -918,4 +919,13 @@ func TestDiscussSDKMessagesFallsBackOnBuilderError(t *testing.T) {
 	if !discussMessagesJSONEqual(got, contextMessagesToSDK(composed.Messages)) {
 		t.Fatalf("messages = %#v, want legacy fallback", got)
 	}
+}
+
+func discussMessagesJSONEqual(got, want []sdk.Message) bool {
+	gotRaw, gotErr := json.Marshal(got)
+	wantRaw, wantErr := json.Marshal(want)
+	if gotErr != nil || wantErr != nil {
+		return false
+	}
+	return string(gotRaw) == string(wantRaw)
 }
