@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
@@ -50,13 +49,6 @@ func applyProviderContextView(ctx context.Context, logger *slog.Logger, cfg agen
 		return cfg.RefreshContextFrag()
 	}
 
-	if payload.System != cfg.System {
-		warnProviderContextView(logger, cfg, "context view system diverged from legacy assembly", nil)
-	}
-	if !sdkMessagesJSONEqual(payload.Messages, cfg.Messages) {
-		warnProviderContextView(logger, cfg, "context view messages diverged from legacy assembly", nil)
-	}
-
 	cfg.System = payload.System
 	cfg.Messages = payload.Messages
 	cfg.ContextFrags = view.Selected
@@ -76,13 +68,4 @@ func warnProviderContextView(logger *slog.Logger, cfg agentpkg.RunConfig, msg st
 		attrs = append(attrs, slog.Any("error", err))
 	}
 	logger.Warn(msg, attrs...)
-}
-
-func sdkMessagesJSONEqual(got, want any) bool {
-	gotRaw, gotErr := json.Marshal(got)
-	wantRaw, wantErr := json.Marshal(want)
-	if gotErr != nil || wantErr != nil {
-		return false
-	}
-	return string(gotRaw) == string(wantRaw)
 }

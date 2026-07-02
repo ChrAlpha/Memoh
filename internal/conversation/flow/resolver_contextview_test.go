@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -90,4 +91,13 @@ func TestApplyProviderContextViewKeepsUnmaterializedQuery(t *testing.T) {
 	if !foundCurrentUser {
 		t.Fatal("unmaterialized query should produce a current_user fragment")
 	}
+}
+
+func sdkMessagesJSONEqual(got, want any) bool {
+	gotRaw, gotErr := json.Marshal(got)
+	wantRaw, wantErr := json.Marshal(want)
+	if gotErr != nil || wantErr != nil {
+		return false
+	}
+	return string(gotRaw) == string(wantRaw)
 }
