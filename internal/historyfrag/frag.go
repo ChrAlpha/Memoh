@@ -98,6 +98,7 @@ func modelMessageToSDKMessage(mm conversation.ModelMessage) sdk.Message {
 	})
 	var msg sdk.Message
 	if err := json.Unmarshal(envelope, &msg); err == nil {
+		restoreToolResultOutputs(&msg, mm.Content)
 		appendTopLevelToolParts(&msg, mm)
 		return msg
 	}
@@ -105,6 +106,31 @@ func modelMessageToSDKMessage(mm conversation.ModelMessage) sdk.Message {
 	msg = sdk.Message{Role: sdk.MessageRole(mm.Role)}
 	appendTopLevelToolParts(&msg, mm)
 	return msg
+}
+
+func restoreToolResultOutputs(msg *sdk.Message, content json.RawMessage) {
+	var rawParts []json.RawMessage
+	if err := json.Unmarshal(content, &rawParts); err != nil || len(rawParts) != len(msg.Content) {
+		return
+	}
+	for i, part := range msg.Content {
+		trp, ok := part.(sdk.ToolResultPart)
+		if !ok || trp.Result != nil {
+			continue
+		}
+		var probe struct {
+			Output json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal(rawParts[i], &probe); err != nil || len(probe.Output) == 0 {
+			continue
+		}
+		var output any
+		if err := json.Unmarshal(probe.Output, &output); err != nil || output == nil {
+			continue
+		}
+		trp.Result = output
+		msg.Content[i] = trp
+	}
 }
 
 func appendTopLevelToolParts(msg *sdk.Message, mm conversation.ModelMessage) {

@@ -411,3 +411,39 @@ func assertSameJSON(t *testing.T, got any, want any) {
 		t.Fatalf("json mismatch:\ngot  %s\nwant %s", gotRaw, wantRaw)
 	}
 }
+
+func TestModelMessageToSDKRestoresOutputStyleToolResult(t *testing.T) {
+	t.Parallel()
+
+	mm := conversation.ModelMessage{
+		Role: "tool",
+		Content: mustJSON(t, []map[string]any{{
+			"type":       "tool-result",
+			"toolCallId": "call-1",
+			"toolName":   "calc",
+			"output":     map[string]any{"type": "text", "value": "42"},
+		}}),
+	}
+
+	msg := ToSDKMessages([]HistoryRecord{{
+		Ref:          contextfrag.ContextRef{Namespace: "test", ID: "out-1", Schema: contextfrag.SchemaContextRef},
+		Kind:         contextfrag.KindConversationEvent,
+		SourceKind:   SourceDBMessage,
+		ModelMessage: mm,
+	}})
+
+	if len(msg) != 1 || len(msg[0].Content) != 1 {
+		t.Fatalf("messages = %#v", msg)
+	}
+	trp, ok := msg[0].Content[0].(sdk.ToolResultPart)
+	if !ok {
+		t.Fatalf("part = %T, want ToolResultPart", msg[0].Content[0])
+	}
+	if trp.Result == nil {
+		t.Fatal("output-style tool result should be restored into Result")
+	}
+	result, ok := trp.Result.(map[string]any)
+	if !ok || result["value"] != "42" {
+		t.Fatalf("Result = %#v, want output payload", trp.Result)
+	}
+}
