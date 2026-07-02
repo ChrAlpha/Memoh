@@ -12,6 +12,7 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/channel"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	sessionpkg "github.com/memohai/memoh/internal/session"
@@ -61,6 +62,7 @@ type DiscussDriverDeps struct {
 	Resolver        RunConfigResolver
 	RuntimeStreamer discussRuntimeStreamer
 	CursorStore     DiscussCursorStore
+	ContextBuilder  DiscussContextBuilder
 	Broadcaster     DiscussStreamBroadcaster
 	Logger          *slog.Logger
 }
@@ -326,7 +328,7 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	}
 	runConfig := resolved.RunConfig
 
-	runConfig.Messages = contextMessagesToSDK(composed.Messages)
+	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, rc, trs, composed, log)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
 
@@ -728,6 +730,31 @@ func buildLateBindingPrompt(isMentioned bool) string {
 	}
 
 	return sb.String()
+}
+
+func (d *DiscussDriver) discussSDKMessages(ctx context.Context, scope contextfrag.Scope, rc RenderedContext, trs []TurnResponseEntry, composed *ComposeContextResult, log *slog.Logger) []sdk.Message {
+	legacy := contextMessagesToSDK(composed.Messages)
+	if d.deps.ContextBuilder == nil {
+		return legacy
+	}
+	messages, err := d.deps.ContextBuilder.BuildDiscussSDKMessages(ctx, scope, rc, trs, "")
+	if err != nil {
+		log.Warn("discuss context view build failed; using legacy context", slog.Any("error", err))
+		return legacy
+	}
+	if !discussMessagesJSONEqual(messages, legacy) {
+		log.Warn("discuss context view diverged from legacy context")
+	}
+	return messages
+}
+
+func discussMessagesJSONEqual(got, want []sdk.Message) bool {
+	gotRaw, gotErr := json.Marshal(got)
+	wantRaw, wantErr := json.Marshal(want)
+	if gotErr != nil || wantErr != nil {
+		return false
+	}
+	return string(gotRaw) == string(wantRaw)
 }
 
 func contextMessagesToSDK(messages []ContextMessage) []sdk.Message {

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -855,4 +856,66 @@ func (f *fakeDiscussCursorStore) UpsertDiscussConsumedCursor(_ context.Context, 
 	f.upsertRouteID = routeID
 	f.upsertCursor = cursor
 	return nil
+}
+
+type fakeDiscussContextBuilder struct {
+	messages []sdk.Message
+	err      error
+	called   bool
+}
+
+func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ RenderedContext, _ []TurnResponseEntry, _ string) ([]sdk.Message, error) {
+	f.called = true
+	return f.messages, f.err
+}
+
+func TestDiscussSDKMessagesUsesInjectedBuilder(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	if composed == nil {
+		t.Fatal("composed should not be nil")
+	}
+	want := []sdk.Message{sdk.UserMessage("from builder")}
+	builder := &fakeDiscussContextBuilder{messages: want}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+
+	if !builder.called {
+		t.Fatal("injected builder should be called")
+	}
+	if !discussMessagesJSONEqual(got, want) {
+		t.Fatalf("messages = %#v, want builder output", got)
+	}
+}
+
+func TestDiscussSDKMessagesFallsBackWithoutBuilder(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	driver := NewDiscussDriver(DiscussDriverDeps{Logger: slog.Default()})
+
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+
+	if !discussMessagesJSONEqual(got, contextMessagesToSDK(composed.Messages)) {
+		t.Fatalf("messages = %#v, want legacy fallback", got)
+	}
+}
+
+func TestDiscussSDKMessagesFallsBackOnBuilderError(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	builder := &fakeDiscussContextBuilder{err: errors.New("boom")}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussSDKMessages(context.Background(), contextfrag.Scope{}, rc, nil, composed, slog.Default())
+
+	if !discussMessagesJSONEqual(got, contextMessagesToSDK(composed.Messages)) {
+		t.Fatalf("messages = %#v, want legacy fallback", got)
+	}
 }
