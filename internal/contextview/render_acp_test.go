@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -131,19 +132,53 @@ func TestACPRenderer_DiscussModeEmptySelection(t *testing.T) {
 	}
 }
 
-func TestACPRenderer_EmptyConfig(t *testing.T) {
+func TestACPRenderer_ChatModeFragmentsWinOverLegacyMarkdown(t *testing.T) {
 	t.Parallel()
 
-	payload, _ := renderACP(t, ACPRenderConfig{}, contextfrag.IntentACPRuntimePrompt)
+	renderer := &ACPFullContextRenderer{Config: ACPRenderConfig{
+		Mode:            ACPRenderModeChat,
+		ContextMarkdown: "LEGACY_DOCUMENT",
+	}}
+	selected := []contextfrag.ContextFrag{
+		contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:        "acp.section.000",
+			Kind:      contextfrag.KindACPContext,
+			Role:      sdk.MessageRoleSystem,
+			Slot:      contextfrag.SlotSystem,
+			Text:      "FRAGMENT_DOCUMENT",
+			Scope:     contextfrag.Scope{BotID: "bot-1"},
+			Source:    "acp_context",
+			Collector: "acp_sections",
+		}),
+	}
+	rendered, err := renderer.Render(context.Background(), RenderInput{
+		Intent:    contextfrag.IntentACPRuntimePrompt,
+		Target:    contextfrag.RenderACPFullContext,
+		Selected:  selected,
+		Placement: IdentityPlacer{}.Place(selected, contextfrag.IntentACPRuntimePrompt),
+	})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	payload := rendered.Data.(*ACPRenderedPayload)
+	if !strings.Contains(payload.ContextMarkdown, "FRAGMENT_DOCUMENT") {
+		t.Fatalf("fragments must win, got %q", payload.ContextMarkdown)
+	}
+	if strings.Contains(payload.ContextMarkdown, "LEGACY_DOCUMENT") {
+		t.Fatalf("legacy markdown must not leak when fragments are selected, got %q", payload.ContextMarkdown)
+	}
+}
 
-	if payload.ContextMarkdown != "" {
-		t.Fatalf("ContextMarkdown = %q, want empty", payload.ContextMarkdown)
-	}
-	if payload.ContextURI != "memoh://context/current-turn" {
-		t.Fatalf("ContextURI = %q, want default current-turn URI", payload.ContextURI)
-	}
-	if payload.ContentHash != sha256Hex("") {
-		t.Fatalf("ContentHash = %q, want SHA-256 of empty markdown", payload.ContentHash)
+func TestACPRenderer_ChatModeEmptyIsError(t *testing.T) {
+	t.Parallel()
+
+	renderer := &ACPFullContextRenderer{Config: ACPRenderConfig{Mode: ACPRenderModeChat}}
+	_, err := renderer.Render(context.Background(), RenderInput{
+		Intent: contextfrag.IntentACPRuntimePrompt,
+		Target: contextfrag.RenderACPFullContext,
+	})
+	if err == nil {
+		t.Fatal("chat render with no fragments and no legacy markdown must fail loudly")
 	}
 }
 

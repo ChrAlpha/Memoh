@@ -28,7 +28,7 @@ func acpContextViaContextView(ctx context.Context, logger *slog.Logger, sections
 	})
 	if err != nil {
 		if logger != nil {
-			logger.Warn("acp context view build failed; assembling sections directly", slog.Any("error", err))
+			logger.Error("acp context view build failed; assembling sections directly", slog.Any("error", err))
 		}
 		return finalizeACPSections(sections), acpContextURI
 	}
@@ -36,7 +36,7 @@ func acpContextViaContextView(ctx context.Context, logger *slog.Logger, sections
 	payload, ok := rendered.Data.(*contextview.ACPRenderedPayload)
 	if !ok {
 		if logger != nil {
-			logger.Warn("acp context view rendered unexpected payload; assembling sections directly")
+			logger.Error("acp context view rendered unexpected payload; assembling sections directly")
 		}
 		return finalizeACPSections(sections), acpContextURI
 	}
