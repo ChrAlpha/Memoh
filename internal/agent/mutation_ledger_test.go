@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -18,7 +19,7 @@ func TestBuildGenerateOptionsRecordsFinalInputHash(t *testing.T) {
 		ContextMutations: ledger,
 	}
 
-	_ = (*Agent)(nil).buildGenerateOptions(cfg, nil, nil, nil)
+	_ = (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
 
 	if ledger.FinalInputHash() == "" {
 		t.Fatal("buildGenerateOptions should record the final provider input hash")
@@ -37,7 +38,7 @@ func TestBuildGenerateOptionsNilLedgerSafe(t *testing.T) {
 		Messages: []sdk.Message{sdk.UserMessage("hello")},
 	}
 
-	opts := (*Agent)(nil).buildGenerateOptions(cfg, nil, nil, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
 	if len(opts) == 0 {
 		t.Fatal("options should still be produced without a ledger")
 	}

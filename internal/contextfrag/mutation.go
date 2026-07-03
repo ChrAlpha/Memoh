@@ -17,6 +17,7 @@ const (
 	MutationBeforeModelCallHook MutationKind = "before_model_call_hook"
 	MutationBackgroundSummary   MutationKind = "background_summary"
 	MutationMidTaskPrune        MutationKind = "mid_task_prune"
+	MutationLoopStepReselection MutationKind = "loop_step_reselection"
 	MutationInjectedMessage     MutationKind = "injected_message"
 )
 

@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -108,5 +109,62 @@ func TestApplyProviderRunConfigPublishesLifecycleToHolder(t *testing.T) {
 	}
 	if snapshot.FinalInputHash != "final-hash" {
 		t.Fatalf("snapshot final hash = %q", snapshot.FinalInputHash)
+	}
+}
+
+func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{
+		sdk.UserMessage("initial request"),
+		sdk.AssistantMessage("initial answer"),
+	}
+	messages := append(append([]sdk.Message(nil), prefix...),
+		sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "old-call",
+			ToolName:   "search",
+			Input:      map[string]any{"q": "old"},
+		}}},
+		sdk.ToolMessage(sdk.ToolResultPart{
+			ToolCallID: "old-call",
+			ToolName:   "search",
+			Result:     strings.Repeat("old ", 2048),
+		}),
+		sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "new-call",
+			ToolName:   "search",
+			Input:      map[string]any{"q": "new"},
+		}}},
+		sdk.ToolMessage(sdk.ToolResultPart{
+			ToolCallID: "new-call",
+			ToolName:   "search",
+			Result:     "new",
+		}),
+	)
+
+	result := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:               contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"},
+		InitialMessageCount: len(prefix),
+		Messages:            messages,
+		BudgetMaxTokens:     1,
+	})
+
+	if result.Dropped != 2 {
+		t.Fatalf("Dropped = %d, want 2", result.Dropped)
+	}
+	if got := len(result.Messages); got != 4 {
+		t.Fatalf("Messages len = %d, want 4", got)
+	}
+	for i := range prefix {
+		if result.Messages[i].Role != prefix[i].Role {
+			t.Fatalf("prefix role %d = %q, want %q", i, result.Messages[i].Role, prefix[i].Role)
+		}
+	}
+	call, ok := result.Messages[2].Content[0].(sdk.ToolCallPart)
+	if !ok || call.ToolCallID != "new-call" {
+		t.Fatalf("first loop message after reselection = %#v, want new tool call", result.Messages[2].Content[0])
+	}
+	if result.DropReasons[string(TagPreserveToolClosure)] != 2 {
+		t.Fatalf("DropReasons = %#v, want preserve_tool_closure:2", result.DropReasons)
 	}
 }

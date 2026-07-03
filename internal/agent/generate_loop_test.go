@@ -12,6 +12,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 type staticToolProvider struct {
@@ -138,6 +139,91 @@ func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 	}
 	if modelProvider.calls.Load() != 4 {
 		t.Fatalf("expected terminal text loop to abort on final step, got %d provider calls", modelProvider.calls.Load())
+	}
+}
+
+func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	var secondCallMessages []sdk.Message
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			switch call {
+			case 1:
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-1",
+						ToolName:   "lookup",
+						Input:      map[string]any{"q": "one"},
+					}},
+				}, nil
+			case 2:
+				secondCallMessages = append([]sdk.Message(nil), params.Messages...)
+				return &sdk.GenerateResult{
+					Text:         "ok",
+					FinishReason: sdk.FinishReasonStop,
+				}, nil
+			default:
+				return nil, errors.New("unexpected provider call")
+			}
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{
+			tools: []sdk.Tool{{
+				Name:       "lookup",
+				Parameters: &jsonschema.Schema{Type: "object"},
+				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+					return map[string]any{"answer": strings.Repeat("tool-result ", 64)}, nil
+				},
+			}},
+		},
+	})
+
+	var reselectorCalls atomic.Int32
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
+		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+			reselectorCalls.Add(1)
+			if input.InitialMessageCount != 1 {
+				t.Fatalf("InitialMessageCount = %d, want 1", input.InitialMessageCount)
+			}
+			if len(input.Messages) != 3 {
+				t.Fatalf("selector input messages = %d, want 3", len(input.Messages))
+			}
+			return ContextStepSelectionResult{
+				Messages:    append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...),
+				Dropped:     len(input.Messages) - input.InitialMessageCount,
+				DropReasons: map[string]int{"test": len(input.Messages) - input.InitialMessageCount},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if reselectorCalls.Load() != 1 {
+		t.Fatalf("step reselector calls = %d, want 1", reselectorCalls.Load())
+	}
+	if len(secondCallMessages) != 1 {
+		t.Fatalf("second provider call messages = %d, want 1", len(secondCallMessages))
+	}
+	if secondCallMessages[0].Role != sdk.MessageRoleUser {
+		t.Fatalf("second provider call first role = %q, want user", secondCallMessages[0].Role)
+	}
+	records := ledger.Records()
+	if len(records) != 1 || records[0].Kind != contextfrag.MutationLoopStepReselection {
+		t.Fatalf("mutation records = %#v, want one loop_step_reselection", records)
+	}
+	if got := ledger.FinalInputHash(); got == "" {
+		t.Fatal("final input hash was not updated after step reselection")
 	}
 }
 

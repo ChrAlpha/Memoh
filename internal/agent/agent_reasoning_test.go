@@ -61,7 +61,7 @@ func TestBuildGenerateOptionsPreservesDeepSeekReasoningDisabled(t *testing.T) {
 		ChatCompletionsCompat: models.ChatCompletionsCompatDeepSeek,
 	}
 
-	opts := (*Agent)(nil).buildGenerateOptions(cfg, nil, nil, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, nil, nil, nil)
 	if _, err := sdk.GenerateTextResult(context.Background(), opts...); err != nil {
 		t.Fatalf("generate text result: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestBuildGenerateOptionsBackgroundPrepareKeepsCachedAnthropicSystemPromoted
 			return "ok", nil
 		},
 	}}
-	opts := (*Agent)(nil).buildGenerateOptions(cfg, testTools, testTools, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, testTools, testTools, nil)
 
 	if _, err := sdk.GenerateTextResult(context.Background(), opts...); err != nil {
 		t.Fatalf("generate text result: %v", err)
@@ -292,7 +292,7 @@ func TestBuildGenerateOptionsRunningTaskSummaryAppendsToCachedAnthropicSystemMes
 			return "ok", nil
 		},
 	}}
-	opts := (*Agent)(nil).buildGenerateOptions(cfg, testTools, testTools, nil)
+	opts := (*Agent)(nil).buildGenerateOptions(context.Background(), cfg, testTools, testTools, nil)
 
 	if _, err := sdk.GenerateTextResult(context.Background(), opts...); err != nil {
 		t.Fatalf("generate text result: %v", err)

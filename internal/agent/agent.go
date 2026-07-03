@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -284,7 +286,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()
 	}
-	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
+	opts := a.buildGenerateOptions(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
 		recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
@@ -711,7 +713,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()
 	}
-	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
+	opts := a.buildGenerateOptions(genCtx, cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts,
 		sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
@@ -788,10 +790,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}, nil
 }
 
-func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
+func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
 	system, messages, tools := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
 	)
+	initialProviderMessageCount := len(messages)
 	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools)
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
@@ -848,11 +851,32 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 				p = override
 			}
 		}
+		if p == nil {
+			return nil
+		}
+		if cfg.ContextStepReselector != nil {
+			beforeMessages := append([]sdk.Message(nil), p.Messages...)
+			selection := cfg.ContextStepReselector(ctx, ContextStepSelectionInput{
+				Scope:               cfg.ContextScope,
+				InitialMessageCount: initialProviderMessageCount,
+				Messages:            p.Messages,
+				BudgetMaxTokens:     cfg.ContextBudgetMaxTokens,
+			})
+			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
+				p.Messages = selection.Messages
+			}
+			if selection.Dropped > 0 {
+				cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
+			}
+			recordPreparedProviderInputHash(cfg.ContextMutations, p)
+			return p
+		}
 		before := len(p.Messages)
 		p = pruneOldToolResults(p, keepSteps, threshold)
 		if len(p.Messages) < before {
 			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", before-len(p.Messages)))
 		}
+		recordPreparedProviderInputHash(cfg.ContextMutations, p)
 		return p
 	}
 	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))
@@ -900,6 +924,37 @@ func tokenEstimateFromBytes(bytes int) int {
 		return 0
 	}
 	return (bytes + 3) / 4
+}
+
+func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams) {
+	if params == nil {
+		return
+	}
+	hash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
+	ledger.SetFinalInputHash(hash)
+}
+
+func stepSelectionPreservesPrefix(before, after []sdk.Message, count int) bool {
+	if count < 0 || count > len(before) || count > len(after) {
+		return false
+	}
+	return reflect.DeepEqual(before[:count], after[:count])
+}
+
+func contextStepSelectionDetail(selection ContextStepSelectionResult) string {
+	if len(selection.DropReasons) == 0 {
+		return fmt.Sprintf("dropped=%d", selection.Dropped)
+	}
+	reasons := make([]string, 0, len(selection.DropReasons))
+	for reason := range selection.DropReasons {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, fmt.Sprintf("%s:%d", reason, selection.DropReasons[reason]))
+	}
+	return fmt.Sprintf("dropped=%d reasons=%s", selection.Dropped, strings.Join(parts, ","))
 }
 
 func publishContextCachePlan(cfg RunConfig, plan contextfrag.CachePlan) {
@@ -1469,7 +1524,7 @@ func (a *Agent) runMidStreamRetry(
 		retryCfgCopy := cfg
 		retryCfgCopy.Messages = prevResult.Messages
 		retryCfgCopy = retryCfgCopy.RefreshContextFrag()
-		retryOpts := a.buildGenerateOptions(retryCfgCopy, sdkTools, approvalTools, prepareStep)
+		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
 		if retryErr != nil {

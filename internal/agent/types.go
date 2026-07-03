@@ -60,6 +60,21 @@ type LoopDetectionConfig struct {
 	Enabled bool
 }
 
+type ContextStepSelectionInput struct {
+	Scope               contextfrag.Scope
+	InitialMessageCount int
+	Messages            []sdk.Message
+	BudgetMaxTokens     int
+}
+
+type ContextStepSelectionResult struct {
+	Messages    []sdk.Message
+	Dropped     int
+	DropReasons map[string]int
+}
+
+type ContextStepReselector func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult
+
 // InjectMessage carries a user message to be injected into a running agent
 // stream between tool rounds via the PrepareStep hook.
 type InjectMessage struct {
@@ -94,6 +109,7 @@ type RunConfig struct {
 	ContextCachePlan             contextfrag.CachePlan
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
+	ContextStepReselector        ContextStepReselector
 	SessionType                  string
 	LiveToolStream               bool
 	CanRequestUserInput          bool
