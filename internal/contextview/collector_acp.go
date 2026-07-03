@@ -17,10 +17,18 @@ const (
 )
 
 // ACPSection is one structurally built block of the ACP context resource:
-// the preamble or a "## Title" section, fully rendered by its source.
+// the preamble or a "## Title" section, fully rendered by its source. The
+// metadata fields describe the section for selection and placement; zero
+// values fall back to the collector defaults (acp_context kind / system
+// trust / priority 35 / dynamic cache).
 type ACPSection struct {
-	ID   string
-	Text string
+	ID         string
+	Text       string
+	Kind       contextfrag.Kind
+	Trust      contextfrag.TrustLevel
+	Priority   int
+	CacheClass contextfrag.CacheClass
+	Budget     contextfrag.BudgetPolicy
 }
 
 type ACPSectionsConfig struct {
@@ -52,15 +60,32 @@ func (*ACPSectionsCollector) Collect(_ context.Context, req CollectRequest) ([]c
 		if id == "" {
 			id = fmt.Sprintf("acp.section.%03d", i)
 		}
+		kind := section.Kind
+		if kind == "" {
+			kind = contextfrag.KindACPContext
+		}
+		trust := section.Trust
+		if trust == "" {
+			trust = contextfrag.TrustSystem
+		}
+		priority := section.Priority
+		if priority == 0 {
+			priority = 35
+		}
+		cacheClass := section.CacheClass
+		if cacheClass == "" {
+			cacheClass = contextfrag.CacheDynamic
+		}
 		frags = append(frags, contextfrag.TextFrag(contextfrag.TextFragInput{
 			ID:         id,
-			Kind:       contextfrag.KindACPContext,
+			Kind:       kind,
 			Role:       sdk.MessageRoleSystem,
 			Slot:       contextfrag.SlotSystem,
 			Text:       text,
-			Priority:   35,
-			CacheClass: contextfrag.CacheDynamic,
-			Trust:      contextfrag.TrustSystem,
+			Priority:   priority,
+			CacheClass: cacheClass,
+			Trust:      trust,
+			Budget:     section.Budget,
 			Scope:      req.Scope,
 			Source:     acpSectionsSource,
 			SourceID:   id,

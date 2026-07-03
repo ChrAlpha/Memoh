@@ -7,6 +7,8 @@ import (
 	"time"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 )
 
@@ -105,4 +107,43 @@ func acpMarkdownViaSections(t *testing.T, input acpContextRenderInput) string {
 		t.Fatalf("uri = %q, want %q", uri, acpContextURI)
 	}
 	return markdown
+}
+
+func TestBuildACPContextSectionsAssignsMetadata(t *testing.T) {
+	t.Parallel()
+
+	sections := buildACPContextSections(acpContextRenderInput{
+		BotID:       "bot-1",
+		DisplayName: "Alice",
+		Attachments: []conversation.ChatAttachment{{Name: "report.pdf"}},
+		Files: []agentpkg.SystemFile{
+			{Filename: "SOUL.md", Content: "the soul"},
+		},
+	})
+
+	byID := make(map[string]contextview.ACPSection, len(sections))
+	for _, section := range sections {
+		byID[section.ID] = section
+	}
+
+	preamble := byID["acp.preamble"]
+	if preamble.Budget.Overflow != contextfrag.OverflowKeep || preamble.CacheClass != contextfrag.CacheStable {
+		t.Fatalf("preamble must be keep+stable: %+v", preamble)
+	}
+	runtime := byID["acp.section.current-runtime"]
+	if runtime.CacheClass != contextfrag.CacheNever {
+		t.Fatalf("runtime section is per-turn volatile: %+v", runtime)
+	}
+	attachments := byID["acp.section.attachments"]
+	if attachments.Trust != contextfrag.TrustExternal || attachments.Kind != contextfrag.KindAttachmentRef {
+		t.Fatalf("attachments describe external input: %+v", attachments)
+	}
+	file := byID["acp.section.file.000"]
+	if file.Trust != contextfrag.TrustWorkspace || file.Kind != contextfrag.KindWorkspaceInstruction {
+		t.Fatalf("workspace file sections carry workspace trust: %+v", file)
+	}
+	notes := byID["acp.section.runtime-notes"]
+	if notes.Kind != contextfrag.KindSystemPolicy || notes.CacheClass != contextfrag.CacheStable {
+		t.Fatalf("runtime notes are static policy: %+v", notes)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/prune"
@@ -102,7 +103,7 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 	}
 
 	sections := make([]contextview.ACPSection, 0, 8)
-	add := func(id, title, content string) {
+	add := func(section contextview.ACPSection, title, content string) {
 		content = strings.TrimSpace(content)
 		if content == "" {
 			return
@@ -111,16 +112,24 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		if title != "" {
 			block = "## " + title + "\n\n" + content
 		}
-		sections = append(sections, contextview.ACPSection{ID: id, Text: block})
+		section.Text = block
+		sections = append(sections, section)
 	}
 
 	sections = append(sections, contextview.ACPSection{
-		ID: "acp.preamble",
+		ID:         "acp.preamble",
+		Kind:       contextfrag.KindSystemPolicy,
+		Priority:   10,
+		CacheClass: contextfrag.CacheStable,
+		Budget:     contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 		Text: "# Memoh ACP Context\n\n" +
 			"This virtual resource is already embedded in the current ACP prompt. It is not a workspace file and no file lookup is needed. Use it for identity, memory, user preferences, and session background. The user prompt outside this resource is the actual task.",
 	})
 
-	add("acp.section.current-runtime", "Current Runtime", acpContextMetadataLines([][2]string{
+	add(contextview.ACPSection{
+		ID:         "acp.section.current-runtime",
+		CacheClass: contextfrag.CacheNever,
+	}, "Current Runtime", acpContextMetadataLines([][2]string{
 		{"Current time", now.Format(time.RFC3339)},
 		{"Timezone", timezoneName},
 		{"Bot ID", input.BotID},
@@ -130,7 +139,10 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		{"Workspace", input.ProjectPath},
 	}))
 
-	add("acp.section.current-conversation", "Current Conversation", acpContextMetadataLines([][2]string{
+	add(contextview.ACPSection{
+		ID:         "acp.section.current-conversation",
+		CacheClass: contextfrag.CacheNever,
+	}, "Current Conversation", acpContextMetadataLines([][2]string{
 		{"Sender", input.DisplayName},
 		{"Channel identity ID", input.SourceChannelIdentityID},
 		{"Channel", input.CurrentChannel},
@@ -141,15 +153,33 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		{"Reply target", input.ReplyTarget},
 	}))
 
-	add("acp.section.attachments", "Attachments", formatACPContextAttachments(input.Attachments))
-	add("acp.section.platform-identities", "", input.PlatformIdentitiesSection)
+	add(contextview.ACPSection{
+		ID:         "acp.section.attachments",
+		Kind:       contextfrag.KindAttachmentRef,
+		Trust:      contextfrag.TrustExternal,
+		CacheClass: contextfrag.CacheNever,
+	}, "Attachments", formatACPContextAttachments(input.Attachments))
+	add(contextview.ACPSection{
+		ID:   "acp.section.platform-identities",
+		Kind: contextfrag.KindPlatformIdentity,
+	}, "", input.PlatformIdentitiesSection)
 
 	files := acpContextSystemFiles(input.Files, input.SystemFilesMaxBytes)
 	for i, file := range files {
-		add(fmt.Sprintf("acp.section.file.%03d", i), file.Title, file.Content)
+		add(contextview.ACPSection{
+			ID:       fmt.Sprintf("acp.section.file.%03d", i),
+			Kind:     contextfrag.KindWorkspaceInstruction,
+			Trust:    contextfrag.TrustWorkspace,
+			Priority: 40,
+		}, file.Title, file.Content)
 	}
 
-	add("acp.section.runtime-notes", "Memoh Runtime Notes", strings.TrimSpace(`
+	add(contextview.ACPSection{
+		ID:         "acp.section.runtime-notes",
+		Kind:       contextfrag.KindSystemPolicy,
+		Priority:   50,
+		CacheClass: contextfrag.CacheStable,
+	}, "Memoh Runtime Notes", strings.TrimSpace(`
 - This context is generated dynamically for the current ACP turn.
 - Prefer the latest user prompt over stale memory when they conflict.
 - Treat secrets, OAuth tokens, API keys, and private configuration as sensitive.
