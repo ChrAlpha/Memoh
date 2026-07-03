@@ -23,12 +23,13 @@ import (
 
 // Agent is the core agent that handles LLM interactions.
 type Agent struct {
-	client         *sdk.Client
-	toolProviders  []tools.ToolProvider
-	bridgeProvider bridge.Provider
-	hookService    *hooks.Service
-	logger         *slog.Logger
-	limits         Limits
+	client             *sdk.Client
+	toolProviders      []tools.ToolProvider
+	bridgeProvider     bridge.Provider
+	hookService        *hooks.Service
+	logger             *slog.Logger
+	limits             Limits
+	contextViewApplier ContextViewApplier
 }
 
 // New creates a new Agent with the given dependencies.
@@ -38,12 +39,23 @@ func New(deps Deps) *Agent {
 		logger = slog.Default()
 	}
 	return &Agent{
-		client:         sdk.NewClient(),
-		bridgeProvider: deps.BridgeProvider,
-		hookService:    deps.HookService,
-		logger:         logger.With(slog.String("service", "agent")),
-		limits:         deps.Limits.Normalize(),
+		client:             sdk.NewClient(),
+		bridgeProvider:     deps.BridgeProvider,
+		hookService:        deps.HookService,
+		logger:             logger.With(slog.String("service", "agent")),
+		limits:             deps.Limits.Normalize(),
+		contextViewApplier: deps.ContextViewApplier,
 	}
+}
+
+// applyContextView routes the run config through the injected context view
+// applier so selection, placement and the cache plan cover the final provider
+// input. Without an applier the legacy compile path keeps the frag view fresh.
+func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) RunConfig {
+	if a != nil && a.contextViewApplier != nil {
+		return a.contextViewApplier(ctx, cfg)
+	}
+	return cfg.RefreshContextFrag()
 }
 
 // BridgeProvider returns the underlying bridge provider (workspace manager).
@@ -164,16 +176,16 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			return
 		}
 		if toolUsage != "" {
-			// Must run before buildGenerateOptions so prompt caching and
-			// background task summaries see the usage-augmented text.
+			// Must run before the context view application so the selection,
+			// placement and cache plan cover the usage-augmented text.
 			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
-			cfg.ContextMutations.Record(contextfrag.MutationToolUsageAppend, fmt.Sprintf("bytes=%d", len(toolUsage)))
 			cfg.ContextToolUsage = toolUsage
 		}
 	}
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	cfg = a.applyContextView(streamCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -269,7 +281,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if cfg.System != systemBeforeHook {
 		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	if a == nil || a.contextViewApplier == nil {
+		cfg = cfg.RefreshContextFrag()
+	}
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
@@ -647,16 +661,16 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
 		if toolUsage != "" {
-			// Must run before buildGenerateOptions so prompt caching and
-			// background task summaries see the usage-augmented text.
+			// Must run before the context view application so the selection,
+			// placement and cache plan cover the usage-augmented text.
 			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
-			cfg.ContextMutations.Record(contextfrag.MutationToolUsageAppend, fmt.Sprintf("bytes=%d", len(toolUsage)))
 			cfg.ContextToolUsage = toolUsage
 		}
 	}
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	cfg = a.applyContextView(genCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -688,7 +702,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if cfg.System != systemBeforeHook {
 		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	if a == nil || a.contextViewApplier == nil {
+		cfg = cfg.RefreshContextFrag()
+	}
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts,

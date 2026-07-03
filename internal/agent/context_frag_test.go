@@ -117,7 +117,7 @@ func TestSpawnRunConfigCarriesContextScopeAndMaterializedQuery(t *testing.T) {
 	}
 }
 
-func TestRefreshContextFragWithDynamicMutatorsMarksPreProviderBoundary(t *testing.T) {
+func TestRefreshContextFragWithMutatorsMarksPreProviderBoundary(t *testing.T) {
 	t.Parallel()
 
 	injectCh := make(chan InjectMessage)
@@ -127,7 +127,8 @@ func TestRefreshContextFragWithDynamicMutatorsMarksPreProviderBoundary(t *testin
 		InjectCh:          injectCh,
 		BackgroundManager: background.New(nil),
 	}
-	cfg = cfg.RefreshContextFragWithDynamicMutators(true, true, true)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(true, true, true)
+	cfg = cfg.RefreshContextFrag()
 
 	if cfg.ContextManifest.View != contextfrag.ViewRunConfigPreProvider {
 		t.Fatalf("manifest view = %q, want %q", cfg.ContextManifest.View, contextfrag.ViewRunConfigPreProvider)

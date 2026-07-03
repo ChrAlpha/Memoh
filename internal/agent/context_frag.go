@@ -30,11 +30,6 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 	return cfg
 }
 
-func (cfg RunConfig) RefreshContextFragWithDynamicMutators(readMedia bool, beforeModelCallHook bool, injectCh bool) RunConfig {
-	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMedia, beforeModelCallHook, injectCh)
-	return cfg.RefreshContextFrag()
-}
-
 func (cfg RunConfig) contextDynamicMutators(readMedia bool, beforeModelCallHook bool, injectCh bool) []contextfrag.DynamicMutator {
 	var mutators []contextfrag.DynamicMutator
 	if cfg.Model != nil &&

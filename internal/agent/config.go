@@ -1,12 +1,19 @@
 package agent
 
 import (
+	"context"
 	"log/slog"
 
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
+
+// ContextViewApplier rebuilds the provider-facing RunConfig through the
+// context view pipeline. It runs after tool usage is appended to the system
+// prompt and before generate options are built, so the selection, placement
+// and cache plan cover the exact provider input.
+type ContextViewApplier func(context.Context, RunConfig) RunConfig
 
 const (
 	DefaultToolOutputMaxBytes  = 64 * 1024
@@ -22,10 +29,11 @@ type Limits struct {
 
 // Deps holds all service dependencies for the Agent.
 type Deps struct {
-	BridgeProvider bridge.Provider
-	HookService    *hooks.Service
-	Logger         *slog.Logger
-	Limits         Limits
+	BridgeProvider     bridge.Provider
+	HookService        *hooks.Service
+	Logger             *slog.Logger
+	Limits             Limits
+	ContextViewApplier ContextViewApplier
 }
 
 func DefaultLimits() Limits {

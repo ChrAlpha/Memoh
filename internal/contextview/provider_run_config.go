@@ -1,4 +1,4 @@
-package flow
+package contextview
 
 import (
 	"context"
@@ -6,52 +6,63 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/contextview"
 )
 
-func providerContextViewBuilder() *contextview.Builder {
-	return contextview.NewBuilder(
-		contextview.NewMapCollectorRegistry(
-			&contextview.SystemPromptCollector{},
-			&contextview.HistoryMessagesCollector{},
-			&contextview.CurrentUserCollector{},
-			&contextview.InlineImageCollector{},
+func providerContextViewBuilder() *Builder {
+	return NewBuilder(
+		NewMapCollectorRegistry(
+			&SystemPromptCollector{},
+			&HistoryMessagesCollector{},
+			&CurrentUserCollector{},
+			&InlineImageCollector{},
 		),
-		&contextview.FragmentSelector{},
-		contextview.StablePrefixPlacer{},
-		contextview.NewMapRendererRegistry(&contextview.SDKMessagesRenderer{}),
+		&FragmentSelector{},
+		StablePrefixPlacer{},
+		NewMapRendererRegistry(&SDKMessagesRenderer{}),
 	)
 }
 
-func applyProviderContextView(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+// ProviderRunConfigApplier adapts ApplyProviderRunConfig to the agent's
+// injected applier hook.
+func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
+	return func(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+		return ApplyProviderRunConfig(ctx, logger, cfg)
+	}
+}
+
+// ApplyProviderRunConfig rebuilds the provider-facing run config through the
+// context view pipeline: collect from the materialized RunConfig fields,
+// select under the token budget, place for prompt caching and render the SDK
+// payload back onto the config together with its manifest and cache plan.
+func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	query := cfg.Query
 	inlineImages := cfg.InlineImages
 	if cfg.ContextQueryMaterialized {
 		query = ""
 		inlineImages = nil
 	}
-	view, err := providerContextViewBuilder().Build(ctx, contextview.BuildInput{
+	view, err := providerContextViewBuilder().Build(ctx, BuildInput{
 		Scope:  cfg.ContextScope,
 		Intent: contextfrag.IntentRunConfigPreProvider,
-		Sources: []contextview.SourceSpec{
-			{Name: "system_prompt", Config: contextview.SystemPromptConfig{System: cfg.System, ToolUsage: cfg.ContextToolUsage}},
-			{Name: "history_messages", Config: contextview.HistoryMessagesConfig{
+		Sources: []SourceSpec{
+			{Name: "system_prompt", Config: SystemPromptConfig{System: cfg.System, ToolUsage: cfg.ContextToolUsage}},
+			{Name: "history_messages", Config: HistoryMessagesConfig{
 				Messages:        cfg.Messages,
 				TokenEstimates:  cfg.ContextHistoryTokenEstimates,
 				TrimmablePrefix: cfg.ContextTrimmableMessages,
 			}},
-			{Name: "current_user", Config: contextview.CurrentUserConfig{Query: query}},
-			{Name: "inline_images", Config: contextview.InlineImageConfig{Images: inlineImages}},
+			{Name: "current_user", Config: CurrentUserConfig{Query: query}},
+			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
 		},
 		Targets:         []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
-		Budget:          contextview.BudgetEnvelope{MaxTokens: cfg.ContextBudgetMaxTokens},
+		Budget:          BudgetEnvelope{MaxTokens: cfg.ContextBudgetMaxTokens},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
 	if err != nil {
 		warnProviderContextView(logger, cfg, "context view build failed; using legacy assembly", err)
 		return cfg.RefreshContextFrag()
 	}
-	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*contextview.SDKRenderedPayload)
+	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
 		warnProviderContextView(logger, cfg, "context view rendered unexpected payload; using legacy assembly", nil)
 		return cfg.RefreshContextFrag()
@@ -70,7 +81,7 @@ func applyProviderContextView(ctx context.Context, logger *slog.Logger, cfg agen
 // message stream: system-slot fragments render into the system prompt, so
 // only non-system fragments inside the stable prefix count toward the
 // message-level cache breakpoint.
-func cachePlanFromPlacement(placement contextview.PlacementPlan) contextfrag.CachePlan {
+func cachePlanFromPlacement(placement PlacementPlan) contextfrag.CachePlan {
 	stableMessages := 0
 	for i, item := range placement.Items {
 		if i >= placement.FirstVolatileIndex {

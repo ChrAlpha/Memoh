@@ -8,6 +8,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 )
 
@@ -96,6 +97,7 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	}
 
 	got := resolver.prepareRunConfig(context.Background(), cfg)
+	got = contextview.ApplyProviderRunConfig(context.Background(), nil, got)
 
 	if got.ContextManifest.Counts.Images != 1 {
 		t.Fatalf("manifest image count = %d, want only image injected into SDK message: %#v", got.ContextManifest.Counts.Images, got.ContextManifest.Items)

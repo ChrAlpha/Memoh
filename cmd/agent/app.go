@@ -343,10 +343,11 @@ func provideScheduleSessionCreator(sessionService *sessionpkg.Service) schedule.
 
 func provideAgent(log *slog.Logger, provider bridge.Provider, hookService *hookspkg.Service, cfg config.Config) *agentpkg.Agent {
 	return agentpkg.New(agentpkg.Deps{
-		BridgeProvider: provider,
-		HookService:    hookService,
-		Logger:         log,
-		Limits:         agentLimitsFromConfig(cfg.Agent),
+		BridgeProvider:     provider,
+		HookService:        hookService,
+		Logger:             log,
+		Limits:             agentLimitsFromConfig(cfg.Agent),
+		ContextViewApplier: contextview.ProviderRunConfigApplier(log),
 	})
 }
 

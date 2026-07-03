@@ -350,6 +350,10 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		LateBinding:  lateBinding,
 		InlineImages: imageParts,
 	}, composed, log)
+	// The discuss messages replace the resolved chat history, so the chat
+	// trim bookkeeping no longer describes them.
+	runConfig.ContextHistoryTokenEstimates = nil
+	runConfig.ContextTrimmableMessages = 0
 	runConfig = runConfig.RefreshContextFrag()
 
 	eventCh := agent.Stream(ctx, runConfig)

@@ -1,4 +1,4 @@
-package flow
+package contextview
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func TestApplyProviderContextViewMatchesLegacyAssembly(t *testing.T) {
 	}
 
 	legacy := cfg.RefreshContextFrag()
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if got.System != cfg.System {
 		t.Fatalf("System = %q, want unchanged %q", got.System, cfg.System)
@@ -73,7 +73,7 @@ func TestApplyProviderContextViewKeepsUnmaterializedQuery(t *testing.T) {
 	}
 
 	legacy := cfg.RefreshContextFrag()
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if got.Query != "live query" {
 		t.Fatalf("Query = %q, want untouched", got.Query)
@@ -111,7 +111,7 @@ func TestApplyProviderContextViewUsesContextBudget(t *testing.T) {
 		},
 	}
 
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages = %d, want trim notice plus latest question", len(got.Messages))
@@ -143,7 +143,7 @@ func TestApplyProviderContextViewCountsImagesAgainstTokenBudget(t *testing.T) {
 		},
 	}
 
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages = %d, want trim notice plus latest image message", len(got.Messages))
@@ -169,7 +169,7 @@ func TestApplyProviderContextViewPreservesDynamicMutators(t *testing.T) {
 		},
 	}
 
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	want := []contextfrag.DynamicMutator{
 		contextfrag.DynamicMutatorPromptCache,
@@ -213,7 +213,7 @@ func TestApplyProviderContextViewProducesCachePlan(t *testing.T) {
 		},
 	}
 
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if got.ContextCachePlan.StablePrefixHash == "" {
 		t.Fatal("cache plan should carry the stable prefix hash")

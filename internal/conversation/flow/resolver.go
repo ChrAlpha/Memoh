@@ -1233,7 +1233,10 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		}
 	}
 
-	return applyProviderContextView(ctx, r.logger, cfg)
+	// The provider context view is applied inside the agent, after tool
+	// usage is appended to the system prompt, so the cache plan covers the
+	// exact provider input. The resolver only materializes the sources.
+	return cfg
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (agentpkg.SkillEntry, bool) {

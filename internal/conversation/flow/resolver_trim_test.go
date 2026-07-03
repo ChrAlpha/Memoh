@@ -33,7 +33,7 @@ func budgetTrimViaContextView(t *testing.T, history []conversation.ModelMessage,
 		ContextBudgetMaxTokens:       budget,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
 	return got.Messages
 }
 
@@ -206,7 +206,7 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		ContextBudgetMaxTokens:       1,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1"},
 	}
-	got := applyProviderContextView(context.Background(), nil, cfg)
+	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %v, want [notice memory request]", rolesOf(got.Messages))
