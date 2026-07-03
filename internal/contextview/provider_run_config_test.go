@@ -85,3 +85,28 @@ func TestApplyProviderRunConfigManifestCarriesLifecycle(t *testing.T) {
 		t.Fatalf("manifest mutation records = %d, want 1", len(records))
 	}
 }
+
+func TestApplyProviderRunConfigPublishesLifecycleToHolder(t *testing.T) {
+	t.Parallel()
+
+	holder := contextfrag.NewLifecycleHolder()
+	cfg := providerRunConfigFixture()
+	cfg.ContextLifecycle = holder
+
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got.ContextMutations.SetFinalInputHash("final-hash")
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle holder did not receive provider manifest")
+	}
+	if snapshot.View != contextfrag.ViewRunConfigPreProvider {
+		t.Fatalf("snapshot view = %q", snapshot.View)
+	}
+	if snapshot.StablePrefixHash != got.ContextCachePlan.StablePrefixHash {
+		t.Fatalf("snapshot stable prefix hash = %q, want %q", snapshot.StablePrefixHash, got.ContextCachePlan.StablePrefixHash)
+	}
+	if snapshot.FinalInputHash != "final-hash" {
+		t.Fatalf("snapshot final hash = %q", snapshot.FinalInputHash)
+	}
+}

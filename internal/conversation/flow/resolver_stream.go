@@ -509,6 +509,7 @@ func (r *Resolver) persistTerminalSnapshotResult(ctx context.Context, req conver
 
 	persisted, err := r.storeRoundWithOptionsResult(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
 		AllowPendingToolCalls: snap.deferredToolID != "",
+		ContextLifecycle:      rc.runConfig.ContextLifecycle,
 	})
 	if err != nil {
 		return nil, err

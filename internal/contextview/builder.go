@@ -79,6 +79,7 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	manifest := contextfrag.BuildManifest(result.Selected)
 	manifest.View = input.Intent.ManifestView()
 	manifest.DynamicMutators = normalizeDynamicMutators(input.DynamicMutators)
+	manifest.Selection = selectionTrace(result.Summary)
 	manifest.EditTrace = append(manifest.EditTrace, selectionEditTrace(result.Dropped)...)
 	trace.Warnings = append(trace.Warnings, manifest.ValidationWarnings...)
 
@@ -154,6 +155,27 @@ func normalizeDynamicMutators(mutators []contextfrag.DynamicMutator) []contextfr
 		out = append(out, mutator)
 	}
 	return out
+}
+
+func selectionTrace(summary SelectionSummary) *contextfrag.SelectionTrace {
+	if summary.TotalCollected == 0 && summary.TotalSelected == 0 && summary.TotalDropped == 0 && len(summary.DropReasons) == 0 {
+		return nil
+	}
+	trace := &contextfrag.SelectionTrace{
+		Selected: summary.TotalSelected,
+		Dropped:  summary.TotalDropped,
+	}
+	if len(summary.DropReasons) > 0 {
+		trace.DropReasons = make(map[string]int, len(summary.DropReasons))
+		for _, record := range summary.DropReasons {
+			reason := record.Reason
+			if reason == "" {
+				reason = "unknown"
+			}
+			trace.DropReasons[reason]++
+		}
+	}
+	return trace
 }
 
 func selectionEditTrace(dropped []contextfrag.ContextFrag) []contextfrag.ContextEditTrace {

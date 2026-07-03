@@ -9,6 +9,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 )
@@ -22,6 +23,7 @@ type storeRoundOptions struct {
 	SkipMemory              bool
 	AllowEmptyAssistantText bool
 	MessageMetadataByIndex  map[int]map[string]any
+	ContextLifecycle        *contextfrag.LifecycleHolder
 }
 
 func (r *Resolver) storeRoundWithOptions(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) error {
@@ -65,6 +67,7 @@ func (r *Resolver) storeRoundWithOptionsResult(ctx context.Context, req conversa
 	if len(filtered) == 0 {
 		return nil, nil
 	}
+	opts = opts.withContextLifecycleMetadata(filtered)
 
 	persisted := r.storeMessages(ctx, req, filtered, modelID, opts)
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
@@ -98,6 +101,10 @@ func isEmptyAssistantMessage(m conversation.ModelMessage) bool {
 // and memory extraction. Used by the discuss driver so it shares the same
 // persistence quality as chat mode.
 func (r *Resolver) StoreRound(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, sdkMessages []sdk.Message, modelID string) error {
+	return r.StoreRoundWithContextLifecycle(ctx, botID, sessionID, channelIdentityID, currentPlatform, sdkMessages, modelID, nil)
+}
+
+func (r *Resolver) StoreRoundWithContextLifecycle(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, sdkMessages []sdk.Message, modelID string, lifecycle *contextfrag.LifecycleHolder) error {
 	modelMessages := sdkMessagesToModelMessages(sdkMessages)
 	req := conversation.ChatRequest{
 		BotID:                   botID,
@@ -107,7 +114,37 @@ func (r *Resolver) StoreRound(ctx context.Context, botID, sessionID, channelIden
 		CurrentChannel:          currentPlatform,
 		UserMessagePersisted:    true,
 	}
-	return r.storeRound(ctx, req, modelMessages, modelID)
+	return r.storeRoundWithOptions(ctx, req, modelMessages, modelID, storeRoundOptions{ContextLifecycle: lifecycle})
+}
+
+func (opts storeRoundOptions) withContextLifecycleMetadata(messages []conversation.ModelMessage) storeRoundOptions {
+	snapshot, ok := opts.ContextLifecycle.Snapshot()
+	if !ok {
+		return opts
+	}
+	idx := lastAssistantMessageIndex(messages)
+	if idx < 0 {
+		return opts
+	}
+	if opts.MessageMetadataByIndex == nil {
+		opts.MessageMetadataByIndex = make(map[int]map[string]any, 1)
+	}
+	existing := opts.MessageMetadataByIndex[idx]
+	if existing == nil {
+		existing = map[string]any{}
+	}
+	existing[contextfrag.MetadataContextLifecycleKey] = snapshot
+	opts.MessageMetadataByIndex[idx] = existing
+	return opts
+}
+
+func lastAssistantMessageIndex(messages []conversation.ModelMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
+			return i
+		}
+	}
+	return -1
 }
 
 func (r *Resolver) storeMessages(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {

@@ -577,9 +577,13 @@ func (r *Resolver) Chat(ctx context.Context, req conversation.ChatRequest) (conv
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	storeReq := req
+	if rc.userMessageAlreadyInContext {
+		storeReq.UserMessagePersisted = true
+	}
 	roundMessages := prependTurnUserMessage(storeReq, outputMessages)
 	if err := r.storeRoundWithOptions(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
-		SkipMemory: storeReq.SkipMemoryExtraction,
+		SkipMemory:       storeReq.SkipMemoryExtraction,
+		ContextLifecycle: cfg.ContextLifecycle,
 	}); err != nil {
 		return conversation.ChatResponse{}, err
 	}
@@ -712,6 +716,7 @@ func (r *Resolver) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams
 		Skills:            agentSkills,
 		LoopDetection:     agentpkg.LoopDetectionConfig{Enabled: loopDetectionEnabled},
 		BackgroundManager: r.bgManager,
+		ContextLifecycle:  contextfrag.NewLifecycleHolder(),
 		ContextScope: contextfrag.Scope{
 			BotID:             p.BotID,
 			ChatID:            chatID,

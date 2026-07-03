@@ -310,7 +310,7 @@ func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval too
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					req,
-					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
+					resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {
 					return storeErr

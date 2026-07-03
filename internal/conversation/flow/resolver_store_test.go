@@ -2,9 +2,12 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 )
@@ -185,5 +188,62 @@ func TestStoreMessagesUsesToolTailBatch(t *testing.T) {
 	}
 	if len(persisted) != 4 {
 		t.Fatalf("persisted messages = %d, want 4", len(persisted))
+	}
+}
+
+func TestStoreRoundPersistsContextLifecycleMetadataOnAssistant(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	ledger.Record(contextfrag.MutationMidTaskPrune, "pruned=2")
+	ledger.SetFinalInputHash("final-hash")
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.Manifest{
+		View: contextfrag.ViewRunConfigPreProvider,
+		Counts: contextfrag.ManifestCounts{
+			Fragments: 2,
+			Messages:  1,
+			TextBytes: 64,
+		},
+		Selection: &contextfrag.SelectionTrace{
+			Selected:    1,
+			Dropped:     1,
+			DropReasons: map[string]int{"budget_trim": 1},
+		},
+		CachePlan: &contextfrag.CachePlan{StablePrefixHash: "prefix-hash", StableMessageCount: 1},
+		Mutations: ledger,
+	})
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		logger:         slog.Default(),
+		messageService: messages,
+	}
+
+	err := resolver.storeRoundWithOptions(context.Background(), conversation.ChatRequest{
+		BotID:     "bot-1",
+		SessionID: "session-1",
+		Query:     "hello",
+	}, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("hello")},
+		{Role: "assistant", Content: conversation.NewTextContent("hi")},
+	}, "model-1", storeRoundOptions{ContextLifecycle: holder})
+	if err != nil {
+		t.Fatalf("storeRoundWithOptions error: %v", err)
+	}
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted messages = %d, want 2", len(messages.persisted))
+	}
+	assistantMeta := messages.persisted[1].Metadata
+	raw, err := json.Marshal(assistantMeta[contextfrag.MetadataContextLifecycleKey])
+	if err != nil {
+		t.Fatalf("marshal lifecycle metadata: %v", err)
+	}
+	for _, want := range []string{"run_config_pre_provider", "prefix-hash", "final-hash", "budget_trim"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("lifecycle metadata missing %q: %s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), `"items"`) {
+		t.Fatalf("lifecycle metadata must use condensed snapshot: %s", raw)
 	}
 }

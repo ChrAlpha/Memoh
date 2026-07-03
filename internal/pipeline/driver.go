@@ -33,6 +33,10 @@ type RunConfigResolver interface {
 	StoreRound(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, messages []sdk.Message, modelID string) error
 }
 
+type contextLifecycleRoundStore interface {
+	StoreRoundWithContextLifecycle(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, messages []sdk.Message, modelID string, lifecycle *contextfrag.LifecycleHolder) error
+}
+
 // discussStreamer abstracts the agent streaming capability for testability.
 type discussStreamer interface {
 	Stream(ctx context.Context, cfg agentpkg.RunConfig) <-chan agentpkg.StreamEvent
@@ -332,6 +336,9 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		return
 	}
 	runConfig := resolved.RunConfig
+	if runConfig.ContextLifecycle == nil {
+		runConfig.ContextLifecycle = contextfrag.NewLifecycleHolder()
+	}
 
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
@@ -378,9 +385,9 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	if d.deps.Resolver != nil && len(finalMessages) > 0 {
 		var sdkMsgs []sdk.Message
 		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
-			if storeErr := d.deps.Resolver.StoreRound(ctx,
+			if storeErr := d.storeDiscussRound(ctx,
 				cfg.BotID, cfg.SessionID, cfg.ChannelIdentityID, cfg.CurrentPlatform,
-				sdkMsgs, resolved.ModelID,
+				sdkMsgs, resolved.ModelID, runConfig.ContextLifecycle,
 			); storeErr != nil {
 				log.Error("discuss: store round failed", slog.Any("error", storeErr))
 			}
@@ -530,6 +537,16 @@ func (d *DiscussDriver) advanceDiscussCursor(ctx context.Context, sess *discussS
 	); err != nil {
 		log.Warn("discuss cursor persist failed", slog.Any("error", err), slog.Int64("cursor", cursor))
 	}
+}
+
+func (d *DiscussDriver) storeDiscussRound(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, messages []sdk.Message, modelID string, lifecycle *contextfrag.LifecycleHolder) error {
+	if d == nil || d.deps.Resolver == nil {
+		return nil
+	}
+	if store, ok := d.deps.Resolver.(contextLifecycleRoundStore); ok {
+		return store.StoreRoundWithContextLifecycle(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID, lifecycle)
+	}
+	return d.deps.Resolver.StoreRound(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID)
 }
 
 func discussCursorScope(cfg DiscussSessionConfig) string {

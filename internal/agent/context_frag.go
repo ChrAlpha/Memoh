@@ -27,6 +27,9 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 	})
 	cfg.ContextFrags = assembled.Frags
 	cfg.ContextManifest = assembled.Manifest
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(assembled.Manifest)
+	}
 	return cfg
 }
 

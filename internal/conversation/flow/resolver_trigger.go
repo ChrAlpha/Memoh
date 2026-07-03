@@ -62,7 +62,9 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	roundMessages := prependUserMessage(req.Query, outputMessages)
-	storeErr := r.storeRound(ctx, req, roundMessages, rc.model.ID)
+	storeErr := r.storeRoundWithOptions(ctx, req, roundMessages, rc.model.ID, storeRoundOptions{
+		ContextLifecycle: cfg.ContextLifecycle,
+	})
 
 	totalUsageJSON, _ := json.Marshal(result.Usage)
 	return schedule.TriggerResult{
@@ -134,7 +136,9 @@ func (r *Resolver) TriggerHeartbeat(ctx context.Context, botID string, payload h
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	roundMessages := prependUserMessage(heartbeatPrompt, outputMessages)
-	_ = r.storeRound(ctx, req, roundMessages, rc.model.ID)
+	_ = r.storeRoundWithOptions(ctx, req, roundMessages, rc.model.ID, storeRoundOptions{
+		ContextLifecycle: cfg.ContextLifecycle,
+	})
 
 	totalUsageJSON, _ := json.Marshal(result.Usage)
 	return heartbeat.TriggerResult{

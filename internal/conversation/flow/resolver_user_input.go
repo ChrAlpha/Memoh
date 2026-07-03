@@ -327,7 +327,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 				if storeErr := r.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					chatReq,
-					resolvedContext{model: models.GetResponse{ID: resolved.ModelID}},
+					resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {
 					return storeErr

@@ -93,6 +93,7 @@ type RunConfig struct {
 	ContextTrimmableMessages     int
 	ContextCachePlan             contextfrag.CachePlan
 	ContextMutations             *contextfrag.MutationLedger
+	ContextLifecycle             *contextfrag.LifecycleHolder
 	SessionType                  string
 	LiveToolStream               bool
 	CanRequestUserInput          bool

@@ -69,3 +69,59 @@ func TestManifestJSONIncludesLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycleHolderSnapshotCondensesManifest(t *testing.T) {
+	ledger := NewMutationLedger()
+	ledger.Record(MutationMidTaskPrune, "pruned=2")
+	ledger.SetFinalInputHash("final-hash")
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{
+		View: ViewRunConfigPreProvider,
+		Counts: ManifestCounts{
+			Fragments: 4,
+			Messages:  2,
+			Images:    1,
+			TextBytes: 512,
+		},
+		Selection: &SelectionTrace{
+			Selected:    3,
+			Dropped:     1,
+			DropReasons: map[string]int{"budget_trim": 1},
+		},
+		CachePlan: &CachePlan{StablePrefixHash: "prefix-hash", StableMessageCount: 2},
+		Mutations: ledger,
+		Items: []ManifestItem{
+			{ID: "large-item", Kind: KindConversationEvent},
+		},
+	})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("snapshot should be available after SetManifest")
+	}
+	if snapshot.View != ViewRunConfigPreProvider {
+		t.Fatalf("snapshot view = %q", snapshot.View)
+	}
+	if snapshot.Counts.Messages != 2 || snapshot.Selection.Dropped != 1 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if snapshot.StablePrefixHash != "prefix-hash" || snapshot.FinalInputHash != "final-hash" {
+		t.Fatalf("snapshot lost cache/final hash fields: %#v", snapshot)
+	}
+	if len(snapshot.Mutations) != 1 || snapshot.Mutations[0].Kind != MutationMidTaskPrune {
+		t.Fatalf("snapshot mutations = %#v", snapshot.Mutations)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	if strings.Contains(string(raw), "large-item") {
+		t.Fatalf("condensed snapshot should not include manifest items: %s", raw)
+	}
+	for _, want := range []string{"rendered_prefix_hash", "cache_read_tokens", "cache_write_tokens"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("snapshot schema must reserve %q for cache telemetry: %s", want, raw)
+		}
+	}
+}

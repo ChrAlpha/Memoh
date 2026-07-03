@@ -265,6 +265,7 @@ type Manifest struct {
 	ValidationWarnings []ValidationWarning `json:"validation_warnings,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
 	Items              []ManifestItem      `json:"items,omitempty"`
+	Selection          *SelectionTrace     `json:"selection,omitempty"`
 	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
 	Mutations          *MutationLedger     `json:"mutations,omitempty"`
 }
@@ -295,6 +296,12 @@ type ManifestCounts struct {
 	Messages  int `json:"messages"`
 	Images    int `json:"images"`
 	TextBytes int `json:"text_bytes"`
+}
+
+type SelectionTrace struct {
+	Selected    int            `json:"selected"`
+	Dropped     int            `json:"dropped"`
+	DropReasons map[string]int `json:"drop_reasons,omitempty"`
 }
 
 // ManifestItem is one non-sensitive fragment entry.
