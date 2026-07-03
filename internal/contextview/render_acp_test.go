@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"testing"
 
+	sdk "github.com/memohai/twilight-ai/sdk"
+
 	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
 )
 
 func TestACPRenderer_ChatModePassThroughMarkdown(t *testing.T) {
@@ -59,18 +60,34 @@ func TestACPRenderer_ChatModeContentHashDeterministic(t *testing.T) {
 	}
 }
 
+func discussTestFrag(id, role, text string, slot contextfrag.Slot) contextfrag.ContextFrag {
+	var msg sdk.Message
+	switch role {
+	case "assistant":
+		msg = sdk.AssistantMessage(text)
+	default:
+		msg = sdk.UserMessage(text)
+	}
+	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:        id,
+		Message:   msg,
+		Kind:      contextfrag.KindConversationEvent,
+		Slot:      slot,
+		Scope:     contextfrag.Scope{BotID: "bot-1"},
+		Source:    "pipeline_discuss",
+		Collector: "discuss_context",
+	})
+}
+
 func TestACPRenderer_DiscussModeFullContextPrompt(t *testing.T) {
 	t.Parallel()
 
-	payload, _ := renderACP(t, ACPRenderConfig{
-		Mode: ACPRenderModeDiscuss,
-		DiscussMessages: []pipeline.ContextMessage{
-			{Role: "user", Content: "first message content"},
-			{Role: "assistant", Content: "response content"},
-			{Role: "", Content: "default role content"},
-			{Role: "tool", Content: "   "},
-		},
-	}, contextfrag.IntentDiscussReply)
+	payload, _ := renderACPSelected(t, ACPRenderConfig{Mode: ACPRenderModeDiscuss}, []contextfrag.ContextFrag{
+		discussTestFrag("discuss.rc.000", "user", "first message content", contextfrag.SlotHistory),
+		discussTestFrag("discuss.tr.000", "assistant", "response content", contextfrag.SlotHistory),
+		discussTestFrag("discuss.rc.001", "user", "default role content", contextfrag.SlotHistory),
+		discussTestFrag("discuss.rc.002", "user", "   ", contextfrag.SlotHistory),
+	})
 
 	want := "You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n" +
 		"[user]\nfirst message content\n\n" +
@@ -88,13 +105,10 @@ func TestACPRenderer_DiscussModeFullContextPrompt(t *testing.T) {
 func TestACPRenderer_DiscussModeLateBinding(t *testing.T) {
 	t.Parallel()
 
-	payload, _ := renderACP(t, ACPRenderConfig{
-		Mode: ACPRenderModeDiscuss,
-		DiscussMessages: []pipeline.ContextMessage{
-			{Role: "user", Content: "question"},
-		},
-		DiscussLateBinding: "  Mentioned user should be answered.  ",
-	}, contextfrag.IntentDiscussReply)
+	payload, _ := renderACPSelected(t, ACPRenderConfig{Mode: ACPRenderModeDiscuss}, []contextfrag.ContextFrag{
+		discussTestFrag("discuss.rc.000", "user", "question", contextfrag.SlotHistory),
+		discussTestFrag("discuss.late_binding", "user", "Mentioned user should be answered.", contextfrag.SlotAfterCurrent),
+	})
 
 	want := "You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n" +
 		"[user]\nquestion\n\n" +
@@ -105,12 +119,10 @@ func TestACPRenderer_DiscussModeLateBinding(t *testing.T) {
 	}
 }
 
-func TestACPRenderer_DiscussModeEmptyMessages(t *testing.T) {
+func TestACPRenderer_DiscussModeEmptySelection(t *testing.T) {
 	t.Parallel()
 
-	payload, _ := renderACP(t, ACPRenderConfig{
-		Mode: ACPRenderModeDiscuss,
-	}, contextfrag.IntentDiscussReply)
+	payload, _ := renderACPSelected(t, ACPRenderConfig{Mode: ACPRenderModeDiscuss}, nil)
 
 	want := "You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n" +
 		"Reply to the latest user-visible message when a response is appropriate."
@@ -148,6 +160,25 @@ func renderACP(t *testing.T, cfg ACPRenderConfig, intent contextfrag.Intent) (*A
 	}
 	if rendered.Target != contextfrag.RenderACPFullContext {
 		t.Fatalf("Target = %q, want %q", rendered.Target, contextfrag.RenderACPFullContext)
+	}
+	return payload, rendered
+}
+
+func renderACPSelected(t *testing.T, cfg ACPRenderConfig, selected []contextfrag.ContextFrag) (*ACPRenderedPayload, RenderedPayload) {
+	t.Helper()
+	renderer := &ACPFullContextRenderer{Config: cfg}
+	rendered, err := renderer.Render(context.Background(), RenderInput{
+		Intent:    contextfrag.IntentACPRuntimePrompt,
+		Target:    contextfrag.RenderACPFullContext,
+		Selected:  selected,
+		Placement: IdentityPlacer{}.Place(selected, contextfrag.IntentACPRuntimePrompt),
+	})
+	if err != nil {
+		t.Fatalf("Render() error: %v", err)
+	}
+	payload, ok := rendered.Data.(*ACPRenderedPayload)
+	if !ok {
+		t.Fatalf("Data type = %T, want *ACPRenderedPayload", rendered.Data)
 	}
 	return payload, rendered
 }

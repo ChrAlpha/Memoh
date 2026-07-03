@@ -867,7 +867,7 @@ func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _
 	return f.messages, f.err
 }
 
-func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ []ContextMessage, _ string) (string, error) {
+func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) (string, error) {
 	f.called = true
 	return f.prompt, f.err
 }
@@ -911,14 +911,33 @@ func TestDiscussSDKMessagesFallsBackWithoutBuilder(t *testing.T) {
 func TestDiscussACPPromptUsesInjectedBuilder(t *testing.T) {
 	t.Parallel()
 
-	messages := []ContextMessage{{Role: "user", Content: "hello"}}
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
 	builder := &fakeDiscussContextBuilder{prompt: "from builder"}
 	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
 
-	got := driver.discussACPPrompt(context.Background(), messages, "late", slog.Default())
+	got := driver.discussACPPrompt(context.Background(), contextfrag.Scope{}, DiscussContextInput{RC: rc, LateBinding: "late"}, composed, slog.Default())
 
 	if got != "from builder" {
 		t.Fatalf("prompt = %q, want builder output", got)
+	}
+	if !builder.called {
+		t.Fatal("injected builder should be called")
+	}
+}
+
+func TestDiscussACPPromptFallsBackToLegacyOnBuilderError(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	builder := &fakeDiscussContextBuilder{err: errors.New("boom")}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.Default()})
+
+	got := driver.discussACPPrompt(context.Background(), contextfrag.Scope{}, DiscussContextInput{RC: rc, LateBinding: "late"}, composed, slog.Default())
+
+	if got != discussACPFullContextPrompt(composed.Messages, "late") {
+		t.Fatalf("prompt = %q, want legacy fallback", got)
 	}
 }
 

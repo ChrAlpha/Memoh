@@ -9,59 +9,84 @@ import (
 	"github.com/memohai/memoh/internal/pipeline"
 )
 
-func TestACPEquivalence_DiscussFullContextPrompt(t *testing.T) {
+// The discuss-ACP prompt renders from selected fragments. For streams where
+// the legacy MergeContext would not fold adjacent RC segments, the fragment
+// rendering must stay byte-identical to the legacy prompt.
+func TestDiscussACPPromptMatchesLegacyForAlternatingStreams(t *testing.T) {
 	t.Parallel()
 
-	messages := []pipeline.ContextMessage{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi"},
+	rc := pipeline.RenderedContext{
+		{ReceivedAtMs: 100, Content: []pipeline.RenderedContentPiece{{Type: "text", Text: "hello"}}},
+		{ReceivedAtMs: 300, Content: []pipeline.RenderedContentPiece{{Type: "text", Text: "how about now?"}}},
 	}
-	lateBinding := "Only answer if mentioned."
-
-	assertACPDiscussPromptEquivalent(t, messages, lateBinding)
-}
-
-func TestACPEquivalence_DiscussFullContextPromptNoLateBinding(t *testing.T) {
-	t.Parallel()
-
-	messages := []pipeline.ContextMessage{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi"},
+	trs := []pipeline.TurnResponseEntry{
+		{RequestedAtMs: 200, Role: "assistant", Content: "hi"},
 	}
 
-	assertACPDiscussPromptEquivalent(t, messages, "")
-}
-
-func TestACPEquivalence_DiscussFullContextPromptWithSummary(t *testing.T) {
-	t.Parallel()
-
-	messages := []pipeline.ContextMessage{
-		{Role: "user", Content: "[Conversation summary]\nolder context"},
-		{Role: "user", Content: "latest question"},
-		{Role: "assistant", Content: "latest answer"},
+	for _, tc := range []struct {
+		name        string
+		summary     string
+		lateBinding string
+	}{
+		{name: "with late binding", lateBinding: "Only answer if mentioned."},
+		{name: "no late binding"},
+		{name: "with summary", summary: "older context", lateBinding: "Mentioned in this turn."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			builder := &DiscussSDKContextBuilder{}
+			got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{
+				RC:             rc,
+				TRs:            trs,
+				CompactSummary: tc.summary,
+				LateBinding:    tc.lateBinding,
+			})
+			if err != nil {
+				t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
+			}
+			composed := pipeline.ComposeContext(rc, trs, tc.summary)
+			if composed == nil {
+				t.Fatal("composed should not be nil")
+			}
+			want := legacyDiscussACPFullContextPrompt(composed.Messages, tc.lateBinding)
+			if got != want {
+				t.Fatalf("prompt mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+			}
+		})
 	}
-	lateBinding := "Mentioned in this turn."
-
-	assertACPDiscussPromptEquivalent(t, messages, lateBinding)
 }
 
-func TestACPEquivalence_EmptyDiscussMessages(t *testing.T) {
+// Adjacent RC segments are atomized into their own [user] blocks instead of
+// being folded into one message. This is the deliberate contract change from
+// the legacy MergeContext folding.
+func TestDiscussACPPromptKeepsAdjacentSegmentsAtomized(t *testing.T) {
 	t.Parallel()
 
-	assertACPDiscussPromptEquivalent(t, nil, "")
+	rc := pipeline.RenderedContext{
+		{ReceivedAtMs: 100, Content: []pipeline.RenderedContentPiece{{Type: "text", Text: "first burst"}}},
+		{ReceivedAtMs: 150, Content: []pipeline.RenderedContentPiece{{Type: "text", Text: "second burst"}}},
+	}
+	builder := &DiscussSDKContextBuilder{}
+	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{RC: rc})
+	if err != nil {
+		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
+	}
+	if !strings.Contains(got, "[user]\nfirst burst") || !strings.Contains(got, "[user]\nsecond burst") {
+		t.Fatalf("adjacent segments must render as separate blocks:\n%s", got)
+	}
 }
 
-func assertACPDiscussPromptEquivalent(t *testing.T, messages []pipeline.ContextMessage, lateBinding string) {
-	t.Helper()
-	payload, _ := renderACP(t, ACPRenderConfig{
-		Mode:               ACPRenderModeDiscuss,
-		DiscussMessages:    messages,
-		DiscussLateBinding: lateBinding,
-	}, contextfrag.IntentDiscussReply)
+func TestDiscussACPPromptEmptyInput(t *testing.T) {
+	t.Parallel()
 
-	want := legacyDiscussACPFullContextPrompt(messages, lateBinding)
-	if payload.ContextMarkdown != want {
-		t.Fatalf("ContextMarkdown mismatch:\ngot:\n%s\nwant:\n%s", payload.ContextMarkdown, want)
+	builder := &DiscussSDKContextBuilder{}
+	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{})
+	if err != nil {
+		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
+	}
+	want := legacyDiscussACPFullContextPrompt(nil, "")
+	if got != want {
+		t.Fatalf("empty prompt mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
@@ -89,22 +114,4 @@ func legacyDiscussACPFullContextPrompt(messages []pipeline.ContextMessage, lateB
 		b.WriteString(strings.TrimSpace(lateBinding))
 	}
 	return strings.TrimSpace(b.String())
-}
-
-func TestDiscussSDKContextBuilderACPPromptMatchesLegacy(t *testing.T) {
-	t.Parallel()
-
-	messages := []pipeline.ContextMessage{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "hi"},
-	}
-	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussACPPrompt(context.Background(), messages, "Only reply when mentioned.")
-	if err != nil {
-		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
-	}
-	want := legacyDiscussACPFullContextPrompt(messages, "Only reply when mentioned.")
-	if got != want {
-		t.Fatalf("prompt mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
-	}
 }

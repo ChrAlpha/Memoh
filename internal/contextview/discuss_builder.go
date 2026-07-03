@@ -46,22 +46,33 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 	return payload.Messages, nil
 }
 
-func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, messages []pipeline.ContextMessage, lateBinding string) (string, error) {
-	renderer := &ACPFullContextRenderer{Config: ACPRenderConfig{
-		Mode:               ACPRenderModeDiscuss,
-		DiscussMessages:    messages,
-		DiscussLateBinding: lateBinding,
-	}}
-	rendered, err := renderer.Render(ctx, RenderInput{
+func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {
+	builder := NewBuilder(
+		NewMapCollectorRegistry(&DiscussContextCollector{}),
+		&FragmentSelector{},
+		IdentityPlacer{},
+		NewMapRendererRegistry(&ACPFullContextRenderer{Config: ACPRenderConfig{Mode: ACPRenderModeDiscuss}}),
+	)
+	view, err := builder.Build(ctx, BuildInput{
+		Scope:  scope,
 		Intent: contextfrag.IntentACPRuntimePrompt,
-		Target: contextfrag.RenderACPFullContext,
+		Sources: []SourceSpec{{
+			Name: "discuss_context",
+			Config: DiscussContextConfig{
+				RC:             input.RC,
+				TRs:            input.TRs,
+				CompactSummary: input.CompactSummary,
+				LateBinding:    input.LateBinding,
+			},
+		}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderACPFullContext},
 	})
 	if err != nil {
 		return "", err
 	}
-	payload, ok := rendered.Data.(*ACPRenderedPayload)
+	payload, ok := view.Rendered[contextfrag.RenderACPFullContext].Data.(*ACPRenderedPayload)
 	if !ok {
-		return "", fmt.Errorf("unexpected acp payload type %T", rendered.Data)
+		return "", fmt.Errorf("unexpected acp payload type %T", view.Rendered[contextfrag.RenderACPFullContext].Data)
 	}
 	return payload.ContextMarkdown, nil
 }

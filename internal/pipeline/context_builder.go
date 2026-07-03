@@ -13,7 +13,7 @@ import (
 // DiscussDriverDeps to avoid a pipeline -> contextview import cycle.
 type DiscussContextBuilder interface {
 	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) ([]sdk.Message, error)
-	BuildDiscussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string) (string, error)
+	BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, error)
 }
 
 // DiscussContextInput carries every discuss source for one turn: the RC/TR

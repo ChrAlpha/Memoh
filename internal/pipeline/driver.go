@@ -321,7 +321,12 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 			d.advanceDiscussCursor(ctx, sess, cfg, consumedMs, log)
 			return
 		}
-		if d.streamDiscussACPRuntime(ctx, cfg, composed, addressed, log) {
+		acpInput := DiscussContextInput{
+			RC:          rc,
+			TRs:         trs,
+			LateBinding: buildLateBindingPrompt(addressed),
+		}
+		if d.streamDiscussACPRuntime(ctx, cfg, resolved.RunConfig.ContextScope, acpInput, composed, log) {
 			d.advanceDiscussCursor(ctx, sess, cfg, consumedMs, log)
 		}
 		return
@@ -390,12 +395,12 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	d.advanceDiscussCursor(ctx, sess, cfg, consumedMs, log)
 }
 
-func (d *DiscussDriver) streamDiscussACPRuntime(ctx context.Context, cfg DiscussSessionConfig, composed *ComposeContextResult, isMentioned bool, log *slog.Logger) bool {
+func (d *DiscussDriver) streamDiscussACPRuntime(ctx context.Context, cfg DiscussSessionConfig, scope contextfrag.Scope, input DiscussContextInput, composed *ComposeContextResult, log *slog.Logger) bool {
 	if d.deps.RuntimeStreamer == nil {
 		log.Error("discuss ACP runtime: streamer not configured")
 		return false
 	}
-	prompt := d.discussACPPrompt(ctx, composed.Messages, buildLateBindingPrompt(isMentioned), log)
+	prompt := d.discussACPPrompt(ctx, scope, input, composed, log)
 	if strings.TrimSpace(prompt) == "" {
 		return false
 	}
@@ -761,14 +766,14 @@ func legacyDiscussSDKMessages(input DiscussContextInput, composed *ComposeContex
 	return messages
 }
 
-func (d *DiscussDriver) discussACPPrompt(ctx context.Context, messages []ContextMessage, lateBinding string, log *slog.Logger) string {
+func (d *DiscussDriver) discussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput, composed *ComposeContextResult, log *slog.Logger) string {
 	if d.deps.ContextBuilder == nil {
-		return discussACPFullContextPrompt(messages, lateBinding)
+		return discussACPFullContextPrompt(composed.Messages, input.LateBinding)
 	}
-	prompt, err := d.deps.ContextBuilder.BuildDiscussACPPrompt(ctx, messages, lateBinding)
+	prompt, err := d.deps.ContextBuilder.BuildDiscussACPPrompt(ctx, scope, input)
 	if err != nil {
 		log.Warn("discuss acp context view build failed; using legacy prompt", slog.Any("error", err))
-		return discussACPFullContextPrompt(messages, lateBinding)
+		return discussACPFullContextPrompt(composed.Messages, input.LateBinding)
 	}
 	return prompt
 }

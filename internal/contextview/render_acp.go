@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"strings"
 
+	sdk "github.com/memohai/twilight-ai/sdk"
+
 	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
 )
 
 const (
@@ -29,11 +30,9 @@ const (
 )
 
 type ACPRenderConfig struct {
-	Mode               ACPRenderMode
-	ContextMarkdown    string
-	ContextURI         string
-	DiscussMessages    []pipeline.ContextMessage
-	DiscussLateBinding string
+	Mode            ACPRenderMode
+	ContextMarkdown string
+	ContextURI      string
 }
 
 type ACPFullContextRenderer struct {
@@ -49,7 +48,11 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 	markdown, uri := cfg.ContextMarkdown, cfg.ContextURI
 
 	if acpRenderMode(cfg) == ACPRenderModeDiscuss {
-		markdown = buildDiscussACPFullContextPrompt(cfg.DiscussMessages, cfg.DiscussLateBinding)
+		rendered, err := renderDiscussACPSelectedPrompt(input)
+		if err != nil {
+			return RenderedPayload{}, err
+		}
+		markdown = rendered
 		uri = defaultDiscussACPContextURI
 	} else {
 		if len(input.Selected) > 0 {
@@ -103,16 +106,25 @@ func acpRenderMode(cfg ACPRenderConfig) ACPRenderMode {
 	return ACPRenderModeChat
 }
 
-func buildDiscussACPFullContextPrompt(messages []pipeline.ContextMessage, lateBinding string) string {
+// renderDiscussACPSelectedPrompt renders the discuss-mode full-context prompt
+// from the selected fragments: conversation fragments become "[role]" blocks
+// in placement order and the late-binding fragment (SlotAfterCurrent) lands
+// after the closing instruction instead of inside the conversation.
+func renderDiscussACPSelectedPrompt(input RenderInput) (string, error) {
+	ordered, err := orderedSelectedFrags(input.Selected, input.Placement)
+	if err != nil {
+		return "", err
+	}
+	var lateBindings []string
 	var b strings.Builder
 	b.WriteString("You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n")
-	for _, msg := range messages {
-		role := strings.TrimSpace(msg.Role)
-		if role == "" {
-			role = "user"
-		}
-		content := strings.TrimSpace(msg.Content)
+	for _, frag := range ordered {
+		role, content := discussACPBlock(frag)
 		if content == "" {
+			continue
+		}
+		if frag.Slot == contextfrag.SlotAfterCurrent {
+			lateBindings = append(lateBindings, content)
 			continue
 		}
 		b.WriteString("[")
@@ -122,11 +134,46 @@ func buildDiscussACPFullContextPrompt(messages []pipeline.ContextMessage, lateBi
 		b.WriteString("\n\n")
 	}
 	b.WriteString("Reply to the latest user-visible message when a response is appropriate.")
-	if strings.TrimSpace(lateBinding) != "" {
+	for _, lateBinding := range lateBindings {
 		b.WriteString("\n\n")
-		b.WriteString(strings.TrimSpace(lateBinding))
+		b.WriteString(lateBinding)
 	}
-	return strings.TrimSpace(b.String())
+	return strings.TrimSpace(b.String()), nil
+}
+
+func discussACPBlock(frag contextfrag.ContextFrag) (string, string) {
+	role := strings.TrimSpace(string(frag.Role))
+	if msg := discussFragMessage(frag); msg != nil {
+		if msgRole := strings.TrimSpace(string(msg.Role)); msgRole != "" {
+			role = msgRole
+		}
+		var texts []string
+		for _, part := range msg.Content {
+			if text, ok := part.(sdk.TextPart); ok {
+				if trimmed := strings.TrimSpace(text.Text); trimmed != "" {
+					texts = append(texts, trimmed)
+				}
+			}
+		}
+		return roleOrUser(role), strings.Join(texts, "\n")
+	}
+	var texts []string
+	for _, part := range frag.Parts {
+		if part.Type != contextfrag.PartText {
+			continue
+		}
+		if text := strings.TrimSpace(part.Text); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	return roleOrUser(role), strings.Join(texts, "\n")
+}
+
+func roleOrUser(role string) string {
+	if role == "" {
+		return "user"
+	}
+	return role
 }
 
 func textContentHash(text string) string {
