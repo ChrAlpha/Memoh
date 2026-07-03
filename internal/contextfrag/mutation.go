@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"sync"
 )
 
@@ -25,6 +26,15 @@ type MutationRecord struct {
 	Detail string       `json:"detail,omitempty"`
 }
 
+type CacheUsageRecord struct {
+	StepIndex          int `json:"step_index"`
+	NoCacheTokens      int `json:"no_cache_tokens,omitempty"`
+	CacheReadTokens    int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens   int `json:"cache_write_tokens,omitempty"`
+	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
+}
+
 // MutationLedger collects the post-render mutations applied to a run's
 // context together with the hash of the first provider input, so the
 // manifest chain from rendered payload to final model input stays auditable.
@@ -32,6 +42,7 @@ type MutationRecord struct {
 type MutationLedger struct {
 	mu             sync.Mutex
 	records        []MutationRecord
+	cacheUsage     []CacheUsageRecord
 	finalInputHash string
 }
 
@@ -59,6 +70,26 @@ func (l *MutationLedger) Records() []MutationRecord {
 	return out
 }
 
+func (l *MutationLedger) RecordCacheUsage(record CacheUsageRecord) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cacheUsage = append(l.cacheUsage, record)
+}
+
+func (l *MutationLedger) CacheUsageRecords() []CacheUsageRecord {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]CacheUsageRecord, len(l.cacheUsage))
+	copy(out, l.cacheUsage)
+	return out
+}
+
 func (l *MutationLedger) SetFinalInputHash(hash string) {
 	if l == nil {
 		return
@@ -80,25 +111,48 @@ func (l *MutationLedger) FinalInputHash() string {
 // ProviderInputHash hashes the assembled provider payload (system prompt
 // plus message stream) deterministically.
 func ProviderInputHash(system string, messages any) string {
+	hash, _ := ProviderPayloadHashAndBytes(system, messages, nil)
+	return hash
+}
+
+func ProviderPayloadHashAndBytes(system string, messages any, tools any) (string, int) {
+	tools = nilIfEmptyValue(tools)
 	raw, err := json.Marshal(struct {
 		System   string `json:"system"`
 		Messages any    `json:"messages"`
-	}{System: system, Messages: messages})
+		Tools    any    `json:"tools,omitempty"`
+	}{System: system, Messages: messages, Tools: tools})
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), len(raw)
+}
+
+func nilIfEmptyValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if rv.IsNil() {
+			return nil
+		}
+	}
+	return value
 }
 
 // MarshalJSON serializes the ledger snapshot so a manifest carrying it can be
 // persisted or logged as one lifecycle document.
 func (l *MutationLedger) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Records        []MutationRecord `json:"records,omitempty"`
-		FinalInputHash string           `json:"final_input_hash,omitempty"`
+		Records        []MutationRecord   `json:"records,omitempty"`
+		CacheUsage     []CacheUsageRecord `json:"cache_usage,omitempty"`
+		FinalInputHash string             `json:"final_input_hash,omitempty"`
 	}{
 		Records:        l.Records(),
+		CacheUsage:     l.CacheUsageRecords(),
 		FinalInputHash: l.FinalInputHash(),
 	})
 }

@@ -125,3 +125,34 @@ func TestLifecycleHolderSnapshotCondensesManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycleSnapshotIncludesCacheUsage(t *testing.T) {
+	ledger := NewMutationLedger()
+	ledger.RecordCacheUsage(CacheUsageRecord{
+		StepIndex:        0,
+		CacheReadTokens:  11,
+		CacheWriteTokens: 7,
+	})
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{
+		View:      ViewRunConfigPreProvider,
+		Mutations: ledger,
+	})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("snapshot should be available")
+	}
+	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 {
+		t.Fatalf("cache usage = read %d write %d", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, want := range []string{`"step_index":0`, `"cache_read_tokens":11`, `"cache_write_tokens":7`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("cache usage JSON missing %s: %s", want, raw)
+		}
+	}
+}

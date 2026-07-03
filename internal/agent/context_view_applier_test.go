@@ -221,3 +221,55 @@ func TestGenerateWritesFinalInputHashToManifestLedger(t *testing.T) {
 		t.Fatal("final provider input hash must land on the manifest ledger")
 	}
 }
+
+func TestGeneratePublishesRenderedPrefixHashAndCacheUsage(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
+		InputTokens: 42,
+		InputTokenDetails: sdk.InputTokenDetail{
+			CacheReadTokens:  11,
+			CacheWriteTokens: 7,
+		},
+	}}
+	holder := contextfrag.NewLifecycleHolder()
+	ledger := contextfrag.NewMutationLedger()
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+		plan := contextfrag.CachePlan{StablePrefixHash: "fragment-prefix", StableMessageCount: 1}
+		manifest := contextfrag.Manifest{
+			View:      contextfrag.ViewRunConfigPreProvider,
+			CachePlan: &plan,
+			Mutations: ledger,
+		}
+		cfg.ContextCachePlan = plan
+		cfg.ContextManifest = manifest
+		cfg.ContextMutations = ledger
+		if cfg.ContextLifecycle != nil {
+			cfg.ContextLifecycle.SetManifest(manifest)
+		}
+		return cfg
+	}})
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "cache-telemetry-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "stable system",
+		Messages:         []sdk.Message{sdk.UserMessage("stable message")},
+		ContextLifecycle: holder,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle snapshot missing")
+	}
+	if snapshot.RenderedPrefixHash == "" {
+		t.Fatalf("rendered prefix hash missing: %#v", snapshot)
+	}
+	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 {
+		t.Fatalf("cache usage = read %d write %d", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
+	}
+}

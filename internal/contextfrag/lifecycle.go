@@ -44,7 +44,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		View:               manifest.View,
 		Counts:             manifest.Counts,
 		Selection:          selectionSnapshot(manifest.Selection),
-		RenderPrefixHash:   "",
+		RenderedPrefixHash: "",
 		CacheReadTokens:    0,
 		CacheWriteTokens:   0,
 		StablePrefixHash:   "",
@@ -53,26 +53,33 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 	if manifest.CachePlan != nil {
 		snapshot.StablePrefixHash = manifest.CachePlan.StablePrefixHash
 		snapshot.StableMessageCount = manifest.CachePlan.StableMessageCount
+		snapshot.RenderedPrefixHash = manifest.CachePlan.RenderedStablePrefixHash
 	}
 	if manifest.Mutations != nil {
 		snapshot.Mutations = manifest.Mutations.Records()
 		snapshot.FinalInputHash = manifest.Mutations.FinalInputHash()
+		snapshot.CacheUsage = manifest.Mutations.CacheUsageRecords()
+		for _, record := range snapshot.CacheUsage {
+			snapshot.CacheReadTokens += record.CacheReadTokens
+			snapshot.CacheWriteTokens += record.CacheWriteTokens
+		}
 	}
 	return snapshot
 }
 
 type LifecycleSnapshot struct {
-	Version            int              `json:"version"`
-	View               ManifestView     `json:"view,omitempty"`
-	Counts             ManifestCounts   `json:"counts"`
-	Selection          SelectionTrace   `json:"selection"`
-	StablePrefixHash   string           `json:"stable_prefix_hash,omitempty"`
-	StableMessageCount int              `json:"stable_message_count,omitempty"`
-	RenderPrefixHash   string           `json:"rendered_prefix_hash"`
-	CacheReadTokens    int              `json:"cache_read_tokens"`
-	CacheWriteTokens   int              `json:"cache_write_tokens"`
-	Mutations          []MutationRecord `json:"mutations,omitempty"`
-	FinalInputHash     string           `json:"final_input_hash,omitempty"`
+	Version            int                `json:"version"`
+	View               ManifestView       `json:"view,omitempty"`
+	Counts             ManifestCounts     `json:"counts"`
+	Selection          SelectionTrace     `json:"selection"`
+	StablePrefixHash   string             `json:"stable_prefix_hash,omitempty"`
+	StableMessageCount int                `json:"stable_message_count,omitempty"`
+	RenderedPrefixHash string             `json:"rendered_prefix_hash"`
+	CacheReadTokens    int                `json:"cache_read_tokens"`
+	CacheWriteTokens   int                `json:"cache_write_tokens"`
+	CacheUsage         []CacheUsageRecord `json:"cache_usage,omitempty"`
+	Mutations          []MutationRecord   `json:"mutations,omitempty"`
+	FinalInputHash     string             `json:"final_input_hash,omitempty"`
 }
 
 func selectionSnapshot(selection *SelectionTrace) SelectionTrace {

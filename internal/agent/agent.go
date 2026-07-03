@@ -287,6 +287,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+		recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
 		a.runAfterModelCallHook(streamCtx, cfg, step, modelStepIndex)
 		modelStepIndex++
 		return nil
@@ -573,19 +574,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if streamResult.DeferredToolApproval != nil {
 		finalMessages = annotateDeferredApproval(finalMessages, *streamResult.DeferredToolApproval)
 	}
-	var totalUsage sdk.Usage
-	for _, step := range streamResult.Steps {
-		totalUsage.InputTokens += step.Usage.InputTokens
-		totalUsage.OutputTokens += step.Usage.OutputTokens
-		totalUsage.TotalTokens += step.Usage.TotalTokens
-		totalUsage.ReasoningTokens += step.Usage.ReasoningTokens
-		totalUsage.CachedInputTokens += step.Usage.CachedInputTokens
-		totalUsage.InputTokenDetails.NoCacheTokens += step.Usage.InputTokenDetails.NoCacheTokens
-		totalUsage.InputTokenDetails.CacheReadTokens += step.Usage.InputTokenDetails.CacheReadTokens
-		totalUsage.InputTokenDetails.CacheWriteTokens += step.Usage.InputTokenDetails.CacheWriteTokens
-		totalUsage.OutputTokenDetails.TextTokens += step.Usage.OutputTokenDetails.TextTokens
-		totalUsage.OutputTokenDetails.ReasoningTokens += step.Usage.OutputTokenDetails.ReasoningTokens
-	}
+	totalUsage := aggregateStepUsage(streamResult.Steps)
 	usageJSON, _ := json.Marshal(totalUsage)
 
 	termEvent := StreamEvent{
@@ -726,6 +715,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	modelStepIndex := 0
 	opts = append(opts,
 		sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+			recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
 			a.runAfterModelCallHook(genCtx, cfg, step, modelStepIndex)
 			modelStepIndex++
 			if cfg.LoopDetection.Enabled {
@@ -756,6 +746,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 	if loopErr := loopAbort.Err(); loopErr != nil {
 		return nil, loopErr
+	}
+	if len(genResult.Steps) > 0 {
+		genResult.Usage = aggregateStepUsage(genResult.Steps)
 	}
 
 	// Drain collected tool-emitted side effects into the result.
@@ -799,7 +792,10 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 	system, messages, tools := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
 	)
-	cfg.ContextMutations.SetFinalInputHash(contextfrag.ProviderInputHash(system, messages))
+	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools)
+	publishContextCachePlan(cfg, plan)
+	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
+	cfg.ContextMutations.SetFinalInputHash(finalHash)
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
 		baseSystem := captureBackgroundSystem(system, messages)
@@ -873,6 +869,90 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 		},
 	})...)
 	return opts
+}
+
+func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool) contextfrag.CachePlan {
+	prefixCount := renderedStableMessageCount(plan, messages)
+	prefixMessages := append([]sdk.Message(nil), messages[:prefixCount]...)
+	hash, bytes := contextfrag.ProviderPayloadHashAndBytes(system, prefixMessages, tools)
+	plan.RenderedStablePrefixHash = hash
+	plan.RenderedStablePrefixBytes = bytes
+	plan.RenderedStablePrefixTokenEstimate = tokenEstimateFromBytes(bytes)
+	return plan
+}
+
+func renderedStableMessageCount(plan contextfrag.CachePlan, messages []sdk.Message) int {
+	count := plan.StableMessageCount
+	if len(messages) > 0 && messages[0].Role == sdk.MessageRoleSystem {
+		count++
+	}
+	if count < 0 {
+		return 0
+	}
+	if count > len(messages) {
+		return len(messages)
+	}
+	return count
+}
+
+func tokenEstimateFromBytes(bytes int) int {
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + 3) / 4
+}
+
+func publishContextCachePlan(cfg RunConfig, plan contextfrag.CachePlan) {
+	if cfg.ContextManifest.CachePlan != nil {
+		*cfg.ContextManifest.CachePlan = plan
+	} else {
+		cfg.ContextManifest.CachePlan = &plan
+	}
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(cfg.ContextManifest)
+	}
+}
+
+func recordContextCacheUsage(ledger *contextfrag.MutationLedger, stepIndex int, step *sdk.StepResult) {
+	if ledger == nil || step == nil {
+		return
+	}
+	detail := step.Usage.InputTokenDetails
+	if step.Usage.CachedInputTokens == 0 &&
+		detail.NoCacheTokens == 0 &&
+		detail.CacheReadTokens == 0 &&
+		detail.CacheWriteTokens == 0 &&
+		detail.CacheWrite5mTokens == 0 &&
+		detail.CacheWrite1hTokens == 0 {
+		return
+	}
+	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{
+		StepIndex:          stepIndex,
+		NoCacheTokens:      detail.NoCacheTokens,
+		CacheReadTokens:    detail.CacheReadTokens,
+		CacheWriteTokens:   detail.CacheWriteTokens,
+		CacheWrite5mTokens: detail.CacheWrite5mTokens,
+		CacheWrite1hTokens: detail.CacheWrite1hTokens,
+	})
+}
+
+func aggregateStepUsage(steps []sdk.StepResult) sdk.Usage {
+	var total sdk.Usage
+	for _, step := range steps {
+		total.InputTokens += step.Usage.InputTokens
+		total.OutputTokens += step.Usage.OutputTokens
+		total.TotalTokens += step.Usage.TotalTokens
+		total.ReasoningTokens += step.Usage.ReasoningTokens
+		total.CachedInputTokens += step.Usage.CachedInputTokens
+		total.InputTokenDetails.NoCacheTokens += step.Usage.InputTokenDetails.NoCacheTokens
+		total.InputTokenDetails.CacheReadTokens += step.Usage.InputTokenDetails.CacheReadTokens
+		total.InputTokenDetails.CacheWriteTokens += step.Usage.InputTokenDetails.CacheWriteTokens
+		total.InputTokenDetails.CacheWrite5mTokens += step.Usage.InputTokenDetails.CacheWrite5mTokens
+		total.InputTokenDetails.CacheWrite1hTokens += step.Usage.InputTokenDetails.CacheWrite1hTokens
+		total.OutputTokenDetails.TextTokens += step.Usage.OutputTokenDetails.TextTokens
+		total.OutputTokenDetails.ReasoningTokens += step.Usage.OutputTokenDetails.ReasoningTokens
+	}
+	return total
 }
 
 // assembleTools collects tools from all registered ToolProviders, along with

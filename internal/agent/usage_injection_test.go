@@ -61,6 +61,7 @@ const usageMarker = "USAGE_MARKER_xyz"
 type usageRecordingProvider struct {
 	mu     sync.Mutex
 	params []sdk.GenerateParams
+	usage  sdk.Usage
 }
 
 func (*usageRecordingProvider) Name() string { return "usage-recording" }
@@ -79,7 +80,7 @@ func (p *usageRecordingProvider) DoGenerate(_ context.Context, params sdk.Genera
 	p.mu.Lock()
 	p.params = append(p.params, params)
 	p.mu.Unlock()
-	return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+	return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop, Usage: p.usage}, nil
 }
 
 func (*usageRecordingProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
