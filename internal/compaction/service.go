@@ -3,12 +3,14 @@ package compaction
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -152,16 +154,6 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
 		return nil
 	}
-	toCompact := selectCompactionRecords(candidates, window)
-	s.logger.Info("compaction: candidates selected",
-		slog.Int("messages", len(toCompact)),
-		slog.Int("total_uncompacted", len(candidates)),
-		slog.Int("max_compact_tokens", window.MaxPromptTokens),
-	)
-	if len(toCompact) == 0 {
-		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
-		return nil
-	}
 
 	priorLogs, err := s.queries.ListCompactionLogsBySession(ctx, sessionUUID)
 	if err != nil {
@@ -174,9 +166,27 @@ func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUU
 		}
 	}
 
-	payload, err := contextViewCompactionPrompt(toCompact, priorSummaries)
+	scope := contextfrag.Scope{BotID: cfg.BotID, SessionID: cfg.SessionID}
+	view, toCompact, err := compactionView(ctx, scope, candidates, window, priorSummaries)
 	if err != nil {
 		return err
+	}
+	s.logger.Info("compaction: candidates selected",
+		slog.Int("messages", len(toCompact)),
+		slog.Int("total_uncompacted", len(candidates)),
+		slog.Int("kept_in_history", view.Trace.SelectionSummary.TotalDropped),
+		slog.Int("max_compact_tokens", window.MaxPromptTokens),
+		slog.Int("manifest_items", len(view.Manifest.Items)),
+		slog.Any("keep_reasons", selectionReasonHistogram(view.Trace.SelectionSummary.DropReasons)),
+	)
+	if len(toCompact) == 0 {
+		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
+		return nil
+	}
+
+	payload, ok := view.Rendered[contextfrag.RenderCompactionPrompt].Data.(*contextview.CompactionRenderedPayload)
+	if !ok {
+		return fmt.Errorf("unexpected compaction payload type %T", view.Rendered[contextfrag.RenderCompactionPrompt].Data)
 	}
 	if payload.EntryCount == 0 {
 		// Every selected message rendered empty (e.g. reasoning-only): summarizing

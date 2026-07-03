@@ -1,13 +1,44 @@
 package compaction
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/historyfrag"
 )
+
+// contextViewCompactionPrompt renders the compaction prompt over the given
+// records through the production collector and renderer, without the
+// selection stage, so the golden fixtures exercise rendering in isolation.
+func contextViewCompactionPrompt(candidates []RecordCompactionCandidate, priorSummaries []string) (*contextview.CompactionRenderedPayload, error) {
+	records := make([]historyfrag.HistoryRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		records = append(records, candidate.Record)
+	}
+	collector := &contextview.CompactionRecordsCollector{}
+	frags, err := collector.Collect(context.Background(), contextview.CollectRequest{
+		Intent: contextfrag.IntentCompactionCandidates,
+		Config: contextview.CompactionRecordsConfig{Records: records},
+	})
+	if err != nil {
+		return nil, err
+	}
+	renderer := &contextview.CompactionPromptRenderer{PriorSummaries: priorSummaries}
+	rendered, err := renderer.Render(context.Background(), contextview.RenderInput{
+		Intent:    contextfrag.IntentCompactionCandidates,
+		Selected:  frags,
+		Placement: contextview.IdentityPlacer{}.Place(frags, contextfrag.IntentCompactionCandidates),
+		Target:    contextfrag.RenderCompactionPrompt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rendered.Data.(*contextview.CompactionRenderedPayload), nil
+}
 
 func TestContextViewCompactionPromptGoldenSmall(t *testing.T) {
 	t.Parallel()

@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -34,36 +35,62 @@ func recordCandidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) (
 	return candidates, skipped
 }
 
-// selectCompactionRecords routes the windowing decision through the
-// contextview selection engine and maps the selected fragments back to their
-// records.
-func selectCompactionRecords(candidates []RecordCompactionCandidate, window *contextview.CompactionWindow) []RecordCompactionCandidate {
+// compactionView runs the compaction candidates through the full context
+// view lifecycle: collect records into fragments, select the compactable
+// window under the trigger budget, and render the summarization prompt. The
+// returned candidates are the records selected for compaction, in original
+// order.
+func compactionView(ctx context.Context, scope contextfrag.Scope, candidates []RecordCompactionCandidate, window *contextview.CompactionWindow, priorSummaries []string) (*contextview.ContextView, []RecordCompactionCandidate, error) {
 	if len(candidates) == 0 {
-		return nil
+		return nil, nil, nil
 	}
-	frags := make([]contextfrag.ContextFrag, 0, len(candidates))
-	for i, candidate := range candidates {
-		frag := historyfrag.ToFrag(candidate.Record)
-		frag.Provenance.Index = i
-		frags = append(frags, frag)
+	records := make([]historyfrag.HistoryRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		records = append(records, candidate.Record)
 	}
-	selector := &contextview.FragmentSelector{}
-	profile := selector.ProfileFor(contextfrag.IntentCompactionCandidates)
-	result := selector.Select(frags, profile, contextview.BudgetEnvelope{Compaction: window})
-	if len(result.Selected) == 0 {
-		return nil
+	builder := contextview.NewBuilder(
+		contextview.NewMapCollectorRegistry(&contextview.CompactionRecordsCollector{}),
+		&contextview.FragmentSelector{},
+		contextview.IdentityPlacer{},
+		contextview.NewMapRendererRegistry(&contextview.CompactionPromptRenderer{PriorSummaries: priorSummaries}),
+	)
+	view, err := builder.Build(ctx, contextview.BuildInput{
+		Scope:  scope,
+		Intent: contextfrag.IntentCompactionCandidates,
+		Sources: []contextview.SourceSpec{{
+			Name:   "compaction_records",
+			Config: contextview.CompactionRecordsConfig{Records: records},
+		}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderCompactionPrompt},
+		Budget:  contextview.BudgetEnvelope{Compaction: window},
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	selectedIndexes := make(map[int]bool, len(result.Selected))
-	for _, frag := range result.Selected {
+	selectedIndexes := make(map[int]bool, len(view.Selected))
+	for _, frag := range view.Selected {
 		if frag.Provenance.Index >= 0 && frag.Provenance.Index < len(candidates) {
 			selectedIndexes[frag.Provenance.Index] = true
 		}
 	}
-	out := make([]RecordCompactionCandidate, 0, len(result.Selected))
+	toCompact := make([]RecordCompactionCandidate, 0, len(view.Selected))
 	for i, candidate := range candidates {
 		if selectedIndexes[i] {
-			out = append(out, candidate)
+			toCompact = append(toCompact, candidate)
 		}
+	}
+	return view, toCompact, nil
+}
+
+// selectionReasonHistogram condenses the selection drop trace ("kept in
+// history" for the compaction intent) into reason counts for the log line.
+func selectionReasonHistogram(records []contextview.DropRecord) map[string]int {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make(map[string]int, 4)
+	for _, record := range records {
+		out[record.Reason]++
 	}
 	return out
 }

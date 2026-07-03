@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -81,6 +82,52 @@ func mustCompactionJSON(value any) json.RawMessage {
 
 func sweepWindow() *contextview.CompactionWindow {
 	return &contextview.CompactionWindow{SweepAll: true}
+}
+
+// selectCompactionRecords keeps the selection-semantics tests running through
+// the full production build lifecycle.
+func selectCompactionRecords(candidates []RecordCompactionCandidate, window *contextview.CompactionWindow) []RecordCompactionCandidate {
+	_, toCompact, err := compactionView(context.Background(), contextfrag.Scope{}, candidates, window, nil)
+	if err != nil {
+		panic(err)
+	}
+	return toCompact
+}
+
+func TestCompactionViewProducesManifestAndTrace(t *testing.T) {
+	t.Parallel()
+
+	candidates := candidatesOf(
+		testRecord("current-user", "user", "current instruction", 100),
+		testRecord("loop-1", "assistant", "loop step 1", 100),
+		testRecord("loop-2", "assistant", "loop step 2", 100),
+		testRecord("tail", "assistant", "latest tail", 100),
+	)
+
+	view, toCompact, err := compactionView(context.Background(), contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}, candidates, sweepWindow(), nil)
+	if err != nil {
+		t.Fatalf("compactionView failed: %v", err)
+	}
+	if len(toCompact) != 2 {
+		t.Fatalf("selected = %#v, want 2", candidateIDs(toCompact))
+	}
+	if view.Manifest.View != contextfrag.ViewCompactionCandidates {
+		t.Fatalf("manifest view = %q, want compaction view", view.Manifest.View)
+	}
+	if len(view.Manifest.Items) != len(toCompact) {
+		t.Fatalf("manifest items = %d, want selected count %d", len(view.Manifest.Items), len(toCompact))
+	}
+	summary := view.Trace.SelectionSummary
+	if summary.TotalCollected != len(candidates) || summary.TotalSelected != 2 || summary.TotalDropped != 2 {
+		t.Fatalf("selection summary = %+v, want 4 collected / 2 selected / 2 kept", summary)
+	}
+	if len(view.Manifest.EditTrace) != summary.TotalDropped {
+		t.Fatalf("edit trace = %d entries, want one per kept record", len(view.Manifest.EditTrace))
+	}
+	payload, ok := view.Rendered[contextfrag.RenderCompactionPrompt].Data.(*contextview.CompactionRenderedPayload)
+	if !ok || payload.EntryCount != 2 {
+		t.Fatalf("rendered payload = %#v, want prompt over the 2 selected records", view.Rendered[contextfrag.RenderCompactionPrompt].Data)
+	}
 }
 
 func TestSelectCompactionRecordsCompactsCurrentTurnMiddle(t *testing.T) {
