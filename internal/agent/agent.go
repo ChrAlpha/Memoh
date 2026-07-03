@@ -620,6 +620,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			)
 		}
 	}
+	a.logContextLifecycle(cfg)
 	// Deliver the terminal event using a context that is NOT cancelled when
 	// the parent ctx is cancelled (user abort / idle timeout / loop-detect).
 	// Otherwise sendEvent would short-circuit on <-ctx.Done() and the consumer
@@ -629,6 +630,22 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	deliveryCtx, deliveryCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer deliveryCancel()
 	sendEvent(deliveryCtx, ch, termEvent)
+}
+
+// logContextLifecycle emits the one-line audit summary linking the context
+// view manifest to the final provider input: what was selected, what the
+// cache plan pinned, and which mutations ran after the view.
+func (a *Agent) logContextLifecycle(cfg RunConfig) {
+	if a == nil || a.logger == nil || cfg.ContextMutations == nil {
+		return
+	}
+	a.logger.Debug("context lifecycle",
+		slog.String("view", string(cfg.ContextManifest.View)),
+		slog.Int("manifest_items", len(cfg.ContextManifest.Items)),
+		slog.String("stable_prefix_hash", cfg.ContextCachePlan.StablePrefixHash),
+		slog.Int("mutations", len(cfg.ContextMutations.Records())),
+		slog.String("final_input_hash", cfg.ContextMutations.FinalInputHash()),
+	)
 }
 
 func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *GenerateResult, retErr error) {
@@ -767,6 +784,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if readMediaState != nil {
 		finalMessages = readMediaState.mergeMessages(genResult.Steps, finalMessages)
 	}
+	a.logContextLifecycle(cfg)
 	return &GenerateResult{
 		Messages:    finalMessages,
 		Text:        genResult.Text,

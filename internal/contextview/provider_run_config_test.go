@@ -63,3 +63,25 @@ func TestApplyProviderRunConfigProducesManifestAndLedger(t *testing.T) {
 		t.Fatal("rendered payload must populate system and messages")
 	}
 }
+
+func TestApplyProviderRunConfigManifestCarriesLifecycle(t *testing.T) {
+	t.Parallel()
+
+	got := ApplyProviderRunConfig(context.Background(), nil, providerRunConfigFixture())
+
+	if got.ContextManifest.CachePlan == nil || *got.ContextManifest.CachePlan != got.ContextCachePlan {
+		t.Fatalf("manifest cache plan = %v, want the run cache plan %v", got.ContextManifest.CachePlan, got.ContextCachePlan)
+	}
+	if got.ContextManifest.Mutations != got.ContextMutations {
+		t.Fatal("manifest must reference the same mutation ledger as the run config")
+	}
+
+	got.ContextMutations.Record(contextfrag.MutationBackgroundSummary, "test")
+	got.ContextMutations.SetFinalInputHash("final-hash")
+	if got.ContextManifest.Mutations.FinalInputHash() != "final-hash" {
+		t.Fatal("mutations recorded after the view must be visible through the manifest")
+	}
+	if records := got.ContextManifest.Mutations.Records(); len(records) != 1 {
+		t.Fatalf("manifest mutation records = %d, want 1", len(records))
+	}
+}

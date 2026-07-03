@@ -90,3 +90,15 @@ func ProviderInputHash(system string, messages any) string {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
+
+// MarshalJSON serializes the ledger snapshot so a manifest carrying it can be
+// persisted or logged as one lifecycle document.
+func (l *MutationLedger) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Records        []MutationRecord `json:"records,omitempty"`
+		FinalInputHash string           `json:"final_input_hash,omitempty"`
+	}{
+		Records:        l.Records(),
+		FinalInputHash: l.FinalInputHash(),
+	})
+}

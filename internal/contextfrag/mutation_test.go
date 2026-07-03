@@ -1,6 +1,10 @@
 package contextfrag
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestMutationLedgerNilSafe(t *testing.T) {
 	t.Parallel()
@@ -43,5 +47,25 @@ func TestProviderInputHashDeterministic(t *testing.T) {
 	}
 	if first == changed {
 		t.Fatal("hash must track payload changes")
+	}
+}
+
+func TestManifestJSONIncludesLifecycle(t *testing.T) {
+	ledger := NewMutationLedger()
+	ledger.Record(MutationMidTaskPrune, "pruned=2")
+	ledger.SetFinalInputHash("final-hash")
+	manifest := Manifest{
+		View:      ViewRunConfigPreProvider,
+		CachePlan: &CachePlan{StablePrefixHash: "prefix-hash", StableMessageCount: 3},
+		Mutations: ledger,
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for _, want := range []string{"prefix-hash", "mid_task_prune", "pruned=2", "final-hash"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("manifest JSON missing %q:\n%s", want, raw)
+		}
 	}
 }

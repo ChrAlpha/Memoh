@@ -9,6 +9,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 type applierRecorder struct {
@@ -190,5 +191,33 @@ func TestSpawnAdapterGoesThroughContextView(t *testing.T) {
 	}
 	if seen.ContextScope.BotID != "bot-1" || seen.ContextScope.SessionID != "session-1" {
 		t.Fatalf("spawn scope not propagated to the view: %+v", seen.ContextScope)
+	}
+}
+
+func TestGenerateWritesFinalInputHashToManifestLedger(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	ledger := contextfrag.NewMutationLedger()
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+		manifest := contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, Mutations: ledger}
+		cfg.ContextManifest = manifest
+		cfg.ContextMutations = ledger
+		return cfg
+	}})
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "lifecycle-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:   "base system",
+		Messages: []sdk.Message{sdk.UserMessage("hi")},
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	if ledger.FinalInputHash() == "" {
+		t.Fatal("final provider input hash must land on the manifest ledger")
 	}
 }

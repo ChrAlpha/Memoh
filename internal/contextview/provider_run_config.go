@@ -68,12 +68,18 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		return cfg.RefreshContextFrag()
 	}
 
+	plan := cachePlanFromPlacement(view.Placement)
+	ledger := contextfrag.NewMutationLedger()
+	manifest := view.Manifest
+	manifest.CachePlan = &plan
+	manifest.Mutations = ledger
+
 	cfg.System = payload.System
 	cfg.Messages = payload.Messages
 	cfg.ContextFrags = view.Selected
-	cfg.ContextManifest = view.Manifest
-	cfg.ContextCachePlan = cachePlanFromPlacement(view.Placement)
-	cfg.ContextMutations = contextfrag.NewMutationLedger()
+	cfg.ContextManifest = manifest
+	cfg.ContextCachePlan = plan
+	cfg.ContextMutations = ledger
 	return cfg
 }
 

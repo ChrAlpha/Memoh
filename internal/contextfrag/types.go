@@ -265,6 +265,8 @@ type Manifest struct {
 	ValidationWarnings []ValidationWarning `json:"validation_warnings,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
 	Items              []ManifestItem      `json:"items,omitempty"`
+	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
+	Mutations          *MutationLedger     `json:"mutations,omitempty"`
 }
 
 // ManifestView names the exact view represented by a manifest.
