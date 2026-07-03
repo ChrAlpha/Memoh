@@ -860,13 +860,22 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				Scope:               cfg.ContextScope,
 				InitialMessageCount: initialProviderMessageCount,
 				Messages:            p.Messages,
-				BudgetMaxTokens:     cfg.ContextBudgetMaxTokens,
+				BudgetMaxTokens:     remainingStepBudget(cfg.ContextBudgetMaxTokens, p, initialProviderMessageCount),
 			})
+			appliedSelection := false
 			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
 				p.Messages = selection.Messages
+				appliedSelection = true
+				if selection.Dropped > 0 {
+					cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
+				}
 			}
-			if selection.Dropped > 0 {
-				cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
+			if !appliedSelection {
+				before := len(p.Messages)
+				p = pruneOldToolResults(p, keepSteps, threshold)
+				if len(p.Messages) < before {
+					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", before-len(p.Messages)))
+				}
 			}
 			recordPreparedProviderInputHash(cfg.ContextMutations, p)
 			return p
@@ -932,6 +941,25 @@ func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params 
 	}
 	hash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
 	ledger.SetFinalInputHash(hash)
+}
+
+func remainingStepBudget(maxTokens int, params *sdk.GenerateParams, prefixCount int) int {
+	if maxTokens <= 0 || params == nil {
+		return 0
+	}
+	if prefixCount < 0 {
+		prefixCount = 0
+	}
+	if prefixCount > len(params.Messages) {
+		prefixCount = len(params.Messages)
+	}
+	prefixMessages := append([]sdk.Message(nil), params.Messages[:prefixCount]...)
+	_, bytes := contextfrag.ProviderPayloadHashAndBytes(params.System, prefixMessages, params.Tools)
+	remaining := maxTokens - tokenEstimateFromBytes(bytes)
+	if remaining < 1 {
+		return 1
+	}
+	return remaining
 }
 
 func stepSelectionPreservesPrefix(before, after []sdk.Message, count int) bool {

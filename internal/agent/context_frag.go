@@ -26,11 +26,32 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 		Existing:        cfg.ContextFrags,
 	})
 	cfg.ContextFrags = assembled.Frags
-	cfg.ContextManifest = assembled.Manifest
+	cfg.ContextManifest = preserveLifecycleAccounting(cfg.ContextManifest, assembled.Manifest)
 	if cfg.ContextLifecycle != nil {
-		cfg.ContextLifecycle.SetManifest(assembled.Manifest)
+		cfg.ContextLifecycle.SetManifest(cfg.ContextManifest)
 	}
 	return cfg
+}
+
+func preserveLifecycleAccounting(previous, next contextfrag.Manifest) contextfrag.Manifest {
+	if previous.CachePlan != nil && next.CachePlan == nil {
+		plan := *previous.CachePlan
+		next.CachePlan = &plan
+	}
+	if previous.Mutations != nil && next.Mutations == nil {
+		next.Mutations = previous.Mutations
+	}
+	if previous.Selection != nil && next.Selection == nil {
+		selection := *previous.Selection
+		if len(previous.Selection.DropReasons) > 0 {
+			selection.DropReasons = make(map[string]int, len(previous.Selection.DropReasons))
+			for reason, count := range previous.Selection.DropReasons {
+				selection.DropReasons[reason] = count
+			}
+		}
+		next.Selection = &selection
+	}
+	return next
 }
 
 func (cfg RunConfig) contextDynamicMutators(readMedia bool, beforeModelCallHook bool, injectCh bool) []contextfrag.DynamicMutator {

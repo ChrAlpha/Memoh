@@ -146,6 +146,63 @@ func TestRefreshContextFragWithMutatorsMarksPreProviderBoundary(t *testing.T) {
 	}
 }
 
+func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
+	t.Parallel()
+
+	holder := contextfrag.NewLifecycleHolder()
+	ledger := contextfrag.NewMutationLedger()
+	ledger.Record(contextfrag.MutationBeforeModelCallHook, "system_bytes=12")
+	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{StepIndex: 0, CacheReadTokens: 7, CacheWriteTokens: 3})
+	ledger.SetFinalInputHash("final-hash")
+	plan := contextfrag.CachePlan{
+		StablePrefixHash:          "stable-hash",
+		StableMessageCount:        2,
+		RenderedStablePrefixHash:  "rendered-hash",
+		RenderedStablePrefixBytes: 128,
+	}
+	cfg := RunConfig{
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		ContextLifecycle: holder,
+		ContextManifest: contextfrag.Manifest{
+			CachePlan: &plan,
+			Mutations: ledger,
+			Selection: &contextfrag.SelectionTrace{
+				Selected: 2,
+				Dropped:  1,
+				DropReasons: map[string]int{
+					"can_drop": 1,
+				},
+			},
+		},
+	}
+
+	cfg = cfg.RefreshContextFrag()
+
+	if cfg.ContextManifest.Mutations != ledger {
+		t.Fatal("RefreshContextFrag dropped the existing mutation ledger")
+	}
+	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.RenderedStablePrefixHash != "rendered-hash" {
+		t.Fatalf("RefreshContextFrag cache plan = %#v, want previous cache plan", cfg.ContextManifest.CachePlan)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle holder has no snapshot")
+	}
+	if snapshot.FinalInputHash != "final-hash" {
+		t.Fatalf("snapshot final hash = %q, want final-hash", snapshot.FinalInputHash)
+	}
+	if snapshot.RenderedPrefixHash != "rendered-hash" {
+		t.Fatalf("snapshot rendered prefix hash = %q, want rendered-hash", snapshot.RenderedPrefixHash)
+	}
+	if snapshot.CacheReadTokens != 7 || snapshot.CacheWriteTokens != 3 {
+		t.Fatalf("snapshot cache read/write = %d/%d, want 7/3", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
+	}
+	if snapshot.Selection.DropReasons["can_drop"] != 1 {
+		t.Fatalf("snapshot selection = %#v, want preserved drop reason", snapshot.Selection)
+	}
+}
+
 func manifestHasAgentKind(manifest contextfrag.Manifest, kind contextfrag.Kind) bool {
 	return manifestAgentKindIndex(manifest, kind) >= 0
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -224,6 +225,176 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 	}
 	if got := ledger.FinalInputHash(); got == "" {
 		t.Fatal("final input hash was not updated after step reselection")
+	}
+}
+
+func TestAgentGenerateFallsBackToMidTaskPruneWhenStepReselectorNoops(t *testing.T) {
+	t.Parallel()
+
+	var providerParams []sdk.GenerateParams
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			providerParams = append(providerParams, sdk.GenerateParams{
+				System:   params.System,
+				Messages: append([]sdk.Message(nil), params.Messages...),
+				Tools:    append([]sdk.Tool(nil), params.Tools...),
+			})
+			if call <= 4 {
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-prune",
+						ToolName:   "lookup",
+						Input:      map[string]any{"step": call},
+					}},
+				}, nil
+			}
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return strings.Repeat("large tool result ", 80), nil
+			},
+		}}},
+	})
+
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:                 &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:              []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall:      true,
+		Identity:              SessionContext{BotID: "bot-1"},
+		ContextMutations:      contextfrag.NewMutationLedger(),
+		MidTaskPruneThreshold: 4,
+		MidTaskPruneKeepSteps: 1,
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			return ContextStepSelectionResult{}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(providerParams) < 3 {
+		t.Fatalf("provider calls = %d, want at least 3", len(providerParams))
+	}
+	if !hasPrunedToolResult(providerParams[len(providerParams)-1].Messages) {
+		t.Fatalf("final provider messages did not include a pruned tool result: %#v", providerParams[len(providerParams)-1].Messages)
+	}
+}
+
+func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
+	t.Parallel()
+
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call == 1 {
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-budget",
+						ToolName:   "lookup",
+						Input:      map[string]any{"q": "one"},
+					}},
+				}, nil
+			}
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return map[string]any{"answer": "ok"}, nil
+			},
+		}}},
+	})
+
+	var seenBudget int
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:                  &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:               []sdk.Message{sdk.UserMessage(strings.Repeat("prefix ", 80))},
+		SupportsToolCall:       true,
+		Identity:               SessionContext{BotID: "bot-1"},
+		ContextMutations:       contextfrag.NewMutationLedger(),
+		ContextBudgetMaxTokens: 20,
+		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+			seenBudget = input.BudgetMaxTokens
+			return ContextStepSelectionResult{}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if seenBudget <= 0 || seenBudget >= 20 {
+		t.Fatalf("step budget = %d, want remaining budget below full run budget", seenBudget)
+	}
+}
+
+func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationRecord(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	var secondCallMessages []sdk.Message
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call == 1 {
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-guard",
+						ToolName:   "lookup",
+						Input:      map[string]any{"q": "one"},
+					}},
+				}, nil
+			}
+			secondCallMessages = append([]sdk.Message(nil), params.Messages...)
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return map[string]any{"answer": "ok"}, nil
+			},
+		}}},
+	})
+
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:                 &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:              []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall:      true,
+		Identity:              SessionContext{BotID: "bot-1"},
+		ContextMutations:      ledger,
+		MidTaskPruneThreshold: 100,
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			return ContextStepSelectionResult{
+				Messages: []sdk.Message{
+					sdk.UserMessage("modified prefix"),
+				},
+				Dropped: 2,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(secondCallMessages) == 0 || textOfMessage(secondCallMessages[0]) != "start" {
+		t.Fatalf("second provider call prefix = %#v, want original prefix", secondCallMessages)
+	}
+	if hasMutationKind(ledger.Records(), contextfrag.MutationLoopStepReselection) {
+		t.Fatalf("mutation records = %#v, want no loop_step_reselection when prefix guard rejects selection", ledger.Records())
 	}
 }
 
@@ -533,4 +704,39 @@ func TestRunMidStreamRetryMarksTextLoopCancellationAsAborted(t *testing.T) {
 	if !aborted {
 		t.Fatal("expected runMidStreamRetry to report aborted when retry stream hit text-loop cancellation")
 	}
+}
+
+func hasPrunedToolResult(messages []sdk.Message) bool {
+	for _, msg := range messages {
+		if msg.Role != sdk.MessageRoleTool {
+			continue
+		}
+		for _, part := range msg.Content {
+			result, ok := part.(sdk.ToolResultPart)
+			if !ok {
+				continue
+			}
+			if strings.Contains(fmt.Sprint(result.Result), "[tool result pruned:") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func textOfMessage(msg sdk.Message) string {
+	if len(msg.Content) == 0 {
+		return ""
+	}
+	text, _ := msg.Content[0].(sdk.TextPart)
+	return text.Text
+}
+
+func hasMutationKind(records []contextfrag.MutationRecord, kind contextfrag.MutationKind) bool {
+	for _, record := range records {
+		if record.Kind == kind {
+			return true
+		}
+	}
+	return false
 }

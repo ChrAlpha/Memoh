@@ -152,17 +152,21 @@ func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
 	if result.Dropped != 2 {
 		t.Fatalf("Dropped = %d, want 2", result.Dropped)
 	}
-	if got := len(result.Messages); got != 4 {
-		t.Fatalf("Messages len = %d, want 4", got)
+	if got := len(result.Messages); got != 5 {
+		t.Fatalf("Messages len = %d, want 5", got)
 	}
 	for i := range prefix {
 		if result.Messages[i].Role != prefix[i].Role {
 			t.Fatalf("prefix role %d = %q, want %q", i, result.Messages[i].Role, prefix[i].Role)
 		}
 	}
-	call, ok := result.Messages[2].Content[0].(sdk.ToolCallPart)
+	notice, ok := result.Messages[2].Content[0].(sdk.TextPart)
+	if !ok || notice.Text != HistoryTrimNotice {
+		t.Fatalf("trim notice = %#v, want history trim notice", result.Messages[2].Content[0])
+	}
+	call, ok := result.Messages[3].Content[0].(sdk.ToolCallPart)
 	if !ok || call.ToolCallID != "new-call" {
-		t.Fatalf("first loop message after reselection = %#v, want new tool call", result.Messages[2].Content[0])
+		t.Fatalf("first loop message after trim notice = %#v, want new tool call", result.Messages[3].Content[0])
 	}
 	if result.DropReasons[string(TagPreserveToolClosure)] != 2 {
 		t.Fatalf("DropReasons = %#v, want preserve_tool_closure:2", result.DropReasons)

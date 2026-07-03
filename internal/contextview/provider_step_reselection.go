@@ -38,15 +38,28 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		return agentpkg.ContextStepSelectionResult{}
 	}
 
-	messages := make([]sdk.Message, 0, input.InitialMessageCount+len(selection.Selected))
+	selected := selectedProviderStepFrags(selection, input.Scope)
+	messages := make([]sdk.Message, 0, input.InitialMessageCount+len(selected))
 	messages = append(messages, cloneSDKMessages(input.Messages[:input.InitialMessageCount])...)
-	messages = append(messages, sdkMessagesFromFrags(selection.Selected)...)
+	messages = append(messages, sdkMessagesFromFrags(selected)...)
 
 	return agentpkg.ContextStepSelectionResult{
 		Messages:    messages,
 		Dropped:     len(selection.Dropped),
 		DropReasons: dropReasonHistogram(selection.Summary.DropReasons),
 	}
+}
+
+func selectedProviderStepFrags(selection SelectionResult, scope contextfrag.Scope) []contextfrag.ContextFrag {
+	if !selection.TrimNotice || selection.TrimNoticeIndex < 0 || selection.TrimNoticeIndex > len(selection.Selected) {
+		return selection.Selected
+	}
+	notice := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{TrimNoticeFrag(scope)})[0]
+	selected := make([]contextfrag.ContextFrag, 0, len(selection.Selected)+1)
+	selected = append(selected, selection.Selected[:selection.TrimNoticeIndex]...)
+	selected = append(selected, notice)
+	selected = append(selected, selection.Selected[selection.TrimNoticeIndex:]...)
+	return selected
 }
 
 func sdkMessagesFromFrags(frags []contextfrag.ContextFrag) []sdk.Message {
