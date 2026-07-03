@@ -8,8 +8,9 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	switch intent {
 	case contextfrag.IntentRunConfigPreProvider:
 		return IntentProfile{
-			Intent:        intent,
-			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			Intent:                    intent,
+			MustKeepSlots:             []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			RejectExternalSystemFrags: true,
 		}
 	case contextfrag.IntentCompactionCandidates:
 		return IntentProfile{
@@ -18,10 +19,14 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 		}
 	case contextfrag.IntentDiscussReply:
 		return IntentProfile{
-			Intent:        intent,
-			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			Intent:                    intent,
+			MustKeepSlots:             []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			RejectExternalSystemFrags: true,
 		}
 	case contextfrag.IntentACPRuntimePrompt:
+		// The ACP prompt is one rendered document: its system slot marks
+		// document position, not instruction authority, so external-trust
+		// sections (attachment metadata) legitimately live there.
 		return IntentProfile{
 			Intent:        intent,
 			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
@@ -32,19 +37,61 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 }
 
 func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
+	frags, gated := applyTrustGate(frags, profile)
+	var result SelectionResult
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
 		if isRetentionIntent(profile.Intent) {
 			if drops := budgetTrimDrops(tagged, budget.MaxTokens); len(drops) > 0 {
-				result := selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
+				result = selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
 				result.TrimNotice = true
 				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
-				return result
+				return appendTrustGateDrops(result, gated)
 			}
 		}
-		return selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
+		result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
+		return appendTrustGateDrops(result, gated)
 	}
-	return selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
+	result = selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
+	return appendTrustGateDrops(result, gated)
+}
+
+const trustGateExternalSystemReason = "trust_gate:external_in_system_slot"
+
+// applyTrustGate removes fragments whose trust level is not allowed to
+// occupy their slot for this intent. Today's single rule: external-trust
+// content must never enter the system slot of a provider-bound prompt.
+func applyTrustGate(frags []contextfrag.ContextFrag, profile IntentProfile) ([]contextfrag.ContextFrag, []contextfrag.ContextFrag) {
+	if !profile.RejectExternalSystemFrags {
+		return frags, nil
+	}
+	kept := make([]contextfrag.ContextFrag, 0, len(frags))
+	var gated []contextfrag.ContextFrag
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotSystem && frag.Trust == contextfrag.TrustExternal {
+			gated = append(gated, frag)
+			continue
+		}
+		kept = append(kept, frag)
+	}
+	return kept, gated
+}
+
+func appendTrustGateDrops(result SelectionResult, gated []contextfrag.ContextFrag) SelectionResult {
+	if len(gated) == 0 {
+		return result
+	}
+	for _, frag := range gated {
+		result.Dropped = append(result.Dropped, frag)
+		result.Summary.DropReasons = append(result.Summary.DropReasons, DropRecord{
+			FragID: frag.ID,
+			Ref:    frag.Ref,
+			Reason: trustGateExternalSystemReason,
+		})
+	}
+	result.Summary.TotalCollected += len(gated)
+	result.Summary.TotalDropped += len(gated)
+	return result
 }
 
 func selectCompactionCandidatesWindowed(frags []contextfrag.ContextFrag, profile IntentProfile, window *CompactionWindow) SelectionResult {

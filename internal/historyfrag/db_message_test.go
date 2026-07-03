@@ -98,13 +98,13 @@ func TestDBMessageSourceHashTracksPersistedTurnDAGFields(t *testing.T) {
 	t.Parallel()
 
 	base := messagepkg.Message{
-		ID:             "row-1",
-		BotID:          "bot-1",
-		SessionID:      "session-1",
-		Role:           "user",
-		Content:        persistedModelMessage(t, conversation.ModelMessage{Role: "user", Content: conversation.NewTextContent("same")}),
-		SessionMode:    "chat",
-		RuntimeType:    "model",
+		ID:          "row-1",
+		BotID:       "bot-1",
+		SessionID:   "session-1",
+		Role:        "user",
+		Content:     persistedModelMessage(t, conversation.ModelMessage{Role: "user", Content: conversation.NewTextContent("same")}),
+		SessionMode: "chat",
+		RuntimeType: "model",
 	}
 	changedRuntime := base
 	changedRuntime.RuntimeType = "acp_agent"
@@ -186,7 +186,7 @@ func TestSummaryRecordCarriesCoverageAndKeepBudget(t *testing.T) {
 	}}
 
 	record := SummaryRecord("compact-1", "condensed", covered, contextfrag.Scope{
-		SessionID:      "session-1",
+		SessionID: "session-1",
 	})
 
 	if record.Kind != contextfrag.KindConversationSummary || record.Lifecycle != LifecycleActiveSummary {
