@@ -65,11 +65,18 @@ type ContextStepSelectionInput struct {
 	InitialMessageCount int
 	Messages            []sdk.Message
 	BudgetMaxTokens     int
+	// KeepRecentToolResults keeps the newest N complete tool cycles intact
+	// and truncates older bulky tool results to a size summary; <= 0 disables
+	// content truncation.
+	KeepRecentToolResults int
+	// MinMessages gates content truncation on total provider message count.
+	MinMessages int
 }
 
 type ContextStepSelectionResult struct {
 	Messages    []sdk.Message
 	Dropped     int
+	Truncated   int
 	DropReasons map[string]int
 }
 

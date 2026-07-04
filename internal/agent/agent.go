@@ -917,16 +917,18 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		if cfg.ContextStepReselector != nil {
 			beforeMessages := append([]sdk.Message(nil), p.Messages...)
 			selection := cfg.ContextStepReselector(ctx, ContextStepSelectionInput{
-				Scope:               cfg.ContextScope,
-				InitialMessageCount: initialProviderMessageCount,
-				Messages:            p.Messages,
-				BudgetMaxTokens:     remainingStepBudget(cfg.ContextBudgetMaxTokens, p, initialProviderMessageCount),
+				Scope:                 cfg.ContextScope,
+				InitialMessageCount:   initialProviderMessageCount,
+				Messages:              p.Messages,
+				BudgetMaxTokens:       remainingStepBudget(cfg.ContextBudgetMaxTokens, p, initialProviderMessageCount),
+				KeepRecentToolResults: keepSteps,
+				MinMessages:           threshold,
 			})
 			appliedSelection := false
 			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
 				p.Messages = selection.Messages
 				appliedSelection = true
-				if selection.Dropped > 0 {
+				if selection.Dropped > 0 || selection.Truncated > 0 {
 					cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
 				}
 			}
@@ -1031,7 +1033,7 @@ func stepSelectionPreservesPrefix(before, after []sdk.Message, count int) bool {
 
 func contextStepSelectionDetail(selection ContextStepSelectionResult) string {
 	if len(selection.DropReasons) == 0 {
-		return fmt.Sprintf("dropped=%d", selection.Dropped)
+		return fmt.Sprintf("dropped=%d truncated=%d", selection.Dropped, selection.Truncated)
 	}
 	reasons := make([]string, 0, len(selection.DropReasons))
 	for reason := range selection.DropReasons {
@@ -1042,7 +1044,7 @@ func contextStepSelectionDetail(selection ContextStepSelectionResult) string {
 	for _, reason := range reasons {
 		parts = append(parts, fmt.Sprintf("%s:%d", reason, selection.DropReasons[reason]))
 	}
-	return fmt.Sprintf("dropped=%d reasons=%s", selection.Dropped, strings.Join(parts, ","))
+	return fmt.Sprintf("dropped=%d truncated=%d reasons=%s", selection.Dropped, selection.Truncated, strings.Join(parts, ","))
 }
 
 func publishContextCachePlan(cfg RunConfig, plan contextfrag.CachePlan) {
