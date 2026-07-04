@@ -422,9 +422,11 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		}
 		_ = estimatedTokens
 	}
-	tail := make([]conversation.ModelMessage, 0, 1+len(reqMessages))
+	tail := make([]conversation.ModelMessage, 0, len(reqMessages))
 	if memoryMsg != nil {
-		tail = append(tail, *memoryMsg)
+		// Memory recall is materialized here (provider search plus hooks) but
+		// shaped and placed by the context view's memory collector.
+		runCfg.ContextMemoryText = memoryMsg.TextContent()
 	}
 	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
 		tail = append(tail, *requestedSkillMsg)
@@ -1201,44 +1203,10 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		cfg.System += "\n\n" + formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
 	}
 
-	if cfg.Query != "" {
-		var extra []sdk.MessagePart
-		for _, img := range cfg.InlineImages {
-			if strings.TrimSpace(img.Image) != "" {
-				extra = append(extra, img)
-			}
-		}
-		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query, extra...))
-		cfg.ContextQueryMaterialized = true
-	} else if len(cfg.InlineImages) > 0 {
-		// Pipeline path: the user query is already embedded in the RC messages,
-		// but image parts are not rendered by the pipeline renderer. Inject the
-		// inline images into the last user message so the model receives them.
-		imageParts := make([]sdk.MessagePart, 0, len(cfg.InlineImages))
-		for _, img := range cfg.InlineImages {
-			if strings.TrimSpace(img.Image) != "" {
-				imageParts = append(imageParts, img)
-			}
-		}
-		if len(imageParts) > 0 {
-			injected := false
-			for i := len(cfg.Messages) - 1; i >= 0; i-- {
-				if cfg.Messages[i].Role == sdk.MessageRoleUser {
-					cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
-					injected = true
-					break
-				}
-			}
-			if !injected {
-				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
-			}
-			cfg.ContextQueryMaterialized = true
-		}
-	}
-
 	// The provider context view is applied inside the agent, after tool
-	// usage is appended to the system prompt, so the cache plan covers the
-	// exact provider input. The resolver only materializes the sources.
+	// usage is appended to the system prompt. The resolver only materializes
+	// the sources: the view owns query and image placement so pinned sources
+	// (memory recall) always precede the current request.
 	return cfg
 }
 

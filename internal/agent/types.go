@@ -108,6 +108,7 @@ type RunConfig struct {
 	ContextTrimmableMessages     int
 	ContextCachePlan             contextfrag.CachePlan
 	ContextToolExchangePolicy    *contextfrag.ToolExchangePolicy
+	ContextMemoryText            string
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
 	ContextStepReselector        ContextStepReselector

@@ -100,14 +100,16 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	got = contextview.ApplyProviderRunConfig(context.Background(), nil, got)
 
 	if got.ContextManifest.Counts.Images != 1 {
-		t.Fatalf("manifest image count = %d, want only image injected into SDK message: %#v", got.ContextManifest.Counts.Images, got.ContextManifest.Items)
-	}
-	rendered := contextfrag.Render(got.ContextFrags)
-	if len(rendered.InlineImages) != 0 {
-		t.Fatalf("rendered inline images = %#v, want images only inside pipeline SDK message", rendered.InlineImages)
+		t.Fatalf("manifest image count = %d, want the image counted exactly once: %#v", got.ContextManifest.Counts.Images, got.ContextManifest.Items)
 	}
 	if !messagesContainImage(got.Messages) {
 		t.Fatalf("prepared messages do not contain injected image: %#v", got.Messages)
+	}
+	if countMessagesWithImage(got.Messages) != 1 {
+		t.Fatalf("image must land in exactly one message: %#v", got.Messages)
+	}
+	if !got.ContextQueryMaterialized {
+		t.Fatal("view must mark the query materialized after rendering")
 	}
 }
 
@@ -129,4 +131,17 @@ func messagesContainImage(messages []sdk.Message) bool {
 		}
 	}
 	return false
+}
+
+func countMessagesWithImage(messages []sdk.Message) int {
+	count := 0
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if _, ok := part.(sdk.ImagePart); ok {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
