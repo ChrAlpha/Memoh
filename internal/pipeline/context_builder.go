@@ -14,6 +14,10 @@ import (
 type DiscussContextBuilder interface {
 	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) ([]sdk.Message, error)
 	BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, error)
+	// CollectDiscussSourceFrags returns the discuss turn as first-class
+	// source fragments (system prompt plus the discuss stream) for the
+	// fragments-first provider run config.
+	CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input DiscussContextInput) ([]contextfrag.ContextFrag, error)
 }
 
 // DiscussContextInput carries every discuss source for one turn: the RC/TR

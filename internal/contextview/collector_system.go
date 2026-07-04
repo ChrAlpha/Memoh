@@ -10,11 +10,18 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-const systemPromptCollectorName = "system_prompt"
+const (
+	systemPromptCollectorName  = "system_prompt"
+	workspaceInstructionAnchor = "\n## Workspace instruction files"
+)
 
 type SystemPromptConfig struct {
 	System    string
 	ToolUsage string
+	// SplitWorkspace splits the workspace instruction section into its own
+	// fragment even without embedded tool usage, so an agent-side tool usage
+	// fragment can sort between prompt and workspace instructions.
+	SplitWorkspace bool
 }
 
 type SystemPromptCollector struct{}
@@ -40,6 +47,16 @@ func (*SystemPromptCollector) Collect(_ context.Context, req CollectRequest) ([]
 		toolStart = strings.Index(system, toolUsage)
 	}
 	if toolStart < 0 {
+		if cfg.SplitWorkspace {
+			if idx := strings.Index(system, workspaceInstructionAnchor); idx >= 0 {
+				frags := make([]contextfrag.ContextFrag, 0, 2)
+				if prompt := strings.TrimSpace(system[:idx]); prompt != "" {
+					frags = append(frags, systemPromptTextFrag(req.Scope, "system.prompt", contextfrag.KindSystemPrompt, prompt, 20, contextfrag.SourceRunConfig, 0))
+				}
+				frags = append(frags, systemPromptTextFrag(req.Scope, "system.workspace_instructions", contextfrag.KindWorkspaceInstruction, strings.TrimSpace(system[idx:]), 50, contextfrag.SourceRunConfig, 1))
+				return frags, nil
+			}
+		}
 		return []contextfrag.ContextFrag{
 			systemPromptTextFrag(req.Scope, "system.prompt", contextfrag.KindSystemPrompt, system, 20, contextfrag.SourceRunConfig, 0),
 		}, nil

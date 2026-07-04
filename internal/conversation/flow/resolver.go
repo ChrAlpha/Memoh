@@ -26,6 +26,7 @@ import (
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/compaction"
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -1203,10 +1204,10 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		cfg.System += "\n\n" + formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
 	}
 
-	// The provider context view is applied inside the agent, after tool
-	// usage is appended to the system prompt. The resolver only materializes
-	// the sources: the view owns query and image placement so pinned sources
-	// (memory recall) always precede the current request.
+	// Fragments are the first-class context carrier: collect the source
+	// fragments here where the materialized sources are richest. The legacy
+	// System/Messages fields remain only as collector input and fallback.
+	cfg.ContextSourceFrags = contextview.CollectProviderSourceFrags(ctx, cfg)
 	return cfg
 }
 

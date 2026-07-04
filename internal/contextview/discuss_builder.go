@@ -46,6 +46,36 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 	return payload.Messages, nil
 }
 
+// CollectDiscussSourceFrags returns the discuss turn as first-class source
+// fragments: the resolved system prompt (workspace section split out) plus
+// the discuss stream, ready to be carried on the run config for the
+// fragments-first provider view.
+func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input pipeline.DiscussContextInput) ([]contextfrag.ContextFrag, error) {
+	systemFrags, err := (&SystemPromptCollector{}).Collect(ctx, CollectRequest{
+		Scope:  scope,
+		Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: SystemPromptConfig{System: system, SplitWorkspace: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	discussFrags, err := (&DiscussContextCollector{}).Collect(ctx, CollectRequest{
+		Scope:  scope,
+		Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: DiscussContextConfig{
+			RC:             input.RC,
+			TRs:            input.TRs,
+			CompactSummary: input.CompactSummary,
+			LateBinding:    input.LateBinding,
+			InlineImages:   input.InlineImages,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(systemFrags, discussFrags...), nil
+}
+
 func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(&DiscussContextCollector{}),

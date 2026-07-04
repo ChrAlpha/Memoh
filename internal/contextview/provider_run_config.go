@@ -11,21 +11,6 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-func providerContextViewBuilder() *Builder {
-	return NewBuilder(
-		NewMapCollectorRegistry(
-			&SystemPromptCollector{},
-			&HistoryMessagesCollector{},
-			&MemoryContextCollector{},
-			&CurrentUserCollector{},
-			&InlineImageCollector{},
-		),
-		&FragmentSelector{},
-		StablePrefixPlacer{},
-		NewMapRendererRegistry(&SDKMessagesRenderer{}),
-	)
-}
-
 // ProviderRunConfigApplier adapts ApplyProviderRunConfig to the agent's
 // injected applier hook.
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
@@ -34,21 +19,98 @@ func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
 	}
 }
 
-// ApplyProviderRunConfig rebuilds the provider-facing run config through the
-// context view pipeline: collect from the materialized RunConfig fields,
-// select under the token budget, place for prompt caching and render the SDK
-// payload back onto the config together with its manifest and cache plan.
-func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+// CollectProviderSourceFrags runs the provider collectors over the
+// materialized RunConfig fields and returns the source fragments that become
+// the first-class context carrier. A nil return means collection failed and
+// the caller should stay on the legacy field path.
+func CollectProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
 	query := cfg.Query
 	inlineImages := cfg.InlineImages
 	if cfg.ContextQueryMaterialized {
 		query = ""
 		inlineImages = nil
 	}
-	view, err := providerContextViewBuilder().Build(ctx, BuildInput{
-		Scope:  cfg.ContextScope,
-		Intent: contextfrag.IntentRunConfigPreProvider,
-		Sources: []SourceSpec{
+	specs := []struct {
+		collector Collector
+		config    any
+	}{
+		{&SystemPromptCollector{}, SystemPromptConfig{System: cfg.System, SplitWorkspace: true}},
+		{&HistoryMessagesCollector{}, HistoryMessagesConfig{
+			Messages:           cfg.Messages,
+			TokenEstimates:     cfg.ContextHistoryTokenEstimates,
+			TrimmablePrefix:    cfg.ContextTrimmableMessages,
+			RepairToolClosures: true,
+		}},
+		{&MemoryContextCollector{}, MemoryContextConfig{Text: cfg.ContextMemoryText}},
+		{&CurrentUserCollector{}, CurrentUserConfig{Query: query}},
+		{&InlineImageCollector{}, InlineImageConfig{Images: inlineImages}},
+	}
+	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages)+4)
+	for _, spec := range specs {
+		collected, err := spec.collector.Collect(ctx, CollectRequest{
+			Scope:  cfg.ContextScope,
+			Intent: contextfrag.IntentRunConfigPreProvider,
+			Config: spec.config,
+		})
+		if err != nil {
+			return nil
+		}
+		frags = append(frags, collected...)
+	}
+	return frags
+}
+
+const sourceFragsCollectorName = "source_frags"
+
+// ToolUsageFrag shapes the agent-assembled tool usage guidance as a system
+// fragment that sorts between the system prompt and workspace instructions.
+func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFrag {
+	return contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:         "system.tool_usage",
+		Kind:       contextfrag.KindToolUsage,
+		Role:       sdk.MessageRoleSystem,
+		Slot:       contextfrag.SlotSystem,
+		Text:       usage,
+		Priority:   45,
+		CacheClass: contextfrag.CacheStable,
+		Trust:      contextfrag.TrustSystem,
+		Scope:      scope,
+		Source:     contextfrag.SourceAgentToolUsage,
+		Collector:  sourceFragsCollectorName,
+		Render:     contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
+	})
+}
+
+// ApplyProviderRunConfig rebuilds the provider-facing run config through the
+// context view pipeline. When the run config carries source fragments they
+// are the authoritative input (fragments-first); otherwise the collectors
+// derive them from the materialized legacy fields. Selection, placement and
+// the SDK render then produce System/Messages as outputs.
+func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	var sources []SourceSpec
+	var registry CollectorRegistry
+	if len(cfg.ContextSourceFrags) > 0 {
+		frags := append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
+		if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" {
+			frags = append(frags, ToolUsageFrag(usage, cfg.ContextScope))
+		}
+		registry = NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})
+		sources = []SourceSpec{{Name: sourceFragsCollectorName}}
+	} else {
+		query := cfg.Query
+		inlineImages := cfg.InlineImages
+		if cfg.ContextQueryMaterialized {
+			query = ""
+			inlineImages = nil
+		}
+		registry = NewMapCollectorRegistry(
+			&SystemPromptCollector{},
+			&HistoryMessagesCollector{},
+			&MemoryContextCollector{},
+			&CurrentUserCollector{},
+			&InlineImageCollector{},
+		)
+		sources = []SourceSpec{
 			{Name: "system_prompt", Config: SystemPromptConfig{System: cfg.System, ToolUsage: cfg.ContextToolUsage}},
 			{Name: "history_messages", Config: HistoryMessagesConfig{
 				Messages:           cfg.Messages,
@@ -59,7 +121,13 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 			{Name: "memory_context", Config: MemoryContextConfig{Text: cfg.ContextMemoryText}},
 			{Name: "current_user", Config: CurrentUserConfig{Query: query}},
 			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
-		},
+		}
+	}
+	builder := NewBuilder(registry, &FragmentSelector{}, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
+	view, err := builder.Build(ctx, BuildInput{
+		Scope:   cfg.ContextScope,
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: sources,
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
 			MaxTokens:    cfg.ContextBudgetMaxTokens,
@@ -133,6 +201,15 @@ func materializeRenderedQuery(payload *SDKRenderedPayload, alreadyMaterialized b
 // build-error fallback, so a broken view degrades to the legacy assembly
 // instead of silently dropping the current request and memory recall.
 func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" && len(cfg.ContextSourceFrags) > 0 &&
+		!strings.Contains(cfg.System, usage) {
+		const anchor = "\n## Workspace instruction files"
+		if idx := strings.Index(cfg.System, anchor); idx >= 0 {
+			cfg.System = strings.TrimSpace(cfg.System[:idx]) + "\n\n" + usage + "\n" + cfg.System[idx:]
+		} else {
+			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + usage)
+		}
+	}
 	if text := strings.TrimSpace(cfg.ContextMemoryText); text != "" {
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
 		cfg.ContextMemoryText = ""

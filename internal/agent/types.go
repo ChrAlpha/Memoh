@@ -94,16 +94,21 @@ type InjectMessage struct {
 
 // RunConfig holds everything needed for a single agent invocation.
 type RunConfig struct {
-	Model                        *sdk.Model
-	ReasoningEffort              string
-	ReasoningActive              bool
-	ReasoningDisabled            bool
-	ReasoningAdaptive            bool
-	ReasoningOffEffort           string
-	ChatCompletionsCompat        string
-	Messages                     []sdk.Message
-	Query                        string
-	System                       string
+	Model                 *sdk.Model
+	ReasoningEffort       string
+	ReasoningActive       bool
+	ReasoningDisabled     bool
+	ReasoningAdaptive     bool
+	ReasoningOffEffort    string
+	ChatCompletionsCompat string
+	Messages              []sdk.Message
+	Query                 string
+	System                string
+	// ContextSourceFrags is the first-class context carrier: the collected
+	// source fragments produced at resolve time. When present, the provider
+	// view selects, places and renders from them and the legacy
+	// System/Messages fields exist only as render outputs and fallback.
+	ContextSourceFrags           []contextfrag.ContextFrag
 	ContextFrags                 []contextfrag.ContextFrag
 	ContextManifest              contextfrag.Manifest
 	ContextScope                 contextfrag.Scope

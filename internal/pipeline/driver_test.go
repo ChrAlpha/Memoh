@@ -858,6 +858,7 @@ func lastMessageFragContains(frags []contextfrag.ContextFrag, needle string) boo
 type fakeDiscussContextBuilder struct {
 	messages []sdk.Message
 	prompt   string
+	frags    []contextfrag.ContextFrag
 	err      error
 	called   bool
 }
@@ -870,6 +871,11 @@ func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _
 func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) (string, error) {
 	f.called = true
 	return f.prompt, f.err
+}
+
+func (f *fakeDiscussContextBuilder) CollectDiscussSourceFrags(_ context.Context, _ contextfrag.Scope, _ string, _ DiscussContextInput) ([]contextfrag.ContextFrag, error) {
+	f.called = true
+	return f.frags, f.err
 }
 
 func TestDiscussSDKMessagesUsesInjectedBuilder(t *testing.T) {

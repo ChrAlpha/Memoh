@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -34,7 +35,7 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	}
 
 	payload := &SDKRenderedPayload{}
-	for _, frag := range ordered {
+	for _, frag := range sortSystemFragsByPriority(ordered) {
 		switch frag.Slot {
 		case contextfrag.SlotSystem:
 			renderSystemFrag(payload, frag)
@@ -221,4 +222,32 @@ func sdkRenderedPayloadHash(payload *SDKRenderedPayload) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// sortSystemFragsByPriority stably reorders only the system-slot fragments by
+// priority so late-collected system sources (agent tool usage) render at
+// their declared position; message ordering is untouched.
+func sortSystemFragsByPriority(ordered []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	systemIdx := make([]int, 0, 4)
+	for i, frag := range ordered {
+		if frag.Slot == contextfrag.SlotSystem {
+			systemIdx = append(systemIdx, i)
+		}
+	}
+	if len(systemIdx) < 2 {
+		return ordered
+	}
+	systemFrags := make([]contextfrag.ContextFrag, 0, len(systemIdx))
+	for _, i := range systemIdx {
+		systemFrags = append(systemFrags, ordered[i])
+	}
+	sort.SliceStable(systemFrags, func(a, b int) bool {
+		return systemFrags[a].Priority < systemFrags[b].Priority
+	})
+	out := make([]contextfrag.ContextFrag, len(ordered))
+	copy(out, ordered)
+	for pos, i := range systemIdx {
+		out[i] = systemFrags[pos]
+	}
+	return out
 }

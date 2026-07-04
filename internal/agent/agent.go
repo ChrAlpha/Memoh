@@ -180,9 +180,12 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			return
 		}
 		if toolUsage != "" {
-			// Must run before the context view application so the selection,
-			// placement and cache plan cover the usage-augmented text.
-			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			// Fragment-first runs hand the usage to the view, which shapes it
+			// as its own system fragment; legacy runs append it to the system
+			// text so the view can split it back out.
+			if len(cfg.ContextSourceFrags) == 0 {
+				cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			}
 			cfg.ContextToolUsage = toolUsage
 		}
 	}
@@ -728,9 +731,12 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
 		if toolUsage != "" {
-			// Must run before the context view application so the selection,
-			// placement and cache plan cover the usage-augmented text.
-			cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			// Fragment-first runs hand the usage to the view, which shapes it
+			// as its own system fragment; legacy runs append it to the system
+			// text so the view can split it back out.
+			if len(cfg.ContextSourceFrags) == 0 {
+				cfg.System = appendToolUsageToSystem(cfg.System, toolUsage)
+			}
 			cfg.ContextToolUsage = toolUsage
 		}
 	}

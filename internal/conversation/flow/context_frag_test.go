@@ -111,6 +111,9 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	if !got.ContextQueryMaterialized {
 		t.Fatal("view must mark the query materialized after rendering")
 	}
+	if len(got.ContextSourceFrags) == 0 {
+		t.Fatal("prepareRunConfig must collect first-class source fragments")
+	}
 }
 
 func hasAttention(reasons []contextfrag.AttentionReason, want contextfrag.AttentionReason) bool {

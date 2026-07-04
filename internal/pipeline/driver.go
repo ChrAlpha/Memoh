@@ -356,16 +356,21 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 
 	isMentioned := wasRecentlyMentioned(rc, sess.lastProcessedMs)
 	lateBinding := buildLateBindingPrompt(isMentioned)
-	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, DiscussContextInput{
+	discussInput := DiscussContextInput{
 		RC:           rc,
 		TRs:          trs,
 		LateBinding:  lateBinding,
 		InlineImages: imageParts,
-	}, composed, log)
-	// The discuss messages replace the resolved chat history, so the chat
-	// trim bookkeeping no longer describes them.
+	}
+	// The discuss turn replaces the resolved chat context wholesale: the
+	// fragments-first carrier gets the discuss source fragments and the chat
+	// trim bookkeeping is cleared. The legacy message swap remains as the
+	// fallback for builder failures.
+	runConfig.ContextSourceFrags = d.discussSourceFrags(ctx, runConfig.ContextScope, runConfig.System, discussInput, log)
+	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, discussInput, composed, log)
 	runConfig.ContextHistoryTokenEstimates = nil
 	runConfig.ContextTrimmableMessages = 0
+	runConfig.ContextMemoryText = ""
 	runConfig = runConfig.RefreshContextFrag()
 
 	eventCh := agent.Stream(ctx, runConfig)
@@ -781,6 +786,18 @@ func legacyDiscussSDKMessages(input DiscussContextInput, composed *ComposeContex
 		messages = append(messages, sdk.UserMessage(input.LateBinding))
 	}
 	return messages
+}
+
+func (d *DiscussDriver) discussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input DiscussContextInput, log *slog.Logger) []contextfrag.ContextFrag {
+	if d.deps.ContextBuilder == nil {
+		return nil
+	}
+	frags, err := d.deps.ContextBuilder.CollectDiscussSourceFrags(ctx, scope, system, input)
+	if err != nil {
+		log.Warn("discuss source frag collection failed; using legacy messages", slog.Any("error", err))
+		return nil
+	}
+	return frags
 }
 
 func (d *DiscussDriver) discussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput, composed *ComposeContextResult, log *slog.Logger) string {

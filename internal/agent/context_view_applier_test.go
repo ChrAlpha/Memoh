@@ -362,3 +362,42 @@ func contextViewStubApplier(_ context.Context, cfg RunConfig) RunConfig {
 	}
 	return cfg
 }
+
+func TestGenerateFragsFirstHandsToolUsageToView(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	recorder := &applierRecorder{}
+	a := newApplierTestAgent(recorder, &usageTestProvider{emitTool: true, usage: usageMarker})
+
+	sourceFrag := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:    "system.prompt",
+		Kind:  contextfrag.KindSystemPrompt,
+		Slot:  contextfrag.SlotSystem,
+		Text:  "frag system",
+		Scope: contextfrag.Scope{BotID: "bot-1"},
+	})
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "frags-first-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:             "base system",
+		Messages:           []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall:   true,
+		ContextSourceFrags: []contextfrag.ContextFrag{sourceFrag},
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	_, seen := recorder.snapshot()
+	if seen.System != "base system" {
+		t.Fatalf("frags-first system must stay untouched by tool usage append, got %q", seen.System)
+	}
+	if !strings.Contains(seen.ContextToolUsage, usageMarker) {
+		t.Fatalf("tool usage must reach the view, got %q", seen.ContextToolUsage)
+	}
+	if len(seen.ContextSourceFrags) != 1 {
+		t.Fatalf("source frags must ride through, got %d", len(seen.ContextSourceFrags))
+	}
+}
