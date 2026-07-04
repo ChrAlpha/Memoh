@@ -38,6 +38,11 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 
 func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	frags, gated := applyTrustGate(frags, profile)
+	var exchangeDropped []contextfrag.ContextFrag
+	var exchangeEdits []contextfrag.ContextEditTrace
+	if isRetentionIntent(profile.Intent) {
+		frags, exchangeDropped, exchangeEdits = applyToolExchangePolicy(frags, budget.ToolExchange)
+	}
 	var result SelectionResult
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
@@ -46,14 +51,14 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 				result = selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
 				result.TrimNotice = true
 				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
-				return appendTrustGateDrops(result, gated)
+				return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
 			}
 		}
 		result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
-		return appendTrustGateDrops(result, gated)
+		return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
 	}
 	result = selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
-	return appendTrustGateDrops(result, gated)
+	return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
 }
 
 const trustGateExternalSystemReason = "trust_gate:external_in_system_slot"

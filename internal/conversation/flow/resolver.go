@@ -416,10 +416,9 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 			loaded = r.replaceCompactedMessages(ctx, loaded)
 			messages = modelMessagesOf(loaded)
 			estimatedTokens = estimateModelMessagesTokens(messages)
-			// Remove tool messages from the recent context — they are large
-			// and unnecessary when we already have a summary. Keep only
-			// user/assistant conversation turns.
-			messages = stripToolMessages(messages)
+			// After compaction the summary replaces tool detail: ask the
+			// selection engine to strip tool exchanges unconditionally.
+			runCfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{}
 		}
 		_ = estimatedTokens
 	}
@@ -435,14 +434,13 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	}
 	messages = sanitizeMessages(messages)
 	tail = sanitizeMessages(tail)
-	// Strip tool messages and tool-call-only assistant messages from context.
-	// Tool outputs are large and waste tokens; the LLM doesn't need raw tool
-	// results when summaries and memory tools are available for lookup.
-	if len(messages)+len(tail) > 10 {
-		messages = stripToolMessages(messages)
-		tail = stripToolMessages(tail)
+	// Tool exchange stripping and tool closure repair are context-view
+	// decisions: the selector strips bulky tool interactions above the
+	// threshold (ask_user survives) and the history collector closes
+	// dangling tool calls. The resolver only sets the policy.
+	if runCfg.ContextToolExchangePolicy == nil {
+		runCfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
 	}
-	messages = repairToolCallClosures(messages, syntheticToolClosureError)
 
 	// Budget trimming is a context-view selection decision now: hand over the
 	// per-message estimates and mark the loaded history prefix as droppable.

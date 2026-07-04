@@ -47,15 +47,19 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		Sources: []SourceSpec{
 			{Name: "system_prompt", Config: SystemPromptConfig{System: cfg.System, ToolUsage: cfg.ContextToolUsage}},
 			{Name: "history_messages", Config: HistoryMessagesConfig{
-				Messages:        cfg.Messages,
-				TokenEstimates:  cfg.ContextHistoryTokenEstimates,
-				TrimmablePrefix: cfg.ContextTrimmableMessages,
+				Messages:           cfg.Messages,
+				TokenEstimates:     cfg.ContextHistoryTokenEstimates,
+				TrimmablePrefix:    cfg.ContextTrimmableMessages,
+				RepairToolClosures: true,
 			}},
 			{Name: "current_user", Config: CurrentUserConfig{Query: query}},
 			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
 		},
-		Targets:         []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
-		Budget:          BudgetEnvelope{MaxTokens: cfg.ContextBudgetMaxTokens},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
+		Budget: BudgetEnvelope{
+			MaxTokens:    cfg.ContextBudgetMaxTokens,
+			ToolExchange: cfg.ContextToolExchangePolicy,
+		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
 	if err != nil {

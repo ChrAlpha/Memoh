@@ -22,6 +22,9 @@ type BudgetEnvelope struct {
 	MaxChars      int
 	MaxImages     int
 	MaxToolSchema int
+	// ToolExchange strips bulky tool interactions from history (ask_user
+	// survives); nil keeps every exchange.
+	ToolExchange *contextfrag.ToolExchangePolicy
 	// Compaction carries the compaction-candidate windowing decision inputs;
 	// nil means the whole eligible range is in scope.
 	Compaction *CompactionWindow

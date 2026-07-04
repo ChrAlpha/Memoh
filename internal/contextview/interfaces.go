@@ -43,7 +43,10 @@ type SelectionResult struct {
 	// must splice the trim notice into Selected at TrimNoticeIndex.
 	TrimNotice      bool
 	TrimNoticeIndex int
-	Summary         SelectionSummary
+	// Edited records in-place content edits (e.g. tool-call stripping) applied
+	// to kept fragments, for the manifest edit trace.
+	Edited  []contextfrag.ContextEditTrace
+	Summary SelectionSummary
 }
 
 type IntentProfile struct {

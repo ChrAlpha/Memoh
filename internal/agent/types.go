@@ -107,6 +107,7 @@ type RunConfig struct {
 	ContextHistoryTokenEstimates []int
 	ContextTrimmableMessages     int
 	ContextCachePlan             contextfrag.CachePlan
+	ContextToolExchangePolicy    *contextfrag.ToolExchangePolicy
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
 	ContextStepReselector        ContextStepReselector
