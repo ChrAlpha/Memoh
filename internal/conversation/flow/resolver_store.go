@@ -67,7 +67,7 @@ func (r *Resolver) storeRoundWithOptionsResult(ctx context.Context, req conversa
 	if len(filtered) == 0 {
 		return nil, nil
 	}
-	opts = opts.withContextLifecycleMetadata(filtered)
+	opts = opts.withContextLifecycleMetadata(r.logger, req, filtered)
 
 	persisted := r.storeMessages(ctx, req, filtered, modelID, opts)
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
@@ -117,13 +117,19 @@ func (r *Resolver) StoreRoundWithContextLifecycle(ctx context.Context, botID, se
 	return r.storeRoundWithOptions(ctx, req, modelMessages, modelID, storeRoundOptions{ContextLifecycle: lifecycle})
 }
 
-func (opts storeRoundOptions) withContextLifecycleMetadata(messages []conversation.ModelMessage) storeRoundOptions {
+func (opts storeRoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req conversation.ChatRequest, messages []conversation.ModelMessage) storeRoundOptions {
 	snapshot, ok := opts.ContextLifecycle.Snapshot()
 	if !ok {
+		reason := "missing_snapshot"
+		if opts.ContextLifecycle == nil {
+			reason = "missing_lifecycle"
+		}
+		logContextLifecycleMetadataSkipped(logger, req, reason, len(messages))
 		return opts
 	}
 	idx := lastAssistantMessageIndex(messages)
 	if idx < 0 {
+		logContextLifecycleMetadataSkipped(logger, req, "missing_assistant", len(messages))
 		return opts
 	}
 	if opts.MessageMetadataByIndex == nil {
@@ -136,6 +142,18 @@ func (opts storeRoundOptions) withContextLifecycleMetadata(messages []conversati
 	existing[contextfrag.MetadataContextLifecycleKey] = snapshot
 	opts.MessageMetadataByIndex[idx] = existing
 	return opts
+}
+
+func logContextLifecycleMetadataSkipped(logger *slog.Logger, req conversation.ChatRequest, reason string, messages int) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("context lifecycle metadata not persisted",
+		slog.String("reason", reason),
+		slog.String("bot_id", req.BotID),
+		slog.String("session_id", req.SessionID),
+		slog.Int("messages", messages),
+	)
 }
 
 func lastAssistantMessageIndex(messages []conversation.ModelMessage) int {

@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -245,5 +246,38 @@ func TestStoreRoundPersistsContextLifecycleMetadataOnAssistant(t *testing.T) {
 	}
 	if strings.Contains(string(raw), `"items"`) {
 		t.Fatalf("lifecycle metadata must use condensed snapshot: %s", raw)
+	}
+}
+
+func TestStoreRoundLogsWhenContextLifecycleMissing(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		logger:         logger,
+		messageService: messages,
+	}
+
+	err := resolver.storeRoundWithOptions(context.Background(), conversation.ChatRequest{
+		BotID:     "bot-acp",
+		SessionID: "session-acp",
+		Query:     "hello",
+	}, []conversation.ModelMessage{
+		{Role: "user", Content: conversation.NewTextContent("hello")},
+		{Role: "assistant", Content: conversation.NewTextContent("hi")},
+	}, "model-1", storeRoundOptions{})
+	if err != nil {
+		t.Fatalf("storeRoundWithOptions error: %v", err)
+	}
+	if got := logs.String(); !strings.Contains(got, "context lifecycle metadata not persisted") || !strings.Contains(got, "missing_lifecycle") {
+		t.Fatalf("debug log = %q, want lifecycle metadata skip reason", got)
+	}
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted messages = %d, want 2", len(messages.persisted))
+	}
+	if _, ok := messages.persisted[1].Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
+		t.Fatalf("unexpected lifecycle metadata: %#v", messages.persisted[1].Metadata)
 	}
 }
