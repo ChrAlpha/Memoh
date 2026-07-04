@@ -57,7 +57,7 @@ func TestBuildDiscussACPPromptRendersFromFragments(t *testing.T) {
 	aliceAt := strings.Index(prompt, "hello from alice")
 	replyAt := strings.Index(prompt, "earlier reply")
 	latestAt := strings.Index(prompt, "latest question")
-	if !(aliceAt < replyAt && replyAt < latestAt) {
+	if aliceAt >= replyAt || replyAt >= latestAt {
 		t.Fatalf("blocks out of time order:\n%s", prompt)
 	}
 	if lateAt := strings.Index(prompt, "LATE_BINDING_INSTRUCTION"); lateAt < strings.Index(prompt, "Reply to the latest") {

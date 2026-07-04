@@ -90,13 +90,7 @@ type auditPlacementItem struct {
 func auditPlacementPlanSnapshot(plan PlacementPlan) auditPlacementPlan {
 	items := make([]auditPlacementItem, 0, len(plan.Items))
 	for _, item := range plan.Items {
-		items = append(items, auditPlacementItem{
-			FragID:    item.FragID,
-			Slot:      item.Slot,
-			Position:  item.Position,
-			CacheHint: item.CacheHint,
-			Ref:       item.Ref,
-		})
+		items = append(items, auditPlacementItem(item))
 	}
 	return auditPlacementPlan{
 		StablePrefixHash:   plan.StablePrefixHash,

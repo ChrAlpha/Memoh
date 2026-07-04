@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -80,7 +81,7 @@ func historyMessagesConfig(config any) (HistoryMessagesConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return HistoryMessagesConfig{}, fmt.Errorf("history_messages config must be HistoryMessagesConfig")
+		return HistoryMessagesConfig{}, errors.New("history_messages config must be HistoryMessagesConfig")
 	}
 }
 

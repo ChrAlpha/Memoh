@@ -1697,6 +1697,120 @@ definitions:
         type: string
       usage: {}
     type: object
+  contextfrag.CacheComparison:
+    properties:
+      first_step_cache_read_tokens:
+        type: integer
+      outcome:
+        type: string
+      prev_age_ms:
+        type: integer
+    type: object
+  contextfrag.CacheUsageRecord:
+    properties:
+      cache_read_tokens:
+        type: integer
+      cache_write_1h_tokens:
+        type: integer
+      cache_write_5m_tokens:
+        type: integer
+      cache_write_tokens:
+        type: integer
+      no_cache_tokens:
+        type: integer
+      step_index:
+        type: integer
+    type: object
+  contextfrag.LifecycleSnapshot:
+    properties:
+      cache_comparison:
+        $ref: '#/definitions/contextfrag.CacheComparison'
+      cache_read_tokens:
+        type: integer
+      cache_usage:
+        items:
+          $ref: '#/definitions/contextfrag.CacheUsageRecord'
+        type: array
+      cache_write_tokens:
+        type: integer
+      counts:
+        $ref: '#/definitions/contextfrag.ManifestCounts'
+      final_input_hash:
+        type: string
+      mutations:
+        items:
+          $ref: '#/definitions/contextfrag.MutationRecord'
+        type: array
+      rendered_prefix_hash:
+        type: string
+      selection:
+        $ref: '#/definitions/contextfrag.SelectionTrace'
+      stable_message_count:
+        type: integer
+      stable_prefix_hash:
+        type: string
+      version:
+        type: integer
+      view:
+        $ref: '#/definitions/contextfrag.ManifestView'
+    type: object
+  contextfrag.ManifestCounts:
+    properties:
+      fragments:
+        type: integer
+      images:
+        type: integer
+      messages:
+        type: integer
+      text_bytes:
+        type: integer
+    type: object
+  contextfrag.ManifestView:
+    enum:
+    - compaction_candidates
+    - discuss_reply
+    - acp_runtime_prompt
+    - run_config_pre_provider
+    type: string
+    x-enum-varnames:
+    - ViewCompactionCandidates
+    - ViewDiscussReply
+    - ViewACPRuntimePrompt
+    - ViewRunConfigPreProvider
+  contextfrag.MutationKind:
+    enum:
+    - tool_usage_append
+    - before_model_call_hook
+    - background_summary
+    - mid_task_prune
+    - loop_step_reselection
+    - injected_message
+    type: string
+    x-enum-varnames:
+    - MutationToolUsageAppend
+    - MutationBeforeModelCallHook
+    - MutationBackgroundSummary
+    - MutationMidTaskPrune
+    - MutationLoopStepReselection
+    - MutationInjectedMessage
+  contextfrag.MutationRecord:
+    properties:
+      detail:
+        type: string
+      kind:
+        $ref: '#/definitions/contextfrag.MutationKind'
+    type: object
+  contextfrag.SelectionTrace:
+    properties:
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      dropped:
+        type: integer
+      selected:
+        type: integer
+    type: object
   conversation.SkillActivation:
     properties:
       prompt:
@@ -2478,6 +2592,47 @@ definitions:
         type: string
       used_bytes:
         type: integer
+    type: object
+  handlers.ContextLifecycleAggregates:
+    properties:
+      cache_hit_rate:
+        type: number
+      cache_outcomes:
+        additionalProperties:
+          type: integer
+        type: object
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      mutation_kinds:
+        additionalProperties:
+          type: integer
+        type: object
+      total_cache_read_tokens:
+        type: integer
+      total_cache_write_tokens:
+        type: integer
+      turns:
+        type: integer
+    type: object
+  handlers.ContextLifecycleResponse:
+    properties:
+      aggregates:
+        $ref: '#/definitions/handlers.ContextLifecycleAggregates'
+      turns:
+        items:
+          $ref: '#/definitions/handlers.ContextLifecycleTurn'
+        type: array
+    type: object
+  handlers.ContextLifecycleTurn:
+    properties:
+      created_at:
+        type: string
+      message_id:
+        type: string
+      snapshot:
+        $ref: '#/definitions/contextfrag.LifecycleSnapshot'
     type: object
   handlers.ContextUsage:
     properties:
@@ -9124,6 +9279,46 @@ paths:
       summary: Trigger immediate context compaction
       tags:
       - compaction
+  /bots/{bot_id}/sessions/{session_id}/context-lifecycle:
+    get:
+      description: List the persisted context lifecycle snapshots (selection, cache
+        plan, mutations, cache attribution) for a chat session with aggregated cache
+        and drop statistics
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Maximum number of turns to return (default 50, max 200)
+        in: query
+        name: limit
+        type: integer
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.ContextLifecycleResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      summary: Get session context lifecycle
+      tags:
+      - sessions
   /bots/{bot_id}/sessions/{session_id}/fork:
     post:
       parameters:

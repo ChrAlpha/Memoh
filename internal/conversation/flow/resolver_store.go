@@ -14,10 +14,6 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/message"
 )
 
-func (r *Resolver) storeRound(ctx context.Context, req conversation.ChatRequest, messages []conversation.ModelMessage, modelID string) error {
-	return r.storeRoundWithOptions(ctx, req, messages, modelID, storeRoundOptions{})
-}
-
 type storeRoundOptions struct {
 	AllowPendingToolCalls   bool
 	SkipMemory              bool

@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -258,7 +259,7 @@ func discussContextConfig(config any) (DiscussContextConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return DiscussContextConfig{}, fmt.Errorf("discuss_context config must be DiscussContextConfig")
+		return DiscussContextConfig{}, errors.New("discuss_context config must be DiscussContextConfig")
 	}
 }
 

@@ -2,7 +2,7 @@ package contextview
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -80,7 +80,7 @@ func systemPromptConfig(config any) (SystemPromptConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return SystemPromptConfig{}, fmt.Errorf("system_prompt config must be SystemPromptConfig")
+		return SystemPromptConfig{}, errors.New("system_prompt config must be SystemPromptConfig")
 	}
 }
 

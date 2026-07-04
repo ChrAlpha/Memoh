@@ -4,7 +4,7 @@ import "github.com/memohai/memoh/internal/contextfrag"
 
 type FragmentSelector struct{}
 
-func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
+func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	switch intent {
 	case contextfrag.IntentRunConfigPreProvider:
 		return IntentProfile{
@@ -36,7 +36,7 @@ func (s *FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	}
 }
 
-func (s *FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
+func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	frags, gated := applyTrustGate(frags, profile)
 	var result SelectionResult
 	if profile.Intent != contextfrag.IntentCompactionCandidates {

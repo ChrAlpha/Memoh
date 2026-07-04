@@ -118,5 +118,5 @@ func warnProviderContextView(logger *slog.Logger, cfg agentpkg.RunConfig, msg st
 	if err != nil {
 		attrs = append(attrs, slog.Any("error", err))
 	}
-	logger.Warn(msg, attrs...)
+	logger.Warn(msg, attrs...) //nolint:sloglint // caller-provided audit message
 }

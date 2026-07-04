@@ -2,7 +2,7 @@ package contextview
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -62,6 +62,6 @@ func currentUserConfig(config any) (CurrentUserConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return CurrentUserConfig{}, fmt.Errorf("current_user config must be CurrentUserConfig")
+		return CurrentUserConfig{}, errors.New("current_user config must be CurrentUserConfig")
 	}
 }

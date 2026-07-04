@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -67,7 +67,7 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 			// Chat mode must never silently produce an empty context
 			// document: either fragments were selected or the caller
 			// explicitly provided a legacy markdown document.
-			return RenderedPayload{}, fmt.Errorf("acp chat render: no selected fragments and no legacy context markdown")
+			return RenderedPayload{}, errors.New("acp chat render: no selected fragments and no legacy context markdown")
 		}
 		if uri == "" {
 			uri = defaultACPContextURI

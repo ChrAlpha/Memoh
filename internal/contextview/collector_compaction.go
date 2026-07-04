@@ -2,7 +2,7 @@ package contextview
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/historyfrag"
@@ -50,6 +50,6 @@ func compactionRecordsConfig(config any) (CompactionRecordsConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return CompactionRecordsConfig{}, fmt.Errorf("compaction_records config must be CompactionRecordsConfig")
+		return CompactionRecordsConfig{}, errors.New("compaction_records config must be CompactionRecordsConfig")
 	}
 }

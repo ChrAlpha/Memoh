@@ -2,7 +2,7 @@ package contextview
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -50,6 +50,6 @@ func inlineImageConfig(config any) (InlineImageConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return InlineImageConfig{}, fmt.Errorf("inline_images config must be InlineImageConfig")
+		return InlineImageConfig{}, errors.New("inline_images config must be InlineImageConfig")
 	}
 }

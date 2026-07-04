@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -110,7 +111,7 @@ func acpSectionsConfig(config any) (ACPSectionsConfig, error) {
 		}
 		return *cfg, nil
 	default:
-		return ACPSectionsConfig{}, fmt.Errorf("acp_sections config must be ACPSectionsConfig")
+		return ACPSectionsConfig{}, errors.New("acp_sections config must be ACPSectionsConfig")
 	}
 }
 

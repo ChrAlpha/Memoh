@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memohai/memoh/internal/contextfrag"
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 func TestBuildEndToEnd_PassthroughProfile(t *testing.T) {

@@ -997,6 +997,61 @@ export type CompactionLog = {
     usage?: unknown;
 };
 
+export type ContextfragCacheComparison = {
+    first_step_cache_read_tokens?: number;
+    outcome?: string;
+    prev_age_ms?: number;
+};
+
+export type ContextfragCacheUsageRecord = {
+    cache_read_tokens?: number;
+    cache_write_1h_tokens?: number;
+    cache_write_5m_tokens?: number;
+    cache_write_tokens?: number;
+    no_cache_tokens?: number;
+    step_index?: number;
+};
+
+export type ContextfragLifecycleSnapshot = {
+    cache_comparison?: ContextfragCacheComparison;
+    cache_read_tokens?: number;
+    cache_usage?: Array<ContextfragCacheUsageRecord>;
+    cache_write_tokens?: number;
+    counts?: ContextfragManifestCounts;
+    final_input_hash?: string;
+    mutations?: Array<ContextfragMutationRecord>;
+    rendered_prefix_hash?: string;
+    selection?: ContextfragSelectionTrace;
+    stable_message_count?: number;
+    stable_prefix_hash?: string;
+    version?: number;
+    view?: ContextfragManifestView;
+};
+
+export type ContextfragManifestCounts = {
+    fragments?: number;
+    images?: number;
+    messages?: number;
+    text_bytes?: number;
+};
+
+export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
+
+export type ContextfragMutationKind = 'tool_usage_append' | 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message';
+
+export type ContextfragMutationRecord = {
+    detail?: string;
+    kind?: ContextfragMutationKind;
+};
+
+export type ContextfragSelectionTrace = {
+    drop_reasons?: {
+        [key: string]: number;
+    };
+    dropped?: number;
+    selected?: number;
+};
+
 export type ConversationSkillActivation = {
     prompt?: string;
     skills?: Array<ConversationSkillActivationSkill>;
@@ -1466,6 +1521,33 @@ export type HandlersContainerResourceLimitValuesResponse = {
 export type HandlersContainerStorageMetricsResponse = {
     path?: string;
     used_bytes?: number;
+};
+
+export type HandlersContextLifecycleAggregates = {
+    cache_hit_rate?: number;
+    cache_outcomes?: {
+        [key: string]: number;
+    };
+    drop_reasons?: {
+        [key: string]: number;
+    };
+    mutation_kinds?: {
+        [key: string]: number;
+    };
+    total_cache_read_tokens?: number;
+    total_cache_write_tokens?: number;
+    turns?: number;
+};
+
+export type HandlersContextLifecycleResponse = {
+    aggregates?: HandlersContextLifecycleAggregates;
+    turns?: Array<HandlersContextLifecycleTurn>;
+};
+
+export type HandlersContextLifecycleTurn = {
+    created_at?: string;
+    message_id?: string;
+    snapshot?: ContextfragLifecycleSnapshot;
 };
 
 export type HandlersContextUsage = {
@@ -8321,6 +8403,53 @@ export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
 };
 
 export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: {
+        /**
+         * Maximum number of turns to return (default 50, max 200)
+         */
+        limit?: number;
+    };
+    url: '/bots/{bot_id}/sessions/{session_id}/context-lifecycle';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleError = GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors[keyof GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses = {
+    /**
+     * OK
+     */
+    200: HandlersContextLifecycleResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse = GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses[keyof GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses];
 
 export type PostBotsByBotIdSessionsBySessionIdForkData = {
     /**

@@ -6646,6 +6646,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/context-lifecycle": {
+            "get": {
+                "description": "List the persisted context lifecycle snapshots (selection, cache plan, mutations, cache attribution) for a chat session with aggregated cache and drop statistics",
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get session context lifecycle",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of turns to return (default 50, max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ContextLifecycleResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/fork": {
             "post": {
                 "tags": [
@@ -15406,6 +15463,172 @@ const docTemplate = `{
                 "usage": {}
             }
         },
+        "contextfrag.CacheComparison": {
+            "type": "object",
+            "properties": {
+                "first_step_cache_read_tokens": {
+                    "type": "integer"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "prev_age_ms": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.CacheUsageRecord": {
+            "type": "object",
+            "properties": {
+                "cache_read_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_1h_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_5m_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "no_cache_tokens": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.LifecycleSnapshot": {
+            "type": "object",
+            "properties": {
+                "cache_comparison": {
+                    "$ref": "#/definitions/contextfrag.CacheComparison"
+                },
+                "cache_read_tokens": {
+                    "type": "integer"
+                },
+                "cache_usage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.CacheUsageRecord"
+                    }
+                },
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "counts": {
+                    "$ref": "#/definitions/contextfrag.ManifestCounts"
+                },
+                "final_input_hash": {
+                    "type": "string"
+                },
+                "mutations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.MutationRecord"
+                    }
+                },
+                "rendered_prefix_hash": {
+                    "type": "string"
+                },
+                "selection": {
+                    "$ref": "#/definitions/contextfrag.SelectionTrace"
+                },
+                "stable_message_count": {
+                    "type": "integer"
+                },
+                "stable_prefix_hash": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                },
+                "view": {
+                    "$ref": "#/definitions/contextfrag.ManifestView"
+                }
+            }
+        },
+        "contextfrag.ManifestCounts": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "integer"
+                },
+                "images": {
+                    "type": "integer"
+                },
+                "messages": {
+                    "type": "integer"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ManifestView": {
+            "type": "string",
+            "enum": [
+                "compaction_candidates",
+                "discuss_reply",
+                "acp_runtime_prompt",
+                "run_config_pre_provider"
+            ],
+            "x-enum-varnames": [
+                "ViewCompactionCandidates",
+                "ViewDiscussReply",
+                "ViewACPRuntimePrompt",
+                "ViewRunConfigPreProvider"
+            ]
+        },
+        "contextfrag.MutationKind": {
+            "type": "string",
+            "enum": [
+                "tool_usage_append",
+                "before_model_call_hook",
+                "background_summary",
+                "mid_task_prune",
+                "loop_step_reselection",
+                "injected_message"
+            ],
+            "x-enum-varnames": [
+                "MutationToolUsageAppend",
+                "MutationBeforeModelCallHook",
+                "MutationBackgroundSummary",
+                "MutationMidTaskPrune",
+                "MutationLoopStepReselection",
+                "MutationInjectedMessage"
+            ]
+        },
+        "contextfrag.MutationRecord": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.MutationKind"
+                }
+            }
+        },
+        "contextfrag.SelectionTrace": {
+            "type": "object",
+            "properties": {
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "dropped": {
+                    "type": "integer"
+                },
+                "selected": {
+                    "type": "integer"
+                }
+            }
+        },
         "conversation.SkillActivation": {
             "type": "object",
             "properties": {
@@ -16590,6 +16813,69 @@ const docTemplate = `{
                 },
                 "used_bytes": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.ContextLifecycleAggregates": {
+            "type": "object",
+            "properties": {
+                "cache_hit_rate": {
+                    "type": "number"
+                },
+                "cache_outcomes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "mutation_kinds": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "total_cache_read_tokens": {
+                    "type": "integer"
+                },
+                "total_cache_write_tokens": {
+                    "type": "integer"
+                },
+                "turns": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ContextLifecycleResponse": {
+            "type": "object",
+            "properties": {
+                "aggregates": {
+                    "$ref": "#/definitions/handlers.ContextLifecycleAggregates"
+                },
+                "turns": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContextLifecycleTurn"
+                    }
+                }
+            }
+        },
+        "handlers.ContextLifecycleTurn": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "message_id": {
+                    "type": "string"
+                },
+                "snapshot": {
+                    "$ref": "#/definitions/contextfrag.LifecycleSnapshot"
                 }
             }
         },
