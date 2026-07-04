@@ -32,6 +32,7 @@ type Agent struct {
 	logger             *slog.Logger
 	limits             Limits
 	contextViewApplier ContextViewApplier
+	prefixCache        *prefixCacheTracker
 }
 
 // New creates a new Agent with the given dependencies.
@@ -47,6 +48,7 @@ func New(deps Deps) *Agent {
 		logger:             logger.With(slog.String("service", "agent")),
 		limits:             deps.Limits.Normalize(),
 		contextViewApplier: deps.ContextViewApplier,
+		prefixCache:        newPrefixCacheTracker(),
 	}
 }
 
@@ -611,6 +613,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			)
 		}
 	}
+	a.observePrefixCache(cfg)
 	a.logContextLifecycle(cfg)
 	// Deliver the terminal event using a context that is NOT cancelled when
 	// the parent ctx is cancelled (user abort / idle timeout / loop-detect).
@@ -623,6 +626,57 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	sendEvent(deliveryCtx, ch, termEvent)
 }
 
+// observePrefixCache compares this run's rendered stable prefix with the
+// previous run of the same session and records the attribution on the
+// mutation ledger, so the persisted snapshot explains cache behaviour
+// without offline correlation. Subagent runs share the parent session but
+// use a different prefix, so they are excluded from the comparison.
+func (a *Agent) observePrefixCache(cfg RunConfig) {
+	if a == nil || a.prefixCache == nil || cfg.ContextMutations == nil || cfg.Identity.IsSubagent {
+		return
+	}
+	plan := cfg.ContextManifest.CachePlan
+	if plan == nil || plan.RenderedStablePrefixHash == "" {
+		return
+	}
+	botID := strings.TrimSpace(cfg.Identity.BotID)
+	sessionID := strings.TrimSpace(cfg.Identity.SessionID)
+	if botID == "" || sessionID == "" {
+		return
+	}
+	firstStepCacheRead := 0
+	if records := cfg.ContextMutations.CacheUsageRecords(); len(records) > 0 {
+		firstStepCacheRead = records[0].CacheReadTokens
+	}
+	now := time.Now()
+	prev, hasPrev := a.prefixCache.observe(botID+":"+sessionID, plan.RenderedStablePrefixHash, now)
+	comparison := compareCachePrefix(prev, hasPrev, plan.RenderedStablePrefixHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
+	cfg.ContextMutations.SetCacheComparison(comparison)
+
+	if comparison.Outcome == contextfrag.CacheOutcomeMissSamePrefix &&
+		a.logger != nil &&
+		models.ResolveClientType(cfg.Model) == string(models.ClientTypeAnthropicMessages) &&
+		models.NormalizePromptCacheTTL(cfg.PromptCacheTTL) != models.PromptCacheTTLOff {
+		a.logger.Warn("prompt cache miss despite unchanged prefix",
+			slog.String("bot_id", botID),
+			slog.String("session_id", sessionID),
+			slog.Int64("prev_age_ms", comparison.PrevAgeMs),
+			slog.Int("mutations", len(cfg.ContextMutations.Records())),
+		)
+	}
+}
+
+func promptCacheTTLWindow(ttl string) time.Duration {
+	switch models.NormalizePromptCacheTTL(ttl) {
+	case models.PromptCacheTTL1h:
+		return time.Hour
+	case models.PromptCacheTTLOff:
+		return 0
+	default:
+		return 5 * time.Minute
+	}
+}
+
 // logContextLifecycle emits the one-line audit summary linking the context
 // view manifest to the final provider input: what was selected, what the
 // cache plan pinned, and which mutations ran after the view.
@@ -630,11 +684,16 @@ func (a *Agent) logContextLifecycle(cfg RunConfig) {
 	if a == nil || a.logger == nil || cfg.ContextMutations == nil {
 		return
 	}
+	cacheOutcome := ""
+	if comparison := cfg.ContextMutations.CacheComparisonValue(); comparison != nil {
+		cacheOutcome = comparison.Outcome
+	}
 	a.logger.Debug("context lifecycle",
 		slog.String("view", string(cfg.ContextManifest.View)),
 		slog.Int("manifest_items", len(cfg.ContextManifest.Items)),
 		slog.String("stable_prefix_hash", cfg.ContextCachePlan.StablePrefixHash),
 		slog.Int("mutations", len(cfg.ContextMutations.Records())),
+		slog.String("cache_outcome", cacheOutcome),
 		slog.String("final_input_hash", cfg.ContextMutations.FinalInputHash()),
 	)
 }
@@ -779,6 +838,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if readMediaState != nil {
 		finalMessages = readMediaState.mergeMessages(genResult.Steps, finalMessages)
 	}
+	a.observePrefixCache(cfg)
 	a.logContextLifecycle(cfg)
 	return &GenerateResult{
 		Messages:    finalMessages,

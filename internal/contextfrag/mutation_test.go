@@ -156,3 +156,22 @@ func TestLifecycleSnapshotIncludesCacheUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestJSONIncludesCacheComparison(t *testing.T) {
+	ledger := NewMutationLedger()
+	ledger.SetCacheComparison(CacheComparison{Outcome: CacheOutcomeMissSamePrefix, PrevAgeMs: 1200})
+	manifest := Manifest{Mutations: ledger}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	for _, want := range []string{"miss_same_prefix", "prev_age_ms"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("manifest JSON missing %q:\n%s", want, raw)
+		}
+	}
+	snapshot := BuildLifecycleSnapshot(manifest)
+	if snapshot.CacheComparison == nil || snapshot.CacheComparison.Outcome != CacheOutcomeMissSamePrefix {
+		t.Fatalf("snapshot comparison = %#v", snapshot.CacheComparison)
+	}
+}

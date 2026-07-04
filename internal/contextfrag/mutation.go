@@ -27,6 +27,24 @@ type MutationRecord struct {
 	Detail string       `json:"detail,omitempty"`
 }
 
+// Cache comparison outcomes: how this run's rendered stable prefix relates
+// to the previous run of the same session.
+const (
+	CacheOutcomeFirstObservation = "first_observation"
+	CacheOutcomeHit              = "hit"
+	CacheOutcomeMissSamePrefix   = "miss_same_prefix"
+	CacheOutcomeExpired          = "expired"
+	CacheOutcomePrefixChanged    = "prefix_changed"
+)
+
+// CacheComparison links the rendered prefix of this run to the previous run
+// in the same session, attributing prompt cache hits and misses in-process.
+type CacheComparison struct {
+	Outcome                  string `json:"outcome"`
+	PrevAgeMs                int64  `json:"prev_age_ms,omitempty"`
+	FirstStepCacheReadTokens int    `json:"first_step_cache_read_tokens,omitempty"`
+}
+
 type CacheUsageRecord struct {
 	StepIndex          int `json:"step_index"`
 	NoCacheTokens      int `json:"no_cache_tokens,omitempty"`
@@ -41,10 +59,11 @@ type CacheUsageRecord struct {
 // manifest chain from rendered payload to final model input stays auditable.
 // All methods are nil-safe.
 type MutationLedger struct {
-	mu             sync.Mutex
-	records        []MutationRecord
-	cacheUsage     []CacheUsageRecord
-	finalInputHash string
+	mu              sync.Mutex
+	records         []MutationRecord
+	cacheUsage      []CacheUsageRecord
+	cacheComparison *CacheComparison
+	finalInputHash  string
 }
 
 func NewMutationLedger() *MutationLedger {
@@ -89,6 +108,28 @@ func (l *MutationLedger) CacheUsageRecords() []CacheUsageRecord {
 	out := make([]CacheUsageRecord, len(l.cacheUsage))
 	copy(out, l.cacheUsage)
 	return out
+}
+
+func (l *MutationLedger) SetCacheComparison(comparison CacheComparison) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cacheComparison = &comparison
+}
+
+func (l *MutationLedger) CacheComparisonValue() *CacheComparison {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.cacheComparison == nil {
+		return nil
+	}
+	out := *l.cacheComparison
+	return &out
 }
 
 func (l *MutationLedger) SetFinalInputHash(hash string) {
@@ -148,12 +189,14 @@ func nilIfEmptyValue(value any) any {
 // persisted or logged as one lifecycle document.
 func (l *MutationLedger) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Records        []MutationRecord   `json:"records,omitempty"`
-		CacheUsage     []CacheUsageRecord `json:"cache_usage,omitempty"`
-		FinalInputHash string             `json:"final_input_hash,omitempty"`
+		Records         []MutationRecord   `json:"records,omitempty"`
+		CacheUsage      []CacheUsageRecord `json:"cache_usage,omitempty"`
+		CacheComparison *CacheComparison   `json:"cache_comparison,omitempty"`
+		FinalInputHash  string             `json:"final_input_hash,omitempty"`
 	}{
-		Records:        l.Records(),
-		CacheUsage:     l.CacheUsageRecords(),
-		FinalInputHash: l.FinalInputHash(),
+		Records:         l.Records(),
+		CacheUsage:      l.CacheUsageRecords(),
+		CacheComparison: l.CacheComparisonValue(),
+		FinalInputHash:  l.FinalInputHash(),
 	})
 }

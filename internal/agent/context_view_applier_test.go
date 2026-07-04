@@ -273,3 +273,92 @@ func TestGeneratePublishesRenderedPrefixHashAndCacheUsage(t *testing.T) {
 		t.Fatalf("cache usage = read %d write %d", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
 	}
 }
+
+func TestGenerateComparesPrefixCacheAcrossTurns(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
+		InputTokens:       42,
+		InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 11},
+	}}
+	a := New(Deps{ContextViewApplier: contextViewStubApplier})
+
+	runOnce := func() contextfrag.LifecycleSnapshot {
+		holder := contextfrag.NewLifecycleHolder()
+		if _, err := a.Generate(context.Background(), RunConfig{
+			Model: &sdk.Model{
+				ID:       "prefix-compare-model",
+				Provider: modelProvider,
+				Type:     sdk.ModelTypeChat,
+			},
+			System:           "stable system",
+			Messages:         []sdk.Message{sdk.UserMessage("stable message")},
+			Identity:         SessionContext{BotID: "bot-1", SessionID: "session-1"},
+			ContextLifecycle: holder,
+		}); err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+		snapshot, ok := holder.Snapshot()
+		if !ok {
+			t.Fatal("lifecycle snapshot missing")
+		}
+		return snapshot
+	}
+
+	first := runOnce()
+	if first.CacheComparison == nil || first.CacheComparison.Outcome != contextfrag.CacheOutcomeFirstObservation {
+		t.Fatalf("first turn comparison = %#v, want first observation", first.CacheComparison)
+	}
+	second := runOnce()
+	if second.CacheComparison == nil || second.CacheComparison.Outcome != contextfrag.CacheOutcomeHit {
+		t.Fatalf("second turn comparison = %#v, want hit", second.CacheComparison)
+	}
+	if second.CacheComparison.FirstStepCacheReadTokens != 11 {
+		t.Fatalf("first step cache read = %d, want 11", second.CacheComparison.FirstStepCacheReadTokens)
+	}
+}
+
+func TestGenerateSkipsPrefixComparisonForSubagents(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	a := New(Deps{ContextViewApplier: contextViewStubApplier})
+	holder := contextfrag.NewLifecycleHolder()
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "subagent-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "subagent system",
+		Messages:         []sdk.Message{sdk.UserMessage("task")},
+		Identity:         SessionContext{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+		ContextLifecycle: holder,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle snapshot missing")
+	}
+	if snapshot.CacheComparison != nil {
+		t.Fatalf("subagent runs must not join the session prefix comparison: %#v", snapshot.CacheComparison)
+	}
+}
+
+func contextViewStubApplier(_ context.Context, cfg RunConfig) RunConfig {
+	plan := contextfrag.CachePlan{StablePrefixHash: "fragment-prefix", StableMessageCount: 0}
+	ledger := contextfrag.NewMutationLedger()
+	manifest := contextfrag.Manifest{
+		View:      contextfrag.ViewRunConfigPreProvider,
+		CachePlan: &plan,
+		Mutations: ledger,
+	}
+	cfg.ContextCachePlan = plan
+	cfg.ContextManifest = manifest
+	cfg.ContextMutations = ledger
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
+	return cfg
+}

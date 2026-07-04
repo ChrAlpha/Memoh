@@ -58,6 +58,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 	if manifest.Mutations != nil {
 		snapshot.Mutations = manifest.Mutations.Records()
 		snapshot.FinalInputHash = manifest.Mutations.FinalInputHash()
+		snapshot.CacheComparison = manifest.Mutations.CacheComparisonValue()
 		snapshot.CacheUsage = manifest.Mutations.CacheUsageRecords()
 		for _, record := range snapshot.CacheUsage {
 			snapshot.CacheReadTokens += record.CacheReadTokens
@@ -78,6 +79,7 @@ type LifecycleSnapshot struct {
 	CacheReadTokens    int                `json:"cache_read_tokens"`
 	CacheWriteTokens   int                `json:"cache_write_tokens"`
 	CacheUsage         []CacheUsageRecord `json:"cache_usage,omitempty"`
+	CacheComparison    *CacheComparison   `json:"cache_comparison,omitempty"`
 	Mutations          []MutationRecord   `json:"mutations,omitempty"`
 	FinalInputHash     string             `json:"final_input_hash,omitempty"`
 }
