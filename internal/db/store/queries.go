@@ -301,6 +301,7 @@ type Queries interface {
 	ListPendingUserInputsBySession(ctx context.Context, arg dbsqlc.ListPendingUserInputsBySessionParams) ([]dbsqlc.UserInputRequest, error)
 	ListProviders(ctx context.Context) ([]dbsqlc.Provider, error)
 	ListReadableBindingsByProvider(ctx context.Context, emailProviderID pgtype.UUID) ([]dbsqlc.BotEmailBinding, error)
+	ListRecentAssistantMessagesBySession(ctx context.Context, arg dbsqlc.ListRecentAssistantMessagesBySessionParams) ([]dbsqlc.ListRecentAssistantMessagesBySessionRow, error)
 	ListScheduleLogsByBot(ctx context.Context, arg dbsqlc.ListScheduleLogsByBotParams) ([]dbsqlc.ListScheduleLogsByBotRow, error)
 	ListScheduleLogsBySchedule(ctx context.Context, arg dbsqlc.ListScheduleLogsByScheduleParams) ([]dbsqlc.ListScheduleLogsByScheduleRow, error)
 	ListSchedulesByBot(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.Schedule, error)

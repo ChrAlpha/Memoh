@@ -11,7 +11,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
-func lifecycleRow(t *testing.T, role string, at time.Time, snapshot *contextfrag.LifecycleSnapshot) sqlc.ListMessagesBySessionRow {
+func lifecycleRow(t *testing.T, role string, at time.Time, snapshot *contextfrag.LifecycleSnapshot) sqlc.ListRecentAssistantMessagesBySessionRow {
 	t.Helper()
 	metadata := map[string]any{}
 	if snapshot != nil {
@@ -21,7 +21,7 @@ func lifecycleRow(t *testing.T, role string, at time.Time, snapshot *contextfrag
 	if err != nil {
 		t.Fatalf("marshal metadata: %v", err)
 	}
-	return sqlc.ListMessagesBySessionRow{
+	return sqlc.ListRecentAssistantMessagesBySessionRow{
 		ID:        pgtype.UUID{Bytes: [16]byte{byte(at.Unix() % 256)}, Valid: true}, //nolint:gosec // test fixture
 		Role:      role,
 		Metadata:  raw,
@@ -33,16 +33,15 @@ func TestLifecycleTurnsFromRowsFiltersAndOrders(t *testing.T) {
 	t.Parallel()
 
 	base := time.Unix(1000, 0).UTC()
-	rows := []sqlc.ListMessagesBySessionRow{
-		lifecycleRow(t, "user", base, nil),
-		lifecycleRow(t, "assistant", base.Add(time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-1"}),
-		lifecycleRow(t, "assistant", base.Add(2*time.Minute), nil),
+	rows := []sqlc.ListRecentAssistantMessagesBySessionRow{
 		lifecycleRow(t, "assistant", base.Add(3*time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-2"}),
+		lifecycleRow(t, "assistant", base.Add(2*time.Minute), nil),
+		lifecycleRow(t, "assistant", base.Add(time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-1"}),
 	}
 
 	turns := lifecycleTurnsFromRows(rows, 10)
 	if len(turns) != 2 {
-		t.Fatalf("turns = %d, want 2 (assistant with snapshots only)", len(turns))
+		t.Fatalf("turns = %d, want 2 (rows with a lifecycle snapshot only)", len(turns))
 	}
 	if turns[0].Snapshot.FinalInputHash != "turn-2" || turns[1].Snapshot.FinalInputHash != "turn-1" {
 		t.Fatalf("turns must be newest-first: %q then %q", turns[0].Snapshot.FinalInputHash, turns[1].Snapshot.FinalInputHash)

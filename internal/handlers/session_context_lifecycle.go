@@ -108,13 +108,17 @@ func (h *SessionInfoHandler) GetSessionContextLifecycle(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "session not found")
 	}
 
-	rows, err := h.queries.ListMessagesBySession(ctx, pgSessionID)
+	limit := contextLifecycleLimit(c)
+	rows, err := h.queries.ListRecentAssistantMessagesBySession(ctx, sqlc.ListRecentAssistantMessagesBySessionParams{
+		SessionID: pgSessionID,
+		MaxCount:  int32(limit), //nolint:gosec // G115: limit is bounded to contextLifecycleMaxLimit
+	})
 	if err != nil {
 		h.logger.Error("list session messages failed", slog.Any("error", err))
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load session messages")
 	}
 
-	turns := lifecycleTurnsFromRows(rows, contextLifecycleLimit(c))
+	turns := lifecycleTurnsFromRows(rows, limit)
 	return c.JSON(http.StatusOK, ContextLifecycleResponse{
 		Turns:      turns,
 		Aggregates: aggregateContextLifecycle(turns),
@@ -136,11 +140,13 @@ func contextLifecycleLimit(c echo.Context) int {
 
 // lifecycleTurnsFromRows extracts persisted lifecycle snapshots from
 // assistant message metadata, newest first, bounded by limit.
-func lifecycleTurnsFromRows(rows []sqlc.ListMessagesBySessionRow, limit int) []ContextLifecycleTurn {
+func lifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessionRow, limit int) []ContextLifecycleTurn {
 	turns := make([]ContextLifecycleTurn, 0, limit)
-	for i := len(rows) - 1; i >= 0 && len(turns) < limit; i-- {
-		row := rows[i]
-		if !strings.EqualFold(strings.TrimSpace(row.Role), "assistant") || len(row.Metadata) == 0 {
+	for _, row := range rows {
+		if len(turns) >= limit {
+			break
+		}
+		if len(row.Metadata) == 0 {
 			continue
 		}
 		var metadata struct {
