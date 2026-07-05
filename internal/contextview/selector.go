@@ -46,7 +46,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	var fragBudgetEdits []contextfrag.ContextEditTrace
 	var fragBudgetWarnings []contextfrag.ValidationWarning
 	if isRetentionIntent(profile.Intent) {
-		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(frags)
+		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(frags, profile)
 	}
 	var exchangeDropped []contextfrag.ContextFrag
 	var exchangeEdits []contextfrag.ContextEditTrace

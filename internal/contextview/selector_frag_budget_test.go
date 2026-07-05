@@ -3,6 +3,7 @@ package contextview
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -42,8 +43,9 @@ func TestFragBudgetTrimsPureTextFragOverMaxChars(t *testing.T) {
 	t.Parallel()
 
 	selector := &FragmentSelector{}
-	long := textFrag("long-note", contextfrag.SlotHistory, contextfrag.KindConversationEvent, sdk.MessageRoleAssistant, strings.Repeat("a", 50))
-	long.Budget = contextfrag.BudgetPolicy{MaxChars: 10, Overflow: contextfrag.OverflowTrim}
+	original := strings.Repeat("a", 50)
+	long := textFrag("long-note", contextfrag.SlotHistory, contextfrag.KindConversationEvent, sdk.MessageRoleAssistant, original)
+	long.Budget = contextfrag.BudgetPolicy{MaxChars: 30, Overflow: contextfrag.OverflowTrim}
 
 	result := selector.Select([]contextfrag.ContextFrag{long}, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
 
@@ -51,11 +53,40 @@ func TestFragBudgetTrimsPureTextFragOverMaxChars(t *testing.T) {
 		t.Fatalf("selected = %d, want 1", len(result.Selected))
 	}
 	text := result.Selected[0].Parts[0].Text
-	if !strings.HasPrefix(text, strings.Repeat("a", 10)) {
-		t.Fatalf("trimmed text = %q, want to keep the first 10 chars", text)
+	if !strings.HasPrefix(text, strings.Repeat("a", 7)) {
+		t.Fatalf("trimmed text = %q, want to keep the first 7 chars", text)
 	}
-	if !strings.Contains(text, "[trimmed:") {
-		t.Fatalf("trimmed text = %q, want a trim marker", text)
+	if !strings.Contains(text, "[trimmed from 50 bytes]") {
+		t.Fatalf("trimmed text = %q, want a trim marker naming the original size", text)
+	}
+	if got := utf8.RuneCountInString(text); got > long.Budget.MaxChars {
+		t.Fatalf("trimmed text rune length = %d, want <= MaxChars (%d)", got, long.Budget.MaxChars)
+	}
+	if len(result.Edited) == 0 {
+		t.Fatal("trim must record an edit trace")
+	}
+}
+
+func TestFragBudgetTrimRespectsMaxTokensBudgetIncludingMarker(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	original := strings.Repeat("z", 200)
+	long := textFrag("long-tool-note", contextfrag.SlotHistory, contextfrag.KindConversationEvent, sdk.MessageRoleAssistant, original)
+	long.Budget = contextfrag.BudgetPolicy{MaxTokens: 10, Overflow: contextfrag.OverflowTrim}
+
+	result := selector.Select([]contextfrag.ContextFrag{long}, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
+
+	if len(result.Selected) != 1 {
+		t.Fatalf("selected = %d, want 1", len(result.Selected))
+	}
+	text := result.Selected[0].Parts[0].Text
+	if !strings.Contains(text, "[trimmed from 200 bytes]") {
+		t.Fatalf("trimmed text = %q, want a trim marker naming the original size", text)
+	}
+	maxBytes := long.Budget.MaxTokens * fragBudgetTokenByteFactor
+	if got := len(text); got > maxBytes {
+		t.Fatalf("trimmed text byte length = %d, want <= MaxTokens*%d (%d)", got, fragBudgetTokenByteFactor, maxBytes)
 	}
 	if len(result.Edited) == 0 {
 		t.Fatal("trim must record an edit trace")
@@ -134,6 +165,24 @@ func TestFragBudgetDropProtectsToolClosure(t *testing.T) {
 	}
 }
 
+func TestFragBudgetCountsNonTextToolResultContentForMaxChars(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	bulky := toolResultFrag("result", "calc", "call-1", strings.Repeat("r", 400))
+	bulky.Budget = contextfrag.BudgetPolicy{MaxChars: 5, Overflow: contextfrag.OverflowDrop}
+	frags := []contextfrag.ContextFrag{
+		toolCallFrag("call", "calc", "call-1"),
+		bulky,
+	}
+
+	result := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
+
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "frag_budget_drop_blocked_tool_closure" {
+		t.Fatalf("expected frag_budget_drop_blocked_tool_closure once MaxChars accounts for non-text tool-result content, got %#v", result.Warnings)
+	}
+}
+
 func TestFragBudgetTrimUnsupportedOnNonPureTextKeepsAndWarns(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +200,34 @@ func TestFragBudgetTrimUnsupportedOnNonPureTextKeepsAndWarns(t *testing.T) {
 	}
 }
 
+func TestFragBudgetTrimHonorsMaxTokensWhenMaxCharsAlsoConfigured(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	original := strings.Repeat("m", 100)
+	frag := textFrag("note", contextfrag.SlotHistory, contextfrag.KindConversationEvent, sdk.MessageRoleAssistant, original)
+	frag.Budget = contextfrag.BudgetPolicy{MaxChars: 1000, MaxTokens: 5, Overflow: contextfrag.OverflowTrim}
+
+	result := selector.Select([]contextfrag.ContextFrag{frag}, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
+
+	if len(result.Selected) != 1 {
+		t.Fatalf("selected = %d, want 1", len(result.Selected))
+	}
+	text := result.Selected[0].Parts[0].Text
+	maxBytes := frag.Budget.MaxTokens * fragBudgetTokenByteFactor
+	if got := len(text); got > maxBytes {
+		t.Fatalf("trimmed text byte length = %d, want <= MaxTokens*%d (%d)", got, fragBudgetTokenByteFactor, maxBytes)
+	}
+	if text == original {
+		t.Fatal("expected the MaxTokens dimension to actually truncate the content even though MaxChars did not trigger")
+	}
+	for _, w := range result.Warnings {
+		if w.Code == "overflow_trim_unsupported" {
+			t.Fatalf("did not expect overflow_trim_unsupported once both budget dimensions are enforced: %#v", result.Warnings)
+		}
+	}
+}
+
 func TestFragBudgetOverflowKeepIgnoresLimits(t *testing.T) {
 	t.Parallel()
 
@@ -165,5 +242,28 @@ func TestFragBudgetOverflowKeepIgnoresLimits(t *testing.T) {
 	}
 	if len(result.Warnings) != 0 || len(result.Dropped) != 0 || len(result.Edited) != 0 {
 		t.Fatalf("OverflowKeep must have zero side effects: warnings=%d dropped=%d edited=%d", len(result.Warnings), len(result.Dropped), len(result.Edited))
+	}
+}
+
+func TestFragBudgetDropProtectsMustKeepSlot(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	frag := textFrag("current-user", contextfrag.SlotCurrentUser, contextfrag.KindConversationEvent, sdk.MessageRoleUser, strings.Repeat("u", 400))
+	frag.Budget = contextfrag.BudgetPolicy{MaxChars: 1, Overflow: contextfrag.OverflowDrop}
+
+	result := selector.Select([]contextfrag.ContextFrag{frag}, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
+
+	var kept bool
+	for _, f := range result.Selected {
+		if f.ID == "current-user" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatal("must-keep SlotCurrentUser frag must survive OverflowDrop")
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "frag_budget_drop_blocked_must_keep" {
+		t.Fatalf("must-keep drop must record a validation warning: %#v", result.Warnings)
 	}
 }

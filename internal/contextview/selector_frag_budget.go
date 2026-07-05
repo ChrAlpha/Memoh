@@ -1,7 +1,9 @@
 package contextview
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -17,7 +19,7 @@ type fragBudgetDrop struct {
 	reason string
 }
 
-func enforceFragBudgets(frags []contextfrag.ContextFrag) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
+func enforceFragBudgets(frags []contextfrag.ContextFrag, profile IntentProfile) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
 	kept = make([]contextfrag.ContextFrag, 0, len(frags))
 	for _, frag := range frags {
 		reason, exceeded := fragBudgetExceeded(frag)
@@ -30,6 +32,11 @@ func enforceFragBudgets(frags []contextfrag.ContextFrag) (kept []contextfrag.Con
 			if isToolExchangeFrag(frag) {
 				kept = append(kept, frag)
 				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_tool_closure", Ref: frag.Ref})
+				continue
+			}
+			if isMustKeepFrag(frag, profile) {
+				kept = append(kept, frag)
+				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_must_keep", Ref: frag.Ref})
 				continue
 			}
 			dropped = append(dropped, fragBudgetDrop{frag: frag, reason: reason})
@@ -80,23 +87,40 @@ func fragBudgetExceeded(frag contextfrag.ContextFrag) (reason string, exceeded b
 	return "", false
 }
 
+// fragCharCount mirrors fragTokenEstimate's fallback: when a frag carries no
+// text content (a pure tool-call/tool-result SDK message), it falls back to
+// the serialized part length so the MaxChars guard sees the payload size
+// instead of a false zero.
 func fragCharCount(frag contextfrag.ContextFrag) int {
-	count := 0
+	texts := make([]string, 0, len(frag.Parts))
+	var fallback int
 	for _, part := range frag.Parts {
 		switch part.Type {
 		case contextfrag.PartText:
-			count += utf8.RuneCountInString(part.Text)
+			if strings.TrimSpace(part.Text) != "" {
+				texts = append(texts, part.Text)
+			}
 		case contextfrag.PartSDKMessage:
 			if msg := sdkMessagePart(part); msg != nil {
 				for _, mp := range msg.Content {
-					if tp, ok := mp.(sdk.TextPart); ok {
-						count += utf8.RuneCountInString(tp.Text)
+					switch p := mp.(type) {
+					case sdk.TextPart:
+						if strings.TrimSpace(p.Text) != "" {
+							texts = append(texts, p.Text)
+						}
+					default:
+						if data, err := json.Marshal(mp); err == nil {
+							fallback += utf8.RuneCountInString(string(data))
+						}
 					}
 				}
 			}
 		}
 	}
-	return count
+	if len(texts) > 0 {
+		return utf8.RuneCountInString(strings.Join(texts, "\n"))
+	}
+	return fallback
 }
 
 func isPureTextFrag(frag contextfrag.ContextFrag) bool {
@@ -115,17 +139,66 @@ func trimFragText(frag contextfrag.ContextFrag) (contextfrag.ContextFrag, bool) 
 	if !isPureTextFrag(frag) {
 		return frag, false
 	}
-	limit, byBytes := fragTrimLimit(frag.Budget)
-	if limit <= 0 {
+	charLimit, tokenByteLimit := fragTrimLimit(frag.Budget)
+	if charLimit <= 0 && tokenByteLimit <= 0 {
 		return frag, false
 	}
-	parts := make([]contextfrag.Part, len(frag.Parts))
-	copy(parts, frag.Parts)
-	remaining := limit
-	removedBytes := 0
+	parts := frag.Parts
+	changed := false
+	if charLimit > 0 {
+		if next, ok := trimPartsToLimit(parts, charLimit, false); ok {
+			parts, changed = next, true
+		}
+	}
+	if tokenByteLimit > 0 {
+		if next, ok := trimPartsToLimit(parts, tokenByteLimit, true); ok {
+			parts, changed = next, true
+		}
+	}
+	if !changed {
+		return frag, false
+	}
+	frag.Parts = parts
+	return frag, true
+}
+
+// fragTrimLimit returns the char-dimension (rune) and token-dimension (byte)
+// trim limits configured on budget. A limit of 0 means that dimension is not
+// configured, so trimFragText must skip its pass instead of treating the
+// unconfigured dimension as satisfied.
+func fragTrimLimit(budget contextfrag.BudgetPolicy) (charLimit int, tokenByteLimit int) {
+	if budget.MaxChars > 0 {
+		charLimit = budget.MaxChars
+	}
+	if budget.MaxTokens > 0 {
+		tokenByteLimit = budget.MaxTokens * fragBudgetTokenByteFactor
+	}
+	return charLimit, tokenByteLimit
+}
+
+// trimPartsToLimit truncates parts' text to fit limit (runes when byBytes is
+// false, bytes when true), reserving room for a "[trimmed from N bytes]"
+// marker sized from parts' untrimmed length so the result never exceeds
+// limit. When limit is too small to fit the marker itself, it degrades to a
+// plain truncation with no marker.
+func trimPartsToLimit(parts []contextfrag.Part, limit int, byBytes bool) ([]contextfrag.Part, bool) {
+	originalBytes := 0
+	for _, part := range parts {
+		originalBytes += len(part.Text)
+	}
+	marker := fmt.Sprintf("[trimmed from %d bytes]", originalBytes)
+	markerWidth := len(marker)
+	contentLimit := limit
+	appendMarker := limit > markerWidth
+	if appendMarker {
+		contentLimit = limit - markerWidth
+	}
+	next := make([]contextfrag.Part, len(parts))
+	copy(next, parts)
+	remaining := contentLimit
 	changed := false
 	last := -1
-	for i, part := range parts {
+	for i, part := range next {
 		original := part.Text
 		var kept string
 		if byBytes {
@@ -135,7 +208,6 @@ func trimFragText(frag contextfrag.ContextFrag) (contextfrag.ContextFrag, bool) 
 		}
 		if kept != original {
 			changed = true
-			removedBytes += len(original) - len(kept)
 			last = i
 		}
 		if byBytes {
@@ -143,24 +215,15 @@ func trimFragText(frag contextfrag.ContextFrag) (contextfrag.ContextFrag, bool) 
 		} else {
 			remaining -= utf8.RuneCountInString(kept)
 		}
-		parts[i].Text = kept
+		next[i].Text = kept
 	}
 	if !changed {
-		return frag, false
+		return parts, false
 	}
-	parts[last].Text += fmt.Sprintf("[trimmed: %d bytes]", removedBytes)
-	frag.Parts = parts
-	return frag, true
-}
-
-func fragTrimLimit(budget contextfrag.BudgetPolicy) (limit int, byBytes bool) {
-	if budget.MaxChars > 0 {
-		return budget.MaxChars, false
+	if appendMarker {
+		next[last].Text += marker
 	}
-	if budget.MaxTokens > 0 {
-		return budget.MaxTokens * fragBudgetTokenByteFactor, true
-	}
-	return 0, false
+	return next, true
 }
 
 func fragBudgetTrimEdit(frag contextfrag.ContextFrag) contextfrag.ContextEditTrace {
