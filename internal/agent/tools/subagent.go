@@ -18,6 +18,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	"github.com/memohai/memoh/internal/contextfrag"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/hooks"
 	messagepkg "github.com/memohai/memoh/internal/message"
@@ -36,15 +37,17 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
-	Model           *sdk.Model
-	System          string
-	Query           string
-	SessionType     string
-	Identity        SpawnIdentity
-	LoopDetection   SpawnLoopConfig
-	Messages        []sdk.Message
-	ReasoningEffort string
-	PromptCacheTTL  string
+	Model                     *sdk.Model
+	System                    string
+	Query                     string
+	SessionType               string
+	Identity                  SpawnIdentity
+	LoopDetection             SpawnLoopConfig
+	Messages                  []sdk.Message
+	ReasoningEffort           string
+	PromptCacheTTL            string
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 }
 
 // SpawnIdentity mirrors agent.SessionContext fields needed by subagent controls.
@@ -687,12 +690,14 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		history = dropLatestMatchingUserMessage(history, req.message)
 	}
 	cfg := SpawnRunConfig{
-		Model:          req.model,
-		System:         req.systemPrompt,
-		Query:          req.message,
-		SessionType:    sessionpkg.TypeSubagent,
-		PromptCacheTTL: req.promptCacheTTL,
-		Messages:       history,
+		Model:                     req.model,
+		System:                    req.systemPrompt,
+		Query:                     req.message,
+		SessionType:               sessionpkg.TypeSubagent,
+		PromptCacheTTL:            req.promptCacheTTL,
+		Messages:                  history,
+		ContextBudgetMaxTokens:    req.parentSession.ContextBudgetMaxTokens,
+		ContextToolExchangePolicy: req.parentSession.ContextToolExchangePolicy,
 		Identity: SpawnIdentity{
 			BotID:             req.parentSession.BotID,
 			ChatID:            req.parentSession.ChatID,

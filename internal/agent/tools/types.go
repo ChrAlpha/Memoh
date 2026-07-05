@@ -12,6 +12,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/agent/tools/internal/toolset"
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -74,23 +75,25 @@ type StreamEmitter func(ToolStreamEvent)
 
 // SessionContext carries request-scoped identity for tool execution.
 type SessionContext struct {
-	BotID               string
-	ChatID              string
-	SessionID           string
-	SessionType         string
-	ChannelIdentityID   string
-	SessionToken        string //nolint:gosec // carries session credential material at runtime
-	CurrentPlatform     string
-	ReplyTarget         string
-	ConversationType    string
-	CanRequestUserInput bool
-	CanListUserInput    bool
-	SupportsImageInput  bool
-	IsSubagent          bool
-	Skills              map[string]SkillDetail
-	TimezoneLocation    *time.Location
-	Emitter             StreamEmitter
-	LiveStream          bool
+	BotID                     string
+	ChatID                    string
+	SessionID                 string
+	SessionType               string
+	ChannelIdentityID         string
+	SessionToken              string //nolint:gosec // carries session credential material at runtime
+	CurrentPlatform           string
+	ReplyTarget               string
+	ConversationType          string
+	CanRequestUserInput       bool
+	CanListUserInput          bool
+	SupportsImageInput        bool
+	IsSubagent                bool
+	Skills                    map[string]SkillDetail
+	TimezoneLocation          *time.Location
+	Emitter                   StreamEmitter
+	LiveStream                bool
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 }
 
 // CanAskUser reports whether ask_user can be both shown to the model and

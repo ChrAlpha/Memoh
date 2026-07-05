@@ -14,6 +14,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	"github.com/memohai/memoh/internal/contextfrag"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 )
@@ -363,6 +364,31 @@ func TestSpawnAgentSessionInheritsParentUserIdentity(t *testing.T) {
 	}
 	if rec.CreatedByUserID != "user1" {
 		t.Fatalf("expected child session creator to inherit parent user, got %q", rec.CreatedByUserID)
+	}
+}
+
+func TestSpawnAgentPropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	policy := &contextfrag.ToolExchangePolicy{MinMessages: 10}
+	session := SessionContext{
+		BotID:                     "bot1",
+		SessionID:                 "parent1",
+		ContextBudgetMaxTokens:    128000,
+		ContextToolExchangePolicy: policy,
+	}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"task": "alpha"})
+
+	call, ok := agent.callAt(0)
+	if !ok {
+		t.Fatal("expected spawn_agent call")
+	}
+	if call.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", call.ContextBudgetMaxTokens)
+	}
+	if call.ContextToolExchangePolicy != policy {
+		t.Fatalf("ContextToolExchangePolicy = %p, want same pointer %p", call.ContextToolExchangePolicy, policy)
 	}
 }
 
