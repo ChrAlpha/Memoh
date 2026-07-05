@@ -22,7 +22,7 @@ func TestApplyPromptCacheZeroPlanMatchesLegacy(t *testing.T) {
 	tools := []sdk.Tool{{Name: "calc"}}
 
 	legacySystem, legacyMessages, legacyTools := ApplyPromptCache(model, "5m", "system", messages, tools)
-	planSystem, planMessages, planTools := ApplyPromptCacheWithPlan(model, "5m", contextfrag.CachePlan{}, "system", messages, tools)
+	planSystem, planMessages, planTools, _ := ApplyPromptCacheWithPlan(model, "5m", contextfrag.CachePlan{}, "system", messages, tools)
 
 	if legacySystem != planSystem || len(legacyMessages) != len(planMessages) || len(legacyTools) != len(planTools) {
 		t.Fatal("zero plan must preserve the legacy cache layout")
@@ -44,7 +44,7 @@ func TestApplyPromptCachePlanSetsStableMessageBreakpoint(t *testing.T) {
 	}
 	plan := contextfrag.CachePlan{StablePrefixHash: "abc", StableMessageCount: 1}
 
-	_, got, _ := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
+	_, got, _, _ := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
 
 	// got[0] is the relocated system message; got[1] is the stable message.
 	stable, ok := got[1].Content[len(got[1].Content)-1].(sdk.TextPart)
@@ -64,9 +64,50 @@ func TestApplyPromptCachePlanOutOfRangeIgnored(t *testing.T) {
 	messages := []sdk.Message{sdk.UserMessage("only")}
 	plan := contextfrag.CachePlan{StableMessageCount: 5}
 
-	_, got, _ := ApplyPromptCacheWithPlan(model, "5m", plan, "", messages, nil)
+	_, got, _, _ := ApplyPromptCacheWithPlan(model, "5m", plan, "", messages, nil)
 	part, ok := got[0].Content[0].(sdk.TextPart)
 	if !ok || part.CacheControl != nil {
 		t.Fatalf("out-of-range plan must be ignored: %#v", got[0].Content)
 	}
+}
+
+// TestApplyPromptCacheWithPlanReportsSystemPromotion asserts the 4th return
+// value truthfully reports whether this call prepended a system message,
+// rather than callers having to guess from messages[0].Role afterwards.
+func TestApplyPromptCacheWithPlanReportsSystemPromotion(t *testing.T) {
+	t.Parallel()
+
+	messages := []sdk.Message{sdk.UserMessage("hello")}
+
+	t.Run("anthropic with system and caching on", func(t *testing.T) {
+		t.Parallel()
+		_, _, _, gotPrepended := ApplyPromptCacheWithPlan(anthropicTestModel(), "5m", contextfrag.CachePlan{}, "system prompt", messages, nil)
+		if !gotPrepended {
+			t.Fatal("expected systemPrepended=true when Anthropic caching promotes a non-empty system string")
+		}
+	})
+
+	t.Run("anthropic with empty system", func(t *testing.T) {
+		t.Parallel()
+		_, _, _, gotPrepended := ApplyPromptCacheWithPlan(anthropicTestModel(), "5m", contextfrag.CachePlan{}, "", messages, nil)
+		if gotPrepended {
+			t.Fatal("expected systemPrepended=false when system is empty, so nothing was promoted")
+		}
+	})
+
+	t.Run("anthropic with caching off", func(t *testing.T) {
+		t.Parallel()
+		_, _, _, gotPrepended := ApplyPromptCacheWithPlan(anthropicTestModel(), PromptCacheTTLOff, contextfrag.CachePlan{}, "system prompt", messages, nil)
+		if gotPrepended {
+			t.Fatal("expected systemPrepended=false when the cache ttl is off")
+		}
+	})
+
+	t.Run("non-anthropic model", func(t *testing.T) {
+		t.Parallel()
+		_, _, _, gotPrepended := ApplyPromptCacheWithPlan(newOpenAITestModel(t), "5m", contextfrag.CachePlan{}, "system prompt", messages, nil)
+		if gotPrepended {
+			t.Fatal("expected systemPrepended=false for non-Anthropic models")
+		}
+	})
 }

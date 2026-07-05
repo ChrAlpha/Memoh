@@ -57,14 +57,18 @@ func ApplyPromptCache(
 	messages []sdk.Message,
 	tools []sdk.Tool,
 ) (string, []sdk.Message, []sdk.Tool) {
-	return ApplyPromptCacheWithPlan(model, ttl, contextfrag.CachePlan{}, system, messages, tools)
+	newSystem, newMessages, newTools, _ := ApplyPromptCacheWithPlan(model, ttl, contextfrag.CachePlan{}, system, messages, tools)
+	return newSystem, newMessages, newTools
 }
 
 // ApplyPromptCacheWithPlan decorates the provider request using the
 // placement-derived cache plan: when the plan marks a stable leading message
 // span, the final message of that span receives a cache breakpoint so the
 // stable prefix is cached across turns. A zero plan preserves the legacy
-// system-and-tools-only layout.
+// system-and-tools-only layout. The 4th return value reports whether this
+// call prepended a system message to messages (Anthropic's system->message
+// cache promotion), so callers can tell that apart from an unrelated
+// leading system-role message already present in the input.
 func ApplyPromptCacheWithPlan(
 	model *sdk.Model,
 	ttl string,
@@ -72,19 +76,19 @@ func ApplyPromptCacheWithPlan(
 	system string,
 	messages []sdk.Message,
 	tools []sdk.Tool,
-) (string, []sdk.Message, []sdk.Tool) {
+) (string, []sdk.Message, []sdk.Tool, bool) {
 	if model == nil {
-		return system, messages, tools
+		return system, messages, tools, false
 	}
 	normalized := NormalizePromptCacheTTL(ttl)
 	if normalized == PromptCacheTTLOff {
-		return system, messages, tools
+		return system, messages, tools, false
 	}
 	switch ResolveClientType(model) {
 	case string(ClientTypeAnthropicMessages):
 		return applyAnthropicPromptCache(normalized, plan, system, messages, tools)
 	default:
-		return system, messages, tools
+		return system, messages, tools, false
 	}
 }
 
@@ -105,10 +109,10 @@ func applyAnthropicPromptCache(
 	system string,
 	messages []sdk.Message,
 	tools []sdk.Tool,
-) (string, []sdk.Message, []sdk.Tool) {
+) (string, []sdk.Message, []sdk.Tool, bool) {
 	cc := anthropicCacheControl(ttl)
 	if cc == nil {
-		return system, messages, tools
+		return system, messages, tools, false
 	}
 
 	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) {
@@ -117,6 +121,7 @@ func applyAnthropicPromptCache(
 
 	newMessages := messages
 	newSystem := system
+	systemPrepended := false
 	if system != "" {
 		systemMsg := sdk.Message{
 			Role: sdk.MessageRoleSystem,
@@ -128,6 +133,7 @@ func applyAnthropicPromptCache(
 		newMessages = append(newMessages, systemMsg)
 		newMessages = append(newMessages, messages...)
 		newSystem = ""
+		systemPrepended = true
 	}
 
 	newTools := tools
@@ -137,7 +143,7 @@ func applyAnthropicPromptCache(
 		newTools[len(newTools)-1].CacheControl = cc
 	}
 
-	return newSystem, newMessages, newTools
+	return newSystem, newMessages, newTools, systemPrepended
 }
 
 func withMessageCacheBreakpoint(messages []sdk.Message, index int, cc *sdk.CacheControl) []sdk.Message {

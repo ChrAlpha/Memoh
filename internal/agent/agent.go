@@ -848,11 +848,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 }
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
-	system, messages, tools := models.ApplyPromptCacheWithPlan(
+	system, messages, tools, systemPrepended := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
 	)
 	initialProviderMessageCount := len(messages)
-	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools)
+	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools, systemPrepended)
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
 	cfg.ContextMutations.SetFinalInputHash(finalHash)
@@ -964,8 +964,8 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	return opts
 }
 
-func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool) contextfrag.CachePlan {
-	prefixCount := renderedStableMessageCount(plan, messages)
+func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, systemPrepended bool) contextfrag.CachePlan {
+	prefixCount := renderedStableMessageCount(plan, messages, systemPrepended)
 	prefixMessages := append([]sdk.Message(nil), messages[:prefixCount]...)
 	hash, bytes := contextfrag.ProviderPayloadHashAndBytes(system, prefixMessages, tools)
 	plan.RenderedStablePrefixHash = hash
@@ -974,9 +974,9 @@ func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system strin
 	return plan
 }
 
-func renderedStableMessageCount(plan contextfrag.CachePlan, messages []sdk.Message) int {
+func renderedStableMessageCount(plan contextfrag.CachePlan, messages []sdk.Message, systemPrepended bool) int {
 	count := plan.StableMessageCount
-	if len(messages) > 0 && messages[0].Role == sdk.MessageRoleSystem {
+	if systemPrepended {
 		count++
 	}
 	if count < 0 {
