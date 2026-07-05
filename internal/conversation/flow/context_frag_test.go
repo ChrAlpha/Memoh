@@ -126,6 +126,29 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	}
 }
 
+// TestPrepareRunConfigClearsStaleContextHookText proves the resume
+// double-call scenario stays correct: session-continuation resume calls
+// ResolveRunConfig (which calls prepareRunConfig once internally) and then
+// calls prepareRunConfig a second time on the resulting RunConfig. If this
+// second call's hooks produce no text (as here, with hookService nil so
+// hooks never fire), any ContextHookText left over from the earlier call
+// must not survive into the result.
+func TestPrepareRunConfigClearsStaleContextHookText(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Resolver{}
+	cfg := agent.RunConfig{
+		Identity:        agent.SessionContext{BotID: "bot-1"},
+		ContextHookText: "[Hook Context: BeforePromptBuild]\nstale text from a prior turn",
+	}
+
+	got := resolver.prepareRunConfig(context.Background(), cfg)
+
+	if got.ContextHookText != "" {
+		t.Fatalf("ContextHookText = %q, want empty (stale hook text from an earlier prepareRunConfig call must not survive a call whose hooks produce no text)", got.ContextHookText)
+	}
+}
+
 func TestPrepareRunConfigSourceFragsCarryTypedSystemKinds(t *testing.T) {
 	t.Parallel()
 

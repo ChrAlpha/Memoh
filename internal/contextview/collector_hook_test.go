@@ -36,8 +36,8 @@ func TestHookContextCollectorProducesPinnedFrag(t *testing.T) {
 		t.Fatal("hook context must be pinned against budget trimming")
 	}
 	msg := discussFragMessage(frag)
-	if msg == nil || msg.Role != sdk.MessageRoleUser {
-		t.Fatalf("hook context renders as a user message: %#v", frag)
+	if msg == nil || msg.Role != sdk.MessageRoleSystem {
+		t.Fatalf("hook context must render as a system message (operator-injected context, not a user utterance): %#v", frag)
 	}
 }
 

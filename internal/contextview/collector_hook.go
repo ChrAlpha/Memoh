@@ -37,7 +37,7 @@ func (*HookContextCollector) Collect(_ context.Context, req CollectRequest) ([]c
 	if text == "" {
 		return nil, nil
 	}
-	msg := sdk.UserMessage(text)
+	msg := sdk.SystemMessage(text)
 	return []contextfrag.ContextFrag{contextfrag.MessageFrag(contextfrag.MessageFragInput{
 		ID:         "hook_context.message",
 		Message:    msg,

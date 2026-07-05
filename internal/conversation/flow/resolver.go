@@ -1205,9 +1205,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 	if afterPromptContext != "" {
 		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext))
 	}
-	if len(hookTexts) > 0 {
-		cfg.ContextHookText = strings.Join(hookTexts, "\n\n")
-	}
+	cfg.ContextHookText = strings.Join(hookTexts, "\n\n")
 
 	// Fragments are the first-class context carrier: build the system
 	// fragments directly from the typed sections (same params as cfg.System
