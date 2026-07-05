@@ -1180,7 +1180,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 			platformIdentitiesSection = buildPlatformIdentitiesSection(channelConfigs)
 		}
 	}
-	cfg.System = agentpkg.GenerateSystemPrompt(agentpkg.SystemPromptParams{
+	systemParams := agentpkg.SystemPromptParams{
 		SessionType:               cfg.SessionType,
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
@@ -1188,7 +1188,8 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		MaxFilesBytes:             limits.SystemFilesMaxBytes,
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
-	})
+	}
+	cfg.System = agentpkg.GenerateSystemPrompt(systemParams)
 	var hookTexts []string
 	if beforePromptContext != "" {
 		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventBeforePromptBuild, beforePromptContext))
@@ -1208,10 +1209,14 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		cfg.ContextHookText = strings.Join(hookTexts, "\n\n")
 	}
 
-	// Fragments are the first-class context carrier: collect the source
-	// fragments here where the materialized sources are richest. The legacy
-	// System/Messages fields remain only as collector input and fallback.
-	cfg.ContextSourceFrags = contextview.CollectProviderSourceFrags(ctx, cfg)
+	// Fragments are the first-class context carrier: build the system
+	// fragments directly from the typed sections (same params as cfg.System
+	// above) and merge with the remaining collectors, rather than reverse-
+	// parsing the flat cfg.System string. The legacy System/Messages fields
+	// remain only as fallback and for whatever else still reads cfg.System.
+	frags := agentpkg.SystemSectionFrags(agentpkg.GenerateSystemSections(systemParams), cfg.ContextScope)
+	frags = append(frags, contextview.CollectNonSystemProviderSourceFrags(ctx, cfg)...)
+	cfg.ContextSourceFrags = frags
 	return cfg
 }
 

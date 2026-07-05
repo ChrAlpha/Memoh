@@ -24,6 +24,32 @@ func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
 // the first-class context carrier. A nil return means collection failed and
 // the caller should stay on the legacy field path.
 func CollectProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
+	systemFrags, err := (&SystemPromptCollector{}).Collect(ctx, CollectRequest{
+		Scope:  cfg.ContextScope,
+		Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: SystemPromptConfig{System: cfg.System, SplitWorkspace: true},
+	})
+	if err != nil {
+		return nil
+	}
+	nonSystem := CollectNonSystemProviderSourceFrags(ctx, cfg)
+	if nonSystem == nil {
+		return nil
+	}
+	frags := make([]contextfrag.ContextFrag, 0, len(systemFrags)+len(nonSystem))
+	frags = append(frags, systemFrags...)
+	frags = append(frags, nonSystem...)
+	return frags
+}
+
+// CollectNonSystemProviderSourceFrags runs the history/memory/hook/current-user/
+// inline-image collectors over the materialized RunConfig fields — everything
+// CollectProviderSourceFrags does except the system prompt collector — so a
+// caller that builds its own system fragments some other way (e.g. directly
+// from agentpkg.GenerateSystemSections) can still reuse this bundle for the
+// rest. A nil return means collection failed and the caller should stay on
+// the legacy field path.
+func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
 	query := cfg.Query
 	inlineImages := cfg.InlineImages
 	if cfg.ContextQueryMaterialized {
@@ -34,7 +60,6 @@ func CollectProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []c
 		collector Collector
 		config    any
 	}{
-		{&SystemPromptCollector{}, SystemPromptConfig{System: cfg.System, SplitWorkspace: true}},
 		{&HistoryMessagesCollector{}, HistoryMessagesConfig{
 			Messages:           cfg.Messages,
 			TokenEstimates:     cfg.ContextHistoryTokenEstimates,

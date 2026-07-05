@@ -1,7 +1,10 @@
 package agent
 
 import (
+	"strings"
 	"testing"
+
+	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/contextfrag"
@@ -286,4 +289,48 @@ func TestGenerateSystemSectionsTableSubagentMinimal(t *testing.T) {
 		{"system.prompt.body", contextfrag.KindSystemPrompt, 30},
 		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50},
 	})
+}
+
+// TestSystemSectionFragsPreservesKindPriorityAndText proves the sections-to-
+// fragments conversion carries each section's ID/Kind/Priority/Text through
+// unchanged (modulo TextFrag's trim), so the finer Kind granularity survives
+// into the ContextFrag shape callers outside internal/agent consume.
+func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{BotID: "bot-1"}
+	sections := GenerateSystemSections(SystemPromptParams{
+		SessionType: sessionmode.Chat, Timezone: "UTC",
+		Bot: goldenFullBot, Skills: goldenFullSkills, Files: goldenFullFiles,
+		PlatformIdentitiesSection: goldenFullPlatform,
+	})
+
+	frags := SystemSectionFrags(sections, scope)
+
+	if len(frags) != len(sections) {
+		t.Fatalf("got %d frags, want %d (one per section)", len(frags), len(sections))
+	}
+	seenKinds := make(map[contextfrag.Kind]bool, len(frags))
+	for i, frag := range frags {
+		seenKinds[frag.Kind] = true
+		if frag.ID != sections[i].ID || frag.Kind != sections[i].Kind || frag.Priority != sections[i].Priority {
+			t.Fatalf("frag[%d] = {ID:%s Kind:%s Priority:%d}, want {ID:%s Kind:%s Priority:%d}",
+				i, frag.ID, frag.Kind, frag.Priority, sections[i].ID, sections[i].Kind, sections[i].Priority)
+		}
+		if frag.Slot != contextfrag.SlotSystem || frag.Role != sdk.MessageRoleSystem {
+			t.Fatalf("frag[%d] slot/role = %s/%s, want system/system", i, frag.Slot, frag.Role)
+		}
+		if frag.Scope.BotID != scope.BotID {
+			t.Fatalf("frag[%d] scope = %#v, want %#v", i, frag.Scope, scope)
+		}
+		wantText := strings.TrimSpace(sections[i].Text)
+		if len(frag.Parts) != 1 || frag.Parts[0].Text != wantText {
+			t.Fatalf("frag[%d] text = %q, want %q", i, frag.Parts[0].Text, wantText)
+		}
+	}
+	for _, want := range []contextfrag.Kind{contextfrag.KindBotIdentity, contextfrag.KindWorkspaceInstruction, contextfrag.KindPlatformIdentity} {
+		if !seenKinds[want] {
+			t.Fatalf("frags missing Kind %s: %#v", want, frags)
+		}
+	}
 }

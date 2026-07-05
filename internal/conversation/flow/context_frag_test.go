@@ -2,15 +2,25 @@ package flow
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/conversation"
 )
+
+type fakeChannelConfigReader struct {
+	configs []channel.ChannelConfig
+}
+
+func (f fakeChannelConfigReader) ListBotConfigs(context.Context, string) ([]channel.ChannelConfig, error) {
+	return f.configs, nil
+}
 
 func TestBuildContextFragScopePreservesIMTopology(t *testing.T) {
 	t.Parallel()
@@ -113,6 +123,69 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	}
 	if len(got.ContextSourceFrags) == 0 {
 		t.Fatal("prepareRunConfig must collect first-class source fragments")
+	}
+}
+
+func TestPrepareRunConfigSourceFragsCarryTypedSystemKinds(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Resolver{}
+	resolver.SetChannelStore(fakeChannelConfigReader{configs: []channel.ChannelConfig{
+		{ChannelType: channel.ChannelTypeTelegram, ExternalIdentity: "12345"},
+	}})
+	cfg := agent.RunConfig{
+		Identity: agent.SessionContext{BotID: "bot-1"},
+		Bot:      agent.BotInfo{ID: "bot-1", Name: "research-bot"},
+		Messages: []sdk.Message{sdk.UserMessage("hi")},
+	}
+
+	got := resolver.prepareRunConfig(context.Background(), cfg)
+
+	kinds := make(map[contextfrag.Kind]bool, len(got.ContextSourceFrags))
+	for _, frag := range got.ContextSourceFrags {
+		kinds[frag.Kind] = true
+	}
+	if !kinds[contextfrag.KindBotIdentity] {
+		t.Fatalf("ContextSourceFrags missing KindBotIdentity: %#v", got.ContextSourceFrags)
+	}
+	if !kinds[contextfrag.KindPlatformIdentity] {
+		t.Fatalf("ContextSourceFrags missing KindPlatformIdentity: %#v", got.ContextSourceFrags)
+	}
+}
+
+// TestPrepareRunConfigFragsFirstMatchesLegacyReverseParse is the byte-equivalence
+// gate: prepareRunConfig now builds ContextSourceFrags directly from
+// GenerateSystemSections instead of letting CollectProviderSourceFrags
+// reverse-parse cfg.System. Both must still render to the identical provider
+// System string and message stream, including when a ContextToolUsage
+// fragment is spliced in afterward by ApplyProviderRunConfig.
+func TestPrepareRunConfigFragsFirstMatchesLegacyReverseParse(t *testing.T) {
+	t.Parallel()
+
+	baseCfg := agent.RunConfig{
+		Identity:     agent.SessionContext{BotID: "bot-1"},
+		Bot:          agent.BotInfo{ID: "bot-1", Name: "research-bot", DisplayName: "Research Bot"},
+		Skills:       []agent.SkillEntry{{Name: "foo-skill", Description: "does foo things"}},
+		Messages:     []sdk.Message{sdk.UserMessage("earlier question"), sdk.AssistantMessage("earlier answer")},
+		Query:        "current question",
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+	}
+	resolver := &Resolver{}
+
+	got1 := resolver.prepareRunConfig(context.Background(), baseCfg)
+	got1.ContextToolUsage = "## Tool usage\n\nUSE_TOOLS"
+	rendered1 := contextview.ApplyProviderRunConfig(context.Background(), nil, got1)
+
+	got2 := resolver.prepareRunConfig(context.Background(), baseCfg)
+	got2.ContextSourceFrags = contextview.CollectProviderSourceFrags(context.Background(), got2)
+	got2.ContextToolUsage = "## Tool usage\n\nUSE_TOOLS"
+	rendered2 := contextview.ApplyProviderRunConfig(context.Background(), nil, got2)
+
+	if rendered1.System != rendered2.System {
+		t.Fatalf("frags-first System diverges from legacy reverse-parse System:\ngot:  %q\nwant: %q", rendered1.System, rendered2.System)
+	}
+	if !reflect.DeepEqual(rendered1.Messages, rendered2.Messages) {
+		t.Fatalf("messages diverge:\ngot:  %#v\nwant: %#v", rendered1.Messages, rendered2.Messages)
 	}
 }
 

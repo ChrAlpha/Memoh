@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 
+	sdk "github.com/memohai/twilight-ai/sdk"
+
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/contextfrag"
 )
@@ -96,6 +98,31 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 	}
 
 	return sections
+}
+
+// SystemSectionFrags converts typed system prompt sections into context
+// fragments, mirroring contextview.ToolUsageFrag's construction so a caller
+// building ContextSourceFrags directly from GenerateSystemSections produces
+// fragments indistinguishable in shape from the rest of the pipeline.
+func SystemSectionFrags(sections []SystemSection, scope contextfrag.Scope) []contextfrag.ContextFrag {
+	frags := make([]contextfrag.ContextFrag, 0, len(sections))
+	for _, section := range sections {
+		frags = append(frags, contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:         section.ID,
+			Kind:       section.Kind,
+			Role:       sdk.MessageRoleSystem,
+			Slot:       contextfrag.SlotSystem,
+			Text:       section.Text,
+			Priority:   section.Priority,
+			CacheClass: contextfrag.CacheStable,
+			Trust:      contextfrag.TrustSystem,
+			Scope:      scope,
+			Source:     contextfrag.SourceRunConfig,
+			Collector:  "system_sections",
+			Render:     contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
+		}))
+	}
+	return frags
 }
 
 // renderSystemSections sorts sections by Priority ascending and joins them

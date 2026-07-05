@@ -132,3 +132,40 @@ func TestCollectProviderSourceFragsSplitsWorkspace(t *testing.T) {
 		t.Fatalf("workspace frag metadata = %s/%d, want workspace_instruction/50", frags[1].Kind, frags[1].Priority)
 	}
 }
+
+func TestCollectNonSystemProviderSourceFragsExcludesSystemFrags(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentpkg.RunConfig{
+		System:            "base system\n\n## Workspace instruction files\n\nworkspace text",
+		Messages:          []sdk.Message{sdk.UserMessage("history")},
+		Query:             "current question",
+		ContextMemoryText: "remembered fact",
+		ContextHookText:   "hook note",
+		InlineImages:      []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+		ContextScope:      contextfrag.Scope{BotID: "bot-1"},
+	}
+
+	frags := CollectNonSystemProviderSourceFrags(context.Background(), cfg)
+
+	for _, frag := range frags {
+		switch frag.Kind {
+		case contextfrag.KindSystemPrompt, contextfrag.KindWorkspaceInstruction, contextfrag.KindBotIdentity, contextfrag.KindPlatformIdentity:
+			t.Fatalf("non-system collection must not include system-derived Kind %s: %#v", frag.Kind, frag)
+		}
+	}
+
+	ids := make([]string, 0, len(frags))
+	for _, frag := range frags {
+		ids = append(ids, frag.ID)
+	}
+	want := []string{"message.000", "memory.recall", "hook_context.message", "current_user.message", "current_user.images"}
+	if len(ids) != len(want) {
+		t.Fatalf("frag ids = %v, want %v", ids, want)
+	}
+	for i, id := range want {
+		if ids[i] != id {
+			t.Fatalf("frag ids = %v, want %v", ids, want)
+		}
+	}
+}
