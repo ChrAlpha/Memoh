@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 
@@ -26,6 +29,7 @@ const (
 	sectionIDPlatformIdentity      = "system.platform_identity"
 	sectionIDSkills                = "system.skills"
 	sectionIDWorkspaceInstructions = "system.workspace_instructions"
+	sectionIDFallback              = "system.prompt.fallback"
 )
 
 const (
@@ -57,8 +61,16 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 		timezone = "UTC"
 	}
 
-	intro, body, tailBoilerplate := splitSystemCommonTmpl(systemCommonTmpl)
+	intro, body, tailBoilerplate, err := splitSystemCommonTmpl(systemCommonTmpl)
+	if err != nil {
+		return degradedSystemSections(params, home, timezone, err)
+	}
 	isSubagent := params.SessionType == sessionmode.Subagent
+
+	tail, err := buildSystemPromptTail(tailBoilerplate, params.SessionType, isSubagent)
+	if err != nil {
+		return degradedSystemSections(params, home, timezone, err)
+	}
 
 	sections := []SystemSection{
 		{
@@ -70,10 +82,7 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 			Text: buildBotInfoSection(params.Bot),
 		},
 		{ID: sectionIDBody, Kind: contextfrag.KindSystemPrompt, Priority: priorityBody, Text: body},
-		{
-			ID: sectionIDTail, Kind: contextfrag.KindSystemPrompt, Priority: priorityTail,
-			Text: buildSystemPromptTail(tailBoilerplate, params.SessionType, isSubagent),
-		},
+		{ID: sectionIDTail, Kind: contextfrag.KindSystemPrompt, Priority: priorityTail, Text: tail},
 	}
 
 	if text := strings.TrimSpace(params.PlatformIdentitiesSection); text != "" {
@@ -98,6 +107,26 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 	}
 
 	return sections
+}
+
+// degradedSystemSections is the panic-free fallback for when the embedded
+// prompt templates are missing an anchor GenerateSystemSections needs to
+// split them into typed sections. It logs the failure and returns the
+// complete, unsplit template text as a single KindSystemPrompt section
+// instead of crashing Agent.Stream's un-recovered goroutine.
+func degradedSystemSections(params SystemPromptParams, home, timezone string, cause error) []SystemSection {
+	slog.Default().Error("agent: system prompt template missing expected anchor; falling back to an unsplit system prompt", slog.Any("error", cause))
+	text := render(systemCommonTmpl, map[string]string{"home": home, "timezone": timezone}) +
+		"\n\n" + strings.TrimSpace(selectModeTemplate(params.SessionType))
+	if params.SessionType != sessionmode.Subagent {
+		text += "\n\n" + strings.TrimSpace(includes["_memory"])
+	}
+	return []SystemSection{{
+		ID:       sectionIDFallback,
+		Kind:     contextfrag.KindSystemPrompt,
+		Priority: priorityBody,
+		Text:     text,
+	}}
 }
 
 // SystemSectionFrags converts typed system prompt sections into context
@@ -148,41 +177,52 @@ func renderSystemSections(sections []SystemSection) string {
 // anchors that also matter downstream (the bot-identity placeholder and the
 // workspace-instructions heading), so the pieces can become independent
 // sections instead of being reverse-parsed from the rendered output later.
-func splitSystemCommonTmpl(tmpl string) (intro, body, tailBoilerplate string) {
+// It returns an error instead of panicking when either anchor is missing.
+func splitSystemCommonTmpl(tmpl string) (intro, body, tailBoilerplate string, err error) {
 	idxBotInfo := strings.Index(tmpl, botInfoPlaceholder)
 	idxWorkspace := strings.Index(tmpl, workspaceHeading)
 	if idxBotInfo < 0 || idxWorkspace < 0 {
-		panic("agent: system_common.md is missing an expected section anchor")
+		return "", "", "", errors.New("agent: system_common.md is missing an expected section anchor")
 	}
 	intro = tmpl[:idxBotInfo]
 	body = strings.TrimSpace(tmpl[idxBotInfo+len(botInfoPlaceholder) : idxWorkspace])
 	tailBoilerplate = tmpl[idxWorkspace:]
-	return intro, body, tailBoilerplate
+	return intro, body, tailBoilerplate, nil
 }
 
 // buildSystemPromptTail fuses the static workspace-instructions/attachments
 // boilerplate with the mode contract and, for main-agent modes, the memory
 // section — mirroring the "\n\n" joins GenerateSystemPrompt used to produce
 // via raw template concatenation and joinPromptSections.
-func buildSystemPromptTail(tailBoilerplate, sessionType string, isSubagent bool) string {
-	tail := tailBoilerplate + "\n\n" + modeContractTmpl(sessionType)
-	if isSubagent {
-		return tail
+func buildSystemPromptTail(tailBoilerplate, sessionType string, isSubagent bool) (string, error) {
+	contract, err := modeContractTmpl(sessionType)
+	if err != nil {
+		return "", err
 	}
-	return tail + "\n\n" + strings.TrimSpace(includes["_memory"])
+	tail := tailBoilerplate + "\n\n" + contract
+	if isSubagent {
+		return tail, nil
+	}
+	return tail + "\n\n" + strings.TrimSpace(includes["_memory"]), nil
 }
 
 // modeContractTmpl returns the mode-specific contract text with its trailing
 // mainAgentSections/subagentSections placeholder cut off and trimmed.
-func modeContractTmpl(sessionType string) string {
+func modeContractTmpl(sessionType string) (string, error) {
 	tmpl := selectModeTemplate(sessionType)
 	placeholder := "{{mainAgentSections}}"
 	if sessionType == sessionmode.Subagent {
 		placeholder = "{{subagentSections}}"
 	}
+	return cutModeContractTmpl(tmpl, placeholder)
+}
+
+// cutModeContractTmpl cuts tmpl at placeholder, returning the trimmed prefix.
+// It returns an error instead of panicking when placeholder is not present.
+func cutModeContractTmpl(tmpl, placeholder string) (string, error) {
 	idx := strings.Index(tmpl, placeholder)
 	if idx < 0 {
-		panic("agent: mode template is missing expected placeholder " + placeholder)
+		return "", fmt.Errorf("agent: mode template is missing expected placeholder %s", placeholder)
 	}
-	return strings.TrimSpace(tmpl[:idx])
+	return strings.TrimSpace(tmpl[:idx]), nil
 }

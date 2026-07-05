@@ -334,3 +334,74 @@ func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateSystemSectionsDegradesGracefullyWhenSystemTemplateAnchorMissing
+// proves that a system_common.md missing an expected section anchor no
+// longer crashes Agent.Stream's un-recovered goroutine: GenerateSystemSections
+// must catch the failure and degrade to a single unsplit fallback section.
+func TestGenerateSystemSectionsDegradesGracefullyWhenSystemTemplateAnchorMissing(t *testing.T) {
+	original := systemCommonTmpl
+	systemCommonTmpl = "no anchors in this template at all"
+	t.Cleanup(func() { systemCommonTmpl = original })
+
+	var sections []SystemSection
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("GenerateSystemSections panicked: %v", r)
+			}
+		}()
+		sections = GenerateSystemSections(SystemPromptParams{SessionType: sessionmode.Chat, Timezone: "UTC"})
+	}()
+
+	if len(sections) != 1 {
+		t.Fatalf("expected exactly one degraded section, got %d: %#v", len(sections), sections)
+	}
+	if sections[0].Kind != contextfrag.KindSystemPrompt {
+		t.Fatalf("degraded section Kind = %s, want KindSystemPrompt", sections[0].Kind)
+	}
+	if !strings.Contains(sections[0].Text, "no anchors in this template at all") {
+		t.Fatalf("degraded section text = %q, want it to contain the full raw fallback template", sections[0].Text)
+	}
+}
+
+// TestGenerateSystemSectionsDegradesGracefullyWhenModeTemplateAnchorMissing
+// mirrors the above for the mode-template placeholder cut, the other panic
+// site GenerateSystemSections must catch instead of letting propagate.
+func TestGenerateSystemSectionsDegradesGracefullyWhenModeTemplateAnchorMissing(t *testing.T) {
+	original := modeChatTmpl
+	modeChatTmpl = "mode template without any placeholder at all"
+	t.Cleanup(func() { modeChatTmpl = original })
+
+	var sections []SystemSection
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("GenerateSystemSections panicked: %v", r)
+			}
+		}()
+		sections = GenerateSystemSections(SystemPromptParams{SessionType: sessionmode.Chat, Timezone: "UTC"})
+	}()
+
+	if len(sections) != 1 {
+		t.Fatalf("expected exactly one degraded section, got %d: %#v", len(sections), sections)
+	}
+}
+
+// TestSplitSystemCommonTmplMissingAnchorReturnsError locks in
+// splitSystemCommonTmpl's error-returning contract for a template missing
+// both expected anchors, instead of panicking.
+func TestSplitSystemCommonTmplMissingAnchorReturnsError(t *testing.T) {
+	if _, _, _, err := splitSystemCommonTmpl("no anchors here"); err == nil {
+		t.Fatal("expected an error for a template missing both anchors")
+	}
+}
+
+// TestCutModeContractTmplMissingPlaceholderReturnsError locks in
+// cutModeContractTmpl's error-returning contract for a template missing the
+// requested placeholder, instead of panicking.
+func TestCutModeContractTmplMissingPlaceholderReturnsError(t *testing.T) {
+	if _, err := cutModeContractTmpl("no placeholder here", "{{mainAgentSections}}"); err == nil {
+		t.Fatal("expected an error for a template missing the placeholder")
+	}
+}
