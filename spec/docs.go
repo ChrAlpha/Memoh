@@ -15570,16 +15570,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
+                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt",
-                "run_config_pre_provider"
+                "acp_runtime_prompt"
             ],
             "x-enum-varnames": [
+                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt",
-                "ViewRunConfigPreProvider"
+                "ViewACPRuntimePrompt"
             ]
         },
         "contextfrag.MutationKind": {
@@ -15590,7 +15590,8 @@ const docTemplate = `{
                 "mid_task_prune",
                 "loop_step_reselection",
                 "injected_message",
-                "context_view_fallback"
+                "context_view_fallback",
+                "read_media"
             ],
             "x-enum-varnames": [
                 "MutationBeforeModelCallHook",
@@ -15598,7 +15599,8 @@ const docTemplate = `{
                 "MutationMidTaskPrune",
                 "MutationLoopStepReselection",
                 "MutationInjectedMessage",
-                "MutationContextViewFallback"
+                "MutationContextViewFallback",
+                "MutationReadMedia"
             ]
         },
         "contextfrag.MutationRecord": {
