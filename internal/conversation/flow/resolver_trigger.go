@@ -7,14 +7,22 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
-
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/heartbeat"
 	"github.com/memohai/memoh/internal/schedule"
 )
+
+// attachCurrentTurnPrompt routes a trigger's rich prompt through cfg.Query
+// instead of cfg.Messages, so the context view (contextview.
+// CollectProviderSourceFrags) classifies it via CurrentUserCollector as the
+// live current-turn message (contextfrag.KindCurrentUserMessage) rather than
+// via HistoryMessagesCollector as ordinary conversation history.
+func attachCurrentTurnPrompt(cfg agentpkg.RunConfig, prompt string) agentpkg.RunConfig {
+	cfg.Query = prompt
+	return cfg
+}
 
 // TriggerSchedule executes a scheduled command via the internal agent.
 func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload schedule.TriggerPayload, token string) (schedule.TriggerResult, error) {
@@ -56,7 +64,7 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 		MaxCalls:    payload.MaxCalls,
 		Command:     payload.Command,
 	}, now)
-	cfg.Messages = append(cfg.Messages, sdk.UserMessage(schedulePrompt))
+	cfg = attachCurrentTurnPrompt(cfg, schedulePrompt)
 	cfg = r.prepareRunConfig(ctx, cfg)
 
 	result, err := r.agent.Generate(ctx, cfg)
@@ -124,7 +132,7 @@ func (r *Resolver) TriggerHeartbeat(ctx context.Context, botID string, payload h
 		now = now.In(cfg.Identity.TimezoneLocation)
 	}
 	heartbeatPrompt := agentpkg.GenerateHeartbeatPrompt(payload.Interval, checklist, now, payload.LastHeartbeatAt)
-	cfg.Messages = append(cfg.Messages, sdk.UserMessage(heartbeatPrompt))
+	cfg = attachCurrentTurnPrompt(cfg, heartbeatPrompt)
 	cfg = r.prepareRunConfig(ctx, cfg)
 
 	result, err := r.agent.Generate(ctx, cfg)
