@@ -353,6 +353,19 @@ func (f *modelSelectionFakeQueries) GetProviderByID(_ context.Context, id pgtype
 	return f.provider, nil
 }
 
+func (f *modelSelectionFakeQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
+	for _, m := range f.models {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return sqlc.Model{}, pgx.ErrNoRows
+}
+
+func (f *modelSelectionFakeQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
+	return sqlc.GetBotByIDRow{}, pgx.ErrNoRows
+}
+
 func newModelSelectionResolver(t *testing.T, fake *modelSelectionFakeQueries) *Resolver {
 	t.Helper()
 	return &Resolver{

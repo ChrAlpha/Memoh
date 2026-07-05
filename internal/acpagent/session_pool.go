@@ -26,6 +26,7 @@ import (
 	"github.com/memohai/memoh/internal/acpprofile"
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/mcp"
 	"github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/toolapproval"
@@ -158,19 +159,21 @@ type PromptInput struct {
 	ChannelIdentityID string
 	// SessionToken is consumed only by Prompt, where it flows into the
 	// per-prompt tool context overlay. Ensure and SetModel ignore it.
-	SessionToken          string //nolint:gosec // runtime session credential, not a hardcoded secret.
-	CurrentPlatform       string
-	ReplyTarget           string
-	ConversationType      string
-	CanRequestUserInput   bool
-	SupportsImageInput    bool
-	ToolOutputLimit       acpclient.ToolOutputLimit
-	ToolHTTPURL           string
-	ContextURI            string
-	ContextMarkdown       string
-	RuntimeOwnerAccountID string
-	ForceFreshRuntime     bool
-	Sink                  acpclient.EventSink
+	SessionToken              string //nolint:gosec // runtime session credential, not a hardcoded secret.
+	CurrentPlatform           string
+	ReplyTarget               string
+	ConversationType          string
+	CanRequestUserInput       bool
+	SupportsImageInput        bool
+	ToolOutputLimit           acpclient.ToolOutputLimit
+	ToolHTTPURL               string
+	ContextURI                string
+	ContextMarkdown           string
+	RuntimeOwnerAccountID     string
+	ForceFreshRuntime         bool
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	Sink                      acpclient.EventSink
 }
 
 // CreateRuntimeInput describes a pre-session runtime creation request.
@@ -1377,6 +1380,12 @@ func (h *runtimeHandle) toolContext() mcp.ToolSessionContext {
 	if h.active.SupportsImageInput {
 		ctx.SupportsImageInput = true
 	}
+	if h.active.ContextBudgetMaxTokens != 0 {
+		ctx.ContextBudgetMaxTokens = h.active.ContextBudgetMaxTokens
+	}
+	if h.active.ContextToolExchangePolicy != nil {
+		ctx.ContextToolExchangePolicy = h.active.ContextToolExchangePolicy
+	}
 	return ctx
 }
 
@@ -1401,21 +1410,23 @@ func (h *runtimeHandle) setStatus(status string) {
 
 func toolSessionContext(input PromptInput, h *runtimeHandle) acpclient.ToolSessionContext {
 	return acpclient.ToolSessionContext{
-		BotID:               h.botID,
-		ChatID:              firstNonEmpty(input.ChatID, h.botID),
-		RuntimeID:           h.id,
-		SessionID:           strings.TrimSpace(input.SessionID),
-		StreamID:            strings.TrimSpace(input.StreamID),
-		SessionType:         firstNonEmpty(input.SessionType, session.TypeACPAgent),
-		RouteID:             input.RouteID,
-		ChannelIdentityID:   input.ChannelIdentityID,
-		SessionToken:        input.SessionToken,
-		CurrentPlatform:     input.CurrentPlatform,
-		ReplyTarget:         input.ReplyTarget,
-		ConversationType:    input.ConversationType,
-		CanRequestUserInput: input.CanRequestUserInput,
-		IsSubagent:          false,
-		SupportsImageInput:  input.SupportsImageInput,
+		BotID:                     h.botID,
+		ChatID:                    firstNonEmpty(input.ChatID, h.botID),
+		RuntimeID:                 h.id,
+		SessionID:                 strings.TrimSpace(input.SessionID),
+		StreamID:                  strings.TrimSpace(input.StreamID),
+		SessionType:               firstNonEmpty(input.SessionType, session.TypeACPAgent),
+		RouteID:                   input.RouteID,
+		ChannelIdentityID:         input.ChannelIdentityID,
+		SessionToken:              input.SessionToken,
+		CurrentPlatform:           input.CurrentPlatform,
+		ReplyTarget:               input.ReplyTarget,
+		ConversationType:          input.ConversationType,
+		CanRequestUserInput:       input.CanRequestUserInput,
+		IsSubagent:                false,
+		SupportsImageInput:        input.SupportsImageInput,
+		ContextBudgetMaxTokens:    input.ContextBudgetMaxTokens,
+		ContextToolExchangePolicy: input.ContextToolExchangePolicy,
 	}
 }
 

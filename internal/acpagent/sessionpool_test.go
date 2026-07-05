@@ -24,6 +24,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/config"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/mcp"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/toolapproval"
@@ -1594,15 +1595,18 @@ func TestRuntimeHandleToolContextOverlaysActivePrompt(t *testing.T) {
 	}
 
 	// During a prompt the live per-prompt fields overlay.
+	policy := &contextfrag.ToolExchangePolicy{MinMessages: 7}
 	active := acpclient.ToolSessionContext{
-		ChatID:             "chat-1",
-		SessionID:          "session-1",
-		StreamID:           "stream-7",
-		SessionToken:       "token-7",
-		CurrentPlatform:    "web",
-		ReplyTarget:        "reply-7",
-		ConversationType:   "private",
-		SupportsImageInput: true,
+		ChatID:                    "chat-1",
+		SessionID:                 "session-1",
+		StreamID:                  "stream-7",
+		SessionToken:              "token-7",
+		CurrentPlatform:           "web",
+		ReplyTarget:               "reply-7",
+		ConversationType:          "private",
+		SupportsImageInput:        true,
+		ContextBudgetMaxTokens:    128000,
+		ContextToolExchangePolicy: policy,
 	}
 	h.state.Lock()
 	h.active = &active
@@ -1620,12 +1624,39 @@ func TestRuntimeHandleToolContextOverlaysActivePrompt(t *testing.T) {
 	if !ctx.SupportsImageInput {
 		t.Fatalf("active tool context lost image capability: %#v", ctx)
 	}
+	if ctx.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("active tool context lost context budget: %#v", ctx)
+	}
+	if ctx.ContextToolExchangePolicy != policy {
+		t.Fatalf("active tool context lost tool exchange policy: %#v", ctx)
+	}
 
 	// clearActive removes every per-prompt field again.
 	h.clearActive()
 	ctx = h.toolContext()
 	if ctx.StreamID != "" || ctx.SessionToken != "" || ctx.ChatID != "bot-1" || ctx.RuntimeActive || ctx.SupportsImageInput || !ctx.CanListUserInput {
 		t.Fatalf("cleared tool context = %#v", ctx)
+	}
+	if ctx.ContextBudgetMaxTokens != 0 || ctx.ContextToolExchangePolicy != nil {
+		t.Fatalf("cleared tool context leaks context budget fields: %#v", ctx)
+	}
+}
+
+func TestToolSessionContextCopiesContextBudgetFields(t *testing.T) {
+	h := &runtimeHandle{id: "rt_test", botID: "bot-1"}
+	policy := &contextfrag.ToolExchangePolicy{MinMessages: 3}
+
+	got := toolSessionContext(PromptInput{
+		BotID:                     "bot-1",
+		ContextBudgetMaxTokens:    5000,
+		ContextToolExchangePolicy: policy,
+	}, h)
+
+	if got.ContextBudgetMaxTokens != 5000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 5000", got.ContextBudgetMaxTokens)
+	}
+	if got.ContextToolExchangePolicy != policy {
+		t.Fatalf("ContextToolExchangePolicy = %#v, want %#v", got.ContextToolExchangePolicy, policy)
 	}
 }
 

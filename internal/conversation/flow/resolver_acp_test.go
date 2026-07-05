@@ -23,6 +23,7 @@ import (
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	messagepkg "github.com/memohai/memoh/internal/message"
+	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/toolapproval"
@@ -91,6 +92,12 @@ func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 	}
 	if pool.input.ContextURI != acpContextURI || !strings.Contains(pool.input.ContextMarkdown, "## Current Runtime") || !strings.Contains(pool.input.ContextMarkdown, "Bot ID: bot-1") {
 		t.Fatalf("ACP context = uri %q markdown %q, want dynamic Memoh context", pool.input.ContextURI, pool.input.ContextMarkdown)
+	}
+	if pool.input.ContextBudgetMaxTokens != 0 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 0 when models/settings services are not configured", pool.input.ContextBudgetMaxTokens)
+	}
+	if pool.input.ContextToolExchangePolicy == nil || pool.input.ContextToolExchangePolicy.MinMessages != 10 {
+		t.Fatalf("ContextToolExchangePolicy = %#v, want default MinMessages=10", pool.input.ContextToolExchangePolicy)
 	}
 	if len(messages.persisted) != 2 {
 		t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
@@ -884,6 +891,84 @@ func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 		t.Fatalf("ACP prompt input SupportsImageInput = true, want false until ACP image transport is wired")
 	}
 	waitForSessionGets(t, sessionGets, 2)
+}
+
+func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "00000000-0000-0000-0000-000000000301"
+	const providerID = "00000000-0000-0000-0000-000000000302"
+	provider := modelSelectionProviderRow(t, providerID, "openai-completions", true)
+	model := modelSelectionModelRow(t, modelID, "gpt-context-window", provider.ID, models.ModelTypeChat, true)
+	model.Config = []byte(`{"context_window": 128000}`)
+	queries := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{model.ModelID: model},
+		provider: provider,
+	}
+
+	messages := &recordingMessageService{}
+	pool := &recordingACPPrompter{
+		result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"},
+	}
+	resolver := &Resolver{
+		messageService:  messages,
+		acpPool:         pool,
+		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		modelsService:   models.NewService(slog.New(slog.DiscardHandler), queries),
+		queries:         queries,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &acpContextBudgetSettingsQueries{chatModelID: modelID}, nil, nil),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:    sessionID,
+					BotID: storeRoundBotID,
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id":             "codex",
+						"project_path":             "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	if err := resolver.streamACPAgentWS(
+		context.Background(),
+		conversation.ChatRequest{
+			BotID:     storeRoundBotID,
+			SessionID: "session-1",
+			Query:     "inspect the app",
+		},
+		make(chan WSStreamEvent, 8),
+		make(chan struct{}),
+	); err != nil {
+		t.Fatalf("streamACPAgentWS() error = %v", err)
+	}
+
+	if pool.input.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", pool.input.ContextBudgetMaxTokens)
+	}
+	if pool.input.ContextToolExchangePolicy == nil || pool.input.ContextToolExchangePolicy.MinMessages != 10 {
+		t.Fatalf("ContextToolExchangePolicy = %#v, want default MinMessages=10", pool.input.ContextToolExchangePolicy)
+	}
+}
+
+type acpContextBudgetSettingsQueries struct {
+	dbstore.Queries
+	chatModelID string
+}
+
+func (q *acpContextBudgetSettingsQueries) GetSettingsByBotID(_ context.Context, botID pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
+	return sqlc.GetSettingsByBotIDRow{
+		BotID:             botID,
+		Language:          "auto",
+		ReasoningEffort:   "medium",
+		HeartbeatInterval: 30,
+		CompactionRatio:   80,
+		ChatModelID:       flowTestUUID(q.chatModelID),
+	}, nil
 }
 
 func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {

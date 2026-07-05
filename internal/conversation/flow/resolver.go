@@ -285,6 +285,13 @@ type resolvedContext struct {
 	estimatedTokens             int // estimated input token count for compaction
 }
 
+func contextBudgetFromChatModel(chatModel models.GetResponse) int {
+	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
+		return *chatModel.Config.ContextWindow
+	}
+	return 0
+}
+
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
 	modelQuery := modelQueryText(req)
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
@@ -344,10 +351,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		}
 	}
 
-	contextTokenBudget := 0
-	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
-		contextTokenBudget = *chatModel.Config.ContextWindow
-	}
+	contextTokenBudget := contextBudgetFromChatModel(chatModel)
 	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
 	var messages []conversation.ModelMessage

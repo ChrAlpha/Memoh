@@ -17,6 +17,7 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	"github.com/memohai/memoh/internal/session"
@@ -206,6 +207,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	// block would pin the answer text above any reasoning that streams first.
 	// The first text_delta lazily creates the text block instead.
 
+	contextBudgetMaxTokens := r.acpContextBudgetDefault(streamCtx, req.BotID)
 	result, err := r.acpPool.Prompt(streamCtx, acpagent.PromptInput{
 		BotID:               req.BotID,
 		ChatID:              req.ChatID,
@@ -224,14 +226,16 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		// ACP/native MCP does not yet have the in-process read-media decoration
 		// path that turns read image bytes into model-native image input. Keep
 		// this false until ACP model capability and image transport are wired.
-		SupportsImageInput:    false,
-		ToolOutputLimit:       r.toolOutputLimit(),
-		ToolHTTPURL:           req.ToolHTTPURL,
-		ContextURI:            contextURI,
-		ContextMarkdown:       contextMarkdown,
-		RuntimeOwnerAccountID: runtimeOwnerAccountID,
-		ForceFreshRuntime:     req.ForceFreshRuntime,
-		Sink:                  acpclient.EventSinkFunc(emit),
+		SupportsImageInput:        false,
+		ToolOutputLimit:           r.toolOutputLimit(),
+		ToolHTTPURL:               req.ToolHTTPURL,
+		ContextURI:                contextURI,
+		ContextMarkdown:           contextMarkdown,
+		RuntimeOwnerAccountID:     runtimeOwnerAccountID,
+		ForceFreshRuntime:         req.ForceFreshRuntime,
+		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
+		ContextToolExchangePolicy: &contextfrag.ToolExchangePolicy{MinMessages: 10},
+		Sink:                      acpclient.EventSinkFunc(emit),
 	})
 	if err != nil {
 		r.logger.Error("ACP prompt failed",
@@ -266,6 +270,22 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	}
 	emit(acpTerminalStreamEvent(agentpkg.EventEnd, result))
 	return nil
+}
+
+// acpContextBudgetDefault mirrors resolve()'s context-window-derived budget
+// for the ACP path, which never calls buildBaseRunConfig/resolve. Model
+// selection here is read-only (no provider credentials resolved), and any
+// failure degrades to 0 rather than breaking the ACP prompt.
+func (r *Resolver) acpContextBudgetDefault(ctx context.Context, botID string) int {
+	botSettings, err := r.loadBotSettings(ctx, botID)
+	if err != nil {
+		return 0
+	}
+	chatModel, _, err := r.selectChatModel(ctx, conversation.ChatRequest{BotID: botID}, botSettings, conversation.Settings{})
+	if err != nil {
+		return 0
+	}
+	return contextBudgetFromChatModel(chatModel)
 }
 
 func ensureACPPromptOutput(result acpclient.PromptResult) acpclient.PromptResult {

@@ -383,6 +383,48 @@ func TestNormalizeImagePartsToDataURL_ConvertsIndexedObject(t *testing.T) {
 	}
 }
 
+func TestContextBudgetFromChatModel(t *testing.T) {
+	t.Parallel()
+
+	positive := 128000
+	zero := 0
+
+	cases := []struct {
+		name  string
+		model models.GetResponse
+		want  int
+	}{
+		{
+			name:  "nil context window",
+			model: models.GetResponse{},
+			want:  0,
+		},
+		{
+			name: "zero context window",
+			model: models.GetResponse{
+				Model: models.Model{Config: models.ModelConfig{ContextWindow: &zero}},
+			},
+			want: 0,
+		},
+		{
+			name: "positive context window",
+			model: models.GetResponse{
+				Model: models.Model{Config: models.ModelConfig{ContextWindow: &positive}},
+			},
+			want: 128000,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := contextBudgetFromChatModel(tt.model); got != tt.want {
+				t.Fatalf("contextBudgetFromChatModel() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeImagePartsToDataURL_LeavesStringImageUntouched(t *testing.T) {
 	original := `[
 		{"type":"image","image":"data:image/png;base64,AAAA","mediaType":"image/png"}
