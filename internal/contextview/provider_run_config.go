@@ -216,6 +216,10 @@ func providerViewFallback(
 	ledger.Record(contextfrag.MutationContextViewFallback, reason)
 	manifest := out.ContextManifest
 	manifest.Mutations = ledger
+	if manifest.CachePlan == nil {
+		plan := contextfrag.CachePlan{}
+		manifest.CachePlan = &plan
+	}
 	out.ContextManifest = manifest
 	out.ContextMutations = ledger
 	if out.ContextLifecycle != nil {

@@ -29,6 +29,12 @@ func TestProviderViewFallbackKeepsLedgerAndLifecycleVisible(t *testing.T) {
 	if out.ContextManifest.Mutations != ledger {
 		t.Fatal("fallback manifest does not carry the ledger")
 	}
+	if out.ContextManifest.CachePlan == nil {
+		t.Fatal("fallback manifest did not receive a cache plan pointer")
+	}
+	if *out.ContextManifest.CachePlan != (contextfrag.CachePlan{}) {
+		t.Fatalf("fallback cache plan = %+v, want zero value", *out.ContextManifest.CachePlan)
+	}
 	snapshot, ok := holder.Snapshot()
 	if !ok {
 		t.Fatal("lifecycle holder did not receive the fallback manifest")
