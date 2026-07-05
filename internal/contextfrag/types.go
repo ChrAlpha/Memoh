@@ -225,21 +225,25 @@ type Part struct {
 
 // ContextFrag is the typed context fragment abstraction.
 type ContextFrag struct {
-	ID            string           `json:"id"`
-	Ref           ContextRef       `json:"ref,omitempty"`
-	Kind          Kind             `json:"kind"`
-	Role          sdk.MessageRole  `json:"role,omitempty"`
-	Slot          Slot             `json:"slot"`
-	Priority      int              `json:"priority,omitempty"`
-	CacheClass    CacheClass       `json:"cache_class,omitempty"`
-	Trust         TrustLevel       `json:"trust,omitempty"`
-	Scope         Scope            `json:"scope,omitempty"`
-	Budget        BudgetPolicy     `json:"budget,omitempty"`
-	Render        RenderPolicy     `json:"render,omitempty"`
-	Provenance    Provenance       `json:"provenance,omitempty"`
-	TokenEstimate int              `json:"token_estimate,omitempty"`
-	Coverage      *SummaryCoverage `json:"coverage,omitempty"`
-	Parts         []Part           `json:"parts,omitempty"`
+	ID            string          `json:"id"`
+	Ref           ContextRef      `json:"ref,omitempty"`
+	Kind          Kind            `json:"kind"`
+	Role          sdk.MessageRole `json:"role,omitempty"`
+	Slot          Slot            `json:"slot"`
+	Priority      int             `json:"priority,omitempty"`
+	CacheClass    CacheClass      `json:"cache_class,omitempty"`
+	Trust         TrustLevel      `json:"trust,omitempty"`
+	Scope         Scope           `json:"scope,omitempty"`
+	Budget        BudgetPolicy    `json:"budget,omitempty"`
+	Render        RenderPolicy    `json:"render,omitempty"`
+	Provenance    Provenance      `json:"provenance,omitempty"`
+	TokenEstimate int
+	// ConflictKey groups fragments that are alternatives of one another: the
+	// selector keeps only the highest-precedence member (closest scope, then
+	// trust, then latest collected) and drops the rest.
+	ConflictKey string           `json:"token_estimate,omitempty"`
+	Coverage    *SummaryCoverage `json:"coverage,omitempty"`
+	Parts       []Part           `json:"parts,omitempty"`
 }
 
 // AssembledContext is the compiled view produced from fragments.
@@ -306,21 +310,22 @@ type SelectionTrace struct {
 
 // ManifestItem is one non-sensitive fragment entry.
 type ManifestItem struct {
-	ID         string          `json:"id"`
-	Ref        ContextRef      `json:"ref,omitempty"`
-	Kind       Kind            `json:"kind"`
-	Slot       Slot            `json:"slot"`
-	Role       sdk.MessageRole `json:"role,omitempty"`
-	Priority   int             `json:"priority,omitempty"`
-	CacheClass CacheClass      `json:"cache_class,omitempty"`
-	Trust      TrustLevel      `json:"trust,omitempty"`
-	Source     string          `json:"source,omitempty"`
-	SourceID   string          `json:"source_id,omitempty"`
-	Collector  string          `json:"collector,omitempty"`
-	PartTypes  []PartType      `json:"part_types,omitempty"`
-	TextBytes  int             `json:"text_bytes,omitempty"`
-	ImageCount int             `json:"image_count,omitempty"`
-	Scope      Scope           `json:"scope,omitempty"`
+	ID          string          `json:"id"`
+	Ref         ContextRef      `json:"ref,omitempty"`
+	Kind        Kind            `json:"kind"`
+	Slot        Slot            `json:"slot"`
+	Role        sdk.MessageRole `json:"role,omitempty"`
+	Priority    int             `json:"priority,omitempty"`
+	CacheClass  CacheClass      `json:"cache_class,omitempty"`
+	Trust       TrustLevel      `json:"trust,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	SourceID    string          `json:"source_id,omitempty"`
+	Collector   string          `json:"collector,omitempty"`
+	ConflictKey string          `json:"conflict_key,omitempty"`
+	PartTypes   []PartType      `json:"part_types,omitempty"`
+	TextBytes   int             `json:"text_bytes,omitempty"`
+	ImageCount  int             `json:"image_count,omitempty"`
+	Scope       Scope           `json:"scope,omitempty"`
 }
 
 type SlotRenderPolicy struct {

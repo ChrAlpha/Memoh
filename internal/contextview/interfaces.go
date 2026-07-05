@@ -53,10 +53,10 @@ type IntentProfile struct {
 	Intent        contextfrag.Intent
 	RequiredKinds []contextfrag.Kind
 	MustKeepSlots []contextfrag.Slot
-	// RejectExternalSystemFrags drops external-trust fragments from the
-	// system slot before selection: provider-bound system prompts carry
-	// instruction authority, so untrusted content must never enter them.
-	RejectExternalSystemFrags bool
+	// SlotTrustFloors declares the minimum trust level per slot: fragments
+	// below the floor are dropped before selection so content never gains
+	// instruction authority its provenance does not warrant.
+	SlotTrustFloors map[contextfrag.Slot]contextfrag.TrustLevel
 }
 
 type Placer interface {

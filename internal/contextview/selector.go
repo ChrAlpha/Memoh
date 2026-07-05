@@ -8,9 +8,9 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	switch intent {
 	case contextfrag.IntentRunConfigPreProvider:
 		return IntentProfile{
-			Intent:                    intent,
-			MustKeepSlots:             []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
-			RejectExternalSystemFrags: true,
+			Intent:          intent,
+			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			SlotTrustFloors: map[contextfrag.Slot]contextfrag.TrustLevel{contextfrag.SlotSystem: contextfrag.TrustWorkspace},
 		}
 	case contextfrag.IntentCompactionCandidates:
 		return IntentProfile{
@@ -19,9 +19,9 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 		}
 	case contextfrag.IntentDiscussReply:
 		return IntentProfile{
-			Intent:                    intent,
-			MustKeepSlots:             []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
-			RejectExternalSystemFrags: true,
+			Intent:          intent,
+			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			SlotTrustFloors: map[contextfrag.Slot]contextfrag.TrustLevel{contextfrag.SlotSystem: contextfrag.TrustWorkspace},
 		}
 	case contextfrag.IntentACPRuntimePrompt:
 		// The ACP prompt is one rendered document: its system slot marks
@@ -38,6 +38,10 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 
 func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {
 	frags, gated := applyTrustGate(frags, profile)
+	var superseded []conflictLoser
+	if isRetentionIntent(profile.Intent) {
+		frags, superseded = resolveConflictGroups(frags)
+	}
 	var exchangeDropped []contextfrag.ContextFrag
 	var exchangeEdits []contextfrag.ContextEditTrace
 	if isRetentionIntent(profile.Intent) {
@@ -51,29 +55,29 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 				result = selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
 				result.TrimNotice = true
 				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
-				return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
+				return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
 			}
 		}
 		result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
-		return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
+		return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
 	}
 	result = selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
-	return appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated)
+	return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
 }
 
-const trustGateExternalSystemReason = "trust_gate:external_in_system_slot"
-
-// applyTrustGate removes fragments whose trust level is not allowed to
-// occupy their slot for this intent. Today's single rule: external-trust
-// content must never enter the system slot of a provider-bound prompt.
+// applyTrustGate removes fragments whose trust level falls below the floor
+// declared for their slot in the intent profile: instruction-bearing slots
+// require workspace trust or above on provider-bound prompts, so user or
+// external content can never gain instruction authority.
 func applyTrustGate(frags []contextfrag.ContextFrag, profile IntentProfile) ([]contextfrag.ContextFrag, []contextfrag.ContextFrag) {
-	if !profile.RejectExternalSystemFrags {
+	if len(profile.SlotTrustFloors) == 0 {
 		return frags, nil
 	}
 	kept := make([]contextfrag.ContextFrag, 0, len(frags))
 	var gated []contextfrag.ContextFrag
 	for _, frag := range frags {
-		if frag.Slot == contextfrag.SlotSystem && frag.Trust == contextfrag.TrustExternal {
+		floor, hasFloor := profile.SlotTrustFloors[frag.Slot]
+		if hasFloor && contextfrag.TrustRank(frag.Trust) < contextfrag.TrustRank(floor) {
 			gated = append(gated, frag)
 			continue
 		}
@@ -82,20 +86,85 @@ func applyTrustGate(frags []contextfrag.ContextFrag, profile IntentProfile) ([]c
 	return kept, gated
 }
 
-func appendTrustGateDrops(result SelectionResult, gated []contextfrag.ContextFrag) SelectionResult {
+func appendTrustGateDrops(result SelectionResult, gated []contextfrag.ContextFrag, profile IntentProfile) SelectionResult {
 	if len(gated) == 0 {
 		return result
 	}
 	for _, frag := range gated {
+		reason := "trust_gate:" + string(frag.Slot) + "_requires_" + string(profile.SlotTrustFloors[frag.Slot])
 		result.Dropped = append(result.Dropped, frag)
 		result.Summary.DropReasons = append(result.Summary.DropReasons, DropRecord{
 			FragID: frag.ID,
 			Ref:    frag.Ref,
-			Reason: trustGateExternalSystemReason,
+			Reason: reason,
 		})
 	}
 	result.Summary.TotalCollected += len(gated)
 	result.Summary.TotalDropped += len(gated)
+	return result
+}
+
+type conflictLoser struct {
+	frag     contextfrag.ContextFrag
+	winnerID string
+}
+
+// resolveConflictGroups keeps one fragment per conflict key: the narrowest
+// scope wins (closest-wins), trust breaks scope ties, and on a full tie the
+// later-collected fragment supersedes the earlier one (fresher source).
+func resolveConflictGroups(frags []contextfrag.ContextFrag) ([]contextfrag.ContextFrag, []conflictLoser) {
+	winners := make(map[string]int, 2)
+	for i, frag := range frags {
+		key := frag.ConflictKey
+		if key == "" {
+			continue
+		}
+		current, exists := winners[key]
+		if !exists || conflictBeats(frag, frags[current]) {
+			winners[key] = i
+		}
+	}
+	if len(winners) == 0 {
+		return frags, nil
+	}
+	kept := make([]contextfrag.ContextFrag, 0, len(frags))
+	var losers []conflictLoser
+	for i, frag := range frags {
+		if key := frag.ConflictKey; key != "" && winners[key] != i {
+			losers = append(losers, conflictLoser{frag: frag, winnerID: frags[winners[key]].ID})
+			continue
+		}
+		kept = append(kept, frag)
+	}
+	return kept, losers
+}
+
+// conflictBeats reports whether challenger supersedes incumbent; equal rank
+// favors the challenger because it was collected later.
+func conflictBeats(challenger, incumbent contextfrag.ContextFrag) bool {
+	if cs, is := challenger.Scope.SpecificityRank(), incumbent.Scope.SpecificityRank(); cs != is {
+		return cs > is
+	}
+	if ct, it := contextfrag.TrustRank(challenger.Trust), contextfrag.TrustRank(incumbent.Trust); ct != it {
+		return ct > it
+	}
+	return true
+}
+
+func appendPrecedenceDrops(result SelectionResult, losers []conflictLoser) SelectionResult {
+	if len(losers) == 0 {
+		return result
+	}
+	for _, loser := range losers {
+		result.Dropped = append(result.Dropped, loser.frag)
+		result.Summary.DropReasons = append(result.Summary.DropReasons, DropRecord{
+			FragID: loser.frag.ID,
+			Ref:    loser.frag.Ref,
+			Reason: "precedence:superseded_by_" + loser.winnerID,
+		})
+	}
+	result.Summary.TotalCollected += len(losers)
+	result.Summary.TotalDropped += len(losers)
 	return result
 }
 
