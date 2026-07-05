@@ -1779,20 +1779,20 @@ definitions:
     - ViewRunConfigPreProvider
   contextfrag.MutationKind:
     enum:
-    - tool_usage_append
     - before_model_call_hook
     - background_summary
     - mid_task_prune
     - loop_step_reselection
     - injected_message
+    - context_view_fallback
     type: string
     x-enum-varnames:
-    - MutationToolUsageAppend
     - MutationBeforeModelCallHook
     - MutationBackgroundSummary
     - MutationMidTaskPrune
     - MutationLoopStepReselection
     - MutationInjectedMessage
+    - MutationContextViewFallback
   contextfrag.MutationRecord:
     properties:
       detail:

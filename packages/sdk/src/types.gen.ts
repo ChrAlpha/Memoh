@@ -1037,7 +1037,7 @@ export type ContextfragManifestCounts = {
 
 export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
 
-export type ContextfragMutationKind = 'tool_usage_append' | 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message';
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback';
 
 export type ContextfragMutationRecord = {
     detail?: string;

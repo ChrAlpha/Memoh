@@ -15576,20 +15576,20 @@
         "contextfrag.MutationKind": {
             "type": "string",
             "enum": [
-                "tool_usage_append",
                 "before_model_call_hook",
                 "background_summary",
                 "mid_task_prune",
                 "loop_step_reselection",
-                "injected_message"
+                "injected_message",
+                "context_view_fallback"
             ],
             "x-enum-varnames": [
-                "MutationToolUsageAppend",
                 "MutationBeforeModelCallHook",
                 "MutationBackgroundSummary",
                 "MutationMidTaskPrune",
                 "MutationLoopStepReselection",
-                "MutationInjectedMessage"
+                "MutationInjectedMessage",
+                "MutationContextViewFallback"
             ]
         },
         "contextfrag.MutationRecord": {
