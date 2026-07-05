@@ -16,6 +16,7 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/tools"
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextlimit"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/userinput"
@@ -1506,35 +1507,8 @@ func pruneOldToolResults(p *sdk.GenerateParams, keepSteps, threshold int) *sdk.G
 			pruned = append(pruned, msgs[i])
 			continue
 		}
-		// Measure content size from ToolResultPart entries.
-		contentSize := 0
-		for _, part := range msgs[i].Content {
-			if tr, ok := part.(sdk.ToolResultPart); ok {
-				contentSize += len(fmt.Sprintf("%v", tr.Result))
-			}
-		}
-		if contentSize > 512 { // only prune if content is large enough
-			// Build replacement parts preserving ToolResultPart type so that
-			// provider serializers that validate part types per role stay happy.
-			replacementParts := make([]sdk.MessagePart, 0, len(msgs[i].Content))
-			for _, part := range msgs[i].Content {
-				if tr, ok := part.(sdk.ToolResultPart); ok {
-					replacementParts = append(replacementParts, sdk.ToolResultPart{
-						ToolCallID: tr.ToolCallID,
-						ToolName:   tr.ToolName,
-						Result:     fmt.Sprintf("[tool result pruned: %d bytes]", contentSize),
-					})
-				} else {
-					replacementParts = append(replacementParts, part)
-				}
-			}
-			pruned = append(pruned, sdk.Message{
-				Role:    msgs[i].Role,
-				Content: replacementParts,
-			})
-		} else {
-			pruned = append(pruned, msgs[i])
-		}
+		replaced, _ := contextlimit.TruncateStepToolResult(msgs[i], contextlimit.StepToolResultTruncateBytes)
+		pruned = append(pruned, replaced)
 	}
 
 	p.Messages = pruned

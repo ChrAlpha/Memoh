@@ -2,12 +2,12 @@ package contextview
 
 import (
 	"context"
-	"fmt"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/contextlimit"
 )
 
 func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepSelectionInput) agentpkg.ContextStepSelectionResult {
@@ -57,8 +57,6 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	}
 }
 
-const stepToolResultTruncateBytes = 512
-
 // truncateOldToolResultFrags keeps the most recent keepRecent complete tool
 // cycles intact and replaces older bulky tool results with a size summary,
 // preserving the ToolResultPart shape so provider serializers stay happy.
@@ -91,7 +89,7 @@ func truncateOldToolResultFrags(frags []contextfrag.ContextFrag, keepRecent int)
 		if msg == nil || msg.Role != sdk.MessageRoleTool {
 			continue
 		}
-		replaced, changed := truncateToolResultMessage(*msg)
+		replaced, changed := contextlimit.TruncateStepToolResult(*msg, contextlimit.StepToolResultTruncateBytes)
 		if !changed {
 			continue
 		}
@@ -99,31 +97,6 @@ func truncateOldToolResultFrags(frags []contextfrag.ContextFrag, keepRecent int)
 		truncated++
 	}
 	return out, truncated
-}
-
-func truncateToolResultMessage(msg sdk.Message) (sdk.Message, bool) {
-	contentSize := 0
-	for _, part := range msg.Content {
-		if result, ok := part.(sdk.ToolResultPart); ok {
-			contentSize += len(fmt.Sprintf("%v", result.Result))
-		}
-	}
-	if contentSize <= stepToolResultTruncateBytes {
-		return msg, false
-	}
-	parts := make([]sdk.MessagePart, 0, len(msg.Content))
-	for _, part := range msg.Content {
-		if result, ok := part.(sdk.ToolResultPart); ok {
-			parts = append(parts, sdk.ToolResultPart{
-				ToolCallID: result.ToolCallID,
-				ToolName:   result.ToolName,
-				Result:     fmt.Sprintf("[tool result pruned: %d bytes]", contentSize),
-			})
-			continue
-		}
-		parts = append(parts, part)
-	}
-	return sdk.Message{Role: msg.Role, Content: parts}, true
 }
 
 func selectedProviderStepFrags(selection SelectionResult, scope contextfrag.Scope) []contextfrag.ContextFrag {
