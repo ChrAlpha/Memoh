@@ -28,6 +28,13 @@ const (
 	KindConversationSummary Kind = "conversation_summary"
 )
 
+// WorkspaceInstructionAnchor is the heading that marks where the workspace
+// instruction section begins in a flattened system prompt string; it must
+// stay byte-identical to the heading system_common.md renders. Reverse-parse
+// paths (the discuss pipeline and the legacy-fields fallback) search for it
+// to splice tool usage before it or split it into its own fragment.
+const WorkspaceInstructionAnchor = "\n## Workspace instruction files"
+
 // v1 keeps all context schema versions in lockstep; future migrations can
 // split this into per-schema supported ranges without changing manifest shape.
 const CurrentSchemaVersion = 1

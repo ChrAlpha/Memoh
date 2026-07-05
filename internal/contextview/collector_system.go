@@ -9,10 +9,7 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-const (
-	systemPromptCollectorName  = "system_prompt"
-	workspaceInstructionAnchor = "\n## Workspace instruction files"
-)
+const systemPromptCollectorName = "system_prompt"
 
 type SystemPromptConfig struct {
 	System    string
@@ -47,7 +44,7 @@ func (*SystemPromptCollector) Collect(_ context.Context, req CollectRequest) ([]
 	}
 	if toolStart < 0 {
 		if cfg.SplitWorkspace {
-			if idx := strings.Index(system, workspaceInstructionAnchor); idx >= 0 {
+			if idx := strings.Index(system, contextfrag.WorkspaceInstructionAnchor); idx >= 0 {
 				frags := make([]contextfrag.ContextFrag, 0, 2)
 				if prompt := strings.TrimSpace(system[:idx]); prompt != "" {
 					frags = append(frags, systemPromptTextFrag(req.Scope, "system.prompt", contextfrag.KindSystemPrompt, prompt, 20, contextfrag.SourceRunConfig, 0))

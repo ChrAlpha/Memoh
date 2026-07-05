@@ -46,3 +46,18 @@ func TestProviderViewFallbackKeepsLedgerAndLifecycleVisible(t *testing.T) {
 		t.Fatal("legacy materialization did not append the current query")
 	}
 }
+
+func TestLegacyMaterializeQuerySplicesToolUsageBeforeSharedWorkspaceAnchor(t *testing.T) {
+	cfg := agentpkg.RunConfig{
+		System:             "base system" + contextfrag.WorkspaceInstructionAnchor + "\n\nworkspace text",
+		ContextToolUsage:   "## Tool usage\n\nusage text",
+		ContextSourceFrags: []contextfrag.ContextFrag{{ID: "placeholder"}},
+	}
+
+	out := legacyMaterializeQuery(cfg)
+
+	want := "base system\n\n## Tool usage\n\nusage text\n\n## Workspace instruction files\n\nworkspace text"
+	if out.System != want {
+		t.Fatalf("legacyMaterializeQuery() System = %q, want %q", out.System, want)
+	}
+}

@@ -1193,8 +1193,7 @@ func appendToolUsageToSystem(system, toolUsage string) string {
 	if system == "" {
 		return toolUsage
 	}
-	const workspaceAnchor = "\n## Workspace instruction files"
-	if idx := strings.Index(system, workspaceAnchor); idx >= 0 {
+	if idx := strings.Index(system, contextfrag.WorkspaceInstructionAnchor); idx >= 0 {
 		return strings.TrimSpace(system[:idx]) + "\n\n" + toolUsage + "\n" + system[idx:]
 	}
 	return strings.TrimSpace(system + "\n\n" + toolUsage)

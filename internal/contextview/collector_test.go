@@ -62,6 +62,28 @@ func TestSystemPromptCollector_NoToolUsage(t *testing.T) {
 	assertTextFrag(t, frags[0], "system.prompt", contextfrag.KindSystemPrompt, "Base system prompt.", 20, contextfrag.SourceRunConfig)
 }
 
+func TestSystemPromptCollector_SplitWorkspaceUsesSharedAnchor(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}
+	system := "Base system prompt." + contextfrag.WorkspaceInstructionAnchor + "\n\n- AGENTS.md"
+
+	collector := &SystemPromptCollector{}
+	frags, err := collector.Collect(context.Background(), CollectRequest{
+		Scope:  scope,
+		Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: SystemPromptConfig{System: system, SplitWorkspace: true},
+	})
+	if err != nil {
+		t.Fatalf("Collect() error: %v", err)
+	}
+	if len(frags) != 2 {
+		t.Fatalf("frags = %d, want 2", len(frags))
+	}
+	assertTextFrag(t, frags[0], "system.prompt", contextfrag.KindSystemPrompt, "Base system prompt.", 20, contextfrag.SourceRunConfig)
+	assertTextFrag(t, frags[1], "system.workspace_instructions", contextfrag.KindWorkspaceInstruction, "## Workspace instruction files\n\n- AGENTS.md", 50, contextfrag.SourceRunConfig)
+}
+
 func TestHistoryMessagesCollector_MultipleMessages(t *testing.T) {
 	t.Parallel()
 

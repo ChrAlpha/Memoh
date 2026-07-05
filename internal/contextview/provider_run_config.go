@@ -262,8 +262,7 @@ func providerViewFallback(
 func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" && len(cfg.ContextSourceFrags) > 0 &&
 		!strings.Contains(cfg.System, usage) {
-		const anchor = "\n## Workspace instruction files"
-		if idx := strings.Index(cfg.System, anchor); idx >= 0 {
+		if idx := strings.Index(cfg.System, contextfrag.WorkspaceInstructionAnchor); idx >= 0 {
 			cfg.System = strings.TrimSpace(cfg.System[:idx]) + "\n\n" + usage + "\n" + cfg.System[idx:]
 		} else {
 			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + usage)

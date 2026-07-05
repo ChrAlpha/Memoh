@@ -84,6 +84,18 @@ func TestRefreshContextFragMarksToolUsageBeforeWorkspaceInstructions(t *testing.
 	}
 }
 
+func TestAppendToolUsageToSystemUsesSharedWorkspaceAnchor(t *testing.T) {
+	t.Parallel()
+
+	system := "base system" + contextfrag.WorkspaceInstructionAnchor + "\n\nworkspace text"
+	got := appendToolUsageToSystem(system, "## Tool usage\n\nusage text")
+
+	want := "base system\n\n## Tool usage\n\nusage text\n\n## Workspace instruction files\n\nworkspace text"
+	if got != want {
+		t.Fatalf("appendToolUsageToSystem() = %q, want %q", got, want)
+	}
+}
+
 func TestSpawnRunConfigCarriesContextScopeAndMaterializedQuery(t *testing.T) {
 	t.Parallel()
 
