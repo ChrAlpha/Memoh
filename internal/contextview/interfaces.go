@@ -54,7 +54,6 @@ type SelectionResult struct {
 
 type IntentProfile struct {
 	Intent        contextfrag.Intent
-	RequiredKinds []contextfrag.Kind
 	MustKeepSlots []contextfrag.Slot
 	// SlotTrustFloors declares the minimum trust level per slot: fragments
 	// below the floor are dropped before selection so content never gains

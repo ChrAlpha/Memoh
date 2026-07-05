@@ -10,7 +10,7 @@ func TestMutationLedgerNilSafe(t *testing.T) {
 	t.Parallel()
 
 	var ledger *MutationLedger
-	ledger.Record(MutationToolUsageAppend, "bytes=10")
+	ledger.Record(MutationBackgroundSummary, "bytes=10")
 	ledger.SetFinalInputHash("abc")
 	if ledger.Records() != nil || ledger.FinalInputHash() != "" {
 		t.Fatal("nil ledger must be inert")
@@ -21,13 +21,13 @@ func TestMutationLedgerRecordsInOrder(t *testing.T) {
 	t.Parallel()
 
 	ledger := NewMutationLedger()
-	ledger.Record(MutationToolUsageAppend, "bytes=10")
+	ledger.Record(MutationBackgroundSummary, "bytes=10")
 	ledger.Record(MutationMidTaskPrune, "pruned=3")
 	ledger.SetFinalInputHash("hash-1")
 
 	records := ledger.Records()
 	if len(records) != 2 ||
-		records[0].Kind != MutationToolUsageAppend ||
+		records[0].Kind != MutationBackgroundSummary ||
 		records[1].Kind != MutationMidTaskPrune {
 		t.Fatalf("records = %#v", records)
 	}

@@ -46,8 +46,7 @@ type CompactionWindow struct {
 }
 
 type BuildOptions struct {
-	DryRun       bool
-	ShadowLegacy bool
+	DryRun bool
 }
 
 type ContextView struct {

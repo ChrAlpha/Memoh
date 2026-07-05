@@ -13,7 +13,6 @@ import (
 type MutationKind string
 
 const (
-	MutationToolUsageAppend     MutationKind = "tool_usage_append"
 	MutationBeforeModelCallHook MutationKind = "before_model_call_hook"
 	MutationBackgroundSummary   MutationKind = "background_summary"
 	MutationMidTaskPrune        MutationKind = "mid_task_prune"
