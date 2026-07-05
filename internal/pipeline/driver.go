@@ -364,14 +364,18 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 	}
 	// The discuss turn replaces the resolved chat context wholesale: the
 	// fragments-first carrier gets the discuss source fragments and the chat
-	// trim bookkeeping is cleared. The legacy message swap remains as the
-	// fallback for builder failures.
+	// trim bookkeeping is cleared. The legacy message swap and frag refresh
+	// remain as the fallback for builder failures; ApplyProviderRunConfig
+	// ignores cfg.Messages once ContextSourceFrags is non-empty, so both are
+	// skipped rather than computed and discarded.
 	runConfig.ContextSourceFrags = d.discussSourceFrags(ctx, runConfig.ContextScope, runConfig.System, discussInput, log)
-	runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, discussInput, composed, log)
+	if len(runConfig.ContextSourceFrags) == 0 {
+		runConfig.Messages = d.discussSDKMessages(ctx, runConfig.ContextScope, discussInput, composed, log)
+		runConfig = runConfig.RefreshContextFrag()
+	}
 	runConfig.ContextHistoryTokenEstimates = nil
 	runConfig.ContextTrimmableMessages = 0
 	runConfig.ContextMemoryText = ""
-	runConfig = runConfig.RefreshContextFrag()
 
 	eventCh := agent.Stream(ctx, runConfig)
 

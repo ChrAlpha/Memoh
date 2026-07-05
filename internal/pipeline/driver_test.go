@@ -762,6 +762,54 @@ func TestHandleReplyWithAgentRefreshesContextFragAfterLateBinding(t *testing.T) 
 	}
 }
 
+// TestHandleReplyWithAgentSkipsLegacyMessageBuildWhenSourceFragsPresent proves
+// that once CollectDiscussSourceFrags returns non-empty fragments, the driver
+// no longer pays for a second, independent BuildDiscussSDKMessages pass — its
+// output would only be discarded by the fragments-first branch of
+// ApplyProviderRunConfig anyway.
+func TestHandleReplyWithAgentSkipsLegacyMessageBuildWhenSourceFragsPresent(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 200,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="x">hello</message>`}},
+		},
+	}
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: agentpkg.RunConfig{System: "base system"},
+			ModelID:   "model-1",
+		},
+	}
+	builder := &fakeDiscussContextBuilder{
+		frags: []contextfrag.ContextFrag{
+			contextfrag.TextFrag(contextfrag.TextFragInput{
+				ID:   "test.frag",
+				Kind: contextfrag.KindSystemPrompt,
+				Text: "frag",
+			}),
+		},
+	}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline:       NewPipeline(RenderParams{}),
+		Resolver:       resolver,
+		ContextBuilder: builder,
+	})
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "b", SessionID: "s"},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if builder.collectSourceFragsCalls != 1 {
+		t.Fatalf("collectSourceFragsCalls = %d, want 1", builder.collectSourceFragsCalls)
+	}
+	if builder.buildSDKMessagesCalls != 0 {
+		t.Fatalf("buildSDKMessagesCalls = %d, want 0 (legacy message build must be skipped once source frags are present)", builder.buildSDKMessagesCalls)
+	}
+}
+
 // --- Test helpers ---
 
 type fakeDiscussStreamer struct {
@@ -861,10 +909,14 @@ type fakeDiscussContextBuilder struct {
 	frags    []contextfrag.ContextFrag
 	err      error
 	called   bool
+
+	collectSourceFragsCalls int
+	buildSDKMessagesCalls   int
 }
 
 func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) ([]sdk.Message, error) {
 	f.called = true
+	f.buildSDKMessagesCalls++
 	return f.messages, f.err
 }
 
@@ -875,6 +927,7 @@ func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ c
 
 func (f *fakeDiscussContextBuilder) CollectDiscussSourceFrags(_ context.Context, _ contextfrag.Scope, _ string, _ DiscussContextInput) ([]contextfrag.ContextFrag, error) {
 	f.called = true
+	f.collectSourceFragsCalls++
 	return f.frags, f.err
 }
 
