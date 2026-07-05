@@ -1140,9 +1140,10 @@ func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, chann
 
 	cfg = r.prepareRunConfig(ctx, cfg)
 	return pipelinepkg.ResolveRunConfigResult{
-		RunConfig:   cfg,
-		ModelID:     chatModel.ID,
-		RuntimeType: runtimeType,
+		RunConfig:              cfg,
+		ModelID:                chatModel.ID,
+		RuntimeType:            runtimeType,
+		ContextBudgetMaxTokens: contextBudgetFromChatModel(chatModel),
 	}, nil
 }
 

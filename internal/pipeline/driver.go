@@ -20,9 +20,10 @@ import (
 
 // ResolveRunConfigResult holds the output of ResolveRunConfig.
 type ResolveRunConfigResult struct {
-	RunConfig   agentpkg.RunConfig
-	ModelID     string // database UUID of the selected model
-	RuntimeType string
+	RunConfig              agentpkg.RunConfig
+	ModelID                string // database UUID of the selected model
+	RuntimeType            string
+	ContextBudgetMaxTokens int
 }
 
 // RunConfigResolver resolves a complete agent RunConfig and persists output

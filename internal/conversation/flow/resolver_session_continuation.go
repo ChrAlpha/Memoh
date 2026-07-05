@@ -15,7 +15,7 @@ import (
 // SDK message list) so tool-approval and user-input session resumption carry
 // the same budget-trimming and tool-exchange-policy signals as the main chat
 // path.
-func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversation.ModelMessage, liveToolStream, canRequestUserInput bool) agentpkg.RunConfig {
+func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversation.ModelMessage, contextBudgetMaxTokens int, liveToolStream, canRequestUserInput bool) agentpkg.RunConfig {
 	messages = sanitizeMessages(messages)
 	historyEstimates := make([]int, len(messages))
 	for i := range messages {
@@ -25,6 +25,9 @@ func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversati
 	cfg.ContextTrimmableMessages = len(messages)
 	if cfg.ContextToolExchangePolicy == nil {
 		cfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
+	}
+	if cfg.ContextBudgetMaxTokens == 0 {
+		cfg.ContextBudgetMaxTokens = contextBudgetMaxTokens
 	}
 	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(messages))
 	cfg.Query = ""
@@ -62,7 +65,7 @@ func (r *Resolver) resumeAgentSession(ctx context.Context, p continuationParams,
 	loaded = r.replaceCompactedMessages(ctx, loaded)
 	messages := modelMessagesOf(loaded)
 
-	cfg := finalizeContinuationRunConfig(resolved.RunConfig, messages, eventCh != nil, r.canDeliverUserInputWS(eventCh))
+	cfg := finalizeContinuationRunConfig(resolved.RunConfig, messages, resolved.ContextBudgetMaxTokens, eventCh != nil, r.canDeliverUserInputWS(eventCh))
 	cfg = r.prepareRunConfig(ctx, cfg)
 
 	chatReq := conversation.ChatRequest{

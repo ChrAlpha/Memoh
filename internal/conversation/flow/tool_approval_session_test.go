@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -10,7 +11,9 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
+	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/session"
+	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/toolapproval"
 )
 
@@ -148,6 +151,44 @@ func TestResolveRunConfigSkipsModelResolutionForACPRuntime(t *testing.T) {
 	}
 	if got.ModelID != "" || got.RunConfig.Model != nil {
 		t.Fatalf("ACP runtime should not resolve a model, model_id=%q model=%#v", got.ModelID, got.RunConfig.Model)
+	}
+	if got.ContextBudgetMaxTokens != 0 {
+		t.Fatalf("ACP runtime should not resolve a context budget, got %d", got.ContextBudgetMaxTokens)
+	}
+}
+
+func TestResolveRunConfigPopulatesContextBudgetMaxTokensFromChatModel(t *testing.T) {
+	t.Parallel()
+
+	conn, queries := newModelSelectionTestDB(t)
+	const modelID = "00000000-0000-0000-0000-000000000601"
+	const providerID = "00000000-0000-0000-0000-000000000602"
+	insertModelSelectionProvider(t, conn, providerID, "openai-completions", true)
+	insertModelSelectionModel(t, conn, modelID, "gpt-run-config-context-window", providerID, models.ModelTypeChat, true, `{"context_window": 128000}`)
+
+	resolver := &Resolver{
+		modelsService:   models.NewService(slog.New(slog.DiscardHandler), queries),
+		queries:         queries,
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &acpContextBudgetSettingsQueries{chatModelID: modelID}, nil, nil),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Session, error) {
+				return session.Session{
+					ID:          sessionID,
+					BotID:       storeRoundBotID,
+					Type:        session.TypeChat,
+					RuntimeType: session.RuntimeModel,
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	got, err := resolver.ResolveRunConfig(context.Background(), storeRoundBotID, "session-1", "user-1", "web", "", "", "")
+	if err != nil {
+		t.Fatalf("ResolveRunConfig() error = %v", err)
+	}
+	if got.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", got.ContextBudgetMaxTokens)
 	}
 }
 
