@@ -27,9 +27,12 @@ type CompileInput struct {
 	Existing        []ContextFrag
 }
 
-// Compile builds typed fragments from the current SDK-shaped fields, preserving
-// explicit non-derived fragments such as tool usage.
-func Compile(input CompileInput) AssembledContext {
+// CompileFrags builds the typed fragment list from the current SDK-shaped
+// fields, preserving explicit non-derived fragments such as tool usage — the
+// same fragment-construction `Compile` does, without also rendering the
+// legacy System/Messages view or building the provenance manifest. For
+// callers that only need the fragments themselves.
+func CompileFrags(input CompileInput) []ContextFrag {
 	source := strings.TrimSpace(input.Source)
 	if source == "" {
 		source = SourceRunConfig
@@ -98,7 +101,13 @@ func Compile(input CompileInput) AssembledContext {
 		}
 	}
 
-	frags = normalizeContextRefs(frags)
+	return normalizeContextRefs(frags)
+}
+
+// Compile builds typed fragments from the current SDK-shaped fields, preserving
+// explicit non-derived fragments such as tool usage.
+func Compile(input CompileInput) AssembledContext {
+	frags := CompileFrags(input)
 	assembled := Render(frags)
 	assembled.Frags = frags
 	assembled.Manifest = BuildManifest(frags)

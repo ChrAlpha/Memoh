@@ -40,7 +40,7 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 	}
 
 	for _, frag := range frags {
-		msg := fragMessage(frag)
+		msg := FragMessage(frag)
 		if msg == nil {
 			flush()
 			repaired = append(repaired, frag)
@@ -89,7 +89,7 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 				continue
 			}
 			if len(kept) != len(msg.Content) {
-				frag = rebuildFragMessage(frag, sdk.Message{Role: sdk.MessageRoleTool, Content: kept})
+				frag = RebuildFragMessage(frag, sdk.Message{Role: sdk.MessageRoleTool, Content: kept})
 			}
 			repaired = append(repaired, frag)
 		default:
@@ -127,9 +127,9 @@ func syntheticToolClosureFrag(callID, toolName string, index int, scope Scope, c
 	})
 }
 
-// fragMessage returns the first SDK message carried by frag's parts, or nil
+// FragMessage returns the first SDK message carried by frag's parts, or nil
 // if frag does not wrap a message (e.g. a text or image fragment).
-func fragMessage(frag ContextFrag) *sdk.Message {
+func FragMessage(frag ContextFrag) *sdk.Message {
 	for _, part := range frag.Parts {
 		if msg := partMessage(part); msg != nil {
 			return msg
@@ -138,7 +138,7 @@ func fragMessage(frag ContextFrag) *sdk.Message {
 	return nil
 }
 
-func rebuildFragMessage(frag ContextFrag, msg sdk.Message) ContextFrag {
+func RebuildFragMessage(frag ContextFrag, msg sdk.Message) ContextFrag {
 	return MessageFrag(MessageFragInput{
 		ID:            frag.ID,
 		Message:       msg,

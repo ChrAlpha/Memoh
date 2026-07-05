@@ -1,6 +1,7 @@
 package contextfrag
 
 import (
+	"reflect"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -81,6 +82,22 @@ func TestCompileDoesNotInferToolUsageFromPlainSystemText(t *testing.T) {
 
 	if manifestHasKind(got.Manifest, KindToolUsage) {
 		t.Fatalf("manifest should not infer tool usage from arbitrary system text: %#v", got.Manifest.Items)
+	}
+}
+
+func TestCompileFragsMatchesCompileFrags(t *testing.T) {
+	input := CompileInput{
+		Scope:    Scope{BotID: "bot-1"},
+		System:   "system prompt",
+		Messages: []sdk.Message{sdk.UserMessage("hi"), sdk.AssistantMessage("hello")},
+		Query:    "current question",
+	}
+
+	got := CompileFrags(input)
+	want := Compile(input).Frags
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CompileFrags(...) diverges from Compile(...).Frags:\ngot:  %#v\nwant: %#v", got, want)
 	}
 }
 

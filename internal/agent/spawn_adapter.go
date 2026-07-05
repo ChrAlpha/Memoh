@@ -96,8 +96,8 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 // SpawnSystemPrompt renders from) plus history fragments compiled from the
 // already-materialized rc.Messages/rc.Query. internal/contextview can't be
 // imported here — it imports internal/agent for RunConfig, so the reverse
-// import would cycle — so this reuses contextfrag.Compile directly instead of
-// contextview's collectors, then reproduces the two behaviors
+// import would cycle — so this reuses contextfrag.CompileFrags directly
+// instead of contextview's collectors, then reproduces the two behaviors
 // contextview.HistoryMessagesCollector layers on top: pinning every history
 // fragment against budget trimming (subagents never set
 // ContextTrimmableMessages, so today every history message is implicitly
@@ -107,7 +107,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 // exercise it directly (see spawn_frags_first_test.go).
 func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 	sections := GenerateSystemSections(SystemPromptParams{SessionType: rc.SessionType})
-	frags := SystemSectionFrags(sections, rc.ContextScope)
+	sectionFrags := SystemSectionFrags(sections, rc.ContextScope)
 
 	query := rc.Query
 	if rc.ContextQueryMaterialized {
@@ -116,14 +116,14 @@ func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 		// fragment.
 		query = ""
 	}
-	assembled := contextfrag.Compile(contextfrag.CompileInput{
+	frags := contextfrag.CompileFrags(contextfrag.CompileInput{
 		Scope:    rc.ContextScope,
 		Messages: rc.Messages,
 		Query:    query,
 	})
 
-	history := make([]contextfrag.ContextFrag, 0, len(assembled.Frags))
-	for _, frag := range assembled.Frags {
+	history := make([]contextfrag.ContextFrag, 0, len(frags))
+	for _, frag := range frags {
 		if frag.Slot == contextfrag.SlotHistory {
 			history = append(history, frag)
 		}
@@ -135,7 +135,7 @@ func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 	}
 	history = contextfrag.RepairToolClosureFrags(history, rc.ContextScope, contextfrag.CollectorRunConfigFields)
 
-	return append(frags, history...)
+	return append(sectionFrags, history...)
 }
 
 // GenerateWithWatchdog runs the agent in streaming mode, touching the

@@ -115,22 +115,7 @@ func stripAssistantToolParts(parts []sdk.MessagePart) ([]sdk.MessagePart, bool) 
 }
 
 func rebuildMessageFrag(frag contextfrag.ContextFrag, msg sdk.Message) contextfrag.ContextFrag {
-	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
-		ID:            frag.ID,
-		Message:       msg,
-		Kind:          frag.Kind,
-		Slot:          frag.Slot,
-		Priority:      frag.Priority,
-		CacheClass:    frag.CacheClass,
-		Trust:         frag.Trust,
-		Scope:         frag.Scope,
-		Source:        frag.Provenance.Source,
-		SourceID:      frag.Provenance.SourceID,
-		Collector:     frag.Provenance.Collector,
-		Index:         frag.Provenance.Index,
-		Budget:        frag.Budget,
-		TokenEstimate: frag.TokenEstimate,
-	})
+	return contextfrag.RebuildFragMessage(frag, msg)
 }
 
 func toolExchangeEdit(frag contextfrag.ContextFrag) contextfrag.ContextEditTrace {

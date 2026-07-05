@@ -124,12 +124,7 @@ func injectDiscussImages(frags []contextfrag.ContextFrag, images []sdk.ImagePart
 }
 
 func discussFragMessage(frag contextfrag.ContextFrag) *sdk.Message {
-	for _, part := range frag.Parts {
-		if msg := sdkMessagePart(part); msg != nil {
-			return msg
-		}
-	}
-	return nil
+	return contextfrag.FragMessage(frag)
 }
 
 func discussLateBindingFrag(lateBinding string, scope contextfrag.Scope) contextfrag.ContextFrag {
