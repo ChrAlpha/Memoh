@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -38,18 +37,5 @@ func (*InlineImageCollector) Collect(_ context.Context, req CollectRequest) ([]c
 }
 
 func inlineImageConfig(config any) (InlineImageConfig, error) {
-	if config == nil {
-		return InlineImageConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case InlineImageConfig:
-		return cfg, nil
-	case *InlineImageConfig:
-		if cfg == nil {
-			return InlineImageConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return InlineImageConfig{}, errors.New("inline_images config must be InlineImageConfig")
-	}
+	return collectorConfig[InlineImageConfig](config, "inline_images config must be InlineImageConfig")
 }

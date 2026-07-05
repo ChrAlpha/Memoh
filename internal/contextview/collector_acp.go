@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -99,20 +98,7 @@ func (*ACPSectionsCollector) Collect(_ context.Context, req CollectRequest) ([]c
 }
 
 func acpSectionsConfig(config any) (ACPSectionsConfig, error) {
-	if config == nil {
-		return ACPSectionsConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case ACPSectionsConfig:
-		return cfg, nil
-	case *ACPSectionsConfig:
-		if cfg == nil {
-			return ACPSectionsConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return ACPSectionsConfig{}, errors.New("acp_sections config must be ACPSectionsConfig")
-	}
+	return collectorConfig[ACPSectionsConfig](config, "acp_sections config must be ACPSectionsConfig")
 }
 
 // FinalizeACPContextMarkdown assembles section blocks into the ACP context

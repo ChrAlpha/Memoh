@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -85,20 +84,7 @@ func (*SystemPromptCollector) Collect(_ context.Context, req CollectRequest) ([]
 }
 
 func systemPromptConfig(config any) (SystemPromptConfig, error) {
-	if config == nil {
-		return SystemPromptConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case SystemPromptConfig:
-		return cfg, nil
-	case *SystemPromptConfig:
-		if cfg == nil {
-			return SystemPromptConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return SystemPromptConfig{}, errors.New("system_prompt config must be SystemPromptConfig")
-	}
+	return collectorConfig[SystemPromptConfig](config, "system_prompt config must be SystemPromptConfig")
 }
 
 func systemPromptTextFrag(scope contextfrag.Scope, id string, kind contextfrag.Kind, text string, priority int, source string, index int) contextfrag.ContextFrag {

@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -50,18 +49,5 @@ func (*CurrentUserCollector) Collect(_ context.Context, req CollectRequest) ([]c
 }
 
 func currentUserConfig(config any) (CurrentUserConfig, error) {
-	if config == nil {
-		return CurrentUserConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case CurrentUserConfig:
-		return cfg, nil
-	case *CurrentUserConfig:
-		if cfg == nil {
-			return CurrentUserConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return CurrentUserConfig{}, errors.New("current_user config must be CurrentUserConfig")
-	}
+	return collectorConfig[CurrentUserConfig](config, "current_user config must be CurrentUserConfig")
 }

@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -54,18 +53,5 @@ func (*MemoryContextCollector) Collect(_ context.Context, req CollectRequest) ([
 }
 
 func memoryContextConfig(config any) (MemoryContextConfig, error) {
-	if config == nil {
-		return MemoryContextConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case MemoryContextConfig:
-		return cfg, nil
-	case *MemoryContextConfig:
-		if cfg == nil {
-			return MemoryContextConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return MemoryContextConfig{}, errors.New("memory_context config must be MemoryContextConfig")
-	}
+	return collectorConfig[MemoryContextConfig](config, "memory_context config must be MemoryContextConfig")
 }

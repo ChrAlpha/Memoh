@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -191,20 +190,7 @@ func syntheticToolClosureFrag(callID, toolName string, index int, scope contextf
 }
 
 func historyMessagesConfig(config any) (HistoryMessagesConfig, error) {
-	if config == nil {
-		return HistoryMessagesConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case HistoryMessagesConfig:
-		return cfg, nil
-	case *HistoryMessagesConfig:
-		if cfg == nil {
-			return HistoryMessagesConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return HistoryMessagesConfig{}, errors.New("history_messages config must be HistoryMessagesConfig")
-	}
+	return collectorConfig[HistoryMessagesConfig](config, "history_messages config must be HistoryMessagesConfig")
 }
 
 func kindForSDKMessage(msg sdk.Message) contextfrag.Kind {

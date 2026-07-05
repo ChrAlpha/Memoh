@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/historyfrag"
@@ -38,18 +37,5 @@ func (*CompactionRecordsCollector) Collect(_ context.Context, req CollectRequest
 }
 
 func compactionRecordsConfig(config any) (CompactionRecordsConfig, error) {
-	if config == nil {
-		return CompactionRecordsConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case CompactionRecordsConfig:
-		return cfg, nil
-	case *CompactionRecordsConfig:
-		if cfg == nil {
-			return CompactionRecordsConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return CompactionRecordsConfig{}, errors.New("compaction_records config must be CompactionRecordsConfig")
-	}
+	return collectorConfig[CompactionRecordsConfig](config, "compaction_records config must be CompactionRecordsConfig")
 }

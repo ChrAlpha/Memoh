@@ -3,7 +3,6 @@ package contextview
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -247,20 +246,7 @@ func discussTRFrag(tr pipeline.TurnResponseEntry, index int, scope contextfrag.S
 }
 
 func discussContextConfig(config any) (DiscussContextConfig, error) {
-	if config == nil {
-		return DiscussContextConfig{}, nil
-	}
-	switch cfg := config.(type) {
-	case DiscussContextConfig:
-		return cfg, nil
-	case *DiscussContextConfig:
-		if cfg == nil {
-			return DiscussContextConfig{}, nil
-		}
-		return *cfg, nil
-	default:
-		return DiscussContextConfig{}, errors.New("discuss_context config must be DiscussContextConfig")
-	}
+	return collectorConfig[DiscussContextConfig](config, "discuss_context config must be DiscussContextConfig")
 }
 
 func discussContextMessageToSDK(m pipeline.ContextMessage) sdk.Message {
