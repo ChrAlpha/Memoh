@@ -1184,8 +1184,9 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
 	})
+	var hookTexts []string
 	if beforePromptContext != "" {
-		cfg.System += "\n\n" + formatResolverHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
+		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventBeforePromptBuild, beforePromptContext))
 	}
 	afterPromptContext := r.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
@@ -1196,7 +1197,10 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		SystemBytes:  len(cfg.System),
 	}, hooks.EventAfterPromptBuild)
 	if afterPromptContext != "" {
-		cfg.System += "\n\n" + formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
+		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext))
+	}
+	if len(hookTexts) > 0 {
+		cfg.ContextHookText = strings.Join(hookTexts, "\n\n")
 	}
 
 	// Fragments are the first-class context carrier: collect the source

@@ -121,6 +121,7 @@ type RunConfig struct {
 	ContextCachePlan             contextfrag.CachePlan
 	ContextToolExchangePolicy    *contextfrag.ToolExchangePolicy
 	ContextMemoryText            string
+	ContextHookText              string
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
 	ContextStepReselector        ContextStepReselector

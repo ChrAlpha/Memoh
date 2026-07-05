@@ -70,6 +70,26 @@ func memoryRecallFrag(text string) contextfrag.ContextFrag {
 	})
 }
 
+// hookContextFrag mirrors HookContextCollector.Collect (collector_hook.go)
+// field-for-field, so the fixture matches what the resolver actually produces.
+func hookContextFrag(text string) contextfrag.ContextFrag {
+	msg := sdk.UserMessage(text)
+	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:         "hook_context.message",
+		Message:    msg,
+		Kind:       contextfrag.KindHookContext,
+		Slot:       contextfrag.SlotAfterHistoryBeforeCurrent,
+		Priority:   contextfrag.PriorityForMessage(msg),
+		CacheClass: contextfrag.CacheNever,
+		Trust:      contextfrag.TrustSystem,
+		Scope:      contextfrag.Scope{BotID: "bot-1"},
+		Source:     "hook_context",
+		SourceID:   "hook_context",
+		Collector:  "hook_context",
+		Budget:     contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+	})
+}
+
 // messagesPreservePrefix mirrors stepSelectionPreservesPrefix
 // (internal/agent/agent.go): before must be an exact message-wise prefix of
 // after.
@@ -153,6 +173,39 @@ func TestApplyProviderRunConfigMemoryRecallSystemIsolation(t *testing.T) {
 	got3 := ApplyProviderRunConfig(ctx, nil, withMemory("a completely different remembered fact"))
 	if got3.System != got1.System {
 		t.Fatalf("memory recall text must never leak into the system prompt:\ngot1.System = %q\ngot3.System = %q", got1.System, got3.System)
+	}
+}
+
+// TestApplyProviderRunConfigHookContextSystemIsolation checks the specific,
+// real invariant hook context must satisfy: it can never leak into System,
+// and identical hook text renders fully reproducible output. Like memory
+// recall, hook context is a history-adjacent message fragment (not system),
+// so its content must never affect the cacheable system prefix.
+func TestApplyProviderRunConfigHookContextSystemIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	withHookContext := func(hookText string) agentpkg.RunConfig {
+		frags := prefixStabilitySystemFrags()
+		frags = append(frags, prefixStabilityHistoryFrags()...)
+		frags = append(frags, hookContextFrag(hookText))
+		frags = append(frags, currentUserTextFrag("current question"))
+		return agentpkg.RunConfig{ContextSourceFrags: frags, ContextScope: prefixStabilityScope()}
+	}
+
+	got1 := ApplyProviderRunConfig(ctx, nil, withHookContext("hook says hi"))
+	got2 := ApplyProviderRunConfig(ctx, nil, withHookContext("hook says hi"))
+
+	if got1.System != got2.System {
+		t.Fatalf("identical fixtures must render byte-identical system prompts:\ngot1 = %q\ngot2 = %q", got1.System, got2.System)
+	}
+	if !reflect.DeepEqual(got1.Messages, got2.Messages) {
+		t.Fatalf("identical fixtures must render identical messages:\ngot1 = %#v\ngot2 = %#v", got1.Messages, got2.Messages)
+	}
+
+	got3 := ApplyProviderRunConfig(ctx, nil, withHookContext("a completely different hook message"))
+	if got3.System != got1.System {
+		t.Fatalf("hook context text must never leak into the system prompt:\ngot1.System = %q\ngot3.System = %q", got1.System, got3.System)
 	}
 }
 

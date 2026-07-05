@@ -42,6 +42,7 @@ func CollectProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []c
 			RepairToolClosures: true,
 		}},
 		{&MemoryContextCollector{}, MemoryContextConfig{Text: cfg.ContextMemoryText}},
+		{&HookContextCollector{}, HookContextConfig{Text: cfg.ContextHookText}},
 		{&CurrentUserCollector{}, CurrentUserConfig{Query: query}},
 		{&InlineImageCollector{}, InlineImageConfig{Images: inlineImages}},
 	}
@@ -110,6 +111,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 			&SystemPromptCollector{},
 			&HistoryMessagesCollector{},
 			&MemoryContextCollector{},
+			&HookContextCollector{},
 			&CurrentUserCollector{},
 			&InlineImageCollector{},
 		)
@@ -122,6 +124,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 				RepairToolClosures: true,
 			}},
 			{Name: "memory_context", Config: MemoryContextConfig{Text: cfg.ContextMemoryText}},
+			{Name: "hook_context", Config: HookContextConfig{Text: cfg.ContextHookText}},
 			{Name: "current_user", Config: CurrentUserConfig{Query: query}},
 			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
 		}
@@ -244,6 +247,10 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	if text := strings.TrimSpace(cfg.ContextMemoryText); text != "" {
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
 		cfg.ContextMemoryText = ""
+	}
+	if text := strings.TrimSpace(cfg.ContextHookText); text != "" {
+		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+		cfg.ContextHookText = ""
 	}
 	if cfg.ContextQueryMaterialized {
 		return cfg
