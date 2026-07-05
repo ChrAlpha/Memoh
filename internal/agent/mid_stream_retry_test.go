@@ -1,0 +1,42 @@
+package agent
+
+import (
+	"testing"
+
+	sdk "github.com/memohai/twilight-ai/sdk"
+)
+
+func TestPrepareMidStreamRetryConfigKeepsConversationPrefix(t *testing.T) {
+	cfg := RunConfig{
+		System:   "sys",
+		Messages: []sdk.Message{sdk.UserMessage("hello")},
+	}
+	accumulated := []sdk.Message{sdk.AssistantMessage("partial answer")}
+	out := prepareMidStreamRetryConfig(cfg, accumulated)
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages = %d, want input prefix + accumulated output", len(out.Messages))
+	}
+	if out.Messages[0].Role != sdk.MessageRoleUser {
+		t.Fatalf("messages[0].Role = %s, want preserved user prefix", out.Messages[0].Role)
+	}
+	if out.Messages[1].Role != sdk.MessageRoleAssistant {
+		t.Fatalf("messages[1].Role = %s, want accumulated assistant output", out.Messages[1].Role)
+	}
+}
+
+func TestPrepareMidStreamRetryConfigStepZeroRetriesFromStart(t *testing.T) {
+	cfg := RunConfig{Messages: []sdk.Message{sdk.UserMessage("hello")}}
+	out := prepareMidStreamRetryConfig(cfg, nil)
+	if len(out.Messages) != 1 || out.Messages[0].Role != sdk.MessageRoleUser {
+		t.Fatalf("messages = %+v, want original conversation unchanged", out.Messages)
+	}
+}
+
+func TestPrepareMidStreamRetryConfigDoesNotMutateOriginal(t *testing.T) {
+	original := []sdk.Message{sdk.UserMessage("hello")}
+	cfg := RunConfig{Messages: original}
+	_ = prepareMidStreamRetryConfig(cfg, []sdk.Message{sdk.AssistantMessage("partial")})
+	if len(original) != 1 {
+		t.Fatalf("original messages mutated: %d entries", len(original))
+	}
+}

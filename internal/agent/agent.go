@@ -1587,12 +1587,11 @@ func (a *Agent) runMidStreamRetry(
 			}
 		}
 
-		// Re-invoke StreamText with accumulated messages.
-		// Use buildGenerateOptions so retry benefits from mid-task pruning,
-		// media resolution, and other prepare-step logic — same as initial stream.
-		retryCfgCopy := cfg
-		retryCfgCopy.Messages = prevResult.Messages
-		retryCfgCopy = retryCfgCopy.RefreshContextFrag()
+		// Re-invoke StreamText with the original conversation plus the output
+		// accumulated before the failure. Use buildGenerateOptions so retry
+		// benefits from mid-task pruning, media resolution, and other
+		// prepare-step logic — same as initial stream.
+		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages)
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
@@ -1738,6 +1737,19 @@ func (a *Agent) runMidStreamRetry(
 	// previous (already drained) result so its accumulated messages are
 	// preserved as the final partial state.
 	return prevResult, true
+}
+
+// prepareMidStreamRetryConfig rebuilds the retry request as the original
+// input conversation plus the output accumulated before the failure.
+// StreamResult.Messages excludes the input messages, so reusing it alone
+// would drop the history and the current query. The input prefix is
+// preserved unchanged, which keeps the placement-derived cache plan valid.
+func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message) RunConfig {
+	merged := make([]sdk.Message, 0, len(cfg.Messages)+len(accumulated))
+	merged = append(merged, cfg.Messages...)
+	merged = append(merged, accumulated...)
+	cfg.Messages = merged
+	return cfg.RefreshContextFrag()
 }
 
 // sleepWithContext sleeps for the given duration or returns context error.
