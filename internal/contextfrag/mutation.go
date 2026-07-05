@@ -19,6 +19,7 @@ const (
 	MutationMidTaskPrune        MutationKind = "mid_task_prune"
 	MutationLoopStepReselection MutationKind = "loop_step_reselection"
 	MutationInjectedMessage     MutationKind = "injected_message"
+	MutationContextViewFallback MutationKind = "context_view_fallback"
 )
 
 // MutationRecord is one ledger entry describing a post-render mutation.

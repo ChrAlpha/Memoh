@@ -126,6 +126,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
 		}
 	}
+	ledger := contextfrag.NewMutationLedger()
 	builder := NewBuilder(registry, &FragmentSelector{}, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
 	view, err := builder.Build(ctx, BuildInput{
 		Scope:   cfg.ContextScope,
@@ -139,17 +140,16 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
 	if err != nil {
-		warnProviderContextView(logger, cfg, "context view build failed; using legacy assembly", err)
-		return legacyMaterializeQuery(cfg).RefreshContextFrag()
+		return providerViewFallback(logger, cfg, ledger, "build_error",
+			"context view build failed; using legacy assembly", err)
 	}
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
-		warnProviderContextView(logger, cfg, "context view rendered unexpected payload; using legacy assembly", nil)
-		return legacyMaterializeQuery(cfg).RefreshContextFrag()
+		return providerViewFallback(logger, cfg, ledger, "unexpected_payload",
+			"context view rendered unexpected payload; using legacy assembly", nil)
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
-	ledger := contextfrag.NewMutationLedger()
 	manifest := view.Manifest
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
@@ -198,6 +198,30 @@ func materializeRenderedQuery(payload *SDKRenderedPayload, alreadyMaterialized b
 		}
 	}
 	return append(messages, sdk.UserMessage("", imageParts...))
+}
+
+// providerViewFallback degrades to the legacy assembly while keeping the
+// round observable: the ledger records the fallback and travels on the
+// legacy-compiled manifest so the lifecycle snapshot is not lost exactly
+// when the view failed.
+func providerViewFallback(
+	logger *slog.Logger,
+	cfg agentpkg.RunConfig,
+	ledger *contextfrag.MutationLedger,
+	reason, message string,
+	err error,
+) agentpkg.RunConfig {
+	warnProviderContextView(logger, cfg, message, err)
+	out := legacyMaterializeQuery(cfg).RefreshContextFrag()
+	ledger.Record(contextfrag.MutationContextViewFallback, reason)
+	manifest := out.ContextManifest
+	manifest.Mutations = ledger
+	out.ContextManifest = manifest
+	out.ContextMutations = ledger
+	if out.ContextLifecycle != nil {
+		out.ContextLifecycle.SetManifest(manifest)
+	}
+	return out
 }
 
 // legacyMaterializeQuery reproduces the pre-view query placement for the
