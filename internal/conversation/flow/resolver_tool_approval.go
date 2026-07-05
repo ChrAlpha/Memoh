@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/contextlimit"
 	"github.com/memohai/memoh/internal/conversation"
-	"github.com/memohai/memoh/internal/models"
 	sessionpkg "github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/toolapproval"
 )
@@ -259,74 +257,15 @@ func (r *Resolver) storeToolResultAndContinue(ctx context.Context, approval tool
 
 func (r *Resolver) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
 	approval = withLocalWebReplyTarget(approval)
-	resolved, err := r.ResolveRunConfig(ctx,
-		input.BotID,
-		approval.SessionID,
-		firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
-		approval.SourcePlatform,
-		approval.ReplyTarget,
-		approval.ConversationType,
-		input.ChatToken,
-	)
-	if err != nil {
-		return err
-	}
-
-	loaded, err := r.loadMessages(ctx, input.BotID, approval.SessionID, defaultMaxContextMinutes)
-	if err != nil {
-		return err
-	}
-	loaded = pruneHistoryForGateway(loaded)
-	loaded = r.replaceCompactedMessages(ctx, loaded)
-	messages := modelMessagesOf(loaded)
-
-	cfg := resolved.RunConfig
-	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(sanitizeMessages(messages)))
-	cfg.Query = ""
-	cfg.LiveToolStream = eventCh != nil
-	cfg.CanRequestUserInput = r.canDeliverUserInputWS(eventCh)
-	cfg = r.prepareRunConfig(ctx, cfg)
-
-	req := conversation.ChatRequest{
-		BotID:                   input.BotID,
-		ChatID:                  input.BotID,
-		SessionID:               approval.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentChannel:          approval.SourcePlatform,
-		ReplyTarget:             approval.ReplyTarget,
-		ConversationType:        approval.ConversationType,
-		UserMessagePersisted:    true,
-	}
-
-	stream := r.agent.Stream(ctx, cfg)
-	stored := false
-	for event := range stream {
-		data, err := json.Marshal(event)
-		if err != nil {
-			continue
-		}
-		if !stored && event.IsTerminal() && len(event.Messages) > 0 {
-			if snap, ok := extractTerminalSnapshot(data); ok {
-				if storeErr := r.persistTerminalSnapshot(
-					context.WithoutCancel(ctx),
-					req,
-					resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}},
-					snap,
-				); storeErr != nil {
-					return storeErr
-				}
-				stored = true
-			}
-		}
-		if eventCh != nil {
-			select {
-			case eventCh <- json.RawMessage(data):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-	return nil
+	return r.resumeAgentSession(ctx, continuationParams{
+		BotID:             input.BotID,
+		SessionID:         approval.SessionID,
+		ChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
+		SourcePlatform:    approval.SourcePlatform,
+		ReplyTarget:       approval.ReplyTarget,
+		ConversationType:  approval.ConversationType,
+		ChatToken:         input.ChatToken,
+	}, eventCh)
 }
 
 func withLocalWebReplyTarget(req toolapproval.Request) toolapproval.Request {
