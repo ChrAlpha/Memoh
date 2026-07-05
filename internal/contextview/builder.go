@@ -82,6 +82,7 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	manifest.Selection = selectionTrace(result.Summary)
 	manifest.EditTrace = append(manifest.EditTrace, selectionEditTrace(result.Dropped)...)
 	manifest.EditTrace = append(manifest.EditTrace, result.Edited...)
+	manifest.ValidationWarnings = append(manifest.ValidationWarnings, result.Warnings...)
 	trace.Warnings = append(trace.Warnings, manifest.ValidationWarnings...)
 
 	view := &ContextView{

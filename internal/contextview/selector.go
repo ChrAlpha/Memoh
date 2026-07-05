@@ -42,6 +42,12 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	if isRetentionIntent(profile.Intent) {
 		frags, superseded = resolveConflictGroups(frags)
 	}
+	var fragBudgetDropped []fragBudgetDrop
+	var fragBudgetEdits []contextfrag.ContextEditTrace
+	var fragBudgetWarnings []contextfrag.ValidationWarning
+	if isRetentionIntent(profile.Intent) {
+		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(frags)
+	}
 	var exchangeDropped []contextfrag.ContextFrag
 	var exchangeEdits []contextfrag.ContextEditTrace
 	if isRetentionIntent(profile.Intent) {
@@ -55,14 +61,22 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 				result = selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
 				result.TrimNotice = true
 				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
-				return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
+				return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
 			}
 		}
 		result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
-		return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
+		return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
 	}
 	result = selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
-	return appendPrecedenceDrops(appendTrustGateDrops(appendToolExchangeDrops(result, exchangeDropped, exchangeEdits), gated, profile), superseded)
+	return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+}
+
+func finishSelection(result SelectionResult, exchangeDropped []contextfrag.ContextFrag, exchangeEdits []contextfrag.ContextEditTrace, fragBudgetDropped []fragBudgetDrop, fragBudgetEdits []contextfrag.ContextEditTrace, fragBudgetWarnings []contextfrag.ValidationWarning, gated []contextfrag.ContextFrag, profile IntentProfile, superseded []conflictLoser) SelectionResult {
+	result = appendToolExchangeDrops(result, exchangeDropped, exchangeEdits)
+	result = appendFragBudgetDrops(result, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings)
+	result = appendTrustGateDrops(result, gated, profile)
+	result = appendPrecedenceDrops(result, superseded)
+	return result
 }
 
 // applyTrustGate removes fragments whose trust level falls below the floor

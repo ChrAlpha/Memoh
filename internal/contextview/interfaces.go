@@ -45,8 +45,11 @@ type SelectionResult struct {
 	TrimNoticeIndex int
 	// Edited records in-place content edits (e.g. tool-call stripping) applied
 	// to kept fragments, for the manifest edit trace.
-	Edited  []contextfrag.ContextEditTrace
-	Summary SelectionSummary
+	Edited []contextfrag.ContextEditTrace
+	// Warnings records validation warnings raised during selection (e.g. an
+	// overflow policy the selector cannot enforce), for the manifest.
+	Warnings []contextfrag.ValidationWarning
+	Summary  SelectionSummary
 }
 
 type IntentProfile struct {
