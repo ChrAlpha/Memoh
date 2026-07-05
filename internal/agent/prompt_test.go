@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
@@ -367,5 +368,21 @@ func TestGenerateSystemPromptTimeInvariant(t *testing.T) {
 	}
 	if strings.Contains(prompt, "Current time") {
 		t.Fatal("current time must not live in the system prompt; the user message header carries it")
+	}
+}
+
+func TestGenerateSchedulePromptIncludesTime(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 5, 9, 30, 0, 0, time.UTC)
+	prompt := GenerateSchedulePrompt(Schedule{
+		Name:        "daily-report",
+		Description: "send the daily report",
+		Pattern:     "0 9 * * *",
+		Command:     "send report",
+	}, now)
+
+	if !strings.Contains(prompt, "time: "+now.Format(time.RFC3339)) {
+		t.Fatalf("expected schedule prompt to contain current time, got:\n%s", prompt)
 	}
 }

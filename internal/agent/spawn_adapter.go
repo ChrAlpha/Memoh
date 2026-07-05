@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -42,9 +43,13 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 	messages := cfg.Messages
 	if cfg.Query != "" {
+		now := time.Now().UTC()
+		if cfg.Identity.TimezoneLocation != nil {
+			now = now.In(cfg.Identity.TimezoneLocation)
+		}
 		messages = append(messages, sdk.Message{
 			Role:    sdk.MessageRoleUser,
-			Content: []sdk.MessagePart{sdk.TextPart{Text: cfg.Query}},
+			Content: []sdk.MessagePart{sdk.TextPart{Text: "Current time: " + now.Format(time.RFC3339) + "\n" + cfg.Query}},
 		})
 	}
 
@@ -56,6 +61,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		CurrentPlatform:   cfg.Identity.CurrentPlatform,
 		SessionToken:      cfg.Identity.SessionToken,
 		IsSubagent:        cfg.Identity.IsSubagent,
+		TimezoneLocation:  cfg.Identity.TimezoneLocation,
 	}
 	return RunConfig{
 		Model:                    cfg.Model,

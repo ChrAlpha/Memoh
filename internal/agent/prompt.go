@@ -158,7 +158,7 @@ func buildBotInfoSection(bot BotInfo) string {
 }
 
 // GenerateSchedulePrompt builds the user message for a scheduled task trigger.
-func GenerateSchedulePrompt(s Schedule) string {
+func GenerateSchedulePrompt(s Schedule, now time.Time) string {
 	maxCallsStr := "Unlimited"
 	if s.MaxCalls != nil {
 		maxCallsStr = strconv.Itoa(*s.MaxCalls)
@@ -169,6 +169,7 @@ func GenerateSchedulePrompt(s Schedule) string {
 		"maxCalls":    maxCallsStr,
 		"pattern":     s.Pattern,
 		"command":     s.Command,
+		"timeNow":     now.Format(time.RFC3339),
 	})
 }
 

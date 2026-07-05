@@ -56,6 +56,7 @@ type SpawnIdentity struct {
 	CurrentPlatform   string
 	SessionToken      string //nolint:gosec // #nosec G117 -- session identifier, not a secret
 	IsSubagent        bool
+	TimezoneLocation  *time.Location
 }
 
 // SpawnLoopConfig mirrors agent.LoopDetectionConfig.
@@ -700,6 +701,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 			CurrentPlatform:   req.parentSession.CurrentPlatform,
 			SessionToken:      req.parentSession.SessionToken,
 			IsSubagent:        true,
+			TimezoneLocation:  req.parentSession.TimezoneLocation,
 		},
 		LoopDetection: SpawnLoopConfig{Enabled: true},
 	}

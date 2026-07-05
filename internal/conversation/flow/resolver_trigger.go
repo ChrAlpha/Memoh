@@ -44,6 +44,10 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 	cfg.Identity.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
 	cfg.ContextScope.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
 
+	now := time.Now().UTC()
+	if cfg.Identity.TimezoneLocation != nil {
+		now = now.In(cfg.Identity.TimezoneLocation)
+	}
 	schedulePrompt := agentpkg.GenerateSchedulePrompt(agentpkg.Schedule{
 		ID:          payload.ID,
 		Name:        payload.Name,
@@ -51,7 +55,7 @@ func (r *Resolver) TriggerSchedule(ctx context.Context, botID string, payload sc
 		Pattern:     payload.Pattern,
 		MaxCalls:    payload.MaxCalls,
 		Command:     payload.Command,
-	})
+	}, now)
 	cfg.Messages = append(cfg.Messages, sdk.UserMessage(schedulePrompt))
 	cfg = r.prepareRunConfig(ctx, cfg)
 
