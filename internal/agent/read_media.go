@@ -8,10 +8,11 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/models"
 )
 
-func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool) ([]sdk.Tool, *readMediaDecorationState) {
+func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool, ledger *contextfrag.MutationLedger) ([]sdk.Tool, *readMediaDecorationState) {
 	if len(tools) == 0 {
 		return tools, nil
 	}
@@ -19,6 +20,7 @@ func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool) ([]sdk.Tool, *re
 	clientType := models.ResolveClientType(model)
 	state := &readMediaDecorationState{
 		pendingImages: make(map[string]sdk.ImagePart),
+		ledger:        ledger,
 	}
 	wrapped := make([]sdk.Tool, 0, len(tools))
 	found := false
@@ -68,6 +70,7 @@ type readMediaDecorationState struct {
 	pendingImages map[string]sdk.ImagePart
 	prepareCalls  int
 	injections    []readMediaInjection
+	ledger        *contextfrag.MutationLedger
 }
 
 type readMediaInjection struct {
@@ -103,6 +106,8 @@ func (s *readMediaDecorationState) prepareStep(params *sdk.GenerateParams) *sdk.
 	if len(parts) == 0 {
 		return nil
 	}
+
+	s.ledger.Record(contextfrag.MutationReadMedia, fmt.Sprintf("images=%d", len(parts)))
 
 	message := sdk.Message{
 		Role:    sdk.MessageRoleUser,

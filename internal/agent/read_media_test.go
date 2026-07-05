@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
 )
@@ -351,7 +352,7 @@ func TestDecorateReadMediaToolsConcurrentExecutions(t *testing.T) {
 				ImageMediaType: "image/png",
 			}, nil
 		},
-	}})
+	}}, nil)
 	if state == nil || len(wrapped) != 1 {
 		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", state, len(wrapped))
 	}
@@ -519,5 +520,80 @@ func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.
 	assertInjectedReadMediaMessage(t, messages[2], expectedDataURL, "image/png")
 	if messages[3].Role != sdk.MessageRoleAssistant {
 		t.Fatalf("expected final persisted message to be assistant, got %s", messages[3].Role)
+	}
+}
+
+func TestReadMediaPrepareStepRecordsMutationOnInjection(t *testing.T) {
+	t.Parallel()
+
+	imageBase64 := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00payload"))
+	ledger := contextfrag.NewMutationLedger()
+	wrapped, state := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []sdk.Tool{{
+		Name: agenttools.ReadMediaToolName().String(),
+		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			return agenttools.ReadMediaToolOutput{
+				Public: agenttools.ReadMediaToolResult{
+					OK:   true,
+					Path: "/data/image.png",
+					Mime: "image/png",
+				},
+				ImageBase64:    imageBase64,
+				ImageMediaType: "image/png",
+			}, nil
+		},
+	}}, ledger)
+	if state == nil || len(wrapped) != 1 {
+		t.Fatalf("decorateReadMediaTools did not wrap read tool: state=%v tools=%d", state, len(wrapped))
+	}
+
+	if _, err := wrapped[0].Execute(&sdk.ToolExecContext{
+		Context:    context.Background(),
+		ToolCallID: "call-1",
+		ToolName:   agenttools.ReadMediaToolName().String(),
+	}, map[string]any{"path": "/data/image.png"}); err != nil {
+		t.Fatalf("wrapped read execute returned error: %v", err)
+	}
+
+	next := state.prepareStep(&sdk.GenerateParams{})
+	if next == nil || len(next.Messages) != 1 {
+		t.Fatalf("prepareStep messages = %#v, want one injected message", next)
+	}
+
+	records := ledger.Records()
+	if len(records) != 1 {
+		t.Fatalf("ledger records = %d, want 1", len(records))
+	}
+	if records[0].Kind != contextfrag.MutationReadMedia {
+		t.Fatalf("ledger record kind = %q, want %q", records[0].Kind, contextfrag.MutationReadMedia)
+	}
+	if records[0].Detail != "images=1" {
+		t.Fatalf("ledger record detail = %q, want %q", records[0].Detail, "images=1")
+	}
+}
+
+func TestReadMediaPrepareStepNoPendingImagesRecordsNoMutation(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	_, state := decorateReadMediaTools(&sdk.Model{ID: "mock-model"}, []sdk.Tool{{
+		Name: agenttools.ReadMediaToolName().String(),
+		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			return agenttools.ReadMediaToolOutput{}, nil
+		},
+	}}, ledger)
+	if state == nil {
+		t.Fatal("decorateReadMediaTools did not wrap read tool")
+	}
+
+	if got := len(ledger.Records()); got != 0 {
+		t.Fatalf("ledger records before prepareStep = %d, want 0", got)
+	}
+
+	if next := state.prepareStep(&sdk.GenerateParams{}); next != nil {
+		t.Fatalf("prepareStep with no pending images = %#v, want nil", next)
+	}
+
+	if got := len(ledger.Records()); got != 0 {
+		t.Fatalf("ledger records after prepareStep = %d, want 0", got)
 	}
 }

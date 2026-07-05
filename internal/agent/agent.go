@@ -99,7 +99,7 @@ func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCal
 	if err != nil {
 		return sdk.ToolResultPart{}, fmt.Errorf("assemble tools: %w", err)
 	}
-	sdkTools, _ = decorateReadMediaTools(cfg.Model, sdkTools)
+	sdkTools, _ = decorateReadMediaTools(cfg.Model, sdkTools, cfg.ContextMutations)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, a.Limits().ToolOutputLimit())
 	for i := range sdkTools {
 		tool := sdkTools[i]
@@ -189,7 +189,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 	limit := a.Limits().ToolOutputLimit()
-	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
+	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools, cfg.ContextMutations)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
 	cfg = a.applyContextView(streamCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
@@ -736,7 +736,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		}
 	}
 	limit := a.Limits().ToolOutputLimit()
-	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
+	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools, cfg.ContextMutations)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
 	cfg = a.applyContextView(genCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
