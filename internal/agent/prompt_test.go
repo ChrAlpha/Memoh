@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
@@ -16,7 +15,6 @@ func TestGenerateSystemPromptIncludesPlatformIdentitiesInChat(t *testing.T) {
 
 	prompt := GenerateSystemPrompt(SystemPromptParams{
 		SessionType:               sessionmode.Chat,
-		Now:                       time.Unix(1, 0).UTC(),
 		Timezone:                  "UTC",
 		PlatformIdentitiesSection: "## Platform Identities\n\n<identity channel=\"telegram\" username=\"@memoh\"/>",
 	})
@@ -84,7 +82,6 @@ func TestGenerateSystemPromptIncludesCommonAndModeContracts(t *testing.T) {
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
 				SessionType: tc.sessionType,
-				Now:         time.Unix(1, 0).UTC(),
 				Timezone:    "UTC",
 			})
 			for _, want := range tc.want {
@@ -107,7 +104,6 @@ func TestGenerateSystemPromptIncludesServiceOwnedBotInfo(t *testing.T) {
 			DisplayName: "Research Bot",
 			Timezone:    "Asia/Shanghai",
 		},
-		Now:      time.Unix(1, 0).UTC(),
 		Timezone: "UTC",
 	})
 
@@ -192,7 +188,6 @@ func TestGenerateSystemPromptOmitsLegacyCoreFiles(t *testing.T) {
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
 				SessionType: sessionType,
-				Now:         time.Unix(1, 0).UTC(),
 				Timezone:    "UTC",
 			})
 			for _, legacy := range []string{"IDENTITY.md", "SOUL.md", "TOOLS.md"} {
@@ -213,7 +208,6 @@ func TestGenerateSystemPromptOmitsToolSpecificMemorySearchGuidance(t *testing.T)
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
 				SessionType: sessionType,
-				Now:         time.Unix(1, 0).UTC(),
 				Timezone:    "UTC",
 			})
 			if strings.Contains(prompt, "`search_memory`") {
@@ -238,7 +232,6 @@ func TestGenerateSystemPromptDoesNotReintroduceStaticToolSections(t *testing.T) 
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
 				SessionType:               sessionType,
-				Now:                       time.Unix(1, 0).UTC(),
 				Timezone:                  "UTC",
 				PlatformIdentitiesSection: "## Platform Identities\n\n<identity channel=\"telegram\" username=\"@memoh\"/>",
 			})
@@ -273,7 +266,6 @@ func TestGenerateSystemPromptDoesNotEnumerateConditionalTools(t *testing.T) {
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
 				SessionType:               sessionType,
-				Now:                       time.Unix(1, 0).UTC(),
 				Timezone:                  "UTC",
 				PlatformIdentitiesSection: "## Platform Identities\n\n<identity channel=\"telegram\" username=\"@memoh\"/>",
 			})
@@ -340,7 +332,6 @@ func TestGenerateSystemPromptIncludesPlatformIdentitiesInDiscuss(t *testing.T) {
 
 	prompt := GenerateSystemPrompt(SystemPromptParams{
 		SessionType:               sessionmode.Discuss,
-		Now:                       time.Unix(1, 0).UTC(),
 		Timezone:                  "UTC",
 		PlatformIdentitiesSection: "## Platform Identities\n\n<identity channel=\"discord\" username=\"@memoh\"/>",
 	})
@@ -360,5 +351,21 @@ func allPromptSessionTypes() []string {
 		sessionmode.Schedule,
 		sessionmode.Heartbeat,
 		sessionmode.Subagent,
+	}
+}
+
+func TestGenerateSystemPromptTimeInvariant(t *testing.T) {
+	t.Parallel()
+
+	params := SystemPromptParams{
+		SessionType: "chat",
+		Timezone:    "Asia/Shanghai",
+	}
+	prompt := GenerateSystemPrompt(params)
+	if prompt != GenerateSystemPrompt(params) {
+		t.Fatal("the system prompt is the stable cache prefix and must be deterministic")
+	}
+	if strings.Contains(prompt, "Current time") {
+		t.Fatal("current time must not live in the system prompt; the user message header carries it")
 	}
 }

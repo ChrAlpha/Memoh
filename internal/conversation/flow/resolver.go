@@ -1163,10 +1163,6 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		files = fs.LoadSystemFiles(ctx)
 	}
 
-	now := time.Now().UTC()
-	if cfg.Identity.TimezoneLocation != nil {
-		now = now.In(cfg.Identity.TimezoneLocation)
-	}
 	platformIdentitiesSection := ""
 	if r.channelStore != nil {
 		channelConfigs, err := r.channelStore.ListBotConfigs(ctx, cfg.Identity.BotID)
@@ -1185,7 +1181,6 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		Skills:                    cfg.Skills,
 		Files:                     files,
 		MaxFilesBytes:             limits.SystemFilesMaxBytes,
-		Now:                       now,
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
 	})
