@@ -215,6 +215,43 @@ func TestHandleReplyWithAgent_NoInlineWhenNoVision(t *testing.T) {
 	}
 }
 
+func TestHandleReplyWithAgent_PropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 200,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="1">hi</message>`}},
+		},
+	}
+	fakeAgent := &fakeDiscussStreamer{}
+	resolver := &fakeRunConfigResolver{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig:              agentpkg.RunConfig{},
+			ModelID:                "model-1",
+			ContextBudgetMaxTokens: 128000,
+		},
+	}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline: NewPipeline(RenderParams{}),
+		Resolver: resolver,
+	})
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "bot-1", SessionID: "sess-1"},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, fakeAgent)
+
+	if fakeAgent.lastConfig == nil {
+		t.Fatal("expected agent to be called")
+	}
+	if fakeAgent.lastConfig.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000 (resolved.ContextBudgetMaxTokens must propagate into the streamed RunConfig)", fakeAgent.lastConfig.ContextBudgetMaxTokens)
+	}
+	if fakeAgent.lastConfig.ContextToolExchangePolicy == nil {
+		t.Fatal("expected a default ContextToolExchangePolicy for the discuss path (was nil end-to-end before this fix)")
+	}
+}
+
 func TestHandleReplyWithAgent_UsesRuntimeStreamerForACPDiscuss(t *testing.T) {
 	rc := RenderedContext{
 		{

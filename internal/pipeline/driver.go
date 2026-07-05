@@ -337,8 +337,12 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		return
 	}
 	runConfig := resolved.RunConfig
+	runConfig.ContextBudgetMaxTokens = resolved.ContextBudgetMaxTokens
 	if runConfig.ContextLifecycle == nil {
 		runConfig.ContextLifecycle = contextfrag.NewLifecycleHolder()
+	}
+	if runConfig.ContextToolExchangePolicy == nil {
+		runConfig.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
 	}
 
 	runConfig.SessionType = sessionpkg.TypeDiscuss
