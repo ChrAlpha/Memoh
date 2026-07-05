@@ -25,6 +25,28 @@ func TestSDKRenderer_SystemText(t *testing.T) {
 	}
 }
 
+// TestSDKRenderer_EmptySystemFragmentStillCountsAsSectionBoundary proves an
+// always-present-but-currently-blank system fragment (such as the bot-identity
+// section subagents render with no bot info) still contributes its own "\n\n"
+// section boundary on both sides, rather than being skipped as if absent.
+// Without this, splitting one legacy system string into several typed
+// fragments loses a blank line whenever a middle section renders empty.
+func TestSDKRenderer_EmptySystemFragmentStillCountsAsSectionBoundary(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		textFrag("sys.1", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "first"),
+		textFrag("sys.2", contextfrag.SlotSystem, contextfrag.KindBotIdentity, sdk.MessageRoleSystem, ""),
+		textFrag("sys.3", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "third"),
+	}
+
+	payload := renderSDK(t, frags, placementFor(frags))
+
+	if payload.System != "first\n\n\n\nthird" {
+		t.Fatalf("System = %q, want the empty middle fragment to still contribute its own section-boundary gap", payload.System)
+	}
+}
+
 func TestSDKRenderer_HistoryMessages(t *testing.T) {
 	t.Parallel()
 

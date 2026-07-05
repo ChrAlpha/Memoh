@@ -35,10 +35,12 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	}
 
 	payload := &SDKRenderedPayload{}
+	firstSystemFrag := true
 	for _, frag := range sortSystemFragsByPriority(ordered) {
 		switch frag.Slot {
 		case contextfrag.SlotSystem:
-			renderSystemFrag(payload, frag)
+			renderSystemFrag(payload, frag, firstSystemFrag)
+			firstSystemFrag = false
 		case contextfrag.SlotCurrentUser:
 			renderCurrentUserFrag(payload, frag)
 		default:
@@ -90,13 +92,19 @@ func orderedSelectedFrags(selected []contextfrag.ContextFrag, placement Placemen
 	return ordered, nil
 }
 
-func renderSystemFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag) {
+// renderSystemFrag appends a system-slot fragment's text to the payload.
+// Every selected system fragment counts as one section boundary for the
+// "\n\n" join, including a fragment whose text happens to be empty (such as
+// an always-present-but-currently-blank bot-identity section), so rendering
+// several system fragments reproduces the same spacing as joining their
+// source sections into one string would (see renderSystemSections).
+func renderSystemFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag, isFirst bool) {
+	if !isFirst {
+		payload.System += "\n\n"
+	}
 	for _, part := range frag.Parts {
-		if part.Type != contextfrag.PartText || strings.TrimSpace(part.Text) == "" {
+		if part.Type != contextfrag.PartText {
 			continue
-		}
-		if payload.System != "" {
-			payload.System += "\n\n"
 		}
 		payload.System += strings.TrimSpace(part.Text)
 	}
