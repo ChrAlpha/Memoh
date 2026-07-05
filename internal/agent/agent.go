@@ -14,7 +14,6 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/agent/background"
 	"github.com/memohai/memoh/internal/agent/tools"
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/hooks"
@@ -868,18 +867,19 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
 		baseSystem := captureBackgroundSystem(system, messages)
-		logger := slog.Default()
-		if a != nil && a.logger != nil {
-			logger = a.logger
-		}
 		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
 			if basePrepare != nil {
 				if override := basePrepare(p); override != nil {
 					p = override
 				}
 			}
-			cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, "")
-			return injectBackgroundTaskSummary(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, logger)
+			if summary := cfg.BackgroundManager.RunningTasksSummary(cfg.Identity.BotID, cfg.Identity.SessionID); summary != "" {
+				cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, fmt.Sprintf("bytes=%d", len(summary)))
+				injectBackgroundSummary(p, baseSystem, summary)
+			} else {
+				injectBackgroundSummary(p, baseSystem, "")
+			}
+			return p
 		}
 	}
 	opts := []sdk.GenerateOption{
@@ -1314,25 +1314,6 @@ func toolStreamEventToAgentEvent(evt tools.ToolStreamEvent) StreamEvent {
 	default:
 		return StreamEvent{}
 	}
-}
-
-// injectBackgroundTaskSummary refreshes the background task summary in the
-// system prompt at step boundaries.
-func injectBackgroundTaskSummary(
-	p *sdk.GenerateParams,
-	mgr *background.Manager,
-	baseSystem backgroundSystem,
-	botID, sessionID string,
-	logger *slog.Logger,
-) *sdk.GenerateParams {
-	// Inject running tasks summary into system prompt so the model
-	// knows about ongoing background work even after compaction.
-	// Always start from baseSystem to avoid accumulating summaries across steps.
-	injectBackgroundSummary(p, baseSystem, mgr.RunningTasksSummary(botID, sessionID))
-	if logger != nil {
-		logger.Debug("refreshed background task summary", slog.String("bot_id", botID), slog.String("session_id", sessionID))
-	}
-	return p
 }
 
 type backgroundSystem struct {

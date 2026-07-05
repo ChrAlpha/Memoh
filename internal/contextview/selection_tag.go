@@ -245,8 +245,12 @@ func hasSelectionTag(tags []SelectionTag, tag SelectionTag) bool {
 	return false
 }
 
+// selectionDropReason reports the mutually exclusive retention state first
+// (must_keep / preserve_recent / can_drop) so a droppable tool-exchange
+// fragment reads as can_drop instead of the misleading closure tag; the
+// closure tag only surfaces when it is the sole marker.
 func selectionDropReason(tagged TaggedFrag) string {
-	for _, tag := range []SelectionTag{TagMustKeep, TagPreserveRecent, TagPreserveToolClosure, TagCanDrop} {
+	for _, tag := range []SelectionTag{TagMustKeep, TagPreserveRecent, TagCanDrop, TagPreserveToolClosure} {
 		if tagged.HasTag(tag) {
 			return string(tag)
 		}
