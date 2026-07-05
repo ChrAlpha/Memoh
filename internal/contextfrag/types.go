@@ -237,11 +237,11 @@ type ContextFrag struct {
 	Budget        BudgetPolicy    `json:"budget,omitempty"`
 	Render        RenderPolicy    `json:"render,omitempty"`
 	Provenance    Provenance      `json:"provenance,omitempty"`
-	TokenEstimate int
+	TokenEstimate int             `json:"token_estimate,omitempty"`
 	// ConflictKey groups fragments that are alternatives of one another: the
 	// selector keeps only the highest-precedence member (closest scope, then
 	// trust, then latest collected) and drops the rest.
-	ConflictKey string           `json:"token_estimate,omitempty"`
+	ConflictKey string           `json:"conflict_key,omitempty"`
 	Coverage    *SummaryCoverage `json:"coverage,omitempty"`
 	Parts       []Part           `json:"parts,omitempty"`
 }
