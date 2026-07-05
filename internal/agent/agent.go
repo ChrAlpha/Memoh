@@ -277,15 +277,11 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 
 	prepareStep = a.wrapPrepareStepWithModelHook(streamCtx, cfg, prepareStep)
 	var err error
-	systemBeforeHook := cfg.System
 	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
 	if err != nil {
 		turnError = err.Error()
 		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 		return
-	}
-	if cfg.System != systemBeforeHook {
-		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()
@@ -766,13 +762,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 
 	prepareStep = a.wrapPrepareStepWithModelHook(genCtx, cfg, prepareStep)
-	systemBeforeHook := cfg.System
 	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
 	if err != nil {
 		return nil, err
-	}
-	if cfg.System != systemBeforeHook {
-		cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("system_bytes=%d", len(cfg.System)))
 	}
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()

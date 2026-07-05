@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextlimit"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -204,11 +205,18 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 		}
 		return cfg, fmt.Errorf("before model call hook failed: %w", err)
 	}
-	if strings.TrimSpace(res.AppendContext) != "" {
-		cfg.Messages = append(cfg.Messages, sdk.UserMessage(formatHookContext(hooks.EventBeforeModelCall, res.AppendContext)))
-		cfg = cfg.RefreshContextFrag()
+	return applyBeforeModelCallAppendContext(cfg, res.AppendContext), nil
+}
+
+// applyBeforeModelCallAppendContext applies hook-appended context as a user
+// message and records the mutation so the ledger reflects the injection.
+func applyBeforeModelCallAppendContext(cfg RunConfig, appendContext string) RunConfig {
+	if strings.TrimSpace(appendContext) == "" {
+		return cfg
 	}
-	return cfg, nil
+	cfg.Messages = append(cfg.Messages, sdk.UserMessage(formatHookContext(hooks.EventBeforeModelCall, appendContext)))
+	cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("append_bytes=%d", len(appendContext)))
+	return cfg.RefreshContextFrag()
 }
 
 func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig, base func(*sdk.GenerateParams) *sdk.GenerateParams) func(*sdk.GenerateParams) *sdk.GenerateParams {
