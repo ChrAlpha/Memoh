@@ -12,7 +12,7 @@ import (
 	"github.com/memohai/memoh/internal/models"
 )
 
-func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool, ledger *contextfrag.MutationLedger) ([]sdk.Tool, *readMediaDecorationState) {
+func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool) ([]sdk.Tool, *readMediaDecorationState) {
 	if len(tools) == 0 {
 		return tools, nil
 	}
@@ -20,7 +20,6 @@ func decorateReadMediaTools(model *sdk.Model, tools []sdk.Tool, ledger *contextf
 	clientType := models.ResolveClientType(model)
 	state := &readMediaDecorationState{
 		pendingImages: make(map[string]sdk.ImagePart),
-		ledger:        ledger,
 	}
 	wrapped := make([]sdk.Tool, 0, len(tools))
 	found := false
