@@ -18,10 +18,7 @@ type SourceSpec struct {
 }
 
 type BudgetEnvelope struct {
-	MaxTokens     int
-	MaxChars      int
-	MaxImages     int
-	MaxToolSchema int
+	MaxTokens int
 	// ToolExchange strips bulky tool interactions from history (ask_user
 	// survives); nil keeps every exchange.
 	ToolExchange *contextfrag.ToolExchangePolicy
