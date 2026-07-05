@@ -131,6 +131,28 @@ func TestModel_HasCompatibility(t *testing.T) {
 	assert.False(t, m.HasCompatibility("image-output"))
 }
 
+func TestModelConfig_ContextBudgetMaxTokens(t *testing.T) {
+	zero := 0
+	positive := 128000
+
+	cases := []struct {
+		name   string
+		config models.ModelConfig
+		want   int
+	}{
+		{name: "nil context window", config: models.ModelConfig{}, want: 0},
+		{name: "zero context window", config: models.ModelConfig{ContextWindow: &zero}, want: 0},
+		{name: "positive context window", config: models.ModelConfig{ContextWindow: &positive}, want: 128000},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.ContextBudgetMaxTokens(); got != tt.want {
+				t.Fatalf("ContextBudgetMaxTokens() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestModelTypes(t *testing.T) {
 	t.Run("ModelType constants", func(t *testing.T) {
 		assert.Equal(t, models.ModelTypeChat, models.ModelType("chat"))

@@ -258,8 +258,8 @@ func newAgentControlProvider(t *testing.T, agent *fakeSpawnAgent) (*SpawnProvide
 	p.sessionService = sessionSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
-	p.modelResolver = func(context.Context, string) (*sdk.Model, string, string, error) {
-		return &sdk.Model{}, "model-1", "", nil
+	p.modelResolver = func(context.Context, string) (*sdk.Model, string, string, int, error) {
+		return &sdk.Model{}, "model-1", "", 0, nil
 	}
 	return p, mgr, sessionSvc, messageSvc
 }
@@ -389,6 +389,29 @@ func TestSpawnAgentPropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
 	}
 	if call.ContextToolExchangePolicy != policy {
 		t.Fatalf("ContextToolExchangePolicy = %p, want same pointer %p", call.ContextToolExchangePolicy, policy)
+	}
+}
+
+func TestSpawnAgentUsesResolvedModelContextBudgetOverParent(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	p.modelResolver = func(context.Context, string) (*sdk.Model, string, string, int, error) {
+		return &sdk.Model{}, "model-2", "", 64000, nil
+	}
+	session := SessionContext{
+		BotID:                  "bot1",
+		SessionID:              "parent1",
+		ContextBudgetMaxTokens: 128000,
+	}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"task": "alpha"})
+
+	call, ok := agent.callAt(0)
+	if !ok {
+		t.Fatal("expected spawn_agent call")
+	}
+	if call.ContextBudgetMaxTokens != 64000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 64000 (the resolved subagent model's own context window, not the parent's 128000)", call.ContextBudgetMaxTokens)
 	}
 }
 

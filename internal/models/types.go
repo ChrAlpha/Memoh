@@ -117,6 +117,15 @@ type ModelConfig struct {
 	ThinkingMode     string   `json:"thinking_mode,omitempty"`
 }
 
+// ContextBudgetMaxTokens returns the token budget derived from this config's
+// configured context window, or 0 when none is configured.
+func (c ModelConfig) ContextBudgetMaxTokens() int {
+	if c.ContextWindow != nil && *c.ContextWindow > 0 {
+		return *c.ContextWindow
+	}
+	return 0
+}
+
 type Model struct {
 	ModelID    string      `json:"model_id"`
 	Name       string      `json:"name"`

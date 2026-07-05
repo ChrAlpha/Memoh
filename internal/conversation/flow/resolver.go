@@ -286,10 +286,7 @@ type resolvedContext struct {
 }
 
 func contextBudgetFromChatModel(chatModel models.GetResponse) int {
-	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
-		return *chatModel.Config.ContextWindow
-	}
-	return 0
+	return chatModel.Config.ContextBudgetMaxTokens()
 }
 
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {

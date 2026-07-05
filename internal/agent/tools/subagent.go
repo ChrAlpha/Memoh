@@ -175,7 +175,7 @@ type SpawnProvider struct {
 	modelCreator   ModelCreator
 	bgManager      *background.Manager
 	hookService    *hooks.Service
-	modelResolver  func(ctx context.Context, botID string) (*sdk.Model, string, string, error)
+	modelResolver  func(ctx context.Context, botID string) (*sdk.Model, string, string, int, error)
 	coord          *agentCoordinator
 	logger         *slog.Logger
 }
@@ -346,16 +346,17 @@ type agentRunResult struct {
 }
 
 type agentRequest struct {
-	taskID           string
-	agentID          string
-	agentSessionID   string
-	message          string
-	messagePersisted bool
-	parentSession    SessionContext
-	model            *sdk.Model
-	modelID          string
-	promptCacheTTL   string
-	systemPrompt     string
+	taskID                 string
+	agentID                string
+	agentSessionID         string
+	message                string
+	messagePersisted       bool
+	parentSession          SessionContext
+	model                  *sdk.Model
+	modelID                string
+	promptCacheTTL         string
+	contextBudgetMaxTokens int
+	systemPrompt           string
 }
 
 type agentCoordinator struct {
@@ -512,7 +513,7 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	if p.bgManager == nil {
 		return nil, errors.New("background task manager not available")
 	}
-	sdkModel, modelID, promptCacheTTL, err := p.modelResolver(context.WithoutCancel(ctx), session.BotID)
+	sdkModel, modelID, promptCacheTTL, contextBudgetMaxTokens, err := p.modelResolver(context.WithoutCancel(ctx), session.BotID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
@@ -522,14 +523,15 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	}
 
 	req := &agentRequest{
-		agentID:        rec.AgentID,
-		agentSessionID: rec.SessionID,
-		message:        message,
-		parentSession:  session,
-		model:          sdkModel,
-		modelID:        modelID,
-		promptCacheTTL: promptCacheTTL,
-		systemPrompt:   systemPrompt,
+		agentID:                rec.AgentID,
+		agentSessionID:         rec.SessionID,
+		message:                message,
+		parentSession:          session,
+		model:                  sdkModel,
+		modelID:                modelID,
+		promptCacheTTL:         promptCacheTTL,
+		contextBudgetMaxTokens: contextBudgetMaxTokens,
+		systemPrompt:           systemPrompt,
 	}
 	description := truncateTitle(fmt.Sprintf("%s: %s", rec.AgentID, message), 120)
 
@@ -689,6 +691,10 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 	if req.messagePersisted {
 		history = dropLatestMatchingUserMessage(history, req.message)
 	}
+	contextBudgetMaxTokens := req.contextBudgetMaxTokens
+	if contextBudgetMaxTokens <= 0 {
+		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
+	}
 	cfg := SpawnRunConfig{
 		Model:                     req.model,
 		System:                    req.systemPrompt,
@@ -696,7 +702,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		SessionType:               sessionpkg.TypeSubagent,
 		PromptCacheTTL:            req.promptCacheTTL,
 		Messages:                  history,
-		ContextBudgetMaxTokens:    req.parentSession.ContextBudgetMaxTokens,
+		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
 		ContextToolExchangePolicy: req.parentSession.ContextToolExchangePolicy,
 		Identity: SpawnIdentity{
 			BotID:             req.parentSession.BotID,
@@ -1127,36 +1133,36 @@ func (p *SpawnProvider) SetModelCreator(fn ModelCreator) {
 	p.modelCreator = fn
 }
 
-func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (*sdk.Model, string, string, error) {
+func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (*sdk.Model, string, string, int, error) {
 	if p.settings == nil || p.models == nil || p.queries == nil {
-		return nil, "", "", errors.New("model resolution services not configured")
+		return nil, "", "", 0, errors.New("model resolution services not configured")
 	}
 	botSettings, err := p.settings.GetBot(ctx, botID)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, err
 	}
 	chatModelID := strings.TrimSpace(botSettings.ChatModelID)
 	if chatModelID == "" {
-		return nil, "", "", errors.New("no chat model configured for bot")
+		return nil, "", "", 0, errors.New("no chat model configured for bot")
 	}
 	modelInfo, err := p.models.GetByID(ctx, chatModelID)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, err
 	}
 	if !modelInfo.Enable {
-		return nil, "", "", fmt.Errorf("subagent chat model %s is disabled", modelInfo.ModelID)
+		return nil, "", "", 0, fmt.Errorf("subagent chat model %s is disabled", modelInfo.ModelID)
 	}
 	provider, err := models.FetchProviderByID(ctx, p.queries, modelInfo.ProviderID)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, err
 	}
 	if p.modelCreator == nil {
-		return nil, "", "", errors.New("model creator not configured")
+		return nil, "", "", 0, errors.New("model creator not configured")
 	}
 	authResolver := providers.NewService(nil, p.queries, "")
 	creds, err := authResolver.ResolveModelCredentials(ctx, provider)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", 0, err
 	}
 	sdkModel := p.modelCreator(
 		modelInfo.ModelID,
@@ -1167,7 +1173,7 @@ func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (*sdk.Mo
 		nil,
 	)
 	cacheTTL := providers.ProviderConfigString(provider, "prompt_cache_ttl")
-	return sdkModel, modelInfo.ID, cacheTTL, nil
+	return sdkModel, modelInfo.ID, cacheTTL, modelInfo.Config.ContextBudgetMaxTokens(), nil
 }
 
 func truncateTitle(s string, maxRunes int) string {
