@@ -230,8 +230,9 @@ func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig,
 				p = override
 			}
 		}
+		currentStep := step
 		req := a.baseHookRequest(ctx, cfg, hooks.EventBeforeModelCall)
-		req.Turn = modelCallHookPayload(cfg, step, len(p.Messages))
+		req.Turn = modelCallHookPayload(cfg, currentStep, len(p.Messages))
 		step++
 		res, err := a.hookService.Run(ctx, req, nil)
 		if err != nil {
@@ -244,11 +245,21 @@ func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig,
 			}
 			return p
 		}
-		if strings.TrimSpace(res.AppendContext) != "" {
-			p.Messages = append(p.Messages, sdk.UserMessage(formatHookContext(hooks.EventBeforeModelCall, res.AppendContext)))
-		}
+		return applyStepHookAppendContext(p, cfg.ContextMutations, currentStep, res.AppendContext)
+	}
+}
+
+// applyStepHookAppendContext applies a per-step before-model-call hook's
+// appended context to the in-flight generate params and records the
+// mutation on the ledger, mirroring applyBeforeModelCallAppendContext so
+// step-level injections are equally auditable.
+func applyStepHookAppendContext(p *sdk.GenerateParams, ledger *contextfrag.MutationLedger, step int, appendContext string) *sdk.GenerateParams {
+	if strings.TrimSpace(appendContext) == "" {
 		return p
 	}
+	p.Messages = append(p.Messages, sdk.UserMessage(formatHookContext(hooks.EventBeforeModelCall, appendContext)))
+	ledger.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("step=%d append_bytes=%d", step, len(appendContext)))
+	return p
 }
 
 func (a *Agent) runAfterModelCallHook(ctx context.Context, cfg RunConfig, step *sdk.StepResult, stepIndex int) {
