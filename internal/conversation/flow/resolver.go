@@ -1197,7 +1197,7 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  len(cfg.System),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, hookTexts),
 	}, hooks.EventAfterPromptBuild)
 	if afterPromptContext != "" {
 		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext))

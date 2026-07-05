@@ -141,6 +141,19 @@ func formatResolverHookContext(eventName, text string) string {
 	return "[Hook Context: " + strings.TrimSpace(eventName) + "]\n" + text
 }
 
+// afterPromptHookSystemBytes reproduces the pre-fragments-first SystemBytes
+// semantics for the AfterPromptBuild hook payload: cfg.System no longer has
+// the before-hook's formatted text appended to it, so the byte count
+// reported to the hook must add it back explicitly to match what a hook
+// author would have seen before that change.
+func afterPromptHookSystemBytes(system string, hookTexts []string) int {
+	n := len(system)
+	if len(hookTexts) > 0 {
+		n += len("\n\n") + len(strings.Join(hookTexts, "\n\n"))
+	}
+	return n
+}
+
 func firstHookText(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
