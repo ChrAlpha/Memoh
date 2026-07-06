@@ -138,7 +138,6 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 	add(contextview.ACPSection{
 		ID:         "acp.section.current-runtime",
 		CacheClass: contextfrag.CacheNever,
-		Data:       runtimePairs,
 	}, "Current Runtime", renderACPMetadataSection(runtimePairs))
 
 	conversationPairs := [][2]string{
@@ -154,7 +153,6 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 	add(contextview.ACPSection{
 		ID:         "acp.section.current-conversation",
 		CacheClass: contextfrag.CacheNever,
-		Data:       conversationPairs,
 	}, "Current Conversation", renderACPMetadataSection(conversationPairs))
 
 	add(contextview.ACPSection{
@@ -162,7 +160,6 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		Kind:       contextfrag.KindAttachmentRef,
 		Trust:      contextfrag.TrustExternal,
 		CacheClass: contextfrag.CacheNever,
-		Data:       input.Attachments,
 	}, "Attachments", renderACPAttachmentsSection(input.Attachments))
 	add(contextview.ACPSection{
 		ID:   "acp.section.platform-identities",
@@ -176,7 +173,6 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 			Kind:     contextfrag.KindWorkspaceInstruction,
 			Trust:    contextfrag.TrustWorkspace,
 			Priority: 40,
-			Data:     file,
 		}, file.Title, file.Content)
 	}
 
@@ -196,7 +192,6 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 }
 
 type acpContextFileSection struct {
-	Name    string
 	Title   string
 	Content string
 }
@@ -237,7 +232,6 @@ func acpContextSystemFiles(files []agentpkg.SystemFile, maxBytes int) []acpConte
 			break
 		}
 		section := acpContextFileSection{
-			Name:  name,
 			Title: title,
 			Content: renderACPFileSection(name, prune.PruneWithEdges(content, name, prune.Config{
 				MaxBytes:  contentBudget,

@@ -50,7 +50,7 @@ func TestRenderMessage_NoImageRefs(t *testing.T) {
 	}
 }
 
-func TestRenderMessage_MetaAndICPopulated(t *testing.T) {
+func TestRenderMessage_MetaPopulated(t *testing.T) {
 	msg := &ICMessage{
 		MessageID:        "msg-7",
 		Sender:           &CanonicalUser{ID: "u-1", DisplayName: "Alice", Username: "alice", IsBot: false},
@@ -84,18 +84,10 @@ func TestRenderMessage_MetaAndICPopulated(t *testing.T) {
 		ForwardMessageID:          "fwd-1",
 		ForwardFromUserID:         "u-9",
 		ForwardFromConversationID: "conv-9",
+		ConversationType:          "group",
 	}
 	if *seg.Meta != want {
 		t.Fatalf("Meta = %+v, want %+v", *seg.Meta, want)
-	}
-	if seg.IC == nil {
-		t.Fatal("expected IC to be populated")
-	}
-	if seg.IC == msg {
-		t.Fatal("expected IC to be a value copy, not the original pointer")
-	}
-	if seg.IC.MessageID != "msg-7" || seg.IC.ReplyToPreview != "earlier" {
-		t.Fatalf("IC copy diverged: %+v", seg.IC)
 	}
 }
 
@@ -156,54 +148,6 @@ func TestRenderMessage_MetaOnDeletedMessage(t *testing.T) {
 	if seg.Meta == nil || seg.Meta.MessageID != "msg-8" {
 		t.Fatalf("Meta = %+v, want MessageID msg-8 on deleted message segment", seg.Meta)
 	}
-	if seg.IC == nil {
-		t.Fatal("expected IC on deleted message segment")
-	}
-}
-
-func TestRenderMessageSnapshotIsSelfContained(t *testing.T) {
-	msg := &ICMessage{
-		MessageID:    "m1",
-		Sender:       &CanonicalUser{ID: "u-1", DisplayName: "Alice"},
-		TimestampSec: 1,
-		Content: []ContentNode{
-			{Type: "bold", Children: []ContentNode{{Type: "text", Text: "hot"}}},
-		},
-		ReplyToMessageID: "m0",
-		ReplyToSender:    &CanonicalUser{ID: "u-2", DisplayName: "Bob"},
-		ForwardInfo:      &ForwardInfo{MessageID: "f1", Sender: &CanonicalUser{ID: "u-3", DisplayName: "Carol"}},
-		Attachments:      []Attachment{{Type: "image", ContentHash: "hash-1", FileName: "cat.png"}},
-		Conversation:     ConversationMeta{Channel: "telegram", ConversationType: "group"},
-	}
-	params := RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}}
-
-	seg := renderMessage(msg, params)
-
-	msg.Content[0].Children[0].Text = "TAMPERED"
-	msg.Sender.DisplayName = "TAMPERED"
-	msg.ReplyToSender.DisplayName = "TAMPERED"
-	msg.ForwardInfo.Sender.DisplayName = "TAMPERED"
-	msg.Attachments[0].FileName = "TAMPERED"
-	params.ContactNames["u-1"] = "TAMPERED"
-
-	if got := seg.IC.Content[0].Children[0].Text; got != "hot" {
-		t.Fatalf("IC content tree shares memory with the source message: %q", got)
-	}
-	if got := seg.IC.Sender.DisplayName; got != "Alice" {
-		t.Fatalf("IC sender shares memory with the source message: %q", got)
-	}
-	if got := seg.IC.ReplyToSender.DisplayName; got != "Bob" {
-		t.Fatalf("IC reply sender shares memory with the source message: %q", got)
-	}
-	if got := seg.IC.ForwardInfo.Sender.DisplayName; got != "Carol" {
-		t.Fatalf("IC forward sender shares memory with the source message: %q", got)
-	}
-	if got := seg.IC.Attachments[0].FileName; got != "cat.png" {
-		t.Fatalf("IC attachments share memory with the source message: %q", got)
-	}
-	if got := seg.Params.ContactNames["u-1"]; got != "Contact Alice" {
-		t.Fatalf("Params.ContactNames shares memory with the caller's map: %q", got)
-	}
 }
 
 func TestRender_SystemEventSegmentHasNoMeta(t *testing.T) {
@@ -220,8 +164,8 @@ func TestRender_SystemEventSegmentHasNoMeta(t *testing.T) {
 	if len(rc) != 1 {
 		t.Fatalf("segments = %d, want 1", len(rc))
 	}
-	if rc[0].Meta != nil || rc[0].IC != nil {
-		t.Fatalf("system event segment must not carry Meta/IC, got Meta=%+v IC=%+v", rc[0].Meta, rc[0].IC)
+	if rc[0].Meta != nil {
+		t.Fatalf("system event segment must not carry Meta, got Meta=%+v", rc[0].Meta)
 	}
 }
 

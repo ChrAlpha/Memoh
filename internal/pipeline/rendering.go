@@ -2,8 +2,6 @@ package pipeline
 
 import (
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +35,7 @@ type SegmentMeta struct {
 	ForwardMessageID          string
 	ForwardFromUserID         string
 	ForwardFromConversationID string
+	ConversationType          string
 }
 
 // RenderedSegment is a single segment of rendered context, one per IC node.
@@ -49,8 +48,6 @@ type RenderedSegment struct {
 	RepliesToMe  bool                   `json:"replies_to_me,omitempty"`
 	ImageRefs    []ImageAttachmentRef   `json:"image_refs,omitempty"`
 	Meta         *SegmentMeta           `json:"-"`
-	IC           *ICMessage             `json:"-"`
-	Params       RenderParams           `json:"-"`
 }
 
 // RenderedContext is the output of the Rendering layer — a slice of segments.
@@ -97,51 +94,10 @@ func RCToXML(rc RenderedContext) string {
 
 // RenderMessageSegment renders a single message node exactly as Render does,
 // byte-identical to the segment Render produced. It keeps the ability to
-// re-render a segment from its IC snapshot and Params available to consumers
-// that need a render target other than the pipeline's own output.
+// re-render a message from its IC form available to consumers that need a
+// render target other than the pipeline's own output.
 func RenderMessageSegment(msg *ICMessage, params RenderParams) RenderedSegment {
 	return renderMessage(msg, params)
-}
-
-// cloneICMessage deep-copies the render-relevant fields so the segment's IC
-// snapshot cannot be mutated through the source message.
-func cloneICMessage(msg *ICMessage) *ICMessage {
-	out := *msg
-	out.Sender = cloneCanonicalUser(msg.Sender)
-	out.ReplyToSender = cloneCanonicalUser(msg.ReplyToSender)
-	out.ForwardInfo = cloneForwardInfo(msg.ForwardInfo)
-	out.Content = cloneContentNodes(msg.Content)
-	out.Attachments = slices.Clone(msg.Attachments)
-	return &out
-}
-
-func cloneCanonicalUser(user *CanonicalUser) *CanonicalUser {
-	if user == nil {
-		return nil
-	}
-	out := *user
-	return &out
-}
-
-func cloneForwardInfo(info *ForwardInfo) *ForwardInfo {
-	if info == nil {
-		return nil
-	}
-	out := *info
-	out.Sender = cloneCanonicalUser(info.Sender)
-	return &out
-}
-
-func cloneContentNodes(nodes []ContentNode) []ContentNode {
-	if nodes == nil {
-		return nil
-	}
-	out := make([]ContentNode, len(nodes))
-	for i, node := range nodes {
-		out[i] = node
-		out[i].Children = cloneContentNodes(node.Children)
-	}
-	return out
 }
 
 func segmentMeta(msg *ICMessage) *SegmentMeta {
@@ -149,6 +105,7 @@ func segmentMeta(msg *ICMessage) *SegmentMeta {
 		MessageID:        msg.MessageID,
 		ReplyToMessageID: msg.ReplyToMessageID,
 		ReplyToSender:    rawSenderName(msg.ReplyToSender),
+		ConversationType: msg.Conversation.ConversationType,
 	}
 	if msg.Sender != nil {
 		meta.SenderID = msg.Sender.ID
@@ -177,8 +134,6 @@ func rawSenderName(user *CanonicalUser) string {
 }
 
 func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
-	icCopy := cloneICMessage(msg)
-	params.ContactNames = maps.Clone(params.ContactNames)
 	isMyself := params.BotUserID != "" && msg.Sender != nil && msg.Sender.ID == params.BotUserID
 	mentionsMe := msg.MentionsMe || (params.BotUserID != "" && hasMention(msg.Content, params.BotUserID))
 	repliesToMe := msg.RepliesToMe || (params.BotUserID != "" && msg.ReplyToSender != nil && msg.ReplyToSender.ID == params.BotUserID)
@@ -226,8 +181,6 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 			MentionsMe:   mentionsMe,
 			RepliesToMe:  repliesToMe,
 			Meta:         segmentMeta(msg),
-			IC:           icCopy,
-			Params:       params,
 		}
 	}
 
@@ -277,8 +230,6 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 		RepliesToMe:  repliesToMe,
 		ImageRefs:    imageRefs,
 		Meta:         segmentMeta(msg),
-		IC:           icCopy,
-		Params:       params,
 	}
 }
 

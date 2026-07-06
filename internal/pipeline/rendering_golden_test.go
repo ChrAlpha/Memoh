@@ -3,9 +3,9 @@ package pipeline
 import "testing"
 
 // These golden tests lock the exact XML bytes renderMessage and
-// renderSystemEventXML produce today. The discuss collector re-renders
-// segments from their IC snapshot at compile time, so any byte drift here
-// would silently change what the model sees. Do not update the expected
+// renderSystemEventXML produce today. These bytes are what the model sees,
+// and RenderMessageSegment promises byte-identical re-rendering, so any
+// drift here would silently change both. Do not update the expected
 // strings to make a refactor pass; make the refactor byte-preserving.
 
 func TestRenderMessageGoldenBytes(t *testing.T) {

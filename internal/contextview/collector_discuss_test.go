@@ -314,11 +314,7 @@ func TestDiscussCollectorSegmentConversationTypeOverridesTurnType(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			seg := renderedTextSegment(100, "hi")
-			seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1"}
-			seg.IC = &pipeline.ICMessage{
-				MessageID:    "m-1",
-				Conversation: pipeline.ConversationMeta{Channel: "telegram", ConversationType: tc.segmentType},
-			}
+			seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1", ConversationType: tc.segmentType}
 			base := contextfrag.Scope{BotID: "bot-1", ConversationType: tc.turnType}
 
 			frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
@@ -472,7 +468,7 @@ func TestDiscussRCFragConsumesRenderedSegmentContent(t *testing.T) {
 	}
 }
 
-func TestDiscussRCFragBytesMatchPipelineRender(t *testing.T) {
+func TestRenderMessageSegmentBytesMatchPipelineRender(t *testing.T) {
 	t.Parallel()
 
 	ic := pipeline.NewEmptyIC("s1")
@@ -512,21 +508,19 @@ func TestDiscussRCFragBytesMatchPipelineRender(t *testing.T) {
 			NewTitle:     "New Room",
 		}},
 	}
-	rc := pipeline.Render(ic, pipeline.RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}})
+	params := pipeline.RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}}
+	rc := pipeline.Render(ic, params)
 
-	frags := collectDiscussContext(t, DiscussContextConfig{RC: rc})
-
-	if len(frags) != len(rc) {
-		t.Fatalf("frags = %d, want %d", len(frags), len(rc))
+	if len(rc) != len(ic.Nodes) {
+		t.Fatalf("segments = %d, want %d", len(rc), len(ic.Nodes))
 	}
-	for i, seg := range rc {
-		msg := discussFragMessageT(t, frags[i])
-		text, ok := msg.Content[0].(sdk.TextPart)
-		if !ok {
-			t.Fatalf("frags[%d] content = %#v, want text part", i, msg.Content)
+	for i, node := range ic.Nodes {
+		if node.Message == nil {
+			continue
 		}
-		if text.Text != seg.Content[0].Text {
-			t.Fatalf("frags[%d] bytes differ from pipeline render:\n--- frag ---\n%s\n--- seg ---\n%s", i, text.Text, seg.Content[0].Text)
+		direct := pipeline.RenderMessageSegment(node.Message, params)
+		if direct.Content[0].Text != rc[i].Content[0].Text {
+			t.Fatalf("RenderMessageSegment bytes differ from pipeline render at %d:\n--- direct ---\n%s\n--- seg ---\n%s", i, direct.Content[0].Text, rc[i].Content[0].Text)
 		}
 	}
 }

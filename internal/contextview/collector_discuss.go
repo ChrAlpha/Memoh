@@ -253,8 +253,8 @@ func firstNonEmptyTrimmed(values ...string) string {
 // type over the turn's and buckets an unknown type as passive group history.
 func discussSegmentAttention(seg pipeline.RenderedSegment, turnConversationType string) []contextfrag.AttentionReason {
 	conversationType := turnConversationType
-	if seg.IC != nil && strings.TrimSpace(seg.IC.Conversation.ConversationType) != "" {
-		conversationType = seg.IC.Conversation.ConversationType
+	if seg.Meta != nil && strings.TrimSpace(seg.Meta.ConversationType) != "" {
+		conversationType = seg.Meta.ConversationType
 	}
 	return contextfrag.DeriveAttention(contextfrag.AttentionDerivation{
 		ConversationType: conversationType,
@@ -265,8 +265,8 @@ func discussSegmentAttention(seg pipeline.RenderedSegment, turnConversationType 
 }
 
 // discussRCText consumes the segment's already-rendered bytes; switch to
-// pipeline.RenderMessageSegment(seg.IC, seg.Params) when the first consumer
-// needs a render target other than the pipeline's own output.
+// pipeline.RenderMessageSegment when the first consumer needs a render target
+// other than the pipeline's own output.
 func discussRCText(seg pipeline.RenderedSegment) string {
 	var out strings.Builder
 	for _, piece := range seg.Content {

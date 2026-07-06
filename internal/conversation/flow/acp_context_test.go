@@ -102,75 +102,25 @@ func TestRenderACPContextMarkdownRespectsSystemFilesBudget(t *testing.T) {
 
 func acpMarkdownViaSections(t *testing.T, input acpContextRenderInput) string {
 	t.Helper()
-	markdown, uri, _ := acpContextViaContextView(context.Background(), nil, buildACPContextSections(input), "")
+	markdown, uri := acpContextViaContextView(context.Background(), nil, buildACPContextSections(input), "")
 	if uri != acpContextURI {
 		t.Fatalf("uri = %q, want %q", uri, acpContextURI)
 	}
 	return markdown
 }
 
-func TestBuildACPContextSectionsCarriesTypedPayloads(t *testing.T) {
-	t.Parallel()
-
-	sections := buildACPContextSections(acpContextRenderInput{
-		BotID:       "bot-1",
-		DisplayName: "Alice",
-		Attachments: []conversation.ChatAttachment{{Name: "report.pdf"}},
-		Files: []agentpkg.SystemFile{
-			{Filename: "SOUL.md", Content: "the soul"},
-		},
-	})
-
-	byID := make(map[string]contextview.ACPSection, len(sections))
-	for _, section := range sections {
-		byID[section.ID] = section
-	}
-
-	runtimePairs, ok := byID["acp.section.current-runtime"].Data.([][2]string)
-	if !ok || !containsPair(runtimePairs, "Bot ID", "bot-1") {
-		t.Fatalf("runtime section must carry metadata pairs: %#v", byID["acp.section.current-runtime"].Data)
-	}
-	conversationPairs, ok := byID["acp.section.current-conversation"].Data.([][2]string)
-	if !ok || !containsPair(conversationPairs, "Sender", "Alice") {
-		t.Fatalf("conversation section must carry metadata pairs: %#v", byID["acp.section.current-conversation"].Data)
-	}
-	attachments, ok := byID["acp.section.attachments"].Data.([]conversation.ChatAttachment)
-	if !ok || len(attachments) != 1 || attachments[0].Name != "report.pdf" {
-		t.Fatalf("attachments section must carry typed attachments: %#v", byID["acp.section.attachments"].Data)
-	}
-	file, ok := byID["acp.section.file.000"].Data.(acpContextFileSection)
-	if !ok || file.Name != "SOUL.md" || file.Title != "Bot Soul" {
-		t.Fatalf("file section must carry typed file payload: %#v", byID["acp.section.file.000"].Data)
-	}
-	if file.Content != renderACPFileSection("SOUL.md", "the soul") {
-		t.Fatalf("file payload content must match rendered excerpt: %q", file.Content)
-	}
-}
-
-func containsPair(pairs [][2]string, key, value string) bool {
-	for _, pair := range pairs {
-		if pair[0] == key && pair[1] == value {
-			return true
-		}
-	}
-	return false
-}
-
-func TestACPContextViaContextViewCarriesQueryOutsideMarkdown(t *testing.T) {
+func TestACPContextViaContextViewKeepsQueryOutsideMarkdown(t *testing.T) {
 	t.Parallel()
 
 	sections := []contextview.ACPSection{
 		{ID: "acp.preamble", Text: "# Memoh ACP Context\n\npreamble body"},
 		{ID: "acp.section.current-runtime", Text: "## Current Runtime\n\n- Bot ID: bot-1"},
 	}
-	baseMarkdown, _, basePrompt := acpContextViaContextView(context.Background(), nil, sections, "")
-	markdown, uri, prompt := acpContextViaContextView(context.Background(), nil, sections, "  deploy the fix  ")
+	baseMarkdown, _ := acpContextViaContextView(context.Background(), nil, sections, "")
+	markdown, uri := acpContextViaContextView(context.Background(), nil, sections, "deploy the fix")
 
-	if prompt != "deploy the fix" {
-		t.Fatalf("prompt must come from the selected current-user fragment, got %q", prompt)
-	}
-	if basePrompt != "" {
-		t.Fatalf("empty query must yield empty prompt, got %q", basePrompt)
+	if strings.Contains(markdown, "deploy the fix") {
+		t.Fatalf("query must not join the context document: %q", markdown)
 	}
 	if markdown != baseMarkdown {
 		t.Fatalf("query must not change context markdown bytes:\n got: %q\nbase: %q", markdown, baseMarkdown)

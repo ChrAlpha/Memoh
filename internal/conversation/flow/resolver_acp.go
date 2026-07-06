@@ -111,7 +111,8 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
 	req.Query = strings.TrimSpace(req.Query)
-	contextMarkdown, contextURI, prompt := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
+	contextMarkdown, contextURI := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
+	prompt := req.Query
 
 	doneTurn, entered := r.tryEnterIdleSessionTurn(ctx, req.BotID, req.SessionID)
 	if !entered {
