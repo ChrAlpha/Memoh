@@ -63,7 +63,7 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 
 	tools := []sdk.Tool{{Name: "search"}}
 	model := anthropicCacheTestModel()
-	newSystem, newMessages, newTools, systemPrepended := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	newSystem, newMessages, newTools, systemPrepended, _ := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
 
 	breakpoints := 0
 
@@ -132,7 +132,7 @@ func TestApplyProviderRunConfigNonAnthropicUnaffected(t *testing.T) {
 
 	tools := []sdk.Tool{{Name: "search"}}
 	model := openAICacheTestModel()
-	newSystem, newMessages, newTools, systemPrepended := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	newSystem, newMessages, newTools, systemPrepended, _ := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
 
 	if systemPrepended {
 		t.Fatal("non-Anthropic models must not get system promotion")

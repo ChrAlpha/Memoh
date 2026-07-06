@@ -868,13 +868,25 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 }
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
-	system, messages, tools, systemPrepended := models.ApplyPromptCacheWithPlan(
-		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
+	// The prefix-cache comparator hashes the pre-decoration payload, not the
+	// cache_control-decorated one: Anthropic's message-level breakpoint moves
+	// forward every turn as history grows, so hashing after decoration would
+	// make byte-identical cached content serialize differently turn to turn
+	// and defeat growth-hit detection below (recordPrefixCacheBoundary /
+	// observePrefixCache).
+	rawPrefixCount := clampStableMessageCount(cfg.ContextCachePlan.StableMessageCount, len(cfg.Messages))
+	a.recordPrefixCacheBoundary(cfg, cfg.System, cfg.Messages, tools, rawPrefixCount)
+	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, cfg.System, cfg.Messages, tools, rawPrefixCount)
+
+	system, messages, decoratedTools, _, actualStableCount := models.ApplyPromptCacheWithPlan(
+		cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, tools,
 	)
+	// Honesty: reflect where the breakpoint actually landed (models.ApplyPromptCacheWithPlan
+	// may have fallen back to an earlier message, or found none) rather than the
+	// upstream claim.
+	plan.StableMessageCount = actualStableCount
+	tools = decoratedTools
 	initialProviderMessageCount := len(messages)
-	prefixCount := renderedStableMessageCount(cfg.ContextCachePlan, messages, systemPrepended)
-	a.recordPrefixCacheBoundary(cfg, system, messages, tools, prefixCount)
-	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools, systemPrepended)
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
 	cfg.ContextMutations.SetFinalInputHash(finalHash)
@@ -985,14 +997,17 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	return opts
 }
 
-// recordPrefixCacheBoundary hands this turn's rendered stable-prefix message
-// count to the mutation ledger, and, when the previous turn's stable prefix
-// is still within this turn's stable range, re-hashes that previous boundary
-// against this turn's rendered messages/system/tools. observePrefixCache
-// later compares that boundary hash against the previous entry's stored hash
-// to recognize prefix-preserving growth (the breakpoint moved forward but
-// the previously-cached bytes are unchanged) as a cache hit rather than
-// misclassifying it as prefix_changed.
+// recordPrefixCacheBoundary hands this turn's raw (pre-decoration)
+// stable-prefix message count to the mutation ledger, and, when the previous
+// turn's stable prefix is still within this turn's stable range, re-hashes
+// that previous boundary against this turn's raw messages/system/tools.
+// observePrefixCache later compares that boundary hash against the previous
+// entry's stored hash to recognize prefix-preserving growth (the breakpoint
+// moved forward but the previously-cached bytes are unchanged) as a cache
+// hit rather than misclassifying it as prefix_changed. Using the raw,
+// undecorated payload for both hashes keeps the comparison decoration-
+// agnostic: Anthropic's cache_control breakpoint moving off a message
+// between turns must not change that message's contribution to the hash.
 func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) {
 	if a == nil || a.prefixCache == nil || cfg.ContextMutations == nil || cfg.Identity.IsSubagent {
 		return
@@ -1010,8 +1025,11 @@ func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages
 	cfg.ContextMutations.SetPrevBoundaryHash(hash)
 }
 
-func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, systemPrepended bool) contextfrag.CachePlan {
-	prefixCount := renderedStableMessageCount(plan, messages, systemPrepended)
+// contextCachePlanWithRenderedPrefix computes the plan's cache-comparator
+// hash from the raw (pre-decoration) system/messages/tools sliced to
+// prefixCount, so the stored hash never depends on where (or whether) a
+// vendor-specific cache_control breakpoint landed.
+func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) contextfrag.CachePlan {
 	prefixMessages := append([]sdk.Message(nil), messages[:prefixCount]...)
 	hash, bytes := contextfrag.ProviderPayloadHashAndBytes(system, prefixMessages, tools)
 	plan.RenderedStablePrefixHash = hash
@@ -1020,16 +1038,15 @@ func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system strin
 	return plan
 }
 
-func renderedStableMessageCount(plan contextfrag.CachePlan, messages []sdk.Message, systemPrepended bool) int {
-	count := plan.StableMessageCount
-	if systemPrepended {
-		count++
-	}
+// clampStableMessageCount bounds a stable-message count reported by context
+// selection to the actual message slice length, guarding against off-range
+// values (e.g. selection racing with a concurrent trim).
+func clampStableMessageCount(count, total int) int {
 	if count < 0 {
 		return 0
 	}
-	if count > len(messages) {
-		return len(messages)
+	if count > total {
+		return total
 	}
 	return count
 }

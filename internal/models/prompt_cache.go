@@ -57,7 +57,7 @@ func ApplyPromptCache(
 	messages []sdk.Message,
 	tools []sdk.Tool,
 ) (string, []sdk.Message, []sdk.Tool) {
-	newSystem, newMessages, newTools, _ := ApplyPromptCacheWithPlan(model, ttl, contextfrag.CachePlan{}, system, messages, tools)
+	newSystem, newMessages, newTools, _, _ := ApplyPromptCacheWithPlan(model, ttl, contextfrag.CachePlan{}, system, messages, tools)
 	return newSystem, newMessages, newTools
 }
 
@@ -68,7 +68,12 @@ func ApplyPromptCache(
 // system-and-tools-only layout. The 4th return value reports whether this
 // call prepended a system message to messages (Anthropic's system->message
 // cache promotion), so callers can tell that apart from an unrelated
-// leading system-role message already present in the input.
+// leading system-role message already present in the input. The 5th return
+// value is the honest count of leading messages actually covered by an
+// applied message-level breakpoint: it matches plan.StableMessageCount
+// unless placement had to fall back to an earlier message (or found none),
+// so callers can keep their own bookkeeping of the cached prefix truthful
+// instead of trusting a claim that was never actually cached.
 func ApplyPromptCacheWithPlan(
 	model *sdk.Model,
 	ttl string,
@@ -76,13 +81,13 @@ func ApplyPromptCacheWithPlan(
 	system string,
 	messages []sdk.Message,
 	tools []sdk.Tool,
-) (string, []sdk.Message, []sdk.Tool, bool) {
+) (string, []sdk.Message, []sdk.Tool, bool, int) {
 	if model == nil {
-		return system, messages, tools, false
+		return system, messages, tools, false, plan.StableMessageCount
 	}
 	normalized := NormalizePromptCacheTTL(ttl)
 	if normalized == PromptCacheTTLOff {
-		return system, messages, tools, false
+		return system, messages, tools, false, plan.StableMessageCount
 	}
 	// OpenAI-family vendors identify cache-warm backends via a
 	// prompt_cache_key on the request rather than explicit breakpoints;
@@ -92,7 +97,7 @@ func ApplyPromptCacheWithPlan(
 	case string(ClientTypeAnthropicMessages):
 		return applyAnthropicPromptCache(normalized, plan, system, messages, tools)
 	default:
-		return system, messages, tools, false
+		return system, messages, tools, false, plan.StableMessageCount
 	}
 }
 
@@ -113,14 +118,21 @@ func applyAnthropicPromptCache(
 	system string,
 	messages []sdk.Message,
 	tools []sdk.Tool,
-) (string, []sdk.Message, []sdk.Tool, bool) {
+) (string, []sdk.Message, []sdk.Tool, bool, int) {
 	cc := anthropicCacheControl(ttl)
 	if cc == nil {
-		return system, messages, tools, false
+		return system, messages, tools, false, plan.StableMessageCount
 	}
 
+	actualStableMessageCount := plan.StableMessageCount
 	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) {
-		messages = withMessageCacheBreakpoint(messages, plan.StableMessageCount-1, cc)
+		var breakpointIndex int
+		messages, breakpointIndex = withMessageCacheBreakpoint(messages, plan.StableMessageCount-1, cc)
+		if breakpointIndex >= 0 {
+			actualStableMessageCount = breakpointIndex + 1
+		} else {
+			actualStableMessageCount = 0
+		}
 	}
 
 	newMessages := messages
@@ -147,25 +159,54 @@ func applyAnthropicPromptCache(
 		newTools[len(newTools)-1].CacheControl = cc
 	}
 
-	return newSystem, newMessages, newTools, systemPrepended
+	return newSystem, newMessages, newTools, systemPrepended, actualStableMessageCount
 }
 
-func withMessageCacheBreakpoint(messages []sdk.Message, index int, cc *sdk.CacheControl) []sdk.Message {
+// withMessageCacheBreakpoint sets a cache_control breakpoint on the last
+// content part of messages[index], or — if that part's type does not carry a
+// CacheControl field — scans backward for the nearest earlier message whose
+// last part does. Not every SDK part type supports cache_control (TextPart,
+// ImagePart and FilePart do; ReasoningPart, ToolCallPart and ToolResultPart
+// do not), so a stable history message that happens to end in a tool
+// call/result must not silently drop the breakpoint: that would leave the
+// caller believing the declared prefix is cached when Anthropic never
+// actually cached anything. Returns the updated messages and the index that
+// received the breakpoint, or -1 if no message in [0, index] qualifies.
+func withMessageCacheBreakpoint(messages []sdk.Message, index int, cc *sdk.CacheControl) ([]sdk.Message, int) {
 	out := make([]sdk.Message, len(messages))
 	copy(out, messages)
-	msg := out[index]
+	for i := index; i >= 0; i-- {
+		if setLastPartCacheControl(&out[i], cc) {
+			return out, i
+		}
+	}
+	return out, -1
+}
+
+// setLastPartCacheControl sets cc on msg's last content part in place if
+// that part's type carries a CacheControl field, reporting whether it did.
+func setLastPartCacheControl(msg *sdk.Message, cc *sdk.CacheControl) bool {
 	if len(msg.Content) == 0 {
-		return out
+		return false
 	}
 	parts := make([]sdk.MessagePart, len(msg.Content))
 	copy(parts, msg.Content)
-	if text, ok := parts[len(parts)-1].(sdk.TextPart); ok {
-		text.CacheControl = cc
-		parts[len(parts)-1] = text
-		msg.Content = parts
-		out[index] = msg
+	last := len(parts) - 1
+	switch p := parts[last].(type) {
+	case sdk.TextPart:
+		p.CacheControl = cc
+		parts[last] = p
+	case sdk.ImagePart:
+		p.CacheControl = cc
+		parts[last] = p
+	case sdk.FilePart:
+		p.CacheControl = cc
+		parts[last] = p
+	default:
+		return false
 	}
-	return out
+	msg.Content = parts
+	return true
 }
 
 // anthropicCacheControl returns the SDK cache_control payload for Anthropic
