@@ -45,6 +45,9 @@ func NewServer(log *slog.Logger, addr string, jwtSecret string,
 		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
 	}))
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		Skipper: func(c echo.Context) bool {
+			return shouldSkipRequestLog(c.Request().URL.Path)
+		},
 		LogStatus: true,
 		LogURI:    true,
 		LogMethod: true,
@@ -82,6 +85,10 @@ func (s *Server) Start() error {
 
 func (s *Server) Stop(ctx context.Context) error {
 	return s.echo.Shutdown(ctx)
+}
+
+func shouldSkipRequestLog(path string) bool {
+	return path == "/health" || path == "/ping"
 }
 
 func shouldSkipJWT(path string) bool {

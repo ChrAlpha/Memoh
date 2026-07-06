@@ -58,75 +58,39 @@ run = "pnpm --filter @memohai/icon generate"
 
 [tasks.dev]
 description = "Start development environment"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.yml up --build
-"""
+run = "scripts/dev.sh up postgres"
 
 [tasks."dev:webhook-tunnel"]
 description = "Start development environment with Cloudflare Quick Tunnel for webhooks"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.webhook-tunnel.yml up --build
-"""
+run = "scripts/dev.sh up postgres-webhook"
 
 [tasks."dev:minify"]
 description = "Start development environment with minified services"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.minify.yml up --build
-"""
+run = "scripts/dev.sh up postgres-minify"
 
 [tasks."dev:minify:webhook-tunnel"]
 description = "Start minified development environment with Cloudflare Quick Tunnel for webhooks"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.minify.yml -f devenv/docker-compose.webhook-tunnel.yml up --build
-"""
+run = "scripts/dev.sh up postgres-minify-webhook"
 
 [tasks."dev:sqlite"]
 description = "Start SQLite development environment"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.sqlite.yml up --build
-"""
+run = "scripts/dev.sh up sqlite"
 
 [tasks."dev:sqlite:webhook-tunnel"]
 description = "Start SQLite development environment with Cloudflare Quick Tunnel for webhooks"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.sqlite.yml -f devenv/docker-compose.webhook-tunnel.yml up --build
-"""
+run = "scripts/dev.sh up sqlite-webhook"
 
 [tasks."dev:sqlite:minify"]
 description = "Start SQLite development environment with minified services"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.sqlite.minify.yml up --build
-"""
+run = "scripts/dev.sh up sqlite-minify"
 
 [tasks."dev:sqlite:minify:webhook-tunnel"]
 description = "Start minified SQLite development environment with Cloudflare Quick Tunnel for webhooks"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.sqlite.minify.yml -f devenv/docker-compose.webhook-tunnel.yml up --build
-"""
+run = "scripts/dev.sh up sqlite-minify-webhook"
 
 [tasks."dev:selinux"]
 description = "Start development environment on SELinux systems"
-run = """
-#!/bin/bash
-set -e
-docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.selinux.yml up --build
-"""
+run = "scripts/dev.sh up postgres-selinux"
 
 [tasks."dev:kata"]
 description = "Start Linux/KVM development environment with containerd Kata runtime"
@@ -143,21 +107,37 @@ docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.kata.yml up
 description = "Inspect whether the running development server is the containerd Kata stack"
 run = "scripts/diagnose-kata-dev-stack.sh"
 
+[tasks."dev:status"]
+description = "Show development environment status"
+run = "scripts/dev.sh status postgres"
+
+[tasks."dev:status:sqlite"]
+description = "Show SQLite development environment status"
+run = "scripts/dev.sh status sqlite"
+
+[tasks."dev:status:sqlite:minify"]
+description = "Show SQLite minified development environment status"
+run = "scripts/dev.sh status sqlite-minify"
+
+[tasks."dev:status:selinux"]
+description = "Show development environment status on SELinux systems"
+run = "scripts/dev.sh status postgres-selinux"
+
 [tasks."dev:down"]
 description = "Stop development environment"
-run = "docker compose -f devenv/docker-compose.yml down --remove-orphans"
+run = "scripts/dev.sh down postgres"
 
 [tasks."dev:down:sqlite"]
 description = "Stop SQLite development environment"
-run = "docker compose -f devenv/docker-compose.sqlite.yml down --remove-orphans"
+run = "scripts/dev.sh down sqlite"
 
 [tasks."dev:down:sqlite:minify"]
 description = "Stop SQLite minified development environment"
-run = "docker compose -f devenv/docker-compose.sqlite.minify.yml down --remove-orphans"
+run = "scripts/dev.sh down sqlite-minify"
 
 [tasks."dev:down:selinux"]
 description = "Stop development environment on SELinux systems"
-run = "docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.selinux.yml down --remove-orphans"
+run = "scripts/dev.sh down postgres-selinux"
 
 [tasks."dev:down:kata"]
 description = "Stop Linux/KVM Kata development environment"
@@ -165,19 +145,19 @@ run = "docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.kata
 
 [tasks."dev:logs"]
 description = "View development logs"
-run = "docker compose -f devenv/docker-compose.yml logs -f"
+run = "scripts/dev.sh logs postgres $@"
 
 [tasks."dev:logs:sqlite"]
 description = "View SQLite development logs"
-run = "docker compose -f devenv/docker-compose.sqlite.yml logs -f"
+run = "scripts/dev.sh logs sqlite $@"
 
 [tasks."dev:logs:sqlite:minify"]
 description = "View SQLite minified development logs"
-run = "docker compose -f devenv/docker-compose.sqlite.minify.yml logs -f"
+run = "scripts/dev.sh logs sqlite-minify $@"
 
 [tasks."dev:logs:selinux"]
 description = "View development logs on SELinux systems"
-run = "docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.selinux.yml logs -f"
+run = "scripts/dev.sh logs postgres-selinux $@"
 
 [tasks."dev:logs:kata"]
 description = "View Linux/KVM Kata development logs"
@@ -185,19 +165,19 @@ run = "docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.kata
 
 [tasks."dev:restart"]
 description = "Restart a service (usage: mise run dev:restart -- server)"
-run = "docker compose -f devenv/docker-compose.yml restart $@"
+run = "scripts/dev.sh restart postgres $@"
 
 [tasks."dev:restart:sqlite"]
 description = "Restart a SQLite dev service (usage: mise run dev:restart:sqlite -- server)"
-run = "docker compose -f devenv/docker-compose.sqlite.yml restart $@"
+run = "scripts/dev.sh restart sqlite $@"
 
 [tasks."dev:restart:sqlite:minify"]
 description = "Restart a SQLite minified dev service (usage: mise run dev:restart:sqlite:minify -- server)"
-run = "docker compose -f devenv/docker-compose.sqlite.minify.yml restart $@"
+run = "scripts/dev.sh restart sqlite-minify $@"
 
 [tasks."dev:restart:selinux"]
 description = "Restart a service on SELinux systems (usage: mise run dev:restart:selinux -- server)"
-run = "docker compose -f devenv/docker-compose.yml -f devenv/docker-compose.selinux.yml restart $@"
+run = "scripts/dev.sh restart postgres-selinux $@"
 
 [tasks."dev:restart:kata"]
 description = "Restart a service in the Linux/KVM Kata dev environment (usage: mise run dev:restart:kata -- server)"

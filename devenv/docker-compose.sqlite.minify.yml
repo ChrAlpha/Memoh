@@ -1,8 +1,8 @@
-name: "memoh-dev-sqlite"
+name: "${MEMOH_DEV_PROJECT:-memoh-dev-sqlite}"
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: memoh-dev-sqlite-qdrant
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-qdrant"
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
@@ -19,7 +19,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.web
-    container_name: memoh-dev-sqlite-deps
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-deps"
     working_dir: /workspace
     command: ["pnpm", "install"]
     environment:
@@ -35,7 +35,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.server
-    container_name: memoh-dev-sqlite-migrate
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-migrate"
     working_dir: /workspace
     entrypoint: []
     command: ["go", "run", "./cmd/agent", "migrate", "up"]
@@ -56,7 +56,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.server
-    container_name: memoh-dev-sqlite-server
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-server"
     working_dir: /workspace
     privileged: true
     pid: host
@@ -108,7 +108,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.web
-    container_name: memoh-dev-sqlite-web
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-web"
     working_dir: /workspace/apps/web
     command: ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "8082"]
     environment:
@@ -130,7 +130,7 @@ services:
   #   build:
   #     context: ..
   #     dockerfile: docker/Dockerfile.sparse
-  #   container_name: memoh-dev-sqlite-sparse
+  #   container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev-sqlite}-sparse"
   #   ports:
   #     - "${MEMOH_SQLITE_DEV_SPARSE_PORT:-19085}:8085"
   #   healthcheck:

@@ -1,7 +1,12 @@
 package server
 
 import (
+	"bytes"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	neturl "net/url"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +78,33 @@ func TestShouldSkipJWT_MCPOAuthCallbackPaths(t *testing.T) {
 		if !shouldSkipJWT(path) {
 			t.Fatalf("path=%q should skip jwt", path)
 		}
+	}
+}
+
+func TestRequestLoggerSkipsHealthChecks(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	srv := NewServer(log, ":0", "test-secret")
+
+	req := httptest.NewRequest(http.MethodHead, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+
+	if strings.Contains(buf.String(), "msg=request") {
+		t.Fatalf("health check should not be logged as a normal request, got log %q", buf.String())
+	}
+}
+
+func TestRequestLoggerKeepsNonHealthRequests(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	srv := NewServer(log, ":0", "test-secret")
+
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+
+	if !strings.Contains(buf.String(), "msg=request") {
+		t.Fatalf("non-health request should be logged, got log %q", buf.String())
 	}
 }

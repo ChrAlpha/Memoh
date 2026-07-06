@@ -1,8 +1,8 @@
-name: "memoh-dev"
+name: "${MEMOH_DEV_PROJECT:-memoh-dev}"
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: memoh-dev-postgres
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-postgres"
     environment:
       POSTGRES_DB: memoh
       POSTGRES_USER: memoh
@@ -21,7 +21,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: memoh-dev-qdrant
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-qdrant"
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
@@ -38,7 +38,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.web
-    container_name: memoh-dev-deps
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-deps"
     working_dir: /workspace
     command: ["pnpm", "install"]
     environment:
@@ -54,7 +54,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.server
-    container_name: memoh-dev-migrate
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-migrate"
     working_dir: /workspace
     entrypoint: []
     command: ["go", "run", "./cmd/agent", "migrate", "up"]
@@ -76,7 +76,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.server
-    container_name: memoh-dev-server
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-server"
     working_dir: /workspace
     privileged: true
     pid: host
@@ -128,7 +128,7 @@ services:
     build:
       context: ..
       dockerfile: devenv/Dockerfile.web
-    container_name: memoh-dev-web
+    container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-web"
     working_dir: /workspace/apps/web
     command: ["pnpm", "exec", "vite", "--host", "0.0.0.0", "--port", "8082"]
     environment:
@@ -150,7 +150,7 @@ services:
   #   build:
   #     context: ..
   #     dockerfile: docker/Dockerfile.sparse
-  #   container_name: memoh-dev-sparse
+  #   container_name: "${MEMOH_DEV_CONTAINER_PREFIX:-memoh-dev}-sparse"
   #   ports:
   #     - "${MEMOH_DEV_SPARSE_PORT:-18085}:8085"
   #   healthcheck:
