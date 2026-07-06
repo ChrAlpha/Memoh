@@ -210,19 +210,33 @@ func discussRCFrag(seg pipeline.RenderedSegment, index int, scope contextfrag.Sc
 // without metadata keep the turn scope untouched.
 func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) contextfrag.Scope {
 	meta := seg.Meta
-	if meta == nil {
+	if meta == nil && len(seg.ImageRefs) == 0 {
 		return scope
 	}
 	out := scope
-	out.CurrentMessageID = strings.TrimSpace(meta.MessageID)
-	out.ReplyToMessageID = strings.TrimSpace(meta.ReplyToMessageID)
-	out.ReplySender = strings.TrimSpace(meta.ReplyToSender)
-	out.ForwardMessageID = strings.TrimSpace(meta.ForwardMessageID)
-	out.ForwardFromUserID = strings.TrimSpace(meta.ForwardFromUserID)
-	out.ForwardFromConversationID = strings.TrimSpace(meta.ForwardFromConversationID)
-	out.MentionsBot = seg.MentionsMe
-	out.RepliesToBot = seg.RepliesToMe
-	out.Attention = discussSegmentAttention(seg, out.ConversationType)
+	if meta != nil {
+		out.CurrentMessageID = strings.TrimSpace(meta.MessageID)
+		out.ReplyToMessageID = strings.TrimSpace(meta.ReplyToMessageID)
+		out.ReplySender = strings.TrimSpace(meta.ReplyToSender)
+		out.ForwardMessageID = strings.TrimSpace(meta.ForwardMessageID)
+		out.ForwardFromUserID = strings.TrimSpace(meta.ForwardFromUserID)
+		out.ForwardFromConversationID = strings.TrimSpace(meta.ForwardFromConversationID)
+		out.MentionsBot = seg.MentionsMe
+		out.RepliesToBot = seg.RepliesToMe
+		out.Attention = discussSegmentAttention(seg, out.ConversationType)
+	}
+	if len(seg.ImageRefs) > 0 {
+		metadata := make(map[string]string, len(out.Metadata)+1)
+		for k, v := range out.Metadata {
+			metadata[k] = v
+		}
+		refs := make([]string, 0, len(seg.ImageRefs))
+		for _, ref := range seg.ImageRefs {
+			refs = append(refs, ref.ContentHash+":"+ref.Mime)
+		}
+		metadata["image_refs"] = strings.Join(refs, ",")
+		out.Metadata = metadata
+	}
 	return out
 }
 

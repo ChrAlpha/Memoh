@@ -421,6 +421,70 @@ func TestDiscussRCFragBytesMatchPipelineRender(t *testing.T) {
 	}
 }
 
+func TestDiscussRCFragCarriesImageRefsMetadata(t *testing.T) {
+	t.Parallel()
+
+	seg := renderedTextSegment(100, "photo msg")
+	seg.ImageRefs = []pipeline.ImageAttachmentRef{
+		{ContentHash: "hash-1", Mime: "image/jpeg"},
+		{ContentHash: "hash-2", Mime: "image/png"},
+	}
+
+	frags := collectDiscussContext(t, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	got := frags[0].Scope.Metadata["image_refs"]
+	if got != "hash-1:image/jpeg,hash-2:image/png" {
+		t.Fatalf("image_refs metadata = %q, want hash-1:image/jpeg,hash-2:image/png", got)
+	}
+	if len(frags[0].Parts) != 1 || frags[0].Parts[0].Type != contextfrag.PartSDKMessage {
+		t.Fatalf("image refs must stay out of Parts, got %#v", frags[0].Parts)
+	}
+}
+
+func TestDiscussRCFragImageRefsDoNotChangePayload(t *testing.T) {
+	t.Parallel()
+
+	plain := renderedTextSegment(100, "same text")
+	withRefs := renderedTextSegment(100, "same text")
+	withRefs.ImageRefs = []pipeline.ImageAttachmentRef{{ContentHash: "hash-1", Mime: "image/jpeg"}}
+
+	plainFrags := collectDiscussContext(t, DiscussContextConfig{RC: pipeline.RenderedContext{plain}})
+	refFrags := collectDiscussContext(t, DiscussContextConfig{RC: pipeline.RenderedContext{withRefs}})
+
+	plainPayload, plainHash := renderSDKPayload(t, plainFrags, placementFor(plainFrags))
+	refPayload, refHash := renderSDKPayload(t, refFrags, placementFor(refFrags))
+	if plainHash != refHash {
+		t.Fatalf("image refs metadata must not enter the payload hash: %q != %q", plainHash, refHash)
+	}
+	assertMessagesEqual(t, refPayload.Messages, plainPayload.Messages)
+}
+
+func TestDiscussRCFragImageRefsDoNotMutateBaseScopeMetadata(t *testing.T) {
+	t.Parallel()
+
+	seg := renderedTextSegment(100, "photo msg")
+	seg.ImageRefs = []pipeline.ImageAttachmentRef{{ContentHash: "hash-1", Mime: "image/jpeg"}}
+	base := contextfrag.Scope{BotID: "bot-1", Metadata: map[string]string{"existing": "kept"}}
+
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+	if _, leaked := base.Metadata["image_refs"]; leaked {
+		t.Fatal("collector must not mutate the caller's scope metadata map")
+	}
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	if frags[0].Scope.Metadata["existing"] != "kept" {
+		t.Fatalf("existing metadata must be preserved, got %#v", frags[0].Scope.Metadata)
+	}
+	if frags[0].Scope.Metadata["image_refs"] != "hash-1:image/jpeg" {
+		t.Fatalf("image_refs = %q, want hash-1:image/jpeg", frags[0].Scope.Metadata["image_refs"])
+	}
+}
+
 func collectDiscussContextScoped(t *testing.T, scope contextfrag.Scope, cfg DiscussContextConfig) []contextfrag.ContextFrag {
 	t.Helper()
 	collector := &DiscussContextCollector{}
