@@ -342,6 +342,9 @@ func TestBudgetAttention_ClosureTierIgnoresAttentionlessMembers(t *testing.T) {
 // Finding [8]: a droppable tool result whose call is absent from the set is a
 // guaranteed provider 400; with a budget in force it drops unconditionally,
 // restoring the legacy leading-orphan cut even when everything fits.
+//
+// An orphan drop is not a space trim: with nothing else under pressure, it
+// must not raise the trim notice either.
 func TestBudgetAttention_OrphanToolResultDroppedEvenUnderBudget(t *testing.T) {
 	t.Parallel()
 
@@ -358,6 +361,60 @@ func TestBudgetAttention_OrphanToolResultDroppedEvenUnderBudget(t *testing.T) {
 
 	assertSelectedIDs(t, result, []string{"plain-old", "latest"})
 	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanResult)
+	if result.TrimNotice {
+		t.Fatal("an orphan-only drop is not a space trim and must not raise a trim notice")
+	}
+}
+
+// A genuine space trim alongside an orphan drop must still raise the notice:
+// only the orphan-only case is silent.
+func TestBudgetAttention_OrphanPlusSpatialDropRaisesTrimNotice(t *testing.T) {
+	t.Parallel()
+
+	orphan := toolResultFrag("orphan-result", "search", "call-gone", "stale")
+	orphan.TokenEstimate = 10
+
+	frags := []contextfrag.ContextFrag{
+		orphan,
+		attentionMessageFrag("passive-old", sdk.UserMessage("chatter"), 100, contextfrag.AttentionPassive),
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 50})
+
+	assertSelectedIDs(t, result, []string{"latest"})
+	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanResult)
+	assertDroppedReason(t, result, "passive-old", budgetDropReasonPassive)
+	if !result.TrimNotice {
+		t.Fatal("a genuine space trim alongside an orphan drop must still raise the trim notice")
+	}
+}
+
+// buildBudgetUnits pairs a tool call with its result regardless of which one
+// is collected first: a result seen before its call must join the same unit
+// and share its fate, never drop unconditionally as a false orphan while the
+// call it belongs to survives (a provider 400 the other way around).
+func TestBudgetAttention_ResultBeforeCallPairsIntoSameUnit(t *testing.T) {
+	t.Parallel()
+
+	early := toolResultFrag("early-result", "search", "call-1", "found")
+	early.TokenEstimate = 40
+	later := toolCallFrag("later-call", "search", "call-1")
+	later.TokenEstimate = 40
+	later.Scope.Attention = []contextfrag.AttentionReason{contextfrag.AttentionPassive}
+
+	frags := []contextfrag.ContextFrag{
+		attentionMessageFrag("directed-old", sdk.UserMessage("@bot keep this"), 100, contextfrag.AttentionMention),
+		early,
+		later,
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 150})
+
+	assertSelectedIDs(t, result, []string{"directed-old", "latest"})
+	assertDroppedReason(t, result, "early-result", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "later-call", budgetDropReasonPassive)
 }
 
 // Finding [9]: drops within a tier are contiguous oldest-first; priority no

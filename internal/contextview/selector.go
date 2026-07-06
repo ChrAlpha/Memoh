@@ -59,8 +59,10 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 		if isRetentionIntent(profile.Intent) {
 			if drops, dropReasons := budgetTrimDrops(tagged, budget.MaxTokens, budget.RecentProtectTokens); len(drops) > 0 {
 				result = selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
-				result.TrimNotice = true
-				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
+				if hasSpatialBudgetDrop(dropReasons) {
+					result.TrimNotice = true
+					result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
+				}
 				return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
 			}
 		}

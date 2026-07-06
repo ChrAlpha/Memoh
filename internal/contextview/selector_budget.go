@@ -88,22 +88,54 @@ func (u *budgetUnit) orphanResult() bool {
 	return u.hasResult && !u.hasCall
 }
 
+// buildBudgetUnits pairs call and result fragments by tool_call_id in a first
+// pass over the whole set, independent of which one is collected first, then
+// builds the units in a second pass. A single ordered pass would misjudge a
+// result collected before its call as an orphan (unit A: result only) while
+// the call forms its own unit (unit B: call only) — dropping the result
+// unconditionally as a guaranteed 400 while its call survives, the mirror
+// image of the bug it exists to prevent.
 func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
-	units := make([]budgetUnit, 0, len(tagged))
-	unitByCall := make(map[string]int)
+	n := len(tagged)
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	find := func(i int) int {
+		for parent[i] != i {
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		}
+		return i
+	}
+
+	firstSeen := make(map[string]int)
 	for i, taggedFrag := range tagged {
 		frag := taggedFrag.Frag
-		unitIdx := -1
-		for _, callID := range fragToolResultCallIDs(frag) {
-			if existing, ok := unitByCall[callID]; ok {
-				unitIdx = existing
-				break
+		ids := append(fragToolCallIDs(frag), fragToolResultCallIDs(frag)...)
+		for _, id := range ids {
+			seen, ok := firstSeen[id]
+			if !ok {
+				firstSeen[id] = i
+				continue
+			}
+			if ri, rs := find(i), find(seen); ri != rs {
+				parent[rs] = ri
 			}
 		}
-		if unitIdx < 0 {
+	}
+
+	unitAt := make(map[int]int, n)
+	units := make([]budgetUnit, 0, n)
+	for i, taggedFrag := range tagged {
+		root := find(i)
+		unitIdx, ok := unitAt[root]
+		if !ok {
 			units = append(units, budgetUnit{droppable: true})
 			unitIdx = len(units) - 1
+			unitAt[root] = unitIdx
 		}
+		frag := taggedFrag.Frag
 		unit := &units[unitIdx]
 		unit.indexes = append(unit.indexes, i)
 		unit.tokens += fragTokenEstimate(frag)
@@ -121,9 +153,6 @@ func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
 		}
 		if len(fragToolResultCallIDs(frag)) > 0 {
 			unit.hasResult = true
-		}
-		for _, callID := range fragToolCallIDs(frag) {
-			unitByCall[callID] = unitIdx
 		}
 	}
 	return units
@@ -250,6 +279,19 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		dropBand(pool[protectedStart:], func(int) string { return budgetDropReasonRecentWindow })
 	}
 	return drops, reasons
+}
+
+// hasSpatialBudgetDrop reports whether any drop reason came from budget
+// pressure rather than the unconditional orphan cut, so the trim notice
+// (which promises the model earlier or intervening messages were trimmed to
+// fit) is never raised over an orphan-only drop that would have fit as-is.
+func hasSpatialBudgetDrop(reasons map[int]string) bool {
+	for _, reason := range reasons {
+		if reason != budgetDropReasonOrphanResult {
+			return true
+		}
+	}
+	return false
 }
 
 func fragTokenEstimate(frag contextfrag.ContextFrag) int {
