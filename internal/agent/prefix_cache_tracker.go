@@ -12,6 +12,11 @@ const prefixCacheTrackerCap = 4096
 // prefixCacheTracker remembers the last rendered stable prefix hash per
 // session so consecutive turns can attribute prompt cache hits and misses
 // in-process instead of offline.
+//
+// This state is in-memory and per-process: under a horizontally-scaled
+// deployment where replicas share a session, each replica only observes its
+// own slice of turns, so this is a single-instance observability aid, not a
+// substitute for offline/cross-instance analysis.
 type prefixCacheTracker struct {
 	mu      sync.Mutex
 	entries map[string]prefixCacheEntry

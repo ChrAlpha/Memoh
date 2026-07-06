@@ -84,6 +84,10 @@ func ApplyPromptCacheWithPlan(
 	if normalized == PromptCacheTTLOff {
 		return system, messages, tools, false
 	}
+	// OpenAI-family vendors identify cache-warm backends via a
+	// prompt_cache_key on the request rather than explicit breakpoints;
+	// wiring that through needs upstream support in the twilight-ai SDK,
+	// which isn't available yet, so the default branch below is a no-op.
 	switch ResolveClientType(model) {
 	case string(ClientTypeAnthropicMessages):
 		return applyAnthropicPromptCache(normalized, plan, system, messages, tools)
