@@ -847,6 +847,56 @@ func TestHandleReplyWithAgentSkipsLegacyMessageBuildWhenSourceFragsPresent(t *te
 	}
 }
 
+// TestHandleReplyWithAgentPassesResolvedSystemFragsToCollector proves the
+// driver forwards the typed system fragments already built by the resolver
+// (prepareRunConfig's sections-first ContextSourceFrags) to the discuss
+// collector, so the builder never has to reverse-parse the flat System string.
+func TestHandleReplyWithAgentPassesResolvedSystemFragsToCollector(t *testing.T) {
+	rc := RenderedContext{
+		{
+			ReceivedAtMs: 200,
+			Content:      []RenderedContentPiece{{Type: "text", Text: `<message id="x">hello</message>`}},
+		},
+	}
+	systemFrag := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:   "system.prompt.intro",
+		Kind: contextfrag.KindSystemPrompt,
+		Slot: contextfrag.SlotSystem,
+		Text: "typed intro",
+	})
+	historyFrag := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:      "message.000",
+		Message: sdk.UserMessage("hi"),
+		Slot:    contextfrag.SlotHistory,
+	})
+	resolver := &fakeRunConfigResolver{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: agentpkg.RunConfig{
+				System:             "flat system",
+				ContextSourceFrags: []contextfrag.ContextFrag{systemFrag, historyFrag},
+			},
+			ModelID: "model-1",
+		},
+	}
+	builder := &fakeDiscussContextBuilder{}
+	driver := NewDiscussDriver(DiscussDriverDeps{
+		Pipeline:       NewPipeline(RenderParams{}),
+		Resolver:       resolver,
+		ContextBuilder: builder,
+	})
+	sess := &discussSession{
+		config:          DiscussSessionConfig{BotID: "b", SessionID: "s"},
+		lastProcessedMs: 0,
+	}
+
+	driver.handleReplyWithAgent(context.Background(), sess, rc, driver.logger, &fakeDiscussStreamer{})
+
+	got := builder.lastCollectInput.SystemFrags
+	if len(got) != 1 || got[0].ID != "system.prompt.intro" {
+		t.Fatalf("SystemFrags = %#v, want only the system-slot frag from the resolved run config", got)
+	}
+}
+
 // --- Test helpers ---
 
 type fakeDiscussStreamer struct {
@@ -949,6 +999,7 @@ type fakeDiscussContextBuilder struct {
 
 	collectSourceFragsCalls int
 	buildSDKMessagesCalls   int
+	lastCollectInput        DiscussContextInput
 }
 
 func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) ([]sdk.Message, error) {
@@ -962,9 +1013,10 @@ func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ c
 	return f.prompt, f.err
 }
 
-func (f *fakeDiscussContextBuilder) CollectDiscussSourceFrags(_ context.Context, _ contextfrag.Scope, _ string, _ DiscussContextInput) ([]contextfrag.ContextFrag, error) {
+func (f *fakeDiscussContextBuilder) CollectDiscussSourceFrags(_ context.Context, _ contextfrag.Scope, _ string, input DiscussContextInput) ([]contextfrag.ContextFrag, error) {
 	f.called = true
 	f.collectSourceFragsCalls++
+	f.lastCollectInput = input
 	return f.frags, f.err
 }
 

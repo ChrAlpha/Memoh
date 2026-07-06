@@ -20,6 +20,11 @@ type SystemPromptConfig struct {
 	SplitWorkspace bool
 }
 
+// SystemPromptCollector reverse-parses a flat system prompt string into
+// system-slot fragments. Production paths (chat/heartbeat/schedule, subagent,
+// discuss) now build typed fragments forward via agentpkg.SystemSectionFrags;
+// this collector remains only as a fallback: the legacy no-source-frags
+// branch of ApplyProviderRunConfig and discuss inputs without SystemFrags.
 type SystemPromptCollector struct{}
 
 func (*SystemPromptCollector) Name() string {

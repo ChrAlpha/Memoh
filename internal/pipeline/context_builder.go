@@ -22,11 +22,15 @@ type DiscussContextBuilder interface {
 
 // DiscussContextInput carries every discuss source for one turn: the RC/TR
 // streams plus the late-binding instruction and freshly surfaced inline
-// images that previously were appended after context assembly.
+// images that previously were appended after context assembly. SystemFrags
+// carries the typed system prompt fragments already built by the resolver;
+// when present the builder uses them instead of reverse-parsing the flat
+// system string.
 type DiscussContextInput struct {
 	RC             RenderedContext
 	TRs            []TurnResponseEntry
 	CompactSummary string
 	LateBinding    string
 	InlineImages   []sdk.ImagePart
+	SystemFrags    []contextfrag.ContextFrag
 }

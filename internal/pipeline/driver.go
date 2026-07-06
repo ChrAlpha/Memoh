@@ -366,6 +366,7 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		TRs:          trs,
 		LateBinding:  lateBinding,
 		InlineImages: imageParts,
+		SystemFrags:  systemSlotFrags(runConfig.ContextSourceFrags),
 	}
 	// The discuss turn replaces the resolved chat context wholesale: the
 	// fragments-first carrier gets the discuss source fragments and the chat
@@ -795,6 +796,19 @@ func legacyDiscussSDKMessages(input DiscussContextInput, composed *ComposeContex
 		messages = append(messages, sdk.UserMessage(input.LateBinding))
 	}
 	return messages
+}
+
+// systemSlotFrags extracts the typed system prompt fragments the resolver
+// already built forward from GenerateSystemSections, so the discuss turn
+// reuses them instead of reverse-parsing the flat System string.
+func systemSlotFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	var out []contextfrag.ContextFrag
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotSystem {
+			out = append(out, frag)
+		}
+	}
+	return out
 }
 
 func (d *DiscussDriver) discussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input DiscussContextInput, log *slog.Logger) []contextfrag.ContextFrag {

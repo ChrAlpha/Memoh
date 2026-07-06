@@ -47,17 +47,22 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 }
 
 // CollectDiscussSourceFrags returns the discuss turn as first-class source
-// fragments: the resolved system prompt (workspace section split out) plus
-// the discuss stream, ready to be carried on the run config for the
-// fragments-first provider view.
+// fragments: the resolved system prompt plus the discuss stream, ready to be
+// carried on the run config for the fragments-first provider view. The typed
+// system fragments supplied on the input are authoritative; the flat system
+// string is only reverse-parsed when the caller provided none.
 func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input pipeline.DiscussContextInput) ([]contextfrag.ContextFrag, error) {
-	systemFrags, err := (&SystemPromptCollector{}).Collect(ctx, CollectRequest{
-		Scope:  scope,
-		Intent: contextfrag.IntentRunConfigPreProvider,
-		Config: SystemPromptConfig{System: system, SplitWorkspace: true},
-	})
-	if err != nil {
-		return nil, err
+	systemFrags := input.SystemFrags
+	if len(systemFrags) == 0 {
+		collected, err := (&SystemPromptCollector{}).Collect(ctx, CollectRequest{
+			Scope:  scope,
+			Intent: contextfrag.IntentRunConfigPreProvider,
+			Config: SystemPromptConfig{System: system, SplitWorkspace: true},
+		})
+		if err != nil {
+			return nil, err
+		}
+		systemFrags = collected
 	}
 	discussFrags, err := (&DiscussContextCollector{}).Collect(ctx, CollectRequest{
 		Scope:  scope,
