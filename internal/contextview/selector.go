@@ -342,8 +342,9 @@ func keptIndexes(tagged []TaggedFrag, drops map[int]bool) map[int]bool {
 }
 
 // trimNoticeIndex returns the position within the selected slice where the
-// trim notice belongs: immediately before the first kept fragment that
-// follows the last dropped one.
+// trim notice belongs: the closure-safe boundary nearest to the first kept
+// fragment that follows the last dropped one, so the notice never separates a
+// kept tool call from its results.
 func trimNoticeIndex(tagged []TaggedFrag, drops map[int]bool) int {
 	lastDropped := -1
 	for i := range tagged {
@@ -354,17 +355,54 @@ func trimNoticeIndex(tagged []TaggedFrag, drops map[int]bool) int {
 	if lastDropped < 0 {
 		return -1
 	}
-	selectedPos := 0
+	kept := make([]contextfrag.ContextFrag, 0, len(tagged)-len(drops))
+	base := -1
 	for i := range tagged {
 		if drops[i] {
 			continue
 		}
-		if i > lastDropped {
-			return selectedPos
+		if base < 0 && i > lastDropped {
+			base = len(kept)
 		}
-		selectedPos++
+		kept = append(kept, tagged[i].Frag)
 	}
-	return selectedPos
+	if base < 0 {
+		base = len(kept)
+	}
+	return closureSafeNoticeIndex(kept, base)
+}
+
+// closureSafeNoticeIndex picks the position closest to base where no tool
+// call opened earlier still awaits its result: the smallest safe position at
+// or after base, else the largest safe one before it (position 0 is always
+// safe because nothing precedes it).
+func closureSafeNoticeIndex(kept []contextfrag.ContextFrag, base int) int {
+	open := make(map[string]int)
+	fallback := 0
+	for pos := 0; pos <= len(kept); pos++ {
+		if len(open) == 0 {
+			if pos >= base {
+				return pos
+			}
+			fallback = pos
+		}
+		if pos == len(kept) {
+			break
+		}
+		for _, id := range fragToolCallIDs(kept[pos]) {
+			open[id]++
+		}
+		for _, id := range fragToolResultCallIDs(kept[pos]) {
+			if count, ok := open[id]; ok {
+				if count <= 1 {
+					delete(open, id)
+				} else {
+					open[id] = count - 1
+				}
+			}
+		}
+	}
+	return fallback
 }
 
 func allSelectedIndexes(tagged []TaggedFrag) map[int]bool {

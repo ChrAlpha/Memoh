@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"encoding/json"
-	"sort"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -10,11 +9,12 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-// HistoryTrimNotice mirrors the legacy trim notice injected when history is
-// dropped to fit the context budget. The wording must stay byte-identical to
-// the legacy resolver notice.
-const HistoryTrimNotice = "[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
-	"If you need information from earlier in the conversation, use the available tools " +
+// HistoryTrimNotice tells the model that budget pressure removed messages.
+// Tiered drops can leave holes mid-history, not only at the head, so the
+// wording stays honest about that. The text is model-visible; change it only
+// deliberately.
+const HistoryTrimNotice = "[System Notice] Some earlier and intervening messages were trimmed to fit the context window. " +
+	"If you need information from the trimmed messages, use the available tools " +
 	"(such as memory_read or web search) to retrieve it."
 
 // Budget drop reasons name the attention band a fragment fell out of, so the
@@ -23,7 +23,6 @@ const (
 	budgetDropReasonPassive      = "budget:passive"
 	budgetDropReasonUntiered     = "budget:untiered"
 	budgetDropReasonDirected     = "budget:directed"
-	budgetDropReasonWindowYield  = "budget:recent_window_yield"
 	budgetDropReasonOrphanResult = "budget:orphan_tool_result"
 )
 
@@ -170,10 +169,16 @@ func fragToolResultCallIDs(frag contextfrag.ContextFrag) []string {
 //
 //  1. Droppable orphan tool-result units (no matching call anywhere in the
 //     set) drop unconditionally: they are a guaranteed provider 400.
-//  2. The newest units within recentProtectTokens are kept unconditionally;
-//     when that window alone exceeds the budget it yields from its old end.
-//  3. Units outside the window drop tier by tier (passive, then untiered,
-//     then directed), oldest first and contiguously within a tier.
+//  2. The newest units within the effective protection window survive. The
+//     window is min(recentProtectTokens, maxTokens/2), so the protected span
+//     can never exceed half the budget and tiering always has room to work.
+//  3. Unprotected units drop tier by tier (passive, then untiered, then
+//     directed), oldest first and contiguously within a tier, stopping as
+//     soon as the droppable total fits.
+//
+// The pass is monotone by construction: the protected span totals at most
+// maxTokens/2, so dropping every unprotected unit always reaches the budget
+// and no phase ever needs to yield protected units back.
 //
 // Priority never enters retention: it only orders rendering. The budget
 // counts droppable tokens only, mirroring the legacy trimMessagesByTokens
@@ -215,54 +220,28 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		return drops, reasons
 	}
 
-	windowStart := len(pool)
-	if recentProtectTokens > 0 {
-		windowStart = 0
-		acc := 0
-		for i := len(pool) - 1; i >= 0; i-- {
-			acc += units[pool[i]].tokens
-			if acc > recentProtectTokens {
-				windowStart = i + 1
-				break
-			}
-		}
+	window := recentProtectTokens
+	if half := maxTokens / 2; window > half {
+		window = half
 	}
-	poolEnd := windowStart
-
-	windowTokens := 0
-	for _, unitIdx := range pool[windowStart:] {
-		windowTokens += units[unitIdx].tokens
-	}
-	for windowStart < len(pool) && windowTokens > maxTokens {
-		dropUnit(&units[pool[windowStart]], budgetDropReasonWindowYield)
-		windowTokens -= units[pool[windowStart]].tokens
-		windowStart++
+	protectedStart := len(pool)
+	acc := 0
+	for protectedStart > 0 && acc+units[pool[protectedStart-1]].tokens <= window {
+		acc += units[pool[protectedStart-1]].tokens
+		protectedStart--
 	}
 
-	remaining := maxTokens - windowTokens
-	poolTokens := 0
-	for _, unitIdx := range pool[:poolEnd] {
-		poolTokens += units[unitIdx].tokens
-	}
-	if poolTokens > remaining {
-		order := make([]int, poolEnd)
-		for i := range order {
-			order[i] = i
-		}
-		sort.SliceStable(order, func(a, b int) bool {
-			ua, ub := &units[pool[order[a]]], &units[pool[order[b]]]
-			if ua.tier() != ub.tier() {
-				return ua.tier() < ub.tier()
+	for tier := attentionTierPassive; tier <= attentionTierDirected; tier++ {
+		for _, unitIdx := range pool[:protectedStart] {
+			if total <= maxTokens {
+				return drops, reasons
 			}
-			return ua.indexes[0] < ub.indexes[0]
-		})
-		for _, pos := range order {
-			if poolTokens <= remaining {
-				break
+			unit := &units[unitIdx]
+			if unit.tier() != tier {
+				continue
 			}
-			unit := &units[pool[pos]]
-			dropUnit(unit, budgetDropReasonForTier(unit.tier()))
-			poolTokens -= unit.tokens
+			dropUnit(unit, budgetDropReasonForTier(tier))
+			total -= unit.tokens
 		}
 	}
 	return drops, reasons
