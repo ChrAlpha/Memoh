@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // MutationKind identifies a post-render context mutator: code that changes
@@ -68,6 +69,22 @@ type MutationLedger struct {
 	finalInputHash             string
 	prevBoundaryHash           string
 	renderedPrefixMessageCount int
+	peekedPrevCacheEntry       PeekedPrevCacheEntry
+}
+
+// PeekedPrevCacheEntry carries the previous-turn prefix-cache tracker entry
+// observed via a non-mutating peek at build time (see
+// agent.recordPrefixCacheBoundary), so the end-of-run comparison in
+// agent.observePrefixCache compares against the snapshot this run actually
+// saw when it started, rather than re-reading the tracker at the end of the
+// run — which could have been overwritten by a concurrent run of the same
+// session between this run's peek and its observe.
+type PeekedPrevCacheEntry struct {
+	Found       bool
+	Hash        string
+	Model       string
+	StableCount int
+	At          time.Time
 }
 
 func NewMutationLedger() *MutationLedger {
@@ -175,6 +192,27 @@ func (l *MutationLedger) PrevBoundaryHash() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.prevBoundaryHash
+}
+
+// SetPeekedPrevCacheEntry stores the previous-turn tracker entry this run
+// observed via peek at build time. Same-run, in-memory only; excluded from
+// MarshalJSON like PrevBoundaryHash above.
+func (l *MutationLedger) SetPeekedPrevCacheEntry(entry PeekedPrevCacheEntry) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.peekedPrevCacheEntry = entry
+}
+
+func (l *MutationLedger) PeekedPrevCacheEntry() PeekedPrevCacheEntry {
+	if l == nil {
+		return PeekedPrevCacheEntry{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.peekedPrevCacheEntry
 }
 
 // SetRenderedPrefixMessageCount carries this turn's rendered stable-prefix

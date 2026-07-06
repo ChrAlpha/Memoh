@@ -104,13 +104,44 @@ func TestCompareCachePrefixOutcomes(t *testing.T) {
 			want:    contextfrag.CacheOutcomeModelChanged,
 		},
 		{
-			name:             "prefix-preserving growth is a hit",
+			name:             "prefix-preserving growth with real cache reads is a hit",
 			prev:             prefixCacheEntry{hash: "prefix-a", model: "model-a", stableCount: 2, at: now.Add(-time.Minute)},
 			hasPrev:          true,
 			nowCount:         4,
 			hash:             "prefix-a-plus-more",
 			model:            "model-a",
 			prevBoundaryHash: "prefix-a",
+			firstRead:        100,
+			want:             contextfrag.CacheOutcomeHit,
+		},
+		{
+			// P3: the growth branch must apply the same reads-informed
+			// classification as the equal-prefix branch. A hash match alone
+			// (byte-identical bytes were requested) does not prove Anthropic
+			// actually served them from cache; zero measured cache-read
+			// tokens means no real hit happened yet.
+			name:             "prefix-preserving growth with no cache reads is miss_same_prefix",
+			prev:             prefixCacheEntry{hash: "prefix-a", model: "model-a", stableCount: 2, at: now.Add(-time.Minute)},
+			hasPrev:          true,
+			nowCount:         4,
+			hash:             "prefix-a-plus-more",
+			model:            "model-a",
+			prevBoundaryHash: "prefix-a",
+			firstRead:        0,
+			want:             contextfrag.CacheOutcomeMissSamePrefix,
+		},
+		{
+			// P3: real cache reads dominate TTL expiry, matching the equal-
+			// prefix branch's precedence (reads>0 wins even past the TTL
+			// window — the provider evidently still had it cached).
+			name:             "prefix-preserving growth past TTL with real cache reads is still a hit",
+			prev:             prefixCacheEntry{hash: "prefix-a", model: "model-a", stableCount: 2, at: now.Add(-10 * time.Minute)},
+			hasPrev:          true,
+			nowCount:         4,
+			hash:             "prefix-a-plus-more",
+			model:            "model-a",
+			prevBoundaryHash: "prefix-a",
+			firstRead:        100,
 			want:             contextfrag.CacheOutcomeHit,
 		},
 		{

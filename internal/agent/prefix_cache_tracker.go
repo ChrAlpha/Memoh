@@ -97,8 +97,10 @@ func (t *prefixCacheTracker) size() int {
 // The growth branch below recognizes that case via prevBoundaryHash: the
 // previous turn's rendered prefix re-hashed against this turn's messages. If
 // that still equals the previous turn's stored hash, the previously-cached
-// bytes are byte-identical and Anthropic serves a genuine partial hit up to
-// that boundary even though the breakpoint moved forward.
+// bytes are byte-identical, so the same reads-informed classification used
+// for an unchanged prefix applies here too (see classifyKnownPrefixOutcome):
+// a hash match only proves identical bytes were requested, not that the
+// provider actually served them from cache.
 func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, nowCount int, hash, model, prevBoundaryHash string, firstStepCacheRead int, now time.Time, ttlWindow time.Duration) contextfrag.CacheComparison {
 	comparison := contextfrag.CacheComparison{
 		FirstStepCacheReadTokens: firstStepCacheRead,
@@ -113,22 +115,29 @@ func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, nowCount int, hash,
 	case prev.model != model:
 		comparison.Outcome = contextfrag.CacheOutcomeModelChanged
 	case prev.stableCount == nowCount && prev.hash == hash:
-		switch {
-		case firstStepCacheRead > 0:
-			comparison.Outcome = contextfrag.CacheOutcomeHit
-		case expired:
-			comparison.Outcome = contextfrag.CacheOutcomeExpired
-		default:
-			comparison.Outcome = contextfrag.CacheOutcomeMissSamePrefix
-		}
+		comparison.Outcome = classifyKnownPrefixOutcome(expired, firstStepCacheRead)
 	case prev.stableCount < nowCount && prevBoundaryHash != "" && prevBoundaryHash == prev.hash:
-		if expired {
-			comparison.Outcome = contextfrag.CacheOutcomeExpired
-		} else {
-			comparison.Outcome = contextfrag.CacheOutcomeHit
-		}
+		comparison.Outcome = classifyKnownPrefixOutcome(expired, firstStepCacheRead)
 	default:
 		comparison.Outcome = contextfrag.CacheOutcomePrefixChanged
 	}
 	return comparison
+}
+
+// classifyKnownPrefixOutcome is the reads-informed classification shared by
+// both branches that established the rendered prefix matches the previous
+// turn's cached bytes (byte-for-byte equal, or a prefix-preserving growth of
+// them): a hash match alone only proves the same bytes were requested, not
+// that the provider actually served them from cache, so measured cache-read
+// tokens decide hit vs miss, and only take the TTL window into account when
+// there is no such evidence either way.
+func classifyKnownPrefixOutcome(expired bool, firstStepCacheRead int) string {
+	switch {
+	case firstStepCacheRead > 0:
+		return contextfrag.CacheOutcomeHit
+	case expired:
+		return contextfrag.CacheOutcomeExpired
+	default:
+		return contextfrag.CacheOutcomeMissSamePrefix
+	}
 }

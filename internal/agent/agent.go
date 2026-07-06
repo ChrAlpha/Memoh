@@ -664,8 +664,16 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 	model := modelID(cfg.Model)
 	nowCount := cfg.ContextMutations.RenderedPrefixMessageCount()
 	prevBoundaryHash := cfg.ContextMutations.PrevBoundaryHash()
-	prev, hasPrev := a.prefixCache.observe(key, nowCount, plan.RenderedStablePrefixHash, model, now)
-	comparison := compareCachePrefix(prev, hasPrev, nowCount, plan.RenderedStablePrefixHash, model, prevBoundaryHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
+	// Compare against the snapshot this run itself peeked at build time
+	// (recordPrefixCacheBoundary), not against observe()'s return value: a
+	// concurrent run of the same session can have already overwritten the
+	// tracker between this run's peek and this observe, which would race the
+	// comparison against a stranger's entry instead of this run's own prior
+	// turn. observe() below still performs the store (last-writer-wins).
+	peeked := cfg.ContextMutations.PeekedPrevCacheEntry()
+	prev := prefixCacheEntry{hash: peeked.Hash, model: peeked.Model, stableCount: peeked.StableCount, at: peeked.At}
+	a.prefixCache.observe(key, nowCount, plan.RenderedStablePrefixHash, model, now)
+	comparison := compareCachePrefix(prev, peeked.Found, nowCount, plan.RenderedStablePrefixHash, model, prevBoundaryHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
 	cfg.ContextMutations.SetCacheComparison(comparison)
 
 	if comparison.Outcome == contextfrag.CacheOutcomeMissSamePrefix &&
@@ -998,16 +1006,19 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 }
 
 // recordPrefixCacheBoundary hands this turn's raw (pre-decoration)
-// stable-prefix message count to the mutation ledger, and, when the previous
+// stable-prefix message count to the mutation ledger, snapshots the
+// previous-turn tracker entry this run peeked (so observePrefixCache later
+// compares against what THIS run actually saw rather than racing a
+// concurrent run's write — see PeekedPrevCacheEntry), and, when the previous
 // turn's stable prefix is still within this turn's stable range, re-hashes
 // that previous boundary against this turn's raw messages/system/tools.
-// observePrefixCache later compares that boundary hash against the previous
-// entry's stored hash to recognize prefix-preserving growth (the breakpoint
-// moved forward but the previously-cached bytes are unchanged) as a cache
-// hit rather than misclassifying it as prefix_changed. Using the raw,
-// undecorated payload for both hashes keeps the comparison decoration-
-// agnostic: Anthropic's cache_control breakpoint moving off a message
-// between turns must not change that message's contribution to the hash.
+// observePrefixCache compares that boundary hash against the peeked entry's
+// hash to recognize prefix-preserving growth (the breakpoint moved forward
+// but the previously-cached bytes are unchanged) as a cache hit rather than
+// misclassifying it as prefix_changed. Using the raw, undecorated payload
+// for both hashes keeps the comparison decoration-agnostic: Anthropic's
+// cache_control breakpoint moving off a message between turns must not
+// change that message's contribution to the hash.
 func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) {
 	if a == nil || a.prefixCache == nil || cfg.ContextMutations == nil || cfg.Identity.IsSubagent {
 		return
@@ -1018,6 +1029,13 @@ func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages
 	}
 	cfg.ContextMutations.SetRenderedPrefixMessageCount(prefixCount)
 	prev, ok := a.prefixCache.peek(key)
+	cfg.ContextMutations.SetPeekedPrevCacheEntry(contextfrag.PeekedPrevCacheEntry{
+		Found:       ok,
+		Hash:        prev.hash,
+		Model:       prev.model,
+		StableCount: prev.stableCount,
+		At:          prev.at,
+	})
 	if !ok || prev.stableCount > prefixCount {
 		return
 	}

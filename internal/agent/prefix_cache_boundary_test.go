@@ -64,6 +64,10 @@ func TestPrefixCacheGrowthSurvivesAnthropicBreakpointMovement(t *testing.T) {
 
 	turn2 := newPrefixCacheRunConfig(identity, model, "sys", []sdk.Message{sdk.UserMessage("h1"), sdk.AssistantMessage("h2")}, 2)
 	a.buildGenerateOptions(context.Background(), turn2, nil, nil, nil)
+	// Real cache-read tokens on step 0: per P3 (classifyKnownPrefixOutcome),
+	// a hash match alone does not prove a hit, so this test's "hit" claim
+	// needs the same reads evidence the equal-prefix branch requires.
+	turn2.ContextMutations.RecordCacheUsage(contextfrag.CacheUsageRecord{StepIndex: 0, CacheReadTokens: 100})
 	a.observePrefixCache(turn2)
 
 	comparison := turn2.ContextMutations.CacheComparisonValue()
@@ -72,5 +76,48 @@ func TestPrefixCacheGrowthSurvivesAnthropicBreakpointMovement(t *testing.T) {
 	}
 	if comparison.Outcome != contextfrag.CacheOutcomeHit {
 		t.Fatalf("turn2 outcome = %q, want hit: the breakpoint moving from h1 onto h2 must not change h1's hash contribution", comparison.Outcome)
+	}
+}
+
+// TestPrefixCacheObserveUsesOwnPeekedSnapshotUnderConcurrency is the P4 RED
+// test. Two runs of the same session (A and B) both peek the tracker before
+// either observes, simulating concurrent requests: both see the same seed
+// entry. B's observe() runs first and overwrites the tracker with its own
+// entry. A's observe() must still classify against the snapshot A itself
+// peeked at build time — not against whatever the tracker holds by the time
+// A gets around to observing, which by then is B's entry.
+func TestPrefixCacheObserveUsesOwnPeekedSnapshotUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
+	a := &Agent{prefixCache: newPrefixCacheTracker()}
+	model := anthropicPrefixCacheTestModel()
+	identity := SessionContext{BotID: "bot-1", SessionID: "session-1"}
+
+	seed := newPrefixCacheRunConfig(identity, model, "sys", []sdk.Message{sdk.UserMessage("seed")}, 1)
+	a.buildGenerateOptions(context.Background(), seed, nil, nil, nil)
+	a.observePrefixCache(seed)
+
+	// Both A and B peek before either observes.
+	runA := newPrefixCacheRunConfig(identity, model, "sys", []sdk.Message{sdk.UserMessage("seed")}, 1)
+	a.buildGenerateOptions(context.Background(), runA, nil, nil, nil)
+
+	runB := newPrefixCacheRunConfig(identity, model, "sys", []sdk.Message{sdk.UserMessage("totally different content")}, 1)
+	a.buildGenerateOptions(context.Background(), runB, nil, nil, nil)
+
+	// B finishes first, overwriting the tracker with its own entry.
+	a.observePrefixCache(runB)
+	if got := runB.ContextMutations.CacheComparisonValue(); got == nil || got.Outcome != contextfrag.CacheOutcomePrefixChanged {
+		t.Fatalf("runB outcome = %+v, want prefix_changed", got)
+	}
+
+	// A finishes second. Its comparison must be based on what A itself
+	// peeked (the seed entry, same content as A), not on B's now-stored entry.
+	a.observePrefixCache(runA)
+	comparison := runA.ContextMutations.CacheComparisonValue()
+	if comparison == nil {
+		t.Fatal("runA should have recorded a cache comparison")
+	}
+	if comparison.Outcome != contextfrag.CacheOutcomeMissSamePrefix {
+		t.Fatalf("runA outcome = %q, want miss_same_prefix based on its own peeked snapshot (same content as seed), not a misclassification from racing against runB's later write", comparison.Outcome)
 	}
 }
