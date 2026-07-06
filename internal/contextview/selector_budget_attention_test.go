@@ -90,7 +90,14 @@ func TestBudgetAttention_UntieredOnlyKeepsOldestFirstOrder(t *testing.T) {
 	assertDroppedReason(t, result, "untiered-1", budgetDropReasonUntiered)
 }
 
-func TestBudgetAttention_RecentWindowProtectsPassive(t *testing.T) {
+// The recent-protect window scopes protection to units sharing a tier, not
+// across tiers: attention is the primary key and window membership only
+// breaks ties within a shared tier. A directed unit sitting outside the
+// window must never drop before a passive unit sitting inside it — that
+// cross-tier case is exactly where a fixed window-as-primary-band ordering
+// used to drop a directed message 21K tokens back to protect in-window
+// passive chatter.
+func TestBudgetAttention_DirectedOutsideWindowNeverDropsBeforePassiveInsideWindow(t *testing.T) {
 	t.Parallel()
 
 	frags := []contextfrag.ContextFrag{
@@ -101,8 +108,8 @@ func TestBudgetAttention_RecentWindowProtectsPassive(t *testing.T) {
 
 	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 200, RecentProtectTokens: 100})
 
-	assertSelectedIDs(t, result, []string{"passive-recent", "latest"})
-	assertDroppedReason(t, result, "directed-old", budgetDropReasonDirected)
+	assertSelectedIDs(t, result, []string{"directed-old", "latest"})
+	assertDroppedReason(t, result, "passive-recent", budgetDropReasonRecentWindow)
 }
 
 // When the budget is too small to hold the recent-protect window, the window
@@ -620,11 +627,17 @@ func TestBudgetAttention_DropReasonHistogram(t *testing.T) {
 
 	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 150, RecentProtectTokens: 200})
 
-	assertSelectedIDs(t, result, []string{"passive-recent", "latest"})
+	// Attention dominates window membership: the passive tier (both
+	// passive-1 outside the window and passive-recent inside it) clears
+	// entirely before the untiered or directed tiers give up anything, so
+	// pressure this tight drops every pool unit, including the in-window
+	// passive-recent — window membership only orders drops within a tier.
+	assertSelectedIDs(t, result, []string{"latest"})
 	histogram := dropReasonHistogram(result.Summary.DropReasons)
 	want := map[string]int{
 		budgetDropReasonOrphanExchange: 1,
 		budgetDropReasonPassive:        1,
+		budgetDropReasonRecentWindow:   1,
 		budgetDropReasonUntiered:       1,
 		budgetDropReasonDirected:       1,
 	}

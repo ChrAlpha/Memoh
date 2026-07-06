@@ -297,24 +297,23 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		protectedStart--
 	}
 
-	dropBand := func(band []int, reasonForTier func(int) string) bool {
-		for tier := attentionTierPassive; tier <= attentionTierDirected; tier++ {
-			for _, unitIdx := range band {
-				if total <= maxTokens {
-					return true
-				}
-				unit := &units[unitIdx]
-				if unit.tier() != tier {
-					continue
-				}
-				dropUnit(unit, reasonForTier(tier))
-				total -= unit.tokens
+	outside, inside := pool[:protectedStart], pool[protectedStart:]
+	dropTier := func(band []int, tier int, reason string) {
+		for _, unitIdx := range band {
+			if total <= maxTokens {
+				return
 			}
+			unit := &units[unitIdx]
+			if unit.tier() != tier {
+				continue
+			}
+			dropUnit(unit, reason)
+			total -= unit.tokens
 		}
-		return total <= maxTokens
 	}
-	if !dropBand(pool[:protectedStart], budgetDropReasonForTier) {
-		dropBand(pool[protectedStart:], func(int) string { return budgetDropReasonRecentWindow })
+	for tier := attentionTierPassive; tier <= attentionTierDirected && total > maxTokens; tier++ {
+		dropTier(outside, tier, budgetDropReasonForTier(tier))
+		dropTier(inside, tier, budgetDropReasonRecentWindow)
 	}
 	return drops, reasons
 }
