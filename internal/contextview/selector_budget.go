@@ -20,11 +20,11 @@ const HistoryTrimNotice = "[System Notice] Some earlier and intervening messages
 // Budget drop reasons name the attention band a fragment fell out of, so the
 // lifecycle drop_reasons histogram explains what budget pressure removed.
 const (
-	budgetDropReasonPassive      = "budget:passive"
-	budgetDropReasonUntiered     = "budget:untiered"
-	budgetDropReasonDirected     = "budget:directed"
-	budgetDropReasonRecentWindow = "budget:recent_window"
-	budgetDropReasonOrphanResult = "budget:orphan_tool_result"
+	budgetDropReasonPassive        = "budget:passive"
+	budgetDropReasonUntiered       = "budget:untiered"
+	budgetDropReasonDirected       = "budget:directed"
+	budgetDropReasonRecentWindow   = "budget:recent_window"
+	budgetDropReasonOrphanExchange = "budget:orphan_tool_exchange"
 )
 
 // Attention tiers order budget drops: passive group traffic goes first,
@@ -84,82 +84,112 @@ func (u *budgetUnit) tier() int {
 	return attentionTierUntiered
 }
 
-func (u *budgetUnit) orphanResult() bool {
-	return u.hasResult && !u.hasCall
+// orphanToolExchange reports a unit that carries only one side of a tool
+// exchange: a call nothing ever answers, or a result answering a call that
+// is not (or no longer) in the set. Either shape is a guaranteed provider
+// 400 if it reaches the wire, so both drop unconditionally.
+func (u *budgetUnit) orphanToolExchange() bool {
+	return u.hasCall != u.hasResult
 }
 
-// buildBudgetUnits pairs call and result fragments by tool_call_id in a first
-// pass over the whole set, independent of which one is collected first, then
-// builds the units in a second pass. A single ordered pass would misjudge a
-// result collected before its call as an orphan (unit A: result only) while
-// the call forms its own unit (unit B: call only) — dropping the result
-// unconditionally as a guaranteed 400 while its call survives, the mirror
-// image of the bug it exists to prevent.
+// buildBudgetUnits pairs tool calls with their results in a single forward
+// pass keyed by tool_call_id and scoped to appearance order, not id identity
+// alone: a call opens its id, the next result seen for that id closes it,
+// and the id is then free for a later call to reopen. Backends that emit
+// deterministic per-turn ids (llama.cpp/vLLM style "call_0") reuse the same
+// id across unrelated exchanges; scoping by the currently-open call keeps
+// each exchange its own drop unit instead of collapsing every reuse of an id
+// into one atomic (and possibly permanently undroppable) unit.
+//
+// A call whose id is already open when a new call for that id arrives does
+// not close the earlier one: the earlier call stays open — and therefore
+// orphaned, since nothing will ever close it — while the new call starts its
+// own unit. A result whose id has no open call is likewise an orphan. This
+// symmetric treatment also covers a result observed before its matching
+// call: the result finds no open call (orphan), and the call that follows
+// then opens a unit nothing ever closes (orphan too) — both drop, instead of
+// the old union-find behavior that paired them regardless of order.
 func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
-	n := len(tagged)
-	callIDs := make([][]string, n)
-	resultIDs := make([][]string, n)
-	parent := make([]int, n)
-	for i := range parent {
-		parent[i] = i
-	}
-	find := func(i int) int {
-		for parent[i] != i {
-			parent[i] = parent[parent[i]]
-			i = parent[i]
-		}
-		return i
-	}
+	units := make([]budgetUnit, 0, len(tagged))
+	open := make(map[string]int)
 
-	firstSeen := make(map[string]int)
 	for i, taggedFrag := range tagged {
 		frag := taggedFrag.Frag
-		callIDs[i] = fragToolCallIDs(frag)
-		resultIDs[i] = fragToolResultCallIDs(frag)
-		ids := append(append([]string{}, callIDs[i]...), resultIDs[i]...)
-		for _, id := range ids {
-			seen, ok := firstSeen[id]
+		callIDs := fragToolCallIDs(frag)
+		resultIDs := fragToolResultCallIDs(frag)
+
+		home := -1
+		for _, id := range resultIDs {
+			idx, ok := open[id]
 			if !ok {
-				firstSeen[id] = i
 				continue
 			}
-			if ri, rs := find(i), find(seen); ri != rs {
-				parent[rs] = ri
+			delete(open, id)
+			if home == -1 {
+				home = idx
+				continue
+			}
+			if home != idx {
+				mergeBudgetUnits(units, home, idx, open)
 			}
 		}
-	}
-
-	unitAt := make(map[int]int, n)
-	units := make([]budgetUnit, 0, n)
-	for i, taggedFrag := range tagged {
-		root := find(i)
-		unitIdx, ok := unitAt[root]
-		if !ok {
+		if home == -1 {
 			units = append(units, budgetUnit{droppable: true})
-			unitIdx = len(units) - 1
-			unitAt[root] = unitIdx
+			home = len(units) - 1
 		}
-		frag := taggedFrag.Frag
-		unit := &units[unitIdx]
-		unit.indexes = append(unit.indexes, i)
-		unit.tokens += fragTokenEstimate(frag)
-		if !taggedFrag.HasTag(TagCanDrop) {
-			unit.droppable = false
-		}
-		if len(frag.Scope.Attention) > 0 {
-			if tier := fragAttentionTier(frag); !unit.hasAttention || tier > unit.attentionTier {
-				unit.attentionTier = tier
-			}
-			unit.hasAttention = true
-		}
-		if len(callIDs[i]) > 0 {
-			unit.hasCall = true
-		}
-		if len(resultIDs[i]) > 0 {
-			unit.hasResult = true
+
+		addFragToBudgetUnit(&units[home], i, frag, taggedFrag, len(callIDs) > 0, len(resultIDs) > 0)
+
+		for _, id := range callIDs {
+			open[id] = home
 		}
 	}
 	return units
+}
+
+// mergeBudgetUnits folds src into dest when a single fragment's result parts
+// close calls that opened two different (still-open) units — a batched
+// multi-result tool message answering more than one pending call. It also
+// redirects any other ids still pointing at src, in case src had further
+// calls open elsewhere.
+func mergeBudgetUnits(units []budgetUnit, dest, src int, open map[string]int) {
+	from := units[src]
+	to := &units[dest]
+	to.indexes = append(to.indexes, from.indexes...)
+	to.tokens += from.tokens
+	if from.hasAttention && (!to.hasAttention || from.attentionTier > to.attentionTier) {
+		to.attentionTier = from.attentionTier
+	}
+	to.hasAttention = to.hasAttention || from.hasAttention
+	to.droppable = to.droppable && from.droppable
+	to.hasCall = to.hasCall || from.hasCall
+	to.hasResult = to.hasResult || from.hasResult
+	units[src] = budgetUnit{}
+	for id, idx := range open {
+		if idx == src {
+			open[id] = dest
+		}
+	}
+}
+
+func addFragToBudgetUnit(unit *budgetUnit, index int, frag contextfrag.ContextFrag, taggedFrag TaggedFrag, hasCall, hasResult bool) {
+	unit.indexes = append(unit.indexes, index)
+	unit.tokens += fragTokenEstimate(frag)
+	if !taggedFrag.HasTag(TagCanDrop) {
+		unit.droppable = false
+	}
+	if len(frag.Scope.Attention) > 0 {
+		if tier := fragAttentionTier(frag); !unit.hasAttention || tier > unit.attentionTier {
+			unit.attentionTier = tier
+		}
+		unit.hasAttention = true
+	}
+	if hasCall {
+		unit.hasCall = true
+	}
+	if hasResult {
+		unit.hasResult = true
+	}
 }
 
 func fragToolCallIDs(frag contextfrag.ContextFrag) []string {
@@ -202,13 +232,17 @@ func fragToolResultCallIDs(frag contextfrag.ContextFrag) []string {
 // budget pressure. The drop order is a fixed total order that depends only on
 // the fragments and the recent-protect window, never on the budget:
 //
-//  1. Droppable orphan tool-result units (no matching call anywhere in the
-//     set) drop unconditionally: they are a guaranteed provider 400.
-//  2. Units older than the recent-protect window drop tier by tier (passive,
-//     then untiered, then directed), oldest first within a tier.
-//  3. Units inside the window follow in the same tier order, reported as
-//     budget:recent_window: the window yields last, and only under budgets
-//     too small to hold it.
+//  1. Droppable orphan tool-call/tool-result units (the other half of the
+//     exchange is missing anywhere in the set) drop unconditionally: left in
+//     place they are a guaranteed provider 400.
+//  2. The remaining units drop tier by tier — passive, then untiered, then
+//     directed — so a directed unit never drops before a passive or
+//     untiered one, regardless of where either sits.
+//  3. Within a tier, units outside the recent-protect window drop before
+//     units inside it (reported as budget:recent_window), oldest first in
+//     both halves. The window is a tie-break within a shared tier, not a
+//     competing band: it can never buy a passive unit survival over a
+//     directed one.
 //
 // Each spatial drop happens only while the droppable total still exceeds the
 // budget — the fit check is the sole budget-dependent point. A larger budget
@@ -242,8 +276,8 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		if !unit.droppable {
 			continue
 		}
-		if unit.orphanResult() {
-			dropUnit(unit, budgetDropReasonOrphanResult)
+		if unit.orphanToolExchange() {
+			dropUnit(unit, budgetDropReasonOrphanExchange)
 			continue
 		}
 		pool = append(pool, i)
@@ -291,7 +325,7 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 // fit) is never raised over an orphan-only drop that would have fit as-is.
 func hasSpatialBudgetDrop(reasons map[int]string) bool {
 	for _, reason := range reasons {
-		if reason != budgetDropReasonOrphanResult {
+		if reason != budgetDropReasonOrphanExchange {
 			return true
 		}
 	}

@@ -360,7 +360,7 @@ func TestBudgetAttention_OrphanToolResultDroppedEvenUnderBudget(t *testing.T) {
 	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 1000})
 
 	assertSelectedIDs(t, result, []string{"plain-old", "latest"})
-	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanResult)
+	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanExchange)
 	if result.TrimNotice {
 		t.Fatal("an orphan-only drop is not a space trim and must not raise a trim notice")
 	}
@@ -383,18 +383,96 @@ func TestBudgetAttention_OrphanPlusSpatialDropRaisesTrimNotice(t *testing.T) {
 	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 50})
 
 	assertSelectedIDs(t, result, []string{"latest"})
-	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanResult)
+	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanExchange)
 	assertDroppedReason(t, result, "passive-old", budgetDropReasonPassive)
 	if !result.TrimNotice {
 		t.Fatal("a genuine space trim alongside an orphan drop must still raise the trim notice")
 	}
 }
 
-// buildBudgetUnits pairs a tool call with its result regardless of which one
-// is collected first: a result seen before its call must join the same unit
-// and share its fate, never drop unconditionally as a false orphan while the
-// call it belongs to survives (a provider 400 the other way around).
-func TestBudgetAttention_ResultBeforeCallPairsIntoSameUnit(t *testing.T) {
+// buildBudgetUnits scopes tool-call pairing to appearance order: a call
+// opens its tool_call_id, the next result seen for that id closes it, and
+// the id is then free for a later call to reopen. Backends that emit
+// deterministic per-turn ids (llama.cpp/vLLM style "call_0") reuse the same
+// id across unrelated exchanges; without appearance-order scoping, reusing
+// an id collapses two independent exchanges into one atomic drop unit. Here
+// the budget only needs the older exchange gone — the newer, smaller reuse
+// of the same id must survive on its own instead of being dragged along.
+func TestBudgetAttention_ReusedToolCallIDKeepsExchangesIndependent(t *testing.T) {
+	t.Parallel()
+
+	oldCall := toolCallFrag("old-call", "search", "call_0")
+	oldCall.TokenEstimate = 50
+	oldCall.Scope.Attention = []contextfrag.AttentionReason{contextfrag.AttentionPassive}
+	oldResult := toolResultFrag("old-result", "search", "call_0", "found")
+	oldResult.TokenEstimate = 50
+
+	newCall := toolCallFrag("new-call", "search", "call_0")
+	newCall.TokenEstimate = 25
+	newCall.Scope.Attention = []contextfrag.AttentionReason{contextfrag.AttentionPassive}
+	newResult := toolResultFrag("new-result", "search", "call_0", "found")
+	newResult.TokenEstimate = 25
+
+	frags := []contextfrag.ContextFrag{
+		oldCall,
+		oldResult,
+		newCall,
+		newResult,
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 50})
+
+	assertSelectedIDs(t, result, []string{"new-call", "new-result", "latest"})
+	assertDroppedReason(t, result, "old-call", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "old-result", budgetDropReasonPassive)
+}
+
+// A must-keep marker on a newer reused-id exchange must not contaminate an
+// unrelated older exchange sharing the same tool_call_id: id-keyed merging
+// (rather than appearance-order scoping) would fold both into one unit,
+// have the must-keep tag make the whole thing undroppable, and blow through
+// the budget with the older exchange still attached — a guaranteed 400 that
+// nothing in the older exchange itself justifies.
+func TestBudgetAttention_ReusedToolCallIDOldExchangeDropsDespiteNewMustKeep(t *testing.T) {
+	t.Parallel()
+
+	oldCall := toolCallFrag("old-call", "search", "call_0")
+	oldCall.TokenEstimate = 5000
+	oldCall.Scope.Attention = []contextfrag.AttentionReason{contextfrag.AttentionPassive}
+	oldResult := toolResultFrag("old-result", "search", "call_0", "found")
+	oldResult.TokenEstimate = 5000
+
+	newCall := toolCallFrag("new-call", "search", "call_0")
+	newCall.TokenEstimate = 50
+	newCall.Budget.Overflow = contextfrag.OverflowKeep
+	newResult := toolResultFrag("new-result", "search", "call_0", "found")
+	newResult.TokenEstimate = 50
+
+	frags := []contextfrag.ContextFrag{
+		oldCall,
+		oldResult,
+		newCall,
+		newResult,
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 200})
+
+	assertSelectedIDs(t, result, []string{"new-call", "new-result", "latest"})
+	assertDroppedReason(t, result, "old-call", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "old-result", budgetDropReasonPassive)
+}
+
+// A result observed before any call for its id has no open unit to close —
+// it is itself an orphan — and the call that later opens the same id is
+// never closed by anything after it, so it is an orphan too. Appearance-
+// order scoping drops both unconditionally instead of the old union-find
+// behavior that paired them regardless of order: result-before-call for the
+// same id is not a shape real backends produce (ids are reused strictly
+// call-then-result), so pairing it was solving a problem this design
+// doesn't have, at the cost of ever dropping a genuine orphan wrong.
+func TestBudgetAttention_ResultBeforeCallBothOrphan(t *testing.T) {
 	t.Parallel()
 
 	early := toolResultFrag("early-result", "search", "call-1", "found")
@@ -410,11 +488,14 @@ func TestBudgetAttention_ResultBeforeCallPairsIntoSameUnit(t *testing.T) {
 		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
 	}
 
-	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 150})
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 1000})
 
 	assertSelectedIDs(t, result, []string{"directed-old", "latest"})
-	assertDroppedReason(t, result, "early-result", budgetDropReasonPassive)
-	assertDroppedReason(t, result, "later-call", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "early-result", budgetDropReasonOrphanExchange)
+	assertDroppedReason(t, result, "later-call", budgetDropReasonOrphanExchange)
+	if result.TrimNotice {
+		t.Fatal("orphan-only drops must not raise the trim notice")
+	}
 }
 
 // Drops within a tier are contiguous oldest-first; priority no longer
@@ -542,10 +623,10 @@ func TestBudgetAttention_DropReasonHistogram(t *testing.T) {
 	assertSelectedIDs(t, result, []string{"passive-recent", "latest"})
 	histogram := dropReasonHistogram(result.Summary.DropReasons)
 	want := map[string]int{
-		budgetDropReasonOrphanResult: 1,
-		budgetDropReasonPassive:      1,
-		budgetDropReasonUntiered:     1,
-		budgetDropReasonDirected:     1,
+		budgetDropReasonOrphanExchange: 1,
+		budgetDropReasonPassive:        1,
+		budgetDropReasonUntiered:       1,
+		budgetDropReasonDirected:       1,
 	}
 	for reason, count := range want {
 		if histogram[reason] != count {
