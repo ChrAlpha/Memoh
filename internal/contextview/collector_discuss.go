@@ -78,7 +78,7 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 			frags = append(frags, discussTRFrag(entry.tr, entry.index, req.Scope))
 		}
 	}
-	frags = injectDiscussImages(frags, cfg.InlineImages, req.Scope)
+	frags = injectDiscussImages(frags, cfg.InlineImages)
 	if lateBinding := strings.TrimSpace(cfg.LateBinding); lateBinding != "" {
 		frags = append(frags, discussLateBindingFrag(lateBinding, req.Scope))
 	}
@@ -88,7 +88,7 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 // injectDiscussImages mirrors the legacy inject-into-last-user-message
 // behavior at fragment granularity: the freshest user-visible message carries
 // the native image parts; without a user message the images are dropped.
-func injectDiscussImages(frags []contextfrag.ContextFrag, images []sdk.ImagePart, scope contextfrag.Scope) []contextfrag.ContextFrag {
+func injectDiscussImages(frags []contextfrag.ContextFrag, images []sdk.ImagePart) []contextfrag.ContextFrag {
 	extra := make([]sdk.MessagePart, 0, len(images))
 	for _, img := range images {
 		if strings.TrimSpace(img.Image) != "" {
@@ -105,20 +105,7 @@ func injectDiscussImages(frags []contextfrag.ContextFrag, images []sdk.ImagePart
 		}
 		enriched := *msg
 		enriched.Content = append(append([]sdk.MessagePart(nil), msg.Content...), extra...)
-		frags[i] = contextfrag.MessageFrag(contextfrag.MessageFragInput{
-			ID:         frags[i].ID,
-			Message:    enriched,
-			Kind:       frags[i].Kind,
-			Slot:       frags[i].Slot,
-			Priority:   frags[i].Priority,
-			CacheClass: frags[i].CacheClass,
-			Trust:      frags[i].Trust,
-			Scope:      scope,
-			Source:     frags[i].Provenance.Source,
-			SourceID:   frags[i].Provenance.SourceID,
-			Collector:  frags[i].Provenance.Collector,
-			Index:      frags[i].Provenance.Index,
-		})
+		frags[i] = contextfrag.RebuildFragMessage(frags[i], enriched)
 		return frags
 	}
 	return frags

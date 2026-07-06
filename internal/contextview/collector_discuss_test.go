@@ -560,6 +560,45 @@ func TestDiscussCollectorInjectsImagesIntoLastUserFrag(t *testing.T) {
 	}
 }
 
+func TestDiscussImageInjectionPreservesPerSegmentScope(t *testing.T) {
+	t.Parallel()
+
+	seg := renderedTextSegment(100, "photo msg")
+	seg.MentionsMe = true
+	seg.Meta = &pipeline.SegmentMeta{MessageID: "msg-7"}
+	seg.ImageRefs = []pipeline.ImageAttachmentRef{{ContentHash: "hash-1", Mime: "image/jpeg"}}
+	base := contextfrag.Scope{BotID: "bot-1", ConversationType: "group"}
+
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{
+		RC:           pipeline.RenderedContext{seg},
+		InlineImages: []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+	})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	msg := discussFragMessageT(t, frags[0])
+	foundImage := false
+	for _, part := range msg.Content {
+		if _, ok := part.(sdk.ImagePart); ok {
+			foundImage = true
+		}
+	}
+	if !foundImage {
+		t.Fatalf("image not injected: %#v", msg.Content)
+	}
+	scope := frags[0].Scope
+	if scope.Metadata["image_refs"] != "hash-1:image/jpeg" {
+		t.Fatalf("image injection dropped image_refs metadata, got %#v", scope.Metadata)
+	}
+	if scope.CurrentMessageID != "msg-7" {
+		t.Fatalf("image injection dropped per-segment CurrentMessageID, got %q", scope.CurrentMessageID)
+	}
+	if len(scope.Attention) != 1 || scope.Attention[0] != contextfrag.AttentionMention {
+		t.Fatalf("image injection dropped per-segment Attention, got %v", scope.Attention)
+	}
+}
+
 func TestDiscussCollectorDropsImagesWithoutUserMessage(t *testing.T) {
 	t.Parallel()
 
