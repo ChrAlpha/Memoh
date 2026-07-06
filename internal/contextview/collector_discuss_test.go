@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -266,7 +267,8 @@ func TestDiscussCollectorPerFragScopeAttentionVariants(t *testing.T) {
 		{"group reply", "group", false, true, []contextfrag.AttentionReason{contextfrag.AttentionReply}},
 		{"direct", "direct", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
 		{"private", "private", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
-		{"empty type treated as direct", "", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+		{"empty type in history is passive", "", false, false, []contextfrag.AttentionReason{contextfrag.AttentionPassive}},
+		{"empty type with mention keeps mention only", "", true, false, []contextfrag.AttentionReason{contextfrag.AttentionMention}},
 		{"thread passive", "thread", false, false, []contextfrag.AttentionReason{contextfrag.AttentionPassive}},
 	}
 	for _, tc := range cases {
@@ -291,6 +293,42 @@ func TestDiscussCollectorPerFragScopeAttentionVariants(t *testing.T) {
 				if got[i] != tc.want[i] {
 					t.Fatalf("Attention = %v, want %v", got, tc.want)
 				}
+			}
+		})
+	}
+}
+
+func TestDiscussCollectorSegmentConversationTypeOverridesTurnType(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		turnType    string
+		segmentType string
+		want        []contextfrag.AttentionReason
+	}{
+		{"group segment in direct turn", "direct", "group", []contextfrag.AttentionReason{contextfrag.AttentionPassive}},
+		{"direct segment in group turn", "group", "direct", []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+		{"empty segment type falls back to turn type", "direct", "", []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			seg := renderedTextSegment(100, "hi")
+			seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1"}
+			seg.IC = &pipeline.ICMessage{
+				MessageID:    "m-1",
+				Conversation: pipeline.ConversationMeta{Channel: "telegram", ConversationType: tc.segmentType},
+			}
+			base := contextfrag.Scope{BotID: "bot-1", ConversationType: tc.turnType}
+
+			frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+			if len(frags) != 1 {
+				t.Fatalf("frags = %d, want 1", len(frags))
+			}
+			if got := frags[0].Scope.Attention; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("Attention = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -227,37 +227,20 @@ func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) 
 	return out
 }
 
-// discussSegmentAttention mirrors the chat-side contextFragAttentionReasons
-// derivation (internal/conversation/flow/context_frag.go) for the reasons a
-// passive discuss segment can carry: mention, reply-to-bot, direct, passive.
-func discussSegmentAttention(seg pipeline.RenderedSegment, conversationType string) []contextfrag.AttentionReason {
-	var reasons []contextfrag.AttentionReason
-	add := func(reason contextfrag.AttentionReason) {
-		for _, existing := range reasons {
-			if existing == reason {
-				return
-			}
-		}
-		reasons = append(reasons, reason)
+// discussSegmentAttention shares the chat-side attention core
+// (contextfrag.DeriveAttention) but prefers the segment's own conversation
+// type over the turn's and buckets an unknown type as passive group history.
+func discussSegmentAttention(seg pipeline.RenderedSegment, turnConversationType string) []contextfrag.AttentionReason {
+	conversationType := turnConversationType
+	if seg.IC != nil && strings.TrimSpace(seg.IC.Conversation.ConversationType) != "" {
+		conversationType = seg.IC.Conversation.ConversationType
 	}
-	if seg.MentionsMe {
-		add(contextfrag.AttentionMention)
-	}
-	if seg.RepliesToMe {
-		add(contextfrag.AttentionReply)
-	}
-	switch strings.ToLower(strings.TrimSpace(conversationType)) {
-	case conversation.KindDirect, "private", "":
-		add(contextfrag.AttentionDirect)
-	case conversation.KindGroup, conversation.KindThread:
-		if len(reasons) == 0 {
-			add(contextfrag.AttentionPassive)
-		}
-	}
-	if len(reasons) == 0 {
-		add(contextfrag.AttentionPassive)
-	}
-	return reasons
+	return contextfrag.DeriveAttention(contextfrag.AttentionDerivation{
+		ConversationType: conversationType,
+		MentionsBot:      seg.MentionsMe,
+		RepliesToBot:     seg.RepliesToMe,
+		UnknownTypeKind:  conversation.KindGroup,
+	})
 }
 
 func discussRCText(seg pipeline.RenderedSegment) string {

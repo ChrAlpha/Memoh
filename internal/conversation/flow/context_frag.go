@@ -36,42 +36,20 @@ func buildContextFragScope(req conversation.ChatRequest, displayName string, ide
 }
 
 func contextFragAttentionReasons(req conversation.ChatRequest) []contextfrag.AttentionReason {
-	var reasons []contextfrag.AttentionReason
-	add := func(reason contextfrag.AttentionReason) {
-		for _, existing := range reasons {
-			if existing == reason {
-				return
-			}
-		}
-		reasons = append(reasons, reason)
+	derivation := contextfrag.AttentionDerivation{
+		ConversationType: req.ConversationType,
+		MentionsBot:      req.MentionsBot,
+		RepliesToBot:     req.RepliesToBot,
+		UnknownTypeKind:  conversation.KindDirect,
 	}
-
 	switch strings.TrimSpace(req.SessionType) {
 	case sessionmode.Schedule:
-		add(contextfrag.AttentionSchedule)
+		derivation.Leading = []contextfrag.AttentionReason{contextfrag.AttentionSchedule}
 	case sessionmode.Heartbeat:
-		add(contextfrag.AttentionHeartbeat)
+		derivation.Leading = []contextfrag.AttentionReason{contextfrag.AttentionHeartbeat}
 	}
-	if req.MentionsBot {
-		add(contextfrag.AttentionMention)
+	if query := strings.TrimSpace(firstNonEmpty(req.RawQuery, req.Query)); strings.HasPrefix(query, "/") {
+		derivation.Trailing = []contextfrag.AttentionReason{contextfrag.AttentionCommand}
 	}
-	if req.RepliesToBot {
-		add(contextfrag.AttentionReply)
-	}
-	query := strings.TrimSpace(firstNonEmpty(req.RawQuery, req.Query))
-	if strings.HasPrefix(query, "/") {
-		add(contextfrag.AttentionCommand)
-	}
-	switch strings.ToLower(strings.TrimSpace(req.ConversationType)) {
-	case conversation.KindDirect, "private", "":
-		add(contextfrag.AttentionDirect)
-	case conversation.KindGroup, conversation.KindThread:
-		if len(reasons) == 0 {
-			add(contextfrag.AttentionPassive)
-		}
-	}
-	if len(reasons) == 0 {
-		add(contextfrag.AttentionPassive)
-	}
-	return reasons
+	return contextfrag.DeriveAttention(derivation)
 }
