@@ -10,6 +10,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/pipeline"
 )
 
@@ -196,12 +197,66 @@ func discussRCFrag(seg pipeline.RenderedSegment, index int, scope contextfrag.Sc
 		Priority:   contextfrag.PriorityForMessage(msg),
 		CacheClass: contextfrag.CacheNever,
 		Trust:      contextfrag.TrustExternal,
-		Scope:      scope,
+		Scope:      discussSegmentScope(seg, scope),
 		Source:     discussContextSource,
 		SourceID:   fmt.Sprintf("rc.%03d", index),
 		Collector:  discussContextCollectorName,
 		Index:      index,
 	}), true
+}
+
+// discussSegmentScope narrows the whole-turn scope to the segment's own
+// message when the renderer supplied structured metadata; fixture segments
+// without metadata keep the turn scope untouched.
+func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) contextfrag.Scope {
+	meta := seg.Meta
+	if meta == nil {
+		return scope
+	}
+	out := scope
+	out.CurrentMessageID = strings.TrimSpace(meta.MessageID)
+	out.ReplyToMessageID = strings.TrimSpace(meta.ReplyToMessageID)
+	out.ReplySender = strings.TrimSpace(meta.ReplyToSender)
+	out.ForwardMessageID = strings.TrimSpace(meta.ForwardMessageID)
+	out.ForwardFromUserID = strings.TrimSpace(meta.ForwardFromUserID)
+	out.ForwardFromConversationID = strings.TrimSpace(meta.ForwardFromConversationID)
+	out.MentionsBot = seg.MentionsMe
+	out.RepliesToBot = seg.RepliesToMe
+	out.Attention = discussSegmentAttention(seg, out.ConversationType)
+	return out
+}
+
+// discussSegmentAttention mirrors the chat-side contextFragAttentionReasons
+// derivation (internal/conversation/flow/context_frag.go) for the reasons a
+// passive discuss segment can carry: mention, reply-to-bot, direct, passive.
+func discussSegmentAttention(seg pipeline.RenderedSegment, conversationType string) []contextfrag.AttentionReason {
+	var reasons []contextfrag.AttentionReason
+	add := func(reason contextfrag.AttentionReason) {
+		for _, existing := range reasons {
+			if existing == reason {
+				return
+			}
+		}
+		reasons = append(reasons, reason)
+	}
+	if seg.MentionsMe {
+		add(contextfrag.AttentionMention)
+	}
+	if seg.RepliesToMe {
+		add(contextfrag.AttentionReply)
+	}
+	switch strings.ToLower(strings.TrimSpace(conversationType)) {
+	case conversation.KindDirect, "private", "":
+		add(contextfrag.AttentionDirect)
+	case conversation.KindGroup, conversation.KindThread:
+		if len(reasons) == 0 {
+			add(contextfrag.AttentionPassive)
+		}
+	}
+	if len(reasons) == 0 {
+		add(contextfrag.AttentionPassive)
+	}
+	return reasons
 }
 
 func discussRCText(seg pipeline.RenderedSegment) string {

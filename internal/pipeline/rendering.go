@@ -21,6 +21,24 @@ type ImageAttachmentRef struct {
 	Mime        string `json:"mime,omitempty"`
 }
 
+// SegmentMeta carries the structured message fields behind a rendered
+// message segment, so downstream consumers do not have to re-parse the XML.
+type SegmentMeta struct {
+	MessageID                 string
+	SenderID                  string
+	SenderDisplayName         string
+	SenderUsername            string
+	SenderIsBot               bool
+	ReplyToMessageID          string
+	ReplyToSender             string
+	ForwardMessageID          string
+	ForwardFromUserID         string
+	ForwardFromConversationID string
+	TimestampSec              int64
+	Edited                    bool
+	Deleted                   bool
+}
+
 // RenderedSegment is a single segment of rendered context, one per IC node.
 type RenderedSegment struct {
 	ReceivedAtMs int64                  `json:"received_at_ms"`
@@ -30,6 +48,8 @@ type RenderedSegment struct {
 	MentionsMe   bool                   `json:"mentions_me,omitempty"`
 	RepliesToMe  bool                   `json:"replies_to_me,omitempty"`
 	ImageRefs    []ImageAttachmentRef   `json:"image_refs,omitempty"`
+	Meta         *SegmentMeta           `json:"-"`
+	IC           *ICMessage             `json:"-"`
 }
 
 // RenderedContext is the output of the Rendering layer — a slice of segments.
@@ -74,7 +94,33 @@ func RCToXML(rc RenderedContext) string {
 	return sb.String()
 }
 
+func segmentMeta(msg *ICMessage, params RenderParams) *SegmentMeta {
+	meta := &SegmentMeta{
+		MessageID:        msg.MessageID,
+		ReplyToMessageID: msg.ReplyToMessageID,
+		TimestampSec:     msg.TimestampSec,
+		Edited:           msg.EditedAtSec > 0,
+		Deleted:          msg.Deleted,
+	}
+	if msg.Sender != nil {
+		meta.SenderID = msg.Sender.ID
+		meta.SenderDisplayName = msg.Sender.DisplayName
+		meta.SenderUsername = msg.Sender.Username
+		meta.SenderIsBot = msg.Sender.IsBot
+	}
+	if msg.ReplyToSender != nil {
+		meta.ReplyToSender = formatSender(msg.ReplyToSender, params.ContactNames)
+	}
+	if msg.ForwardInfo != nil {
+		meta.ForwardMessageID = msg.ForwardInfo.MessageID
+		meta.ForwardFromUserID = msg.ForwardInfo.FromUserID
+		meta.ForwardFromConversationID = msg.ForwardInfo.FromConversationID
+	}
+	return meta
+}
+
 func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
+	icCopy := *msg
 	isMyself := params.BotUserID != "" && msg.Sender != nil && msg.Sender.ID == params.BotUserID
 	mentionsMe := msg.MentionsMe || (params.BotUserID != "" && hasMention(msg.Content, params.BotUserID))
 	repliesToMe := msg.RepliesToMe || (params.BotUserID != "" && msg.ReplyToSender != nil && msg.ReplyToSender.ID == params.BotUserID)
@@ -121,6 +167,8 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 			IsSelfSent:   msg.IsSelfSent,
 			MentionsMe:   mentionsMe,
 			RepliesToMe:  repliesToMe,
+			Meta:         segmentMeta(msg, params),
+			IC:           &icCopy,
 		}
 	}
 
@@ -169,6 +217,8 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 		MentionsMe:   mentionsMe,
 		RepliesToMe:  repliesToMe,
 		ImageRefs:    imageRefs,
+		Meta:         segmentMeta(msg, params),
+		IC:           &icCopy,
 	}
 }
 

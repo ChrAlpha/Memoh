@@ -196,6 +196,156 @@ func discussFragMessageT(t *testing.T, frag contextfrag.ContextFrag) sdk.Message
 	return *msg
 }
 
+func TestDiscussCollectorPerFragScopeFromSegmentMeta(t *testing.T) {
+	t.Parallel()
+
+	base := contextfrag.Scope{
+		BotID:            "bot-1",
+		SessionID:        "s1",
+		Platform:         "telegram",
+		ConversationType: "group",
+	}
+	seg := renderedTextSegment(100, "structured")
+	seg.MentionsMe = true
+	seg.RepliesToMe = true
+	seg.Meta = &pipeline.SegmentMeta{
+		MessageID:                 "msg-7",
+		SenderID:                  "u-1",
+		ReplyToMessageID:          "msg-3",
+		ReplyToSender:             "Bob",
+		ForwardMessageID:          "fwd-1",
+		ForwardFromUserID:         "u-9",
+		ForwardFromConversationID: "conv-9",
+		TimestampSec:              1,
+	}
+
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	scope := frags[0].Scope
+	if scope.BotID != "bot-1" || scope.SessionID != "s1" || scope.Platform != "telegram" || scope.ConversationType != "group" {
+		t.Fatalf("session-level scope fields must be preserved, got %+v", scope)
+	}
+	if scope.CurrentMessageID != "msg-7" {
+		t.Fatalf("CurrentMessageID = %q, want msg-7", scope.CurrentMessageID)
+	}
+	if scope.ReplyToMessageID != "msg-3" || scope.ReplySender != "Bob" {
+		t.Fatalf("reply fields = %q/%q, want msg-3/Bob", scope.ReplyToMessageID, scope.ReplySender)
+	}
+	if scope.ForwardMessageID != "fwd-1" || scope.ForwardFromUserID != "u-9" || scope.ForwardFromConversationID != "conv-9" {
+		t.Fatalf("forward fields = %q/%q/%q", scope.ForwardMessageID, scope.ForwardFromUserID, scope.ForwardFromConversationID)
+	}
+	if !scope.MentionsBot || !scope.RepliesToBot {
+		t.Fatalf("MentionsBot/RepliesToBot = %v/%v, want true/true", scope.MentionsBot, scope.RepliesToBot)
+	}
+	wantAttention := []contextfrag.AttentionReason{contextfrag.AttentionMention, contextfrag.AttentionReply}
+	if len(scope.Attention) != len(wantAttention) {
+		t.Fatalf("Attention = %v, want %v", scope.Attention, wantAttention)
+	}
+	for i := range wantAttention {
+		if scope.Attention[i] != wantAttention[i] {
+			t.Fatalf("Attention = %v, want %v", scope.Attention, wantAttention)
+		}
+	}
+}
+
+func TestDiscussCollectorPerFragScopeAttentionVariants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name             string
+		conversationType string
+		mentions         bool
+		replies          bool
+		want             []contextfrag.AttentionReason
+	}{
+		{"group passive", "group", false, false, []contextfrag.AttentionReason{contextfrag.AttentionPassive}},
+		{"group mention", "group", true, false, []contextfrag.AttentionReason{contextfrag.AttentionMention}},
+		{"group reply", "group", false, true, []contextfrag.AttentionReason{contextfrag.AttentionReply}},
+		{"direct", "direct", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+		{"private", "private", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+		{"empty type treated as direct", "", false, false, []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
+		{"thread passive", "thread", false, false, []contextfrag.AttentionReason{contextfrag.AttentionPassive}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			seg := renderedTextSegment(100, "hi")
+			seg.MentionsMe = tc.mentions
+			seg.RepliesToMe = tc.replies
+			seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1"}
+			base := contextfrag.Scope{BotID: "bot-1", ConversationType: tc.conversationType}
+
+			frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+			if len(frags) != 1 {
+				t.Fatalf("frags = %d, want 1", len(frags))
+			}
+			got := frags[0].Scope.Attention
+			if len(got) != len(tc.want) {
+				t.Fatalf("Attention = %v, want %v", got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("Attention = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscussCollectorNilMetaKeepsWholeTurnScope(t *testing.T) {
+	t.Parallel()
+
+	base := contextfrag.Scope{BotID: "bot-1", SessionID: "s1", ConversationType: "group"}
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{
+		RC: pipeline.RenderedContext{renderedTextSegment(100, "plain")},
+	})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	scope := frags[0].Scope
+	if scope.CurrentMessageID != "" || scope.MentionsBot || len(scope.Attention) != 0 {
+		t.Fatalf("nil-Meta segment must keep the whole-turn scope untouched, got %+v", scope)
+	}
+}
+
+func TestDiscussCollectorPerFragScopeDoesNotChangePayloadHash(t *testing.T) {
+	t.Parallel()
+
+	plain := renderedTextSegment(100, "same text")
+	structured := renderedTextSegment(100, "same text")
+	structured.MentionsMe = true
+	structured.Meta = &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1"}
+	base := contextfrag.Scope{BotID: "bot-1", ConversationType: "group"}
+
+	plainFrags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{plain}})
+	structuredFrags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{structured}})
+
+	_, plainHash := renderSDKPayload(t, plainFrags, placementFor(plainFrags))
+	_, structuredHash := renderSDKPayload(t, structuredFrags, placementFor(structuredFrags))
+	if plainHash != structuredHash {
+		t.Fatalf("per-frag scope must not enter the payload hash: %q != %q", plainHash, structuredHash)
+	}
+}
+
+func collectDiscussContextScoped(t *testing.T, scope contextfrag.Scope, cfg DiscussContextConfig) []contextfrag.ContextFrag {
+	t.Helper()
+	collector := &DiscussContextCollector{}
+	frags, err := collector.Collect(context.Background(), CollectRequest{
+		Scope:  scope,
+		Intent: contextfrag.IntentDiscussReply,
+		Config: cfg,
+	})
+	if err != nil {
+		t.Fatalf("Collect() error: %v", err)
+	}
+	return frags
+}
+
 func TestDiscussCollectorAppendsLateBindingLast(t *testing.T) {
 	t.Parallel()
 
