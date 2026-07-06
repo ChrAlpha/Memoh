@@ -625,6 +625,18 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	sendEvent(deliveryCtx, ch, termEvent)
 }
 
+// prefixCacheSessionKey derives the per-session key the prefix cache tracker
+// keys its entries by. Returns "" when either identifier is blank, meaning
+// the run cannot be attributed to a tracked session.
+func prefixCacheSessionKey(identity SessionContext) string {
+	botID := strings.TrimSpace(identity.BotID)
+	sessionID := strings.TrimSpace(identity.SessionID)
+	if botID == "" || sessionID == "" {
+		return ""
+	}
+	return botID + ":" + sessionID
+}
+
 // observePrefixCache compares this run's rendered stable prefix with the
 // previous run of the same session and records the attribution on the
 // mutation ledger, so the persisted snapshot explains cache behaviour
@@ -638,19 +650,22 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 	if plan == nil || plan.RenderedStablePrefixHash == "" {
 		return
 	}
-	botID := strings.TrimSpace(cfg.Identity.BotID)
-	sessionID := strings.TrimSpace(cfg.Identity.SessionID)
-	if botID == "" || sessionID == "" {
+	key := prefixCacheSessionKey(cfg.Identity)
+	if key == "" {
 		return
 	}
+	botID := strings.TrimSpace(cfg.Identity.BotID)
+	sessionID := strings.TrimSpace(cfg.Identity.SessionID)
 	firstStepCacheRead := 0
 	if records := cfg.ContextMutations.CacheUsageRecords(); len(records) > 0 {
 		firstStepCacheRead = records[0].CacheReadTokens
 	}
 	now := time.Now()
 	model := modelID(cfg.Model)
-	prev, hasPrev := a.prefixCache.observe(botID+":"+sessionID, plan.RenderedStablePrefixHash, model, now)
-	comparison := compareCachePrefix(prev, hasPrev, plan.RenderedStablePrefixHash, model, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
+	nowCount := cfg.ContextMutations.RenderedPrefixMessageCount()
+	prevBoundaryHash := cfg.ContextMutations.PrevBoundaryHash()
+	prev, hasPrev := a.prefixCache.observe(key, nowCount, plan.RenderedStablePrefixHash, model, now)
+	comparison := compareCachePrefix(prev, hasPrev, nowCount, plan.RenderedStablePrefixHash, model, prevBoundaryHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
 	cfg.ContextMutations.SetCacheComparison(comparison)
 
 	if comparison.Outcome == contextfrag.CacheOutcomeMissSamePrefix &&
@@ -857,6 +872,8 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, tools,
 	)
 	initialProviderMessageCount := len(messages)
+	prefixCount := renderedStableMessageCount(cfg.ContextCachePlan, messages, systemPrepended)
+	a.recordPrefixCacheBoundary(cfg, system, messages, tools, prefixCount)
 	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, system, messages, tools, systemPrepended)
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
@@ -966,6 +983,31 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		},
 	})...)
 	return opts
+}
+
+// recordPrefixCacheBoundary hands this turn's rendered stable-prefix message
+// count to the mutation ledger, and, when the previous turn's stable prefix
+// is still within this turn's stable range, re-hashes that previous boundary
+// against this turn's rendered messages/system/tools. observePrefixCache
+// later compares that boundary hash against the previous entry's stored hash
+// to recognize prefix-preserving growth (the breakpoint moved forward but
+// the previously-cached bytes are unchanged) as a cache hit rather than
+// misclassifying it as prefix_changed.
+func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) {
+	if a == nil || a.prefixCache == nil || cfg.ContextMutations == nil || cfg.Identity.IsSubagent {
+		return
+	}
+	key := prefixCacheSessionKey(cfg.Identity)
+	if key == "" {
+		return
+	}
+	cfg.ContextMutations.SetRenderedPrefixMessageCount(prefixCount)
+	prev, ok := a.prefixCache.peek(key)
+	if !ok || prev.stableCount > prefixCount {
+		return
+	}
+	hash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages[:prev.stableCount], tools)
+	cfg.ContextMutations.SetPrevBoundaryHash(hash)
 }
 
 func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, systemPrepended bool) contextfrag.CachePlan {

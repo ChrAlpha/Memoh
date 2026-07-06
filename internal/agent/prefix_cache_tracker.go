@@ -23,18 +23,19 @@ type prefixCacheTracker struct {
 }
 
 type prefixCacheEntry struct {
-	hash  string
-	model string
-	at    time.Time
+	hash        string
+	model       string
+	stableCount int
+	at          time.Time
 }
 
 func newPrefixCacheTracker() *prefixCacheTracker {
 	return &prefixCacheTracker{entries: make(map[string]prefixCacheEntry)}
 }
 
-// observe stores the current hash and model for the session key and returns
-// the previous entry, if any.
-func (t *prefixCacheTracker) observe(key, hash, model string, now time.Time) (prefixCacheEntry, bool) {
+// observe stores the current hash, model and stable-prefix message count for
+// the session key and returns the previous entry, if any.
+func (t *prefixCacheTracker) observe(key string, stableCount int, hash, model string, now time.Time) (prefixCacheEntry, bool) {
 	if t == nil {
 		return prefixCacheEntry{}, false
 	}
@@ -44,8 +45,20 @@ func (t *prefixCacheTracker) observe(key, hash, model string, now time.Time) (pr
 	if !ok && len(t.entries) >= prefixCacheTrackerCap {
 		t.evictOldestLocked()
 	}
-	t.entries[key] = prefixCacheEntry{hash: hash, model: model, at: now}
+	t.entries[key] = prefixCacheEntry{hash: hash, model: model, stableCount: stableCount, at: now}
 	return prev, ok
+}
+
+// peek returns the current entry for the session key without mutating any
+// state (no timestamp refresh, no eviction, no store).
+func (t *prefixCacheTracker) peek(key string) (prefixCacheEntry, bool) {
+	if t == nil {
+		return prefixCacheEntry{}, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	entry, ok := t.entries[key]
+	return entry, ok
 }
 
 func (t *prefixCacheTracker) evictOldestLocked() {
@@ -76,7 +89,17 @@ func (t *prefixCacheTracker) size() int {
 // compareCachePrefix classifies this run's rendered prefix against the
 // previous run of the same session. ttlWindow <= 0 disables the expired
 // classification (cache disabled or unknown vendor TTL).
-func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, hash, model string, firstStepCacheRead int, now time.Time, ttlWindow time.Duration) contextfrag.CacheComparison {
+//
+// Because history frags are cache-stable, the stable-prefix message count
+// legitimately grows turn over turn as history accumulates, so a flat hash
+// comparison over the whole (longer) prefix would never match the previous
+// turn's (shorter) hash even when the model's cached bytes are unchanged.
+// The growth branch below recognizes that case via prevBoundaryHash: the
+// previous turn's rendered prefix re-hashed against this turn's messages. If
+// that still equals the previous turn's stored hash, the previously-cached
+// bytes are byte-identical and Anthropic serves a genuine partial hit up to
+// that boundary even though the breakpoint moved forward.
+func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, nowCount int, hash, model, prevBoundaryHash string, firstStepCacheRead int, now time.Time, ttlWindow time.Duration) contextfrag.CacheComparison {
 	comparison := contextfrag.CacheComparison{
 		FirstStepCacheReadTokens: firstStepCacheRead,
 	}
@@ -85,17 +108,27 @@ func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, hash, model string,
 		return comparison
 	}
 	comparison.PrevAgeMs = now.Sub(prev.at).Milliseconds()
+	expired := ttlWindow > 0 && now.Sub(prev.at) > ttlWindow
 	switch {
 	case prev.model != model:
 		comparison.Outcome = contextfrag.CacheOutcomeModelChanged
-	case prev.hash != hash:
-		comparison.Outcome = contextfrag.CacheOutcomePrefixChanged
-	case firstStepCacheRead > 0:
-		comparison.Outcome = contextfrag.CacheOutcomeHit
-	case ttlWindow > 0 && now.Sub(prev.at) > ttlWindow:
-		comparison.Outcome = contextfrag.CacheOutcomeExpired
+	case prev.stableCount == nowCount && prev.hash == hash:
+		switch {
+		case firstStepCacheRead > 0:
+			comparison.Outcome = contextfrag.CacheOutcomeHit
+		case expired:
+			comparison.Outcome = contextfrag.CacheOutcomeExpired
+		default:
+			comparison.Outcome = contextfrag.CacheOutcomeMissSamePrefix
+		}
+	case prev.stableCount < nowCount && prevBoundaryHash != "" && prevBoundaryHash == prev.hash:
+		if expired {
+			comparison.Outcome = contextfrag.CacheOutcomeExpired
+		} else {
+			comparison.Outcome = contextfrag.CacheOutcomeHit
+		}
 	default:
-		comparison.Outcome = contextfrag.CacheOutcomeMissSamePrefix
+		comparison.Outcome = contextfrag.CacheOutcomePrefixChanged
 	}
 	return comparison
 }

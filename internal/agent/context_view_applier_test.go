@@ -365,6 +365,132 @@ func TestGenerateComparesPrefixCacheAcrossModelSwitch(t *testing.T) {
 	}
 }
 
+func growingPrefixApplier(_ context.Context, cfg RunConfig) RunConfig {
+	stable := len(cfg.Messages)
+	if stable > 0 {
+		stable-- // newest message is the volatile/unstable tail
+	}
+	plan := contextfrag.CachePlan{StablePrefixHash: "fragment-prefix", StableMessageCount: stable}
+	ledger := contextfrag.NewMutationLedger()
+	manifest := contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, CachePlan: &plan, Mutations: ledger}
+	cfg.ContextCachePlan = plan
+	cfg.ContextManifest = manifest
+	cfg.ContextMutations = ledger
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
+	return cfg
+}
+
+func TestGenerateRecognizesPrefixPreservingGrowthAsHit(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
+		InputTokens:       42,
+		InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 11},
+	}}
+	a := New(Deps{ContextViewApplier: growingPrefixApplier})
+
+	runOnce := func(messages []sdk.Message) contextfrag.LifecycleSnapshot {
+		holder := contextfrag.NewLifecycleHolder()
+		if _, err := a.Generate(context.Background(), RunConfig{
+			Model: &sdk.Model{
+				ID:       "growing-prefix-model",
+				Provider: modelProvider,
+				Type:     sdk.ModelTypeChat,
+			},
+			System:           "stable system",
+			Messages:         messages,
+			Identity:         SessionContext{BotID: "bot-grow", SessionID: "session-grow"},
+			ContextLifecycle: holder,
+		}); err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+		snapshot, ok := holder.Snapshot()
+		if !ok {
+			t.Fatal("lifecycle snapshot missing")
+		}
+		return snapshot
+	}
+
+	turn1 := []sdk.Message{
+		sdk.UserMessage("stable-1"),
+		sdk.AssistantMessage("stable-2"),
+		sdk.UserMessage("volatile-turn-1"),
+	}
+	first := runOnce(turn1)
+	if first.CacheComparison == nil || first.CacheComparison.Outcome != contextfrag.CacheOutcomeFirstObservation {
+		t.Fatalf("first turn comparison = %#v, want first observation", first.CacheComparison)
+	}
+
+	// Turn 2 appends two new messages after the byte-identical first three;
+	// the stable prefix count grew (2 -> 4) but the previously-cached bytes
+	// are unchanged, so this must be a hit, not prefix_changed.
+	turn2 := append(append([]sdk.Message(nil), turn1...),
+		sdk.AssistantMessage("stable-3"),
+		sdk.UserMessage("volatile-turn-2"),
+	)
+	second := runOnce(turn2)
+	if second.CacheComparison == nil || second.CacheComparison.Outcome != contextfrag.CacheOutcomeHit {
+		t.Fatalf("second turn (grown, byte-identical prefix) comparison = %#v, want hit", second.CacheComparison)
+	}
+}
+
+func TestGenerateTreatsEditedGrownPrefixAsPrefixChanged(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
+		InputTokens:       42,
+		InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 11},
+	}}
+	a := New(Deps{ContextViewApplier: growingPrefixApplier})
+
+	runOnce := func(messages []sdk.Message) contextfrag.LifecycleSnapshot {
+		holder := contextfrag.NewLifecycleHolder()
+		if _, err := a.Generate(context.Background(), RunConfig{
+			Model: &sdk.Model{
+				ID:       "edited-prefix-model",
+				Provider: modelProvider,
+				Type:     sdk.ModelTypeChat,
+			},
+			System:           "stable system",
+			Messages:         messages,
+			Identity:         SessionContext{BotID: "bot-edit", SessionID: "session-edit"},
+			ContextLifecycle: holder,
+		}); err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+		snapshot, ok := holder.Snapshot()
+		if !ok {
+			t.Fatal("lifecycle snapshot missing")
+		}
+		return snapshot
+	}
+
+	turn1 := []sdk.Message{
+		sdk.UserMessage("stable-1"),
+		sdk.AssistantMessage("stable-2"),
+		sdk.UserMessage("volatile-turn-1"),
+	}
+	first := runOnce(turn1)
+	if first.CacheComparison == nil || first.CacheComparison.Outcome != contextfrag.CacheOutcomeFirstObservation {
+		t.Fatalf("first turn comparison = %#v, want first observation", first.CacheComparison)
+	}
+
+	// Turn 2 grows the message count, but the first message's TEXT differs
+	// from turn 1 — the prefix was actually edited, not just extended, so
+	// this must still be prefix_changed.
+	turn2 := []sdk.Message{
+		sdk.UserMessage("stable-1-edited"),
+		sdk.AssistantMessage("stable-2"),
+		sdk.UserMessage("volatile-turn-1"),
+		sdk.AssistantMessage("stable-3"),
+		sdk.UserMessage("volatile-turn-2"),
+	}
+	second := runOnce(turn2)
+	if second.CacheComparison == nil || second.CacheComparison.Outcome != contextfrag.CacheOutcomePrefixChanged {
+		t.Fatalf("second turn (grown but edited prefix) comparison = %#v, want prefix_changed", second.CacheComparison)
+	}
+}
+
 func TestGenerateSkipsPrefixComparisonForSubagents(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}

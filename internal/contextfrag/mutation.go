@@ -61,11 +61,13 @@ type CacheUsageRecord struct {
 // manifest chain from rendered payload to final model input stays auditable.
 // All methods are nil-safe.
 type MutationLedger struct {
-	mu              sync.Mutex
-	records         []MutationRecord
-	cacheUsage      []CacheUsageRecord
-	cacheComparison *CacheComparison
-	finalInputHash  string
+	mu                         sync.Mutex
+	records                    []MutationRecord
+	cacheUsage                 []CacheUsageRecord
+	cacheComparison            *CacheComparison
+	finalInputHash             string
+	prevBoundaryHash           string
+	renderedPrefixMessageCount int
 }
 
 func NewMutationLedger() *MutationLedger {
@@ -150,6 +152,51 @@ func (l *MutationLedger) FinalInputHash() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.finalInputHash
+}
+
+// SetPrevBoundaryHash carries the previous turn's rendered stable-prefix
+// hash, re-hashed against this turn's messages, from buildGenerateOptions to
+// observePrefixCache within the same run. It is same-run, in-memory only and
+// intentionally excluded from MarshalJSON: it has no lifecycle/swagger
+// surface, it only feeds the in-process cache comparator.
+func (l *MutationLedger) SetPrevBoundaryHash(hash string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.prevBoundaryHash = hash
+}
+
+func (l *MutationLedger) PrevBoundaryHash() string {
+	if l == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.prevBoundaryHash
+}
+
+// SetRenderedPrefixMessageCount carries this turn's rendered stable-prefix
+// message count from buildGenerateOptions to observePrefixCache within the
+// same run. Same-run, in-memory only; excluded from MarshalJSON like
+// PrevBoundaryHash above.
+func (l *MutationLedger) SetRenderedPrefixMessageCount(count int) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.renderedPrefixMessageCount = count
+}
+
+func (l *MutationLedger) RenderedPrefixMessageCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.renderedPrefixMessageCount
 }
 
 // ProviderInputHash hashes the assembled provider payload (system prompt
