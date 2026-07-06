@@ -20,10 +20,11 @@ const HistoryTrimNotice = "[System Notice] Earlier conversation history has been
 // Budget drop reasons name the attention band a fragment fell out of, so the
 // lifecycle drop_reasons histogram explains what budget pressure removed.
 const (
-	budgetDropReasonPassive     = "budget:passive"
-	budgetDropReasonUntiered    = "budget:untiered"
-	budgetDropReasonDirected    = "budget:directed"
-	budgetDropReasonWindowYield = "budget:recent_window_yield"
+	budgetDropReasonPassive      = "budget:passive"
+	budgetDropReasonUntiered     = "budget:untiered"
+	budgetDropReasonDirected     = "budget:directed"
+	budgetDropReasonWindowYield  = "budget:recent_window_yield"
+	budgetDropReasonOrphanResult = "budget:orphan_tool_result"
 )
 
 // Attention tiers order budget drops: passive group traffic goes first,
@@ -62,19 +63,36 @@ func budgetDropReasonForTier(tier int) string {
 
 // budgetUnit is the atomic drop unit: a lone fragment, or an assistant
 // tool-call fragment grouped with its tool-result fragments so budget drops
-// never break a tool closure.
+// never break a tool closure. Units span the whole tagged set: when any
+// member is protected the entire unit is (mixed droppability would orphan
+// half a closure), and the tier comes from attention-bearing members only so
+// data-less tool results never promote a passive exchange.
 type budgetUnit struct {
-	indexes  []int
-	tokens   int
-	tier     int
-	priority int
+	indexes       []int
+	tokens        int
+	attentionTier int
+	hasAttention  bool
+	droppable     bool
+	hasCall       bool
+	hasResult     bool
 }
 
-func buildBudgetUnits(tagged []TaggedFrag, candidates []int) []budgetUnit {
-	units := make([]budgetUnit, 0, len(candidates))
+func (u *budgetUnit) tier() int {
+	if u.hasAttention {
+		return u.attentionTier
+	}
+	return attentionTierUntiered
+}
+
+func (u *budgetUnit) orphanResult() bool {
+	return u.hasResult && !u.hasCall
+}
+
+func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
+	units := make([]budgetUnit, 0, len(tagged))
 	unitByCall := make(map[string]int)
-	for _, idx := range candidates {
-		frag := tagged[idx].Frag
+	for i, taggedFrag := range tagged {
+		frag := taggedFrag.Frag
 		unitIdx := -1
 		for _, callID := range fragToolResultCallIDs(frag) {
 			if existing, ok := unitByCall[callID]; ok {
@@ -83,17 +101,26 @@ func buildBudgetUnits(tagged []TaggedFrag, candidates []int) []budgetUnit {
 			}
 		}
 		if unitIdx < 0 {
-			units = append(units, budgetUnit{tier: fragAttentionTier(frag), priority: frag.Priority})
+			units = append(units, budgetUnit{droppable: true})
 			unitIdx = len(units) - 1
 		}
 		unit := &units[unitIdx]
-		unit.indexes = append(unit.indexes, idx)
+		unit.indexes = append(unit.indexes, i)
 		unit.tokens += fragTokenEstimate(frag)
-		if tier := fragAttentionTier(frag); tier > unit.tier {
-			unit.tier = tier
+		if !taggedFrag.HasTag(TagCanDrop) {
+			unit.droppable = false
 		}
-		if frag.Priority > unit.priority {
-			unit.priority = frag.Priority
+		if len(frag.Scope.Attention) > 0 {
+			if tier := fragAttentionTier(frag); !unit.hasAttention || tier > unit.attentionTier {
+				unit.attentionTier = tier
+			}
+			unit.hasAttention = true
+		}
+		if len(fragToolCallIDs(frag)) > 0 {
+			unit.hasCall = true
+		}
+		if len(fragToolResultCallIDs(frag)) > 0 {
+			unit.hasResult = true
 		}
 		for _, callID := range fragToolCallIDs(frag) {
 			unitByCall[callID] = unitIdx
@@ -139,48 +166,61 @@ func fragToolResultCallIDs(frag contextfrag.ContextFrag) []string {
 }
 
 // budgetTrimDrops decides which droppable fragments leave the context under
-// budget pressure using a three-band model over tool-closure units:
+// budget pressure using attention tiers over tool-closure units:
 //
-//  1. The newest units within recentProtectTokens are kept unconditionally;
+//  1. Droppable orphan tool-result units (no matching call anywhere in the
+//     set) drop unconditionally: they are a guaranteed provider 400.
+//  2. The newest units within recentProtectTokens are kept unconditionally;
 //     when that window alone exceeds the budget it yields from its old end.
-//  2. Units outside the window drop in composite order: attention tier first
-//     (passive, then untiered, then directed), lower Priority first within a
-//     tier, oldest first on full ties.
-//  3. Without attention data or a window every unit is untiered, so the drop
-//     set degenerates to the legacy oldest-first cut.
+//  3. Units outside the window drop tier by tier (passive, then untiered,
+//     then directed), oldest first and contiguously within a tier.
 //
-// The budget counts droppable tokens only, mirroring the legacy
-// trimMessagesByTokens accounting; when the droppable total fits, nothing
-// drops and the output is byte-identical to the unbudgeted path.
+// Priority never enters retention: it only orders rendering. The budget
+// counts droppable tokens only, mirroring the legacy trimMessagesByTokens
+// accounting; when the droppable total fits, nothing drops and the output is
+// byte-identical to the unbudgeted path.
 func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (map[int]bool, map[int]string) {
 	if maxTokens <= 0 {
 		return nil, nil
 	}
-	candidates := make([]int, 0, len(tagged))
-	for i, taggedFrag := range tagged {
-		if taggedFrag.HasTag(TagCanDrop) {
-			candidates = append(candidates, i)
+	units := buildBudgetUnits(tagged)
+
+	drops := make(map[int]bool)
+	reasons := make(map[int]string)
+	dropUnit := func(unit *budgetUnit, reason string) {
+		for _, idx := range unit.indexes {
+			drops[idx] = true
+			reasons[idx] = reason
 		}
 	}
-	if len(candidates) == 0 {
-		return nil, nil
-	}
 
-	units := buildBudgetUnits(tagged, candidates)
+	pool := make([]int, 0, len(units))
 	total := 0
-	for _, unit := range units {
+	for i := range units {
+		unit := &units[i]
+		if !unit.droppable {
+			continue
+		}
+		if unit.orphanResult() {
+			dropUnit(unit, budgetDropReasonOrphanResult)
+			continue
+		}
+		pool = append(pool, i)
 		total += unit.tokens
 	}
 	if total <= maxTokens {
-		return nil, nil
+		if len(drops) == 0 {
+			return nil, nil
+		}
+		return drops, reasons
 	}
 
-	windowStart := len(units)
+	windowStart := len(pool)
 	if recentProtectTokens > 0 {
 		windowStart = 0
 		acc := 0
-		for i := len(units) - 1; i >= 0; i-- {
-			acc += units[i].tokens
+		for i := len(pool) - 1; i >= 0; i-- {
+			acc += units[pool[i]].tokens
 			if acc > recentProtectTokens {
 				windowStart = i + 1
 				break
@@ -189,29 +229,20 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 	}
 	poolEnd := windowStart
 
-	drops := make(map[int]bool)
-	reasons := make(map[int]string)
-	dropUnit := func(unit budgetUnit, reason string) {
-		for _, idx := range unit.indexes {
-			drops[idx] = true
-			reasons[idx] = reason
-		}
-	}
-
 	windowTokens := 0
-	for _, unit := range units[windowStart:] {
-		windowTokens += unit.tokens
+	for _, unitIdx := range pool[windowStart:] {
+		windowTokens += units[unitIdx].tokens
 	}
-	for windowStart < len(units) && windowTokens > maxTokens {
-		dropUnit(units[windowStart], budgetDropReasonWindowYield)
-		windowTokens -= units[windowStart].tokens
+	for windowStart < len(pool) && windowTokens > maxTokens {
+		dropUnit(&units[pool[windowStart]], budgetDropReasonWindowYield)
+		windowTokens -= units[pool[windowStart]].tokens
 		windowStart++
 	}
 
 	remaining := maxTokens - windowTokens
 	poolTokens := 0
-	for _, unit := range units[:poolEnd] {
-		poolTokens += unit.tokens
+	for _, unitIdx := range pool[:poolEnd] {
+		poolTokens += units[unitIdx].tokens
 	}
 	if poolTokens > remaining {
 		order := make([]int, poolEnd)
@@ -219,21 +250,19 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 			order[i] = i
 		}
 		sort.SliceStable(order, func(a, b int) bool {
-			ua, ub := units[order[a]], units[order[b]]
-			if ua.tier != ub.tier {
-				return ua.tier < ub.tier
-			}
-			if ua.priority != ub.priority {
-				return ua.priority < ub.priority
+			ua, ub := &units[pool[order[a]]], &units[pool[order[b]]]
+			if ua.tier() != ub.tier() {
+				return ua.tier() < ub.tier()
 			}
 			return ua.indexes[0] < ub.indexes[0]
 		})
-		for _, unitIdx := range order {
+		for _, pos := range order {
 			if poolTokens <= remaining {
 				break
 			}
-			dropUnit(units[unitIdx], budgetDropReasonForTier(units[unitIdx].tier))
-			poolTokens -= units[unitIdx].tokens
+			unit := &units[pool[pos]]
+			dropUnit(unit, budgetDropReasonForTier(unit.tier()))
+			poolTokens -= unit.tokens
 		}
 	}
 	return drops, reasons

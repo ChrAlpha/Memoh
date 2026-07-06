@@ -146,24 +146,107 @@ func TestBudgetAttention_ToolClosureDropsAtomically(t *testing.T) {
 	assertDroppedReason(t, result, "passive-result", budgetDropReasonPassive)
 }
 
-func TestBudgetAttention_PriorityBreaksTiesWithinTier(t *testing.T) {
+// Finding [1]: a tool closure with mixed droppability (one member pinned, the
+// other droppable) must be kept whole; dropping only the droppable half leaves
+// an orphan tool_use or tool_result the provider rejects with a 400.
+func TestBudgetAttention_MixedDroppabilityClosureKeptWhole(t *testing.T) {
 	t.Parallel()
 
-	high := attentionMessageFrag("passive-high", sdk.UserMessage("pinned chatter"), 100, contextfrag.AttentionPassive)
-	high.Priority = 80
-	low := attentionMessageFrag("passive-low", sdk.UserMessage("ordinary chatter"), 100, contextfrag.AttentionPassive)
-	low.Priority = 10
+	pinnedCall := toolCallFrag("pinned-call", "search", "call-1")
+	pinnedCall.TokenEstimate = 50
+	pinnedCall.Budget.Overflow = contextfrag.OverflowKeep
+	droppableResult := toolResultFrag("droppable-result", "search", "call-1", "found")
+	droppableResult.TokenEstimate = 200
+
+	droppableCall := toolCallFrag("droppable-call", "search", "call-2")
+	droppableCall.TokenEstimate = 200
+	pinnedResult := toolResultFrag("pinned-result", "search", "call-2", "found")
+	pinnedResult.TokenEstimate = 50
+	pinnedResult.Budget.Overflow = contextfrag.OverflowKeep
 
 	frags := []contextfrag.ContextFrag{
-		high,
-		low,
+		attentionMessageFrag("filler-old", sdk.UserMessage("old filler"), 100),
+		pinnedCall,
+		droppableResult,
+		droppableCall,
+		pinnedResult,
 		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
 	}
 
-	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 100})
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 50})
 
-	assertSelectedIDs(t, result, []string{"passive-high", "latest"})
-	assertDroppedReason(t, result, "passive-low", budgetDropReasonPassive)
+	assertSelectedIDs(t, result, []string{"pinned-call", "droppable-result", "droppable-call", "pinned-result", "latest"})
+	assertDroppedReason(t, result, "filler-old", budgetDropReasonUntiered)
+}
+
+// Finding [4]: a closure's tier comes from its attention-bearing members only.
+// A passive call whose tool result carries no attention data stays in the
+// passive band instead of being promoted to untiered.
+func TestBudgetAttention_ClosureTierIgnoresAttentionlessMembers(t *testing.T) {
+	t.Parallel()
+
+	call := toolCallFrag("passive-call", "search", "call-1")
+	call.TokenEstimate = 50
+	call.Scope.Attention = []contextfrag.AttentionReason{contextfrag.AttentionPassive}
+	callResult := toolResultFrag("plain-result", "search", "call-1", "found")
+	callResult.TokenEstimate = 50
+
+	frags := []contextfrag.ContextFrag{
+		attentionMessageFrag("untiered-old", sdk.UserMessage("plain history"), 100),
+		call,
+		callResult,
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 150})
+
+	assertSelectedIDs(t, result, []string{"untiered-old", "latest"})
+	assertDroppedReason(t, result, "passive-call", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "plain-result", budgetDropReasonPassive)
+}
+
+// Finding [8]: a droppable tool result whose call is absent from the set is a
+// guaranteed provider 400; with a budget in force it drops unconditionally,
+// restoring the legacy leading-orphan cut even when everything fits.
+func TestBudgetAttention_OrphanToolResultDroppedEvenUnderBudget(t *testing.T) {
+	t.Parallel()
+
+	orphan := toolResultFrag("orphan-result", "search", "call-gone", "stale")
+	orphan.TokenEstimate = 10
+
+	frags := []contextfrag.ContextFrag{
+		orphan,
+		attentionMessageFrag("plain-old", sdk.UserMessage("plain history"), 100),
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 1000})
+
+	assertSelectedIDs(t, result, []string{"plain-old", "latest"})
+	assertDroppedReason(t, result, "orphan-result", budgetDropReasonOrphanResult)
+}
+
+// Finding [9]: drops within a tier are contiguous oldest-first; priority no
+// longer reorders them, so a newer zero-estimate unit is not sacrificed for
+// zero gain before an older unit that actually frees tokens.
+func TestBudgetAttention_OldestFirstWithinTierNoZeroGainScatter(t *testing.T) {
+	t.Parallel()
+
+	heavy := attentionMessageFrag("passive-heavy-old", sdk.UserMessage("very long chatter"), 100, contextfrag.AttentionPassive)
+	heavy.Priority = 70
+	zero := attentionMessageFrag("passive-zero-new", sdk.UserMessage("hi"), 0, contextfrag.AttentionPassive)
+	zero.Priority = 10
+
+	frags := []contextfrag.ContextFrag{
+		heavy,
+		zero,
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
+	}
+
+	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 50})
+
+	assertSelectedIDs(t, result, []string{"passive-zero-new", "latest"})
+	assertDroppedReason(t, result, "passive-heavy-old", budgetDropReasonPassive)
 }
 
 func budgetAttentionRunConfig(holder *contextfrag.LifecycleHolder) agentpkg.RunConfig {
