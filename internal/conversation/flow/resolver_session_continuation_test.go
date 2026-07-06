@@ -11,6 +11,7 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/settings"
 )
@@ -135,11 +136,15 @@ func (a *resumeContextBudgetApplier) snapshot() int {
 func TestResumeAgentSessionPropagatesContextBudgetToAgentStream(t *testing.T) {
 	t.Parallel()
 
-	conn, queries := newModelSelectionTestDB(t)
 	const modelID = "00000000-0000-0000-0000-000000000501"
 	const providerID = "00000000-0000-0000-0000-000000000502"
-	insertModelSelectionProvider(t, conn, providerID, "openai-completions", true)
-	insertModelSelectionModel(t, conn, modelID, "gpt-resume-context-window", providerID, models.ModelTypeChat, true, `{"context_window": 128000}`)
+	provider := modelSelectionProviderRow(t, providerID, "openai-completions", true)
+	model := modelSelectionModelRow(t, modelID, "gpt-resume-context-window", provider.ID, models.ModelTypeChat, true)
+	model.Config = []byte(`{"context_window": 128000}`)
+	queries := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{model.ModelID: model},
+		provider: provider,
+	}
 
 	applier := &resumeContextBudgetApplier{provider: &triggerCaptureProvider{}}
 	resolver := &Resolver{

@@ -18,22 +18,32 @@ type UserMessageMeta struct {
 	Time              string   `json:"time"`
 	Timezone          string   `json:"timezone,omitempty"`
 	AttachmentPaths   []string `json:"attachments"`
+	MentionsMe        bool     `json:"mentions-me,omitempty"`
+	ReplyToMessageID  string   `json:"reply-to-message-id,omitempty"`
+	ReplyToSender     string   `json:"reply-to-sender,omitempty"`
+	ForwardedFrom     string   `json:"forwarded-from,omitempty"`
 }
 
 // UserMessageHeaderInput is the unified input for building user message headers.
 // Keeping this as a struct avoids long positional argument lists and makes
 // future metadata extension backward-compatible for call sites.
 type UserMessageHeaderInput struct {
-	MessageID         string
-	ChannelIdentityID string
-	DisplayName       string
-	Channel           string
-	ConversationType  string
-	ConversationName  string
-	Target            string
-	AttachmentPaths   []string
-	Time              time.Time
-	Timezone          string
+	MessageID                 string
+	ChannelIdentityID         string
+	DisplayName               string
+	Channel                   string
+	ConversationType          string
+	ConversationName          string
+	Target                    string
+	AttachmentPaths           []string
+	Time                      time.Time
+	Timezone                  string
+	MentionsMe                bool
+	ReplyToMessageID          string
+	ReplyToSender             string
+	ForwardSender             string
+	ForwardFromUserID         string
+	ForwardFromConversationID string
 }
 
 // BuildUserMessageMetaFromInput constructs metadata from one cohesive input.
@@ -53,11 +63,30 @@ func BuildUserMessageMetaFromInput(input UserMessageHeaderInput) UserMessageMeta
 		Time:              time.Now().UTC().Format(time.RFC3339),
 		Timezone:          strings.TrimSpace(input.Timezone),
 		AttachmentPaths:   attachmentPaths,
+		MentionsMe:        input.MentionsMe,
+		ReplyToMessageID:  strings.TrimSpace(input.ReplyToMessageID),
+		ReplyToSender:     strings.TrimSpace(input.ReplyToSender),
+		ForwardedFrom:     forwardedFromValue(input),
 	}
 	if !input.Time.IsZero() {
 		meta.Time = input.Time.Format(time.RFC3339)
 	}
 	return meta
+}
+
+// forwardedFromValue mirrors the DCP rendering fallback for forwarded_from:
+// raw sender first, then prefixed source IDs, without contact decoration.
+func forwardedFromValue(input UserMessageHeaderInput) string {
+	if v := strings.TrimSpace(input.ForwardSender); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(input.ForwardFromUserID); v != "" {
+		return "user:" + v
+	}
+	if v := strings.TrimSpace(input.ForwardFromConversationID); v != "" {
+		return "conversation:" + v
+	}
+	return ""
 }
 
 // BuildUserMessageMetaWithTime constructs metadata with an explicit timestamp
@@ -136,6 +165,18 @@ func FormatUserHeaderFromMeta(meta UserMessageMeta, query string) string {
 	}
 	if meta.Target != "" {
 		writeXMLAttr(&sb, "target", meta.Target)
+	}
+	if meta.MentionsMe {
+		writeXMLAttr(&sb, "mentions_me", "true")
+	}
+	if meta.ReplyToMessageID != "" {
+		writeXMLAttr(&sb, "reply_to_message_id", meta.ReplyToMessageID)
+	}
+	if meta.ReplyToSender != "" {
+		writeXMLAttr(&sb, "reply_to_sender", meta.ReplyToSender)
+	}
+	if meta.ForwardedFrom != "" {
+		writeXMLAttr(&sb, "forwarded_from", meta.ForwardedFrom)
 	}
 	sb.WriteString(">\n")
 

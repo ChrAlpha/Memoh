@@ -11,6 +11,7 @@ import (
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/settings"
@@ -160,11 +161,15 @@ func TestResolveRunConfigSkipsModelResolutionForACPRuntime(t *testing.T) {
 func TestResolveRunConfigPopulatesContextBudgetMaxTokensFromChatModel(t *testing.T) {
 	t.Parallel()
 
-	conn, queries := newModelSelectionTestDB(t)
 	const modelID = "00000000-0000-0000-0000-000000000601"
 	const providerID = "00000000-0000-0000-0000-000000000602"
-	insertModelSelectionProvider(t, conn, providerID, "openai-completions", true)
-	insertModelSelectionModel(t, conn, modelID, "gpt-run-config-context-window", providerID, models.ModelTypeChat, true, `{"context_window": 128000}`)
+	provider := modelSelectionProviderRow(t, providerID, "openai-completions", true)
+	model := modelSelectionModelRow(t, modelID, "gpt-run-config-context-window", provider.ID, models.ModelTypeChat, true)
+	model.Config = []byte(`{"context_window": 128000}`)
+	queries := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{model.ModelID: model},
+		provider: provider,
+	}
 
 	resolver := &Resolver{
 		modelsService:   models.NewService(slog.New(slog.DiscardHandler), queries),

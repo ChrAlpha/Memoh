@@ -471,16 +471,22 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		tz = time.UTC
 	}
 	headerInput := UserMessageHeaderInput{
-		MessageID:         strings.TrimSpace(req.ExternalMessageID),
-		ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
-		DisplayName:       displayName,
-		Channel:           req.CurrentChannel,
-		ConversationType:  strings.TrimSpace(req.ConversationType),
-		ConversationName:  strings.TrimSpace(req.ConversationName),
-		Target:            strings.TrimSpace(req.ReplyTarget),
-		AttachmentPaths:   extractAttachmentPaths(mergedAttachments),
-		Time:              time.Now().In(tz),
-		Timezone:          runCfg.Identity.Timezone,
+		MessageID:                 strings.TrimSpace(req.ExternalMessageID),
+		ChannelIdentityID:         strings.TrimSpace(req.SourceChannelIdentityID),
+		DisplayName:               displayName,
+		Channel:                   req.CurrentChannel,
+		ConversationType:          strings.TrimSpace(req.ConversationType),
+		ConversationName:          strings.TrimSpace(req.ConversationName),
+		Target:                    strings.TrimSpace(req.ReplyTarget),
+		AttachmentPaths:           extractAttachmentPaths(mergedAttachments),
+		Time:                      time.Now().In(tz),
+		Timezone:                  runCfg.Identity.Timezone,
+		MentionsMe:                req.MentionsBot,
+		ReplyToMessageID:          req.SourceReplyToMessageID,
+		ReplyToSender:             req.ReplySender,
+		ForwardSender:             req.ForwardSender,
+		ForwardFromUserID:         req.ForwardFromUserID,
+		ForwardFromConversationID: req.ForwardFromConversationID,
 	}
 	headerifiedQuery := ""
 	if userQueryNeedsHeader(req, len(mergedAttachments)) {
