@@ -59,14 +59,20 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	}
 }
 
-// markInjectedLoopUserFrags types and protects user-role messages appended
-// during the tool loop (InjectCh injections, read_media payloads, background
-// summaries): they carry content the run deliberately inserted mid-stream, so
-// step budget pressure must never drop them.
+// markInjectedLoopUserFrags types user-role messages appended during the tool
+// loop. Text-only carriers (InjectCh text, background summaries) hold content
+// the run deliberately inserted mid-stream, so step budget pressure must never
+// drop them. Image-bearing payloads (read_media injections) stay droppable:
+// their sources live at workspace paths the model can re-read, and their
+// base64 bodies can exceed the whole step budget on their own.
 func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	for i := range frags {
 		msg := discussFragMessage(frags[i])
 		if msg == nil || !isRole(msg.Role, sdk.MessageRoleUser) {
+			continue
+		}
+		if messageHasImagePart(*msg) {
+			frags[i].Kind = contextfrag.KindNativeImage
 			continue
 		}
 		if isBackgroundSummarySDKMessage(msg) {
@@ -77,6 +83,15 @@ func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.Co
 		frags[i].Budget.Overflow = contextfrag.OverflowKeep
 	}
 	return frags
+}
+
+func messageHasImagePart(msg sdk.Message) bool {
+	for _, part := range msg.Content {
+		if _, ok := part.(sdk.ImagePart); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func isBackgroundSummarySDKMessage(msg *sdk.Message) bool {
