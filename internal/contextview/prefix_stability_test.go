@@ -73,7 +73,7 @@ func memoryRecallFrag(text string) contextfrag.ContextFrag {
 // hookContextFrag mirrors HookContextCollector.Collect (collector_hook.go)
 // field-for-field, so the fixture matches what the resolver actually produces.
 func hookContextFrag(text string) contextfrag.ContextFrag {
-	msg := sdk.SystemMessage(text)
+	msg := sdk.UserMessage(text)
 	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
 		ID:         "hook_context.message",
 		Message:    msg,

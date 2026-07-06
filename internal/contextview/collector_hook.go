@@ -37,7 +37,13 @@ func (*HookContextCollector) Collect(_ context.Context, req CollectRequest) ([]c
 	if text == "" {
 		return nil, nil
 	}
-	msg := sdk.SystemMessage(text)
+	// User role, not system: google-generativeai's provider adapter drops
+	// message-stream system-role messages outright, and anthropic-messages /
+	// openai-codex hoist them into the top-level system block, losing this
+	// frag's after-history-before-current position either way. The legacy
+	// fallback (legacyMaterializeQuery) already sends hook text as a user
+	// message, so this keeps both paths consistent.
+	msg := sdk.UserMessage(text)
 	return []contextfrag.ContextFrag{contextfrag.MessageFrag(contextfrag.MessageFragInput{
 		ID:         "hook_context.message",
 		Message:    msg,
