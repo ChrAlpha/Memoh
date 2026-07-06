@@ -340,18 +340,30 @@ func formatSender(user *CanonicalUser, contactNames map[string]string) string {
 	return displayName
 }
 
+// ForwardedFromValue is the single source of the forwarded_from fallback
+// chain shared by the pipeline renderer and the user message header: raw
+// sender first, then prefixed source IDs. It returns "" when every origin is
+// empty; callers decide how to wrap that case (the pipeline renders
+// "unknown", the header omits the attribute).
+func ForwardedFromValue(senderName, fromUserID, fromConversationID string) string {
+	if v := strings.TrimSpace(senderName); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(fromUserID); v != "" {
+		return "user:" + v
+	}
+	if v := strings.TrimSpace(fromConversationID); v != "" {
+		return "conversation:" + v
+	}
+	return ""
+}
+
 func resolveForwardFrom(info *ForwardInfo, contactNames map[string]string) string {
 	if info.Sender != nil {
 		return formatSender(info.Sender, contactNames)
 	}
-	if info.SenderName != "" {
-		return info.SenderName
-	}
-	if info.FromUserID != "" {
-		return "user:" + info.FromUserID
-	}
-	if info.FromConversationID != "" {
-		return "conversation:" + info.FromConversationID
+	if v := ForwardedFromValue(info.SenderName, info.FromUserID, info.FromConversationID); v != "" {
+		return v
 	}
 	return "unknown"
 }

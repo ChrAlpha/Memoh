@@ -169,6 +169,24 @@ func TestRender_SystemEventSegmentHasNoMeta(t *testing.T) {
 	}
 }
 
+func TestForwardedFromValueChain(t *testing.T) {
+	cases := []struct {
+		name                                     string
+		senderName, fromUserID, fromConversation string
+		want                                     string
+	}{
+		{"sender wins", "Carol", "u9", "c7", "Carol"},
+		{"user id next", "  ", "u9", "c7", "user:u9"},
+		{"conversation id next", "", "", "c7", "conversation:c7"},
+		{"all empty is empty", "", " ", "", ""},
+	}
+	for _, tc := range cases {
+		if got := ForwardedFromValue(tc.senderName, tc.fromUserID, tc.fromConversation); got != tc.want {
+			t.Fatalf("%s: ForwardedFromValue = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestAdaptAttachments_ContentHash(t *testing.T) {
 	atts := []channel.Attachment{
 		{Type: channel.AttachmentImage, ContentHash: "abc123", URL: "/data/media/bot/ab/abc123.jpg", Mime: "image/jpeg"},

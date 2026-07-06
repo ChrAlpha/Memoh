@@ -3,6 +3,8 @@ package flow
 import (
 	"strings"
 	"time"
+
+	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
 )
 
 // UserMessageMeta holds the structured metadata attached to every user
@@ -66,27 +68,15 @@ func BuildUserMessageMetaFromInput(input UserMessageHeaderInput) UserMessageMeta
 		MentionsMe:        input.MentionsMe,
 		ReplyToMessageID:  strings.TrimSpace(input.ReplyToMessageID),
 		ReplyToSender:     strings.TrimSpace(input.ReplyToSender),
-		ForwardedFrom:     forwardedFromValue(input),
+		// The shared chain returns "" when every origin is empty; the header
+		// omits the attribute in that case, unlike the pipeline renderer
+		// which renders "unknown".
+		ForwardedFrom: pipelinepkg.ForwardedFromValue(input.ForwardSender, input.ForwardFromUserID, input.ForwardFromConversationID),
 	}
 	if !input.Time.IsZero() {
 		meta.Time = input.Time.Format(time.RFC3339)
 	}
 	return meta
-}
-
-// forwardedFromValue mirrors the DCP rendering fallback for forwarded_from:
-// raw sender first, then prefixed source IDs, without contact decoration.
-func forwardedFromValue(input UserMessageHeaderInput) string {
-	if v := strings.TrimSpace(input.ForwardSender); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(input.ForwardFromUserID); v != "" {
-		return "user:" + v
-	}
-	if v := strings.TrimSpace(input.ForwardFromConversationID); v != "" {
-		return "conversation:" + v
-	}
-	return ""
 }
 
 // BuildUserMessageMetaWithTime constructs metadata with an explicit timestamp

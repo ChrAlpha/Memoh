@@ -118,3 +118,20 @@ func TestFormatUserHeaderForwardedFromFallsBackToIDs(t *testing.T) {
 		t.Fatalf("expected conversation fallback in header: %s", header)
 	}
 }
+
+func TestFormatUserHeaderOmitsForwardedFromWhenAllOriginsEmpty(t *testing.T) {
+	t.Parallel()
+
+	header := FormatUserHeader(UserMessageHeaderInput{
+		DisplayName:               "Alice",
+		Channel:                   "telegram",
+		Time:                      time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+		ForwardSender:             "  ",
+		ForwardFromUserID:         " ",
+		ForwardFromConversationID: "",
+	}, "hi")
+
+	if strings.Contains(header, "forwarded_from") {
+		t.Fatalf("header must omit forwarded_from when every origin is empty: %s", header)
+	}
+}
