@@ -35,6 +35,48 @@ const (
 	storeRoundMemoryProviderID = "22222222-2222-2222-2222-222222222222"
 )
 
+func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
+	t.Parallel()
+
+	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "ok", StopReason: "end_turn"}}
+	resolver := &Resolver{
+		messageService: &recordingMessageService{},
+		acpPool:        pool,
+		botPermissions: allowWorkspaceExecFor("user-1"),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, _ string) (session.Session, error) {
+				return session.Session{
+					ID:    "session-1",
+					BotID: "bot-1",
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id":             "codex",
+						"project_path":             "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.StreamChatWS(context.Background(), conversation.ChatRequest{
+		BotID:     "bot-1",
+		SessionID: "session-1",
+		Query:     "  inspect the app  ",
+	}, eventCh, make(chan struct{})); err != nil {
+		t.Fatalf("StreamChatWS() error = %v", err)
+	}
+
+	if pool.input.Prompt != "inspect the app" {
+		t.Fatalf("Prompt = %q, want trimmed query bytes", pool.input.Prompt)
+	}
+	if strings.Contains(pool.input.ContextMarkdown, "inspect the app") {
+		t.Fatalf("query must not join the context document: %q", pool.input.ContextMarkdown)
+	}
+}
+
 func TestStreamChatWSRoutesACPAgentSessionToACPPool(t *testing.T) {
 	t.Parallel()
 

@@ -126,10 +126,7 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 			"This virtual resource is already embedded in the current ACP prompt. It is not a workspace file and no file lookup is needed. Use it for identity, memory, user preferences, and session background. The user prompt outside this resource is the actual task.",
 	})
 
-	add(contextview.ACPSection{
-		ID:         "acp.section.current-runtime",
-		CacheClass: contextfrag.CacheNever,
-	}, "Current Runtime", acpContextMetadataLines([][2]string{
+	runtimePairs := [][2]string{
 		{"Current time", now.Format(time.RFC3339)},
 		{"Timezone", timezoneName},
 		{"Bot ID", input.BotID},
@@ -137,12 +134,14 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		{"Stream ID", input.StreamID},
 		{"ACP agent", input.AgentID},
 		{"Workspace", input.ProjectPath},
-	}))
-
+	}
 	add(contextview.ACPSection{
-		ID:         "acp.section.current-conversation",
+		ID:         "acp.section.current-runtime",
 		CacheClass: contextfrag.CacheNever,
-	}, "Current Conversation", acpContextMetadataLines([][2]string{
+		Data:       runtimePairs,
+	}, "Current Runtime", renderACPMetadataSection(runtimePairs))
+
+	conversationPairs := [][2]string{
 		{"Sender", input.DisplayName},
 		{"Channel identity ID", input.SourceChannelIdentityID},
 		{"Channel", input.CurrentChannel},
@@ -151,14 +150,20 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		{"Chat ID", input.ChatID},
 		{"Route ID", input.RouteID},
 		{"Reply target", input.ReplyTarget},
-	}))
+	}
+	add(contextview.ACPSection{
+		ID:         "acp.section.current-conversation",
+		CacheClass: contextfrag.CacheNever,
+		Data:       conversationPairs,
+	}, "Current Conversation", renderACPMetadataSection(conversationPairs))
 
 	add(contextview.ACPSection{
 		ID:         "acp.section.attachments",
 		Kind:       contextfrag.KindAttachmentRef,
 		Trust:      contextfrag.TrustExternal,
 		CacheClass: contextfrag.CacheNever,
-	}, "Attachments", formatACPContextAttachments(input.Attachments))
+		Data:       input.Attachments,
+	}, "Attachments", renderACPAttachmentsSection(input.Attachments))
 	add(contextview.ACPSection{
 		ID:   "acp.section.platform-identities",
 		Kind: contextfrag.KindPlatformIdentity,
@@ -171,6 +176,7 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 			Kind:     contextfrag.KindWorkspaceInstruction,
 			Trust:    contextfrag.TrustWorkspace,
 			Priority: 40,
+			Data:     file,
 		}, file.Title, file.Content)
 	}
 
@@ -190,6 +196,7 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 }
 
 type acpContextFileSection struct {
+	Name    string
 	Title   string
 	Content string
 }
@@ -230,8 +237,9 @@ func acpContextSystemFiles(files []agentpkg.SystemFile, maxBytes int) []acpConte
 			break
 		}
 		section := acpContextFileSection{
+			Name:  name,
 			Title: title,
-			Content: formatACPContextFileExcerpt(name, prune.PruneWithEdges(content, name, prune.Config{
+			Content: renderACPFileSection(name, prune.PruneWithEdges(content, name, prune.Config{
 				MaxBytes:  contentBudget,
 				MaxLines:  320,
 				HeadBytes: contentBudget * 3 / 4,
@@ -280,7 +288,7 @@ func acpContextMinInt(a, b int) int {
 	return b
 }
 
-func formatACPContextFileExcerpt(name, content string) string {
+func renderACPFileSection(name, content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
@@ -305,7 +313,7 @@ func markdownFence(content string) string {
 	return strings.Repeat("`", maxRun)
 }
 
-func acpContextMetadataLines(pairs [][2]string) string {
+func renderACPMetadataSection(pairs [][2]string) string {
 	lines := make([]string, 0, len(pairs))
 	for _, pair := range pairs {
 		key := strings.TrimSpace(pair[0])
@@ -318,7 +326,7 @@ func acpContextMetadataLines(pairs [][2]string) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatACPContextAttachments(attachments []conversation.ChatAttachment) string {
+func renderACPAttachmentsSection(attachments []conversation.ChatAttachment) string {
 	if len(attachments) == 0 {
 		return ""
 	}

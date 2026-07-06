@@ -169,6 +169,42 @@ func TestACPRenderer_ChatModeFragmentsWinOverLegacyMarkdown(t *testing.T) {
 	}
 }
 
+func TestACPRenderer_ChatModeExcludesCurrentUserFragment(t *testing.T) {
+	t.Parallel()
+
+	selected := []contextfrag.ContextFrag{
+		contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:        "acp.section.000",
+			Kind:      contextfrag.KindACPContext,
+			Role:      sdk.MessageRoleSystem,
+			Slot:      contextfrag.SlotSystem,
+			Text:      "FRAGMENT_DOCUMENT",
+			Scope:     contextfrag.Scope{BotID: "bot-1"},
+			Source:    "acp_context",
+			Collector: "acp_sections",
+		}),
+		contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:        "current_user.message",
+			Kind:      contextfrag.KindCurrentUserMessage,
+			Role:      sdk.MessageRoleUser,
+			Slot:      contextfrag.SlotCurrentUser,
+			Text:      "latest question",
+			Trust:     contextfrag.TrustUser,
+			Scope:     contextfrag.Scope{BotID: "bot-1"},
+			Source:    contextfrag.SourceRunConfig,
+			Collector: "current_user",
+		}),
+	}
+	payload, _ := renderACPSelected(t, ACPRenderConfig{Mode: ACPRenderModeChat}, selected)
+
+	if strings.Contains(payload.ContextMarkdown, "latest question") {
+		t.Fatalf("current user message must stay out of the context document, got %q", payload.ContextMarkdown)
+	}
+	if !strings.Contains(payload.ContextMarkdown, "FRAGMENT_DOCUMENT") {
+		t.Fatalf("context sections must still render, got %q", payload.ContextMarkdown)
+	}
+}
+
 func TestACPRenderer_ChatModeEmptyIsError(t *testing.T) {
 	t.Parallel()
 

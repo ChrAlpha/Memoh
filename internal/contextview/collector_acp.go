@@ -20,7 +20,8 @@ const (
 // the preamble or a "## Title" section, fully rendered by its source. The
 // metadata fields describe the section for selection and placement; zero
 // values fall back to the collector defaults (acp_context kind / system
-// trust / priority 35 / dynamic cache).
+// trust / priority 35 / dynamic cache). Data optionally carries the typed
+// input the section was rendered from; Text stays the rendered product.
 type ACPSection struct {
 	ID         string
 	Text       string
@@ -29,6 +30,7 @@ type ACPSection struct {
 	Priority   int
 	CacheClass contextfrag.CacheClass
 	Budget     contextfrag.BudgetPolicy
+	Data       any
 }
 
 type ACPSectionsConfig struct {

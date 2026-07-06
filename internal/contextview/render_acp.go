@@ -87,6 +87,10 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 	}, nil
 }
 
+// renderACPSelectedMarkdown assembles the ACP context resource document.
+// The current user message is selected and manifest-recorded with the view,
+// but it is delivered as the ACP prompt itself, never as part of the context
+// document, so SlotCurrentUser fragments are skipped here.
 func renderACPSelectedMarkdown(input RenderInput) (string, error) {
 	ordered, err := orderedSelectedFrags(input.Selected, input.Placement)
 	if err != nil {
@@ -94,6 +98,9 @@ func renderACPSelectedMarkdown(input RenderInput) (string, error) {
 	}
 	blocks := make([]string, 0, len(ordered))
 	for _, frag := range ordered {
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			continue
+		}
 		for _, part := range frag.Parts {
 			if part.Type != contextfrag.PartText {
 				continue

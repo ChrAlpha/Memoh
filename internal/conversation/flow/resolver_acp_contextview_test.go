@@ -15,7 +15,7 @@ func TestACPContextViaContextViewAssemblesSections(t *testing.T) {
 		{ID: "acp.preamble", Text: "# Memoh ACP Context\n\npreamble body"},
 		{ID: "acp.section.current-runtime", Text: "## Current Runtime\n\n- Bot ID: bot-1"},
 	}
-	markdown, uri := acpContextViaContextView(context.Background(), nil, sections)
+	markdown, uri, _ := acpContextViaContextView(context.Background(), nil, sections, "")
 
 	const want = "# Memoh ACP Context\n\npreamble body\n\n## Current Runtime\n\n- Bot ID: bot-1\n\n"
 	if markdown != want {
@@ -34,7 +34,7 @@ func TestACPContextSectionsSafeWithHeadingInsideFileExcerpt(t *testing.T) {
 		{ID: "acp.preamble", Text: "# Memoh ACP Context\n\npreamble"},
 		{ID: "acp.section.file.000", Text: fileBlock},
 	}
-	markdown, _ := acpContextViaContextView(context.Background(), nil, sections)
+	markdown, _, _ := acpContextViaContextView(context.Background(), nil, sections, "")
 
 	if !strings.Contains(markdown, "line before heading\n## Preferences\nprefers small patches") {
 		t.Fatalf("fence content must survive byte-for-byte:\n%s", markdown)

@@ -107,7 +107,11 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	if err := r.requireACPRuntimeOwnerWorkspaceExec(ctx, req.BotID, runtimeOwnerAccountID); err != nil {
 		return err
 	}
-	contextMarkdown, contextURI := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath))
+	if req.RawQuery == "" {
+		req.RawQuery = strings.TrimSpace(req.Query)
+	}
+	req.Query = strings.TrimSpace(req.Query)
+	contextMarkdown, contextURI, prompt := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
 
 	doneTurn, entered := r.tryEnterIdleSessionTurn(ctx, req.BotID, req.SessionID)
 	if !entered {
@@ -122,10 +126,6 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	}
 	defer doneTurn()
 
-	if req.RawQuery == "" {
-		req.RawQuery = strings.TrimSpace(req.Query)
-	}
-	req.Query = strings.TrimSpace(req.Query)
 	req = r.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
 	go r.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
@@ -215,7 +215,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		RouteID:             req.RouteID,
 		AgentID:             agentID,
 		ProjectPath:         projectPath,
-		Prompt:              req.Query,
+		Prompt:              prompt,
 		ChannelIdentityID:   req.SourceChannelIdentityID,
 		SessionToken:        req.Token,
 		CurrentPlatform:     req.CurrentChannel,
