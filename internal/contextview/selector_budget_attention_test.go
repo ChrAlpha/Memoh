@@ -1,10 +1,12 @@
 package contextview
 
 import (
+	"context"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
@@ -162,6 +164,84 @@ func TestBudgetAttention_PriorityBreaksTiesWithinTier(t *testing.T) {
 
 	assertSelectedIDs(t, result, []string{"passive-high", "latest"})
 	assertDroppedReason(t, result, "passive-low", budgetDropReasonPassive)
+}
+
+func budgetAttentionRunConfig(holder *contextfrag.LifecycleHolder) agentpkg.RunConfig {
+	return agentpkg.RunConfig{
+		ContextSourceFrags: []contextfrag.ContextFrag{
+			attentionMessageFrag("directed-old", sdk.UserMessage("@bot old ask"), 100, contextfrag.AttentionMention),
+			attentionMessageFrag("passive-new", sdk.UserMessage("recent group chatter"), 100, contextfrag.AttentionPassive),
+			attentionMessageFrag("latest", sdk.UserMessage("latest"), 50, contextfrag.AttentionDirect),
+		},
+		ContextQueryMaterialized: true,
+		ContextBudgetMaxTokens:   150,
+		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
+		ContextLifecycle:         holder,
+	}
+}
+
+func messageText(t *testing.T, msg sdk.Message) string {
+	t.Helper()
+	if len(msg.Content) == 0 {
+		t.Fatalf("message has no content: %#v", msg)
+	}
+	text, ok := msg.Content[0].(sdk.TextPart)
+	if !ok {
+		t.Fatalf("message content = %#v, want text part", msg.Content[0])
+	}
+	return text.Text
+}
+
+func TestApplyProviderRunConfigDefaultsRecentProtectWindow(t *testing.T) {
+	t.Parallel()
+
+	holder := contextfrag.NewLifecycleHolder()
+	got := ApplyProviderRunConfig(context.Background(), nil, budgetAttentionRunConfig(holder))
+
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages = %d, want notice plus two kept", len(got.Messages))
+	}
+	if text := messageText(t, got.Messages[0]); text != HistoryTrimNotice {
+		t.Fatalf("first message = %q, want trim notice", text)
+	}
+	if text := messageText(t, got.Messages[1]); text != "recent group chatter" {
+		t.Fatalf("kept message = %q, want the window-protected passive message", text)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle holder has no snapshot")
+	}
+	if snapshot.Selection.DropReasons[budgetDropReasonWindowYield] != 1 {
+		t.Fatalf("drop reasons = %#v, want one recent window yield", snapshot.Selection.DropReasons)
+	}
+}
+
+func TestApplyProviderRunConfigRecentProtectOverrideDisablesWindow(t *testing.T) {
+	t.Parallel()
+
+	holder := contextfrag.NewLifecycleHolder()
+	cfg := budgetAttentionRunConfig(holder)
+	zero := 0
+	cfg.ContextRecentProtectTokens = &zero
+
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages = %d, want directed history, notice, latest", len(got.Messages))
+	}
+	if text := messageText(t, got.Messages[0]); text != "@bot old ask" {
+		t.Fatalf("first message = %q, want the directed message kept", text)
+	}
+	if text := messageText(t, got.Messages[1]); text != HistoryTrimNotice {
+		t.Fatalf("second message = %q, want trim notice after the drop point", text)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle holder has no snapshot")
+	}
+	if snapshot.Selection.DropReasons[budgetDropReasonPassive] != 1 {
+		t.Fatalf("drop reasons = %#v, want one passive drop", snapshot.Selection.DropReasons)
+	}
 }
 
 func TestBudgetAttention_DropReasonHistogram(t *testing.T) {

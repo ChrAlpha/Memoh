@@ -108,14 +108,19 @@ type RunConfig struct {
 	// source fragments produced at resolve time. When present, the provider
 	// view selects, places and renders from them and the legacy
 	// System/Messages fields exist only as render outputs and fallback.
-	ContextSourceFrags           []contextfrag.ContextFrag
-	ContextFrags                 []contextfrag.ContextFrag
-	ContextManifest              contextfrag.Manifest
-	ContextScope                 contextfrag.Scope
-	ContextQueryMaterialized     bool
-	ContextToolUsage             string
-	ContextDynamicMutators       []contextfrag.DynamicMutator
-	ContextBudgetMaxTokens       int
+	ContextSourceFrags       []contextfrag.ContextFrag
+	ContextFrags             []contextfrag.ContextFrag
+	ContextManifest          contextfrag.Manifest
+	ContextScope             contextfrag.Scope
+	ContextQueryMaterialized bool
+	ContextToolUsage         string
+	ContextDynamicMutators   []contextfrag.DynamicMutator
+	ContextBudgetMaxTokens   int
+	// ContextRecentProtectTokens overrides the recent-protection window the
+	// provider view applies under budget pressure: the newest droppable
+	// history within this many estimated tokens survives trimming. Nil uses
+	// the view default; a pointer to zero disables the window.
+	ContextRecentProtectTokens   *int
 	ContextHistoryTokenEstimates []int
 	ContextTrimmableMessages     int
 	ContextCachePlan             contextfrag.CachePlan

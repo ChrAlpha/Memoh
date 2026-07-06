@@ -110,6 +110,22 @@ func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFra
 
 const toolUsageConflictKey = "system.tool_usage"
 
+// DefaultRecentProtectTokens is the provider-view default for the budget
+// recent-protection window: under budget pressure the newest droppable
+// history within this many estimated tokens survives trimming, in line with
+// the ~20K-token recency guards common across agent runtimes.
+const DefaultRecentProtectTokens = 20000
+
+func resolveRecentProtectTokens(override *int) int {
+	if override == nil {
+		return DefaultRecentProtectTokens
+	}
+	if *override < 0 {
+		return 0
+	}
+	return *override
+}
+
 // ApplyProviderRunConfig rebuilds the provider-facing run config through the
 // context view pipeline. When the run config carries source fragments they
 // are the authoritative input (fragments-first); otherwise the collectors
@@ -162,8 +178,9 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		Sources: sources,
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
-			MaxTokens:    cfg.ContextBudgetMaxTokens,
-			ToolExchange: cfg.ContextToolExchangePolicy,
+			MaxTokens:           cfg.ContextBudgetMaxTokens,
+			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
+			ToolExchange:        cfg.ContextToolExchangePolicy,
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
