@@ -109,3 +109,29 @@ func manifestHasKind(manifest Manifest, kind Kind) bool {
 	}
 	return false
 }
+
+// TestCacheForMessageMatchesHistoryCollectorMapping is the P5 RED test.
+// cacheForMessage backs the legacy/fallback compile path (contextfrag.Compile,
+// used by agent.RefreshContextFrag); contextview's history collector
+// (cacheForSDKMessage in internal/contextview/collector_history.go) backs the
+// newer contextview path. Both classify the same message roles, so they must
+// agree: history messages (user/assistant/tool) are CacheStable, matching
+// the view-side rule, instead of the legacy path's CacheNever.
+func TestCacheForMessageMatchesHistoryCollectorMapping(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		role sdk.MessageRole
+		want CacheClass
+	}{
+		{sdk.MessageRoleSystem, CacheDynamic},
+		{sdk.MessageRoleUser, CacheStable},
+		{sdk.MessageRoleAssistant, CacheStable},
+		{sdk.MessageRoleTool, CacheStable},
+	}
+	for _, tc := range cases {
+		if got := cacheForMessage(sdk.Message{Role: tc.role}); got != tc.want {
+			t.Errorf("cacheForMessage(role=%s) = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+}

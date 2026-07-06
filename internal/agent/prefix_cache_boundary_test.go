@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	anthropicmessages "github.com/memohai/twilight-ai/provider/anthropic/messages"
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -119,5 +120,38 @@ func TestPrefixCacheObserveUsesOwnPeekedSnapshotUnderConcurrency(t *testing.T) {
 	}
 	if comparison.Outcome != contextfrag.CacheOutcomeMissSamePrefix {
 		t.Fatalf("runA outcome = %q, want miss_same_prefix based on its own peeked snapshot (same content as seed), not a misclassification from racing against runB's later write", comparison.Outcome)
+	}
+}
+
+// TestRecordPrefixCacheBoundarySkipsHashWhenCountUnchanged is the P6 RED
+// test. compareCachePrefix's equal-prefix branch (prev.stableCount ==
+// nowCount) never reads prevBoundaryHash — only the growth branch
+// (prev.stableCount < nowCount) does. So when this turn's stable count
+// matches the previous turn's exactly, recordPrefixCacheBoundary hashing a
+// boundary slice is wasted work computed on every turn for nothing.
+func TestRecordPrefixCacheBoundarySkipsHashWhenCountUnchanged(t *testing.T) {
+	t.Parallel()
+
+	a := &Agent{prefixCache: newPrefixCacheTracker()}
+	identity := SessionContext{BotID: "bot-1", SessionID: "session-1"}
+	key := prefixCacheSessionKey(identity)
+	a.prefixCache.observe(key, 2, "prior-hash", "model-x", time.Now())
+
+	cfg := RunConfig{
+		Identity:         identity,
+		ContextMutations: contextfrag.NewMutationLedger(),
+	}
+	messages := []sdk.Message{sdk.UserMessage("a"), sdk.UserMessage("b")}
+	a.recordPrefixCacheBoundary(cfg, "sys", messages, nil, 2) // prefixCount == prev.stableCount(2)
+
+	if got := cfg.ContextMutations.PrevBoundaryHash(); got != "" {
+		t.Fatalf("boundary hash = %q, want empty: the equal-prefix branch never reads it, so it must not be computed", got)
+	}
+	if got := cfg.ContextMutations.RenderedPrefixMessageCount(); got != 2 {
+		t.Fatalf("rendered prefix message count = %d, want 2 (still recorded regardless of the boundary-hash skip)", got)
+	}
+	peeked := cfg.ContextMutations.PeekedPrevCacheEntry()
+	if !peeked.Found || peeked.StableCount != 2 {
+		t.Fatalf("peeked prev entry = %+v, want Found=true StableCount=2 (P4's snapshot capture stays unconditional)", peeked)
 	}
 }

@@ -384,6 +384,8 @@ func cacheForMessage(msg sdk.Message) CacheClass {
 	switch msg.Role {
 	case sdk.MessageRoleSystem:
 		return CacheDynamic
+	case sdk.MessageRoleUser, sdk.MessageRoleAssistant, sdk.MessageRoleTool:
+		return CacheStable
 	default:
 		return CacheNever
 	}

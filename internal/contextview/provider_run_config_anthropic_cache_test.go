@@ -34,6 +34,38 @@ func lastTextCacheControl(msg sdk.Message) *sdk.CacheControl {
 	return text.CacheControl
 }
 
+// countCacheControlBreakpoints walks every message part and tool in the
+// decorated payload and counts real cache_control occurrences, so a
+// breakpoint applied somewhere other than the specific locations this test
+// checks by hand cannot go unnoticed.
+func countCacheControlBreakpoints(messages []sdk.Message, tools []sdk.Tool) int {
+	count := 0
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			switch p := part.(type) {
+			case sdk.TextPart:
+				if p.CacheControl != nil {
+					count++
+				}
+			case sdk.ImagePart:
+				if p.CacheControl != nil {
+					count++
+				}
+			case sdk.FilePart:
+				if p.CacheControl != nil {
+					count++
+				}
+			}
+		}
+	}
+	for _, tool := range tools {
+		if tool.CacheControl != nil {
+			count++
+		}
+	}
+	return count
+}
+
 // TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint proves the fix end
 // to end: a StableMessageCount produced by the context view (history frags are
 // now CacheStable) actually reaches models.ApplyPromptCacheWithPlan and lands a
@@ -65,8 +97,6 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	model := anthropicCacheTestModel()
 	newSystem, newMessages, newTools, systemPrepended, _ := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
 
-	breakpoints := 0
-
 	if !systemPrepended {
 		t.Fatal("expected the system prompt to be promoted into a message for Anthropic")
 	}
@@ -77,7 +107,6 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	if systemCC == nil {
 		t.Fatal("promoted system message should carry a cache breakpoint")
 	}
-	breakpoints++
 
 	shift := 0
 	if systemPrepended {
@@ -88,19 +117,22 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	if stableCC == nil {
 		t.Fatalf("last stable history message (index %d) should carry a cache breakpoint", stableIndex)
 	}
-	breakpoints++
 
 	if len(newTools) == 0 || newTools[len(newTools)-1].CacheControl == nil {
 		t.Fatal("last tool should carry a cache breakpoint")
 	}
-	breakpoints++
 
+	// Real traversal, not a hand-incremented counter that can only ever
+	// equal the number of presence checks written above regardless of what
+	// the payload actually contains: it would silently pass even if an
+	// extra, unwanted breakpoint appeared somewhere else in the payload.
 	const anthropicBreakpointLimit = 4
-	if breakpoints != 3 {
-		t.Fatalf("breakpoints applied = %d, want 3 (system + last-tool + last-history-message)", breakpoints)
+	total := countCacheControlBreakpoints(newMessages, newTools)
+	if total != 3 {
+		t.Fatalf("total cache_control breakpoints = %d, want exactly 3 (system + last-history-message + last-tool)", total)
 	}
-	if breakpoints > anthropicBreakpointLimit {
-		t.Fatalf("breakpoints applied = %d, exceeds Anthropic's hard limit of %d", breakpoints, anthropicBreakpointLimit)
+	if total > anthropicBreakpointLimit {
+		t.Fatalf("total cache_control breakpoints = %d, exceeds Anthropic's hard limit of %d", total, anthropicBreakpointLimit)
 	}
 }
 

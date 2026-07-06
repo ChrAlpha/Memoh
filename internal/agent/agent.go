@@ -1036,7 +1036,11 @@ func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages
 		StableCount: prev.stableCount,
 		At:          prev.at,
 	})
-	if !ok || prev.stableCount > prefixCount {
+	// compareCachePrefix's equal-prefix branch (prev.stableCount == nowCount)
+	// never reads the boundary hash — only the growth branch
+	// (prev.stableCount < nowCount) does — so skip the wasted hash when the
+	// stable count hasn't grown.
+	if !ok || prev.stableCount >= prefixCount {
 		return
 	}
 	hash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages[:prev.stableCount], tools)
