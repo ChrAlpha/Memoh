@@ -114,10 +114,21 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 // split them into typed sections. It logs the failure and returns the
 // complete, unsplit template text as a single KindSystemPrompt section
 // instead of crashing Agent.Stream's un-recovered goroutine.
+//
+// It still runs the whole system_common+mode template through the same
+// render() substitution the healthy path applies (per section), so a
+// missing anchor degrades to an unsplit prompt instead of one that leaks a
+// literal {{placeholder}} or drops the bot identity.
 func degradedSystemSections(params SystemPromptParams, home, timezone string, cause error) []SystemSection {
 	slog.Default().Error("agent: system prompt template missing expected anchor; falling back to an unsplit system prompt", slog.Any("error", cause))
-	text := render(systemCommonTmpl, map[string]string{"home": home, "timezone": timezone}) +
-		"\n\n" + strings.TrimSpace(selectModeTemplate(params.SessionType))
+	tmpl := strings.TrimSpace(systemCommonTmpl + "\n\n" + selectModeTemplate(params.SessionType))
+	text := render(tmpl, map[string]string{
+		"home":              home,
+		"timezone":          timezone,
+		"botInfoSection":    buildBotInfoSection(params.Bot),
+		"mainAgentSections": "",
+		"subagentSections":  "",
+	})
 	if params.SessionType != sessionmode.Subagent {
 		text += "\n\n" + strings.TrimSpace(includes["_memory"])
 	}
