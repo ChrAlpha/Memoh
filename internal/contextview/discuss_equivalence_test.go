@@ -113,8 +113,8 @@ func TestDiscussSelector_BudgetedSelectionDropsCanDropHistory(t *testing.T) {
 	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
 
 	assertSelectedIDs(t, result, []string{"latest"})
-	assertDroppedReason(t, result, "old-user", string(TagCanDrop))
-	assertDroppedReason(t, result, "old-assistant", string(TagCanDrop))
+	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
+	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
 }
 
 func TestDiscussSelector_BudgetedSelectionKeepsAllWhenWithinBudget(t *testing.T) {
@@ -150,8 +150,8 @@ func TestSelector_ProviderBudgetedIntentDropsCanDropHistory(t *testing.T) {
 	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
 
 	assertSelectedIDs(t, result, []string{"latest"})
-	assertDroppedReason(t, result, "old-user", string(TagCanDrop))
-	assertDroppedReason(t, result, "old-assistant", string(TagCanDrop))
+	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
+	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
 }
 
 type discussLegacyInput struct {

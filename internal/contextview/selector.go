@@ -57,8 +57,8 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
 		if isRetentionIntent(profile.Intent) {
-			if drops := budgetTrimDrops(tagged, budget.MaxTokens); len(drops) > 0 {
-				result = selectionResultFromTagged(tagged, keptIndexes(tagged, drops))
+			if drops, dropReasons := budgetTrimDrops(tagged, budget.MaxTokens, budget.RecentProtectTokens); len(drops) > 0 {
+				result = selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
 				result.TrimNotice = true
 				result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
 				return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
@@ -294,6 +294,10 @@ func isRetentionIntent(intent contextfrag.Intent) bool {
 }
 
 func selectionResultFromTagged(tagged []TaggedFrag, selectedIndexes map[int]bool) SelectionResult {
+	return selectionResultFromTaggedReasons(tagged, selectedIndexes, nil)
+}
+
+func selectionResultFromTaggedReasons(tagged []TaggedFrag, selectedIndexes map[int]bool, reasonOverrides map[int]string) SelectionResult {
 	selected := make([]contextfrag.ContextFrag, 0, len(selectedIndexes))
 	dropped := make([]contextfrag.ContextFrag, 0, len(tagged)-len(selectedIndexes))
 	dropRecords := make([]DropRecord, 0, len(tagged)-len(selectedIndexes))
@@ -303,11 +307,15 @@ func selectionResultFromTagged(tagged []TaggedFrag, selectedIndexes map[int]bool
 			selected = append(selected, taggedFrag.Frag)
 			continue
 		}
+		reason := reasonOverrides[i]
+		if reason == "" {
+			reason = selectionDropReason(taggedFrag)
+		}
 		dropped = append(dropped, taggedFrag.Frag)
 		dropRecords = append(dropRecords, DropRecord{
 			FragID: taggedFrag.Frag.ID,
 			Ref:    taggedFrag.Frag.Ref,
-			Reason: selectionDropReason(taggedFrag),
+			Reason: reason,
 		})
 	}
 

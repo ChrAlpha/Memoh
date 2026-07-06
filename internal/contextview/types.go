@@ -19,6 +19,11 @@ type SourceSpec struct {
 
 type BudgetEnvelope struct {
 	MaxTokens int
+	// RecentProtectTokens shields the newest droppable history within this
+	// many estimated tokens from budget drops. The window is not harder than
+	// the budget itself: when it alone exceeds MaxTokens it yields from its
+	// old end. Zero disables the window.
+	RecentProtectTokens int
 	// ToolExchange strips bulky tool interactions from history (ask_user
 	// survives); nil keeps every exchange.
 	ToolExchange *contextfrag.ToolExchangePolicy

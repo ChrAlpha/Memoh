@@ -168,7 +168,7 @@ func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
 	if !ok || call.ToolCallID != "new-call" {
 		t.Fatalf("first loop message after trim notice = %#v, want new tool call", result.Messages[3].Content[0])
 	}
-	if result.DropReasons[string(TagCanDrop)] != 2 {
-		t.Fatalf("DropReasons = %#v, want the droppable cause can_drop:2", result.DropReasons)
+	if result.DropReasons[budgetDropReasonUntiered] != 2 {
+		t.Fatalf("DropReasons = %#v, want the droppable cause budget:untiered:2", result.DropReasons)
 	}
 }
