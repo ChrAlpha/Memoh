@@ -260,6 +260,9 @@ func discussSegmentAttention(seg pipeline.RenderedSegment, conversationType stri
 }
 
 func discussRCText(seg pipeline.RenderedSegment) string {
+	if seg.IC != nil {
+		seg = pipeline.RenderMessageSegment(seg.IC, seg.Params)
+	}
 	var out strings.Builder
 	for _, piece := range seg.Content {
 		if piece.Type != "text" {

@@ -50,6 +50,7 @@ type RenderedSegment struct {
 	ImageRefs    []ImageAttachmentRef   `json:"image_refs,omitempty"`
 	Meta         *SegmentMeta           `json:"-"`
 	IC           *ICMessage             `json:"-"`
+	Params       RenderParams           `json:"-"`
 }
 
 // RenderedContext is the output of the Rendering layer — a slice of segments.
@@ -92,6 +93,14 @@ func RCToXML(rc RenderedContext) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// RenderMessageSegment renders a single message node exactly as Render does.
+// Exported so the discuss collector can re-render a segment at compile time
+// from its IC snapshot and Params; the output is byte-identical to the
+// segment Render produced.
+func RenderMessageSegment(msg *ICMessage, params RenderParams) RenderedSegment {
+	return renderMessage(msg, params)
 }
 
 func segmentMeta(msg *ICMessage, params RenderParams) *SegmentMeta {
@@ -169,6 +178,7 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 			RepliesToMe:  repliesToMe,
 			Meta:         segmentMeta(msg, params),
 			IC:           &icCopy,
+			Params:       params,
 		}
 	}
 
@@ -219,6 +229,7 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 		ImageRefs:    imageRefs,
 		Meta:         segmentMeta(msg, params),
 		IC:           &icCopy,
+		Params:       params,
 	}
 }
 

@@ -332,6 +332,95 @@ func TestDiscussCollectorPerFragScopeDoesNotChangePayloadHash(t *testing.T) {
 	}
 }
 
+func TestDiscussRCFragReRendersFromICSnapshot(t *testing.T) {
+	t.Parallel()
+
+	msg := &pipeline.ICMessage{
+		MessageID:    "m1",
+		Sender:       &pipeline.CanonicalUser{ID: "u-1", DisplayName: "Alice", Username: "alice"},
+		TimestampSec: 1,
+		Content:      []pipeline.ContentNode{{Type: "text", Text: "hello"}},
+		Conversation: pipeline.ConversationMeta{Channel: "telegram", ConversationType: "group"},
+	}
+	params := pipeline.RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}}
+	seg := pipeline.RenderMessageSegment(msg, params)
+	want := seg.Content[0].Text
+	seg.Content = []pipeline.RenderedContentPiece{{Type: "text", Text: "TAMPERED"}}
+
+	frags := collectDiscussContext(t, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	got := discussFragMessageT(t, frags[0])
+	text, ok := got.Content[0].(sdk.TextPart)
+	if !ok {
+		t.Fatalf("content = %#v, want text part", got.Content)
+	}
+	if text.Text != want {
+		t.Fatalf("frag must be re-rendered from the IC snapshot with the original params:\n--- got ---\n%s\n--- want ---\n%s", text.Text, want)
+	}
+}
+
+func TestDiscussRCFragBytesMatchPipelineRender(t *testing.T) {
+	t.Parallel()
+
+	ic := pipeline.NewEmptyIC("s1")
+	ic.Nodes = []pipeline.ICNode{
+		{Message: &pipeline.ICMessage{
+			MessageID:    "m1",
+			Sender:       &pipeline.CanonicalUser{ID: "u-1", DisplayName: "Alice", Username: "alice"},
+			ReceivedAtMs: 100,
+			TimestampSec: 1,
+			UTCOffsetMin: 330,
+			Content: []pipeline.ContentNode{
+				{Type: "mention", UserID: "u-2", Children: []pipeline.ContentNode{{Type: "text", Text: "Bob"}}},
+				{Type: "text", Text: ` see "this" & <that>`},
+			},
+			Conversation: pipeline.ConversationMeta{Channel: "telegram", ConversationName: "Dev Room", ConversationType: "group"},
+		}},
+		{Message: &pipeline.ICMessage{
+			MessageID:        "m2",
+			Sender:           &pipeline.CanonicalUser{ID: "u-2", DisplayName: "Bob"},
+			ReceivedAtMs:     200,
+			TimestampSec:     2,
+			Content:          []pipeline.ContentNode{{Type: "text", Text: "reply body"}},
+			ReplyToMessageID: "m1",
+			ReplyToSender:    &pipeline.CanonicalUser{ID: "u-1", DisplayName: "Alice"},
+			ReplyToPreview:   "earlier",
+			ForwardInfo:      &pipeline.ForwardInfo{MessageID: "f1", SenderName: "Carol"},
+			Attachments: []pipeline.Attachment{
+				{Type: "image", MimeType: "image/png", ContentHash: "hash-1", FilePath: "/tmp/a.png", AltText: "pic"},
+			},
+			Conversation: pipeline.ConversationMeta{Channel: "telegram", ConversationType: "group"},
+		}},
+		{SystemEvent: &pipeline.ICSystemEvent{
+			Type:         "system_event",
+			Kind:         "chat_renamed",
+			ReceivedAtMs: 300,
+			TimestampSec: 3,
+			NewTitle:     "New Room",
+		}},
+	}
+	rc := pipeline.Render(ic, pipeline.RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}})
+
+	frags := collectDiscussContext(t, DiscussContextConfig{RC: rc})
+
+	if len(frags) != len(rc) {
+		t.Fatalf("frags = %d, want %d", len(frags), len(rc))
+	}
+	for i, seg := range rc {
+		msg := discussFragMessageT(t, frags[i])
+		text, ok := msg.Content[0].(sdk.TextPart)
+		if !ok {
+			t.Fatalf("frags[%d] content = %#v, want text part", i, msg.Content)
+		}
+		if text.Text != seg.Content[0].Text {
+			t.Fatalf("frags[%d] bytes differ from pipeline render:\n--- frag ---\n%s\n--- seg ---\n%s", i, text.Text, seg.Content[0].Text)
+		}
+	}
+}
+
 func collectDiscussContextScoped(t *testing.T, scope contextfrag.Scope, cfg DiscussContextConfig) []contextfrag.ContextFrag {
 	t.Helper()
 	collector := &DiscussContextCollector{}
