@@ -217,7 +217,6 @@ func TestDiscussCollectorPerFragScopeFromSegmentMeta(t *testing.T) {
 		ForwardMessageID:          "fwd-1",
 		ForwardFromUserID:         "u-9",
 		ForwardFromConversationID: "conv-9",
-		TimestampSec:              1,
 	}
 
 	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
@@ -331,6 +330,65 @@ func TestDiscussCollectorSegmentConversationTypeOverridesTurnType(t *testing.T) 
 				t.Fatalf("Attention = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDiscussCollectorPerFragSenderIdentity(t *testing.T) {
+	t.Parallel()
+
+	text := renderedTextSegment(100, "text msg")
+	text.Meta = &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1", SenderDisplayName: "Alice"}
+	image := renderedTextSegment(200, "photo msg")
+	image.Meta = &pipeline.SegmentMeta{MessageID: "m-2", SenderID: "u-2", SenderUsername: "bob"}
+	image.ImageRefs = []pipeline.ImageAttachmentRef{{ContentHash: "hash-1", Mime: "image/jpeg"}}
+	base := contextfrag.Scope{
+		BotID:             "bot-1",
+		ChannelIdentityID: "ci-turn",
+		DisplayName:       "Turn Sender",
+		ConversationType:  "group",
+	}
+
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{text, image}})
+
+	if len(frags) != 2 {
+		t.Fatalf("frags = %d, want 2", len(frags))
+	}
+	if frags[0].Scope.DisplayName != "Alice" {
+		t.Fatalf("text frag DisplayName = %q, want segment sender Alice", frags[0].Scope.DisplayName)
+	}
+	if frags[0].Scope.Metadata["sender_id"] != "u-1" {
+		t.Fatalf("text frag sender_id = %q, want u-1", frags[0].Scope.Metadata["sender_id"])
+	}
+	if frags[1].Scope.DisplayName != "bob" {
+		t.Fatalf("image frag DisplayName = %q, want username fallback bob", frags[1].Scope.DisplayName)
+	}
+	if frags[1].Scope.Metadata["sender_id"] != "u-2" {
+		t.Fatalf("image frag sender_id = %q, want u-2", frags[1].Scope.Metadata["sender_id"])
+	}
+	if frags[1].Scope.Metadata["image_refs"] != "hash-1:image/jpeg" {
+		t.Fatalf("image frag image_refs = %q, want hash-1:image/jpeg", frags[1].Scope.Metadata["image_refs"])
+	}
+	for i, frag := range frags {
+		if frag.Scope.ChannelIdentityID != "ci-turn" {
+			t.Fatalf("frags[%d] ChannelIdentityID = %q, must stay turn-level (Memoh identity, not platform sender)", i, frag.Scope.ChannelIdentityID)
+		}
+	}
+}
+
+func TestDiscussCollectorEmptySenderMetaKeepsTurnDisplayName(t *testing.T) {
+	t.Parallel()
+
+	seg := renderedTextSegment(100, "hi")
+	seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1"}
+	base := contextfrag.Scope{BotID: "bot-1", DisplayName: "Turn Sender", ConversationType: "group"}
+
+	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	if frags[0].Scope.DisplayName != "Turn Sender" {
+		t.Fatalf("DisplayName = %q, want turn-level kept when segment sender has no name", frags[0].Scope.DisplayName)
 	}
 }
 

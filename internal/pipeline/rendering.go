@@ -23,20 +23,18 @@ type ImageAttachmentRef struct {
 
 // SegmentMeta carries the structured message fields behind a rendered
 // message segment, so downstream consumers do not have to re-parse the XML.
+// Sender fields hold raw adapter values; decoration (contact names,
+// "(@username)" suffixes) is a rendering concern.
 type SegmentMeta struct {
 	MessageID                 string
 	SenderID                  string
 	SenderDisplayName         string
 	SenderUsername            string
-	SenderIsBot               bool
 	ReplyToMessageID          string
 	ReplyToSender             string
 	ForwardMessageID          string
 	ForwardFromUserID         string
 	ForwardFromConversationID string
-	TimestampSec              int64
-	Edited                    bool
-	Deleted                   bool
 }
 
 // RenderedSegment is a single segment of rendered context, one per IC node.
@@ -103,22 +101,16 @@ func RenderMessageSegment(msg *ICMessage, params RenderParams) RenderedSegment {
 	return renderMessage(msg, params)
 }
 
-func segmentMeta(msg *ICMessage, params RenderParams) *SegmentMeta {
+func segmentMeta(msg *ICMessage) *SegmentMeta {
 	meta := &SegmentMeta{
 		MessageID:        msg.MessageID,
 		ReplyToMessageID: msg.ReplyToMessageID,
-		TimestampSec:     msg.TimestampSec,
-		Edited:           msg.EditedAtSec > 0,
-		Deleted:          msg.Deleted,
+		ReplyToSender:    rawSenderName(msg.ReplyToSender),
 	}
 	if msg.Sender != nil {
 		meta.SenderID = msg.Sender.ID
 		meta.SenderDisplayName = msg.Sender.DisplayName
 		meta.SenderUsername = msg.Sender.Username
-		meta.SenderIsBot = msg.Sender.IsBot
-	}
-	if msg.ReplyToSender != nil {
-		meta.ReplyToSender = formatSender(msg.ReplyToSender, params.ContactNames)
 	}
 	if msg.ForwardInfo != nil {
 		meta.ForwardMessageID = msg.ForwardInfo.MessageID
@@ -126,6 +118,19 @@ func segmentMeta(msg *ICMessage, params RenderParams) *SegmentMeta {
 		meta.ForwardFromConversationID = msg.ForwardInfo.FromConversationID
 	}
 	return meta
+}
+
+func rawSenderName(user *CanonicalUser) string {
+	switch {
+	case user == nil:
+		return ""
+	case user.DisplayName != "":
+		return user.DisplayName
+	case user.Username != "":
+		return user.Username
+	default:
+		return user.ID
+	}
 }
 
 func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
@@ -176,7 +181,7 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 			IsSelfSent:   msg.IsSelfSent,
 			MentionsMe:   mentionsMe,
 			RepliesToMe:  repliesToMe,
-			Meta:         segmentMeta(msg, params),
+			Meta:         segmentMeta(msg),
 			IC:           &icCopy,
 			Params:       params,
 		}
@@ -227,7 +232,7 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 		MentionsMe:   mentionsMe,
 		RepliesToMe:  repliesToMe,
 		ImageRefs:    imageRefs,
-		Meta:         segmentMeta(msg, params),
+		Meta:         segmentMeta(msg),
 		IC:           &icCopy,
 		Params:       params,
 	}

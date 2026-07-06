@@ -201,6 +201,7 @@ func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) 
 		return scope
 	}
 	out := scope
+	extra := map[string]string{}
 	if meta != nil {
 		out.CurrentMessageID = strings.TrimSpace(meta.MessageID)
 		out.ReplyToMessageID = strings.TrimSpace(meta.ReplyToMessageID)
@@ -211,20 +212,40 @@ func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) 
 		out.MentionsBot = seg.MentionsMe
 		out.RepliesToBot = seg.RepliesToMe
 		out.Attention = discussSegmentAttention(seg, out.ConversationType)
+		if name := firstNonEmptyTrimmed(meta.SenderDisplayName, meta.SenderUsername); name != "" {
+			out.DisplayName = name
+		}
+		if senderID := strings.TrimSpace(meta.SenderID); senderID != "" {
+			extra["sender_id"] = senderID
+		}
 	}
 	if len(seg.ImageRefs) > 0 {
-		metadata := make(map[string]string, len(out.Metadata)+1)
-		for k, v := range out.Metadata {
-			metadata[k] = v
-		}
 		refs := make([]string, 0, len(seg.ImageRefs))
 		for _, ref := range seg.ImageRefs {
 			refs = append(refs, ref.ContentHash+":"+ref.Mime)
 		}
-		metadata["image_refs"] = strings.Join(refs, ",")
+		extra["image_refs"] = strings.Join(refs, ",")
+	}
+	if len(extra) > 0 {
+		metadata := make(map[string]string, len(out.Metadata)+len(extra))
+		for k, v := range out.Metadata {
+			metadata[k] = v
+		}
+		for k, v := range extra {
+			metadata[k] = v
+		}
 		out.Metadata = metadata
 	}
 	return out
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // discussSegmentAttention shares the chat-side attention core
