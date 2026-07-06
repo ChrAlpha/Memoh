@@ -428,7 +428,7 @@ func TestDiscussCollectorPerFragScopeDoesNotChangePayloadHash(t *testing.T) {
 	}
 }
 
-func TestDiscussRCFragReRendersFromICSnapshot(t *testing.T) {
+func TestDiscussRCFragConsumesRenderedSegmentContent(t *testing.T) {
 	t.Parallel()
 
 	msg := &pipeline.ICMessage{
@@ -440,8 +440,7 @@ func TestDiscussRCFragReRendersFromICSnapshot(t *testing.T) {
 	}
 	params := pipeline.RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}}
 	seg := pipeline.RenderMessageSegment(msg, params)
-	want := seg.Content[0].Text
-	seg.Content = []pipeline.RenderedContentPiece{{Type: "text", Text: "TAMPERED"}}
+	seg.Content = []pipeline.RenderedContentPiece{{Type: "text", Text: "EDITED BYTES"}}
 
 	frags := collectDiscussContext(t, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
 
@@ -453,8 +452,8 @@ func TestDiscussRCFragReRendersFromICSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatalf("content = %#v, want text part", got.Content)
 	}
-	if text.Text != want {
-		t.Fatalf("frag must be re-rendered from the IC snapshot with the original params:\n--- got ---\n%s\n--- want ---\n%s", text.Text, want)
+	if text.Text != "EDITED BYTES" {
+		t.Fatalf("frag must consume the segment's rendered bytes as-is (re-rendering from seg.IC is a proven capability, not the live path):\n--- got ---\n%s", text.Text)
 	}
 }
 

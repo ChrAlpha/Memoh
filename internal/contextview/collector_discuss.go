@@ -264,10 +264,10 @@ func discussSegmentAttention(seg pipeline.RenderedSegment, turnConversationType 
 	})
 }
 
+// discussRCText consumes the segment's already-rendered bytes; switch to
+// pipeline.RenderMessageSegment(seg.IC, seg.Params) when the first consumer
+// needs a render target other than the pipeline's own output.
 func discussRCText(seg pipeline.RenderedSegment) string {
-	if seg.IC != nil {
-		seg = pipeline.RenderMessageSegment(seg.IC, seg.Params)
-	}
 	var out strings.Builder
 	for _, piece := range seg.Content {
 		if piece.Type != "text" {

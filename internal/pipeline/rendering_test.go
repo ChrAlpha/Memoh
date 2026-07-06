@@ -161,6 +161,51 @@ func TestRenderMessage_MetaOnDeletedMessage(t *testing.T) {
 	}
 }
 
+func TestRenderMessageSnapshotIsSelfContained(t *testing.T) {
+	msg := &ICMessage{
+		MessageID:    "m1",
+		Sender:       &CanonicalUser{ID: "u-1", DisplayName: "Alice"},
+		TimestampSec: 1,
+		Content: []ContentNode{
+			{Type: "bold", Children: []ContentNode{{Type: "text", Text: "hot"}}},
+		},
+		ReplyToMessageID: "m0",
+		ReplyToSender:    &CanonicalUser{ID: "u-2", DisplayName: "Bob"},
+		ForwardInfo:      &ForwardInfo{MessageID: "f1", Sender: &CanonicalUser{ID: "u-3", DisplayName: "Carol"}},
+		Attachments:      []Attachment{{Type: "image", ContentHash: "hash-1", FileName: "cat.png"}},
+		Conversation:     ConversationMeta{Channel: "telegram", ConversationType: "group"},
+	}
+	params := RenderParams{ContactNames: map[string]string{"u-1": "Contact Alice"}}
+
+	seg := renderMessage(msg, params)
+
+	msg.Content[0].Children[0].Text = "TAMPERED"
+	msg.Sender.DisplayName = "TAMPERED"
+	msg.ReplyToSender.DisplayName = "TAMPERED"
+	msg.ForwardInfo.Sender.DisplayName = "TAMPERED"
+	msg.Attachments[0].FileName = "TAMPERED"
+	params.ContactNames["u-1"] = "TAMPERED"
+
+	if got := seg.IC.Content[0].Children[0].Text; got != "hot" {
+		t.Fatalf("IC content tree shares memory with the source message: %q", got)
+	}
+	if got := seg.IC.Sender.DisplayName; got != "Alice" {
+		t.Fatalf("IC sender shares memory with the source message: %q", got)
+	}
+	if got := seg.IC.ReplyToSender.DisplayName; got != "Bob" {
+		t.Fatalf("IC reply sender shares memory with the source message: %q", got)
+	}
+	if got := seg.IC.ForwardInfo.Sender.DisplayName; got != "Carol" {
+		t.Fatalf("IC forward sender shares memory with the source message: %q", got)
+	}
+	if got := seg.IC.Attachments[0].FileName; got != "cat.png" {
+		t.Fatalf("IC attachments share memory with the source message: %q", got)
+	}
+	if got := seg.Params.ContactNames["u-1"]; got != "Contact Alice" {
+		t.Fatalf("Params.ContactNames shares memory with the caller's map: %q", got)
+	}
+}
+
 func TestRender_SystemEventSegmentHasNoMeta(t *testing.T) {
 	ic := NewEmptyIC("s1")
 	ic.Nodes = []ICNode{{SystemEvent: &ICSystemEvent{
