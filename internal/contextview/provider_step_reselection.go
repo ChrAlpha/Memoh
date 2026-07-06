@@ -30,6 +30,7 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	if err != nil || len(frags) == 0 {
 		return agentpkg.ContextStepSelectionResult{}
 	}
+	frags = markInjectedLoopUserFrags(frags)
 
 	selector := &FragmentSelector{}
 	selection := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{
@@ -55,6 +56,22 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		Truncated:   truncated,
 		DropReasons: dropReasonHistogram(selection.Summary.DropReasons),
 	}
+}
+
+// markInjectedLoopUserFrags types and protects user-role messages appended
+// during the tool loop (InjectCh injections, read_media payloads): they carry
+// content the run deliberately inserted mid-stream, so step budget pressure
+// must never drop them.
+func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	for i := range frags {
+		msg := discussFragMessage(frags[i])
+		if msg == nil || !isRole(msg.Role, sdk.MessageRoleUser) {
+			continue
+		}
+		frags[i].Kind = contextfrag.KindInjectedMessage
+		frags[i].Budget.Overflow = contextfrag.OverflowKeep
+	}
+	return frags
 }
 
 // truncateOldToolResultFrags keeps the most recent keepRecent complete tool

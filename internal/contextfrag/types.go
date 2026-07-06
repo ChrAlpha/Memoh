@@ -19,6 +19,7 @@ const (
 	KindAttachmentRef        Kind = "attachment_ref"
 	KindNativeImage          Kind = "native_image"
 	KindHookContext          Kind = "hook_context"
+	KindInjectedMessage      Kind = "injected_message"
 	KindBackgroundSummary    Kind = "background_summary"
 	KindACPContext           Kind = "acp_context"
 
