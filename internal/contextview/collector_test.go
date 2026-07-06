@@ -100,8 +100,8 @@ func TestHistoryMessagesCollector_MultipleMessages(t *testing.T) {
 		t.Fatalf("frags = %d, want %d", len(frags), len(messages))
 	}
 	assertMessageFrag(t, frags[0], "message.000", contextfrag.KindSystemPolicy, contextfrag.CacheDynamic, contextfrag.TrustSystem, 30, sdk.MessageRoleSystem)
-	assertMessageFrag(t, frags[1], "message.001", contextfrag.KindConversationEvent, contextfrag.CacheNever, contextfrag.TrustExternal, 70, sdk.MessageRoleUser)
-	assertMessageFrag(t, frags[2], "message.002", contextfrag.KindConversationEvent, contextfrag.CacheNever, contextfrag.TrustWorkspace, 70, sdk.MessageRoleAssistant)
+	assertMessageFrag(t, frags[1], "message.001", contextfrag.KindConversationEvent, contextfrag.CacheStable, contextfrag.TrustExternal, 70, sdk.MessageRoleUser)
+	assertMessageFrag(t, frags[2], "message.002", contextfrag.KindConversationEvent, contextfrag.CacheStable, contextfrag.TrustWorkspace, 70, sdk.MessageRoleAssistant)
 }
 
 func TestHistoryMessagesCollector_EmptyMessages(t *testing.T) {
@@ -123,7 +123,7 @@ func TestHistoryMessagesCollector_ToolMessage(t *testing.T) {
 	if len(frags) != 1 {
 		t.Fatalf("frags = %d, want 1", len(frags))
 	}
-	assertMessageFrag(t, frags[0], "message.000", contextfrag.KindConversationEvent, contextfrag.CacheNever, contextfrag.TrustWorkspace, 55, sdk.MessageRoleTool)
+	assertMessageFrag(t, frags[0], "message.000", contextfrag.KindConversationEvent, contextfrag.CacheStable, contextfrag.TrustWorkspace, 55, sdk.MessageRoleTool)
 }
 
 // Chat history carries no per-message attention data, so the collector must

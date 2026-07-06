@@ -100,7 +100,7 @@ func cacheForSDKMessage(msg sdk.Message) contextfrag.CacheClass {
 	case sdk.MessageRoleSystem:
 		return contextfrag.CacheDynamic
 	case sdk.MessageRoleUser, sdk.MessageRoleAssistant, sdk.MessageRoleTool:
-		return contextfrag.CacheNever
+		return contextfrag.CacheStable
 	default:
 		return contextfrag.CacheNever
 	}

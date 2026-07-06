@@ -124,6 +124,13 @@ func TestApplyProviderContextViewUsesContextBudget(t *testing.T) {
 		got.ContextManifest.Items[1].ID != "message.002" {
 		t.Fatalf("manifest items = %#v, want notice then latest message", got.ContextManifest.Items)
 	}
+	// The trim notice is always CacheNever and lands first among the
+	// non-system items, so StableMessageCount is correctly 0 here: a
+	// budget-trimmed prefix is not stable across turns and must not get a
+	// cache breakpoint.
+	if got.ContextCachePlan.StableMessageCount != 0 {
+		t.Fatalf("stable message count = %d, want 0 when a trim notice is present", got.ContextCachePlan.StableMessageCount)
+	}
 }
 
 func TestApplyProviderContextViewCountsImagesAgainstTokenBudget(t *testing.T) {
@@ -218,7 +225,32 @@ func TestApplyProviderContextViewProducesCachePlan(t *testing.T) {
 	if got.ContextCachePlan.StablePrefixHash == "" {
 		t.Fatal("cache plan should carry the stable prefix hash")
 	}
-	if got.ContextCachePlan.StableMessageCount != 0 {
-		t.Fatalf("history is cache-volatile, stable message count = %d, want 0", got.ContextCachePlan.StableMessageCount)
+	if got.ContextCachePlan.StableMessageCount != 1 {
+		t.Fatalf("history is cache-stable now, stable message count = %d, want 1", got.ContextCachePlan.StableMessageCount)
+	}
+}
+
+func TestApplyProviderContextViewStableMessageCountExcludesMemoryAndCurrent(t *testing.T) {
+	t.Parallel()
+
+	cfg := agentpkg.RunConfig{
+		System: "stable system prompt",
+		Messages: []sdk.Message{
+			sdk.UserMessage("h1"),
+			sdk.AssistantMessage("h2"),
+			sdk.UserMessage("h3"),
+		},
+		ContextMemoryText: "remembered fact",
+		Query:             "current question",
+		ContextScope: contextfrag.Scope{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+		},
+	}
+
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+
+	if got.ContextCachePlan.StableMessageCount != 3 {
+		t.Fatalf("stable message count = %d, want 3 (memory/current must stay cache-volatile)", got.ContextCachePlan.StableMessageCount)
 	}
 }
