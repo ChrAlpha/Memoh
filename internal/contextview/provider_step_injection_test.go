@@ -130,6 +130,25 @@ func TestMarkInjectedLoopUserFragsLeavesImagePayloadsDroppable(t *testing.T) {
 	}
 }
 
+func TestMarkInjectedLoopUserFragsUsesStrictBackgroundSummaryContract(t *testing.T) {
+	t.Parallel()
+
+	decorated := sdk.Message{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.TextPart{
+		Text:         "[Background tasks]\nCurrently running background tasks:\n- [task-1] build",
+		CacheControl: &sdk.CacheControl{Type: "ephemeral"},
+	}}}
+	marked := markInjectedLoopUserFrags(collectLoopFrags(t, []sdk.Message{decorated}))
+
+	// The agent's between-step removal only strips unadorned carriers, so a
+	// decorated message must be treated as injected content, not as a summary.
+	if marked[0].Kind != contextfrag.KindInjectedMessage {
+		t.Fatalf("decorated frag kind = %q, want %q", marked[0].Kind, contextfrag.KindInjectedMessage)
+	}
+	if marked[0].Budget.Overflow != contextfrag.OverflowKeep {
+		t.Fatalf("decorated frag overflow = %q, want keep", marked[0].Budget.Overflow)
+	}
+}
+
 func TestStepReselectionDropsBulkyImagePayloadsUnderBudgetPressure(t *testing.T) {
 	t.Parallel()
 

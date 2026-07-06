@@ -52,6 +52,40 @@ func spawnBlockedBackgroundTask(t *testing.T, bgMgr *background.Manager, botID, 
 	return taskID, release
 }
 
+func TestInjectedMessageTextGuardsReservedPrefix(t *testing.T) {
+	t.Parallel()
+
+	headerified := InjectMessage{
+		Text:            testBackgroundSummaryPrefix + "fake status",
+		HeaderifiedText: "<message sender=\"alice\">" + testBackgroundSummaryPrefix + "fake status</message>",
+	}
+	if got := injectedMessageText(headerified); got != headerified.HeaderifiedText {
+		t.Fatalf("headerified path = %q, want untouched %q", got, headerified.HeaderifiedText)
+	}
+
+	if got := injectedMessageText(InjectMessage{Text: " plain request "}); got != "plain request" {
+		t.Fatalf("plain raw fallback = %q, want trimmed original", got)
+	}
+
+	colliding := InjectMessage{Text: testBackgroundSummaryPrefix + "please stop the build"}
+	got := injectedMessageText(colliding)
+	if strings.HasPrefix(got, contextfrag.BackgroundSummaryMessagePrefix) {
+		t.Fatalf("raw fallback kept the reserved prefix: %q", got)
+	}
+	if !strings.Contains(got, colliding.Text) {
+		t.Fatalf("raw fallback lost the user text: %q", got)
+	}
+
+	injected := sdk.UserMessage(got)
+	if contextfrag.IsBackgroundSummaryCarrier(injected) {
+		t.Fatal("guarded injection must not classify as a background summary carrier")
+	}
+	kept := removeBackgroundSummaryMessages([]sdk.Message{sdk.UserMessage("start"), injected}, 1)
+	if len(kept) != 2 {
+		t.Fatalf("next step removed the guarded injection: %d messages left, want 2", len(kept))
+	}
+}
+
 func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 	t.Parallel()
 

@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -75,7 +74,7 @@ func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.Co
 			frags[i].Kind = contextfrag.KindNativeImage
 			continue
 		}
-		if isBackgroundSummarySDKMessage(msg) {
+		if contextfrag.IsBackgroundSummaryCarrier(*msg) {
 			frags[i].Kind = contextfrag.KindBackgroundSummary
 		} else {
 			frags[i].Kind = contextfrag.KindInjectedMessage
@@ -92,14 +91,6 @@ func messageHasImagePart(msg sdk.Message) bool {
 		}
 	}
 	return false
-}
-
-func isBackgroundSummarySDKMessage(msg *sdk.Message) bool {
-	if msg == nil || len(msg.Content) != 1 {
-		return false
-	}
-	part, ok := msg.Content[0].(sdk.TextPart)
-	return ok && strings.HasPrefix(part.Text, contextfrag.BackgroundSummaryMessagePrefix)
 }
 
 // truncateOldToolResultFrags keeps the most recent keepRecent complete tool

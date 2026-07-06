@@ -245,10 +245,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 					if !ok {
 						break
 					}
-					text := strings.TrimSpace(injected.HeaderifiedText)
-					if text == "" {
-						text = strings.TrimSpace(injected.Text)
-					}
+					text := injectedMessageText(injected)
 					if text != "" || (cfg.SupportsImageInput && len(injected.ImageParts) > 0) {
 						insertAfter := len(p.Messages) - initialMsgCount
 						var extra []sdk.MessagePart
@@ -1326,13 +1323,13 @@ func removeBackgroundSummaryMessages(messages []sdk.Message, keepPrefix int) []s
 		keepPrefix = 0
 	}
 	for i := keepPrefix; i < len(messages); i++ {
-		if !isBackgroundSummaryMessage(messages[i]) {
+		if !contextfrag.IsBackgroundSummaryCarrier(messages[i]) {
 			continue
 		}
 		out := make([]sdk.Message, 0, len(messages)-1)
 		out = append(out, messages[:i]...)
 		for _, msg := range messages[i+1:] {
-			if !isBackgroundSummaryMessage(msg) {
+			if !contextfrag.IsBackgroundSummaryCarrier(msg) {
 				out = append(out, msg)
 			}
 		}
@@ -1341,15 +1338,19 @@ func removeBackgroundSummaryMessages(messages []sdk.Message, keepPrefix int) []s
 	return messages
 }
 
-func isBackgroundSummaryMessage(msg sdk.Message) bool {
-	if msg.Role != sdk.MessageRoleUser || len(msg.Content) != 1 {
-		return false
+// injectedMessageText prefers the headerified rendering; when it falls back to
+// raw text it guards the reserved background-summary prefix so an injected
+// user message can never masquerade as a summary carrier, which the next
+// step's rebuild would silently remove.
+func injectedMessageText(injected InjectMessage) string {
+	if text := strings.TrimSpace(injected.HeaderifiedText); text != "" {
+		return text
 	}
-	part, ok := msg.Content[0].(sdk.TextPart)
-	return ok &&
-		part.CacheControl == nil &&
-		part.ProviderMetadata == nil &&
-		strings.HasPrefix(part.Text, contextfrag.BackgroundSummaryMessagePrefix)
+	text := strings.TrimSpace(injected.Text)
+	if strings.HasPrefix(text, contextfrag.BackgroundSummaryMessagePrefix) {
+		return "[injected]\n" + text
+	}
+	return text
 }
 
 func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []sdk.Tool {

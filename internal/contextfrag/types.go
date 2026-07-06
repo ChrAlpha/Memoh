@@ -2,7 +2,11 @@
 // describe context before it is rendered into provider-specific SDK inputs.
 package contextfrag
 
-import sdk "github.com/memohai/twilight-ai/sdk"
+import (
+	"strings"
+
+	sdk "github.com/memohai/twilight-ai/sdk"
+)
 
 // Kind identifies the semantic source and intent of a context fragment.
 type Kind string
@@ -35,6 +39,22 @@ const (
 // rewrites the cached system prefix, and step reselection recognizes it as a
 // status notice rather than a conversation turn.
 const BackgroundSummaryMessagePrefix = "[Background tasks]\n"
+
+// IsBackgroundSummaryCarrier reports whether msg is the per-step background
+// summary carrier: a user message holding exactly one unadorned text part that
+// starts with BackgroundSummaryMessagePrefix. The agent's between-step removal
+// and step reselection share this single contract so a message one side would
+// remove is never content the other side protects.
+func IsBackgroundSummaryCarrier(msg sdk.Message) bool {
+	if msg.Role != sdk.MessageRoleUser || len(msg.Content) != 1 {
+		return false
+	}
+	part, ok := msg.Content[0].(sdk.TextPart)
+	return ok &&
+		part.CacheControl == nil &&
+		part.ProviderMetadata == nil &&
+		strings.HasPrefix(part.Text, BackgroundSummaryMessagePrefix)
+}
 
 // WorkspaceInstructionAnchor is the heading that marks where the workspace
 // instruction section begins in a flattened system prompt string; it must
