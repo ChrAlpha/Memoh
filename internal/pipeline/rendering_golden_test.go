@@ -172,6 +172,72 @@ func TestRenderMessageGoldenBytes(t *testing.T) {
 			want: `<message id="m12" sender="Contact Alice (@alice)" t="1970-01-01T00:00:00+00:00" channel="telegram">` + "\n" +
 				"hi\n</message>",
 		},
+		{
+			name: "myself attribute when bot user id matches sender",
+			msg: &ICMessage{
+				MessageID:    "m13",
+				Sender:       &CanonicalUser{ID: "u1", DisplayName: "Alice", Username: "alice"},
+				TimestampSec: 0,
+				Content:      []ContentNode{{Type: "text", Text: "hi"}},
+				Conversation: ConversationMeta{Channel: "telegram"},
+			},
+			params: RenderParams{BotUserID: "u1"},
+			want: `<message id="m13" sender="Alice (@alice)" myself="true" t="1970-01-01T00:00:00+00:00" channel="telegram">` + "\n" +
+				"hi\n</message>",
+		},
+		{
+			name: "forward with canonical sender is decorated",
+			msg: &ICMessage{
+				MessageID:    "m14",
+				TimestampSec: 0,
+				Content:      []ContentNode{{Type: "text", Text: "fwd body"}},
+				ForwardInfo:  &ForwardInfo{MessageID: "f2", Sender: &CanonicalUser{ID: "u7", DisplayName: "Dana", Username: "dana"}},
+				Conversation: ConversationMeta{Channel: "telegram"},
+			},
+			want: `<message id="m14" t="1970-01-01T00:00:00+00:00" channel="telegram" forwarded_from="Dana (@dana)" forwarded_message_id="f2">` + "\n" +
+				"fwd body\n</message>",
+		},
+		{
+			name: "forward with conversation origin only",
+			msg: &ICMessage{
+				MessageID:    "m15",
+				TimestampSec: 0,
+				Content:      []ContentNode{{Type: "text", Text: "fwd body"}},
+				ForwardInfo:  &ForwardInfo{FromConversationID: "c7"},
+				Conversation: ConversationMeta{Channel: "telegram"},
+			},
+			want: `<message id="m15" t="1970-01-01T00:00:00+00:00" channel="telegram" forwarded_from="conversation:c7">` + "\n" +
+				"fwd body\n</message>",
+		},
+		{
+			name: "forward without origin is unknown",
+			msg: &ICMessage{
+				MessageID:    "m16",
+				TimestampSec: 0,
+				Content:      []ContentNode{{Type: "text", Text: "fwd body"}},
+				ForwardInfo:  &ForwardInfo{},
+				Conversation: ConversationMeta{Channel: "telegram"},
+			},
+			want: `<message id="m16" t="1970-01-01T00:00:00+00:00" channel="telegram" forwarded_from="unknown">` + "\n" +
+				"fwd body\n</message>",
+		},
+		{
+			name: "rich content nodes italic underline strikethrough spoiler blockquote",
+			msg: &ICMessage{
+				MessageID:    "m17",
+				TimestampSec: 0,
+				Content: []ContentNode{
+					{Type: "italic", Children: []ContentNode{{Type: "text", Text: "it"}}},
+					{Type: "underline", Children: []ContentNode{{Type: "text", Text: "ul"}}},
+					{Type: "strikethrough", Children: []ContentNode{{Type: "text", Text: "st"}}},
+					{Type: "spoiler", Children: []ContentNode{{Type: "text", Text: "sp"}}},
+					{Type: "blockquote", Children: []ContentNode{{Type: "text", Text: "bq"}}},
+				},
+				Conversation: ConversationMeta{Channel: "telegram"},
+			},
+			want: `<message id="m17" t="1970-01-01T00:00:00+00:00" channel="telegram">` + "\n" +
+				`<i>it</i><u>ul</u><s>st</s><spoiler>sp</spoiler><blockquote>bq</blockquote>` + "\n</message>",
+		},
 	}
 
 	for _, tc := range cases {
