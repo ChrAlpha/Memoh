@@ -112,6 +112,25 @@ func TestApplyProviderRunConfigPublishesLifecycleToHolder(t *testing.T) {
 	}
 }
 
+// Finding [7]: the step reselection envelope resolves the same recent-protect
+// window as the provider view, passed through from the RunConfig override.
+func TestProviderStepEnvelopeCarriesRecentProtectWindow(t *testing.T) {
+	t.Parallel()
+
+	got := providerStepBudgetEnvelope(agentpkg.ContextStepSelectionInput{BudgetMaxTokens: 100})
+	if got.MaxTokens != 100 || got.RecentProtectTokens != DefaultRecentProtectTokens {
+		t.Fatalf("default envelope = %#v, want max 100 with the default window", got)
+	}
+	zero := 0
+	if got := providerStepBudgetEnvelope(agentpkg.ContextStepSelectionInput{BudgetMaxTokens: 100, RecentProtectTokens: &zero}); got.RecentProtectTokens != 0 {
+		t.Fatalf("zero override envelope = %#v, want disabled window", got)
+	}
+	window := 40
+	if got := providerStepBudgetEnvelope(agentpkg.ContextStepSelectionInput{BudgetMaxTokens: 100, RecentProtectTokens: &window}); got.RecentProtectTokens != 40 {
+		t.Fatalf("override envelope = %#v, want window 40", got)
+	}
+}
+
 func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
 	t.Parallel()
 

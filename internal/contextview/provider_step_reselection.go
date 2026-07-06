@@ -10,6 +10,16 @@ import (
 	"github.com/memohai/memoh/internal/contextlimit"
 )
 
+// providerStepBudgetEnvelope resolves the step selection budget with the same
+// recent-protect window semantics as the provider view, so mid-loop
+// reselection and resolve-time selection share one envelope shape.
+func providerStepBudgetEnvelope(input agentpkg.ContextStepSelectionInput) BudgetEnvelope {
+	return BudgetEnvelope{
+		MaxTokens:           input.BudgetMaxTokens,
+		RecentProtectTokens: resolveRecentProtectTokens(input.RecentProtectTokens),
+	}
+}
+
 func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepSelectionInput) agentpkg.ContextStepSelectionResult {
 	if input.InitialMessageCount < 0 || input.InitialMessageCount >= len(input.Messages) {
 		return agentpkg.ContextStepSelectionResult{}
@@ -33,9 +43,7 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	frags = markInjectedLoopUserFrags(frags)
 
 	selector := &FragmentSelector{}
-	selection := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{
-		MaxTokens: input.BudgetMaxTokens,
-	})
+	selection := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), providerStepBudgetEnvelope(input))
 
 	selected := selectedProviderStepFrags(selection, input.Scope)
 	truncated := 0

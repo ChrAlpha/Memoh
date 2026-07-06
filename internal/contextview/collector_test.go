@@ -126,6 +126,35 @@ func TestHistoryMessagesCollector_ToolMessage(t *testing.T) {
 	assertMessageFrag(t, frags[0], "message.000", contextfrag.KindConversationEvent, contextfrag.CacheNever, contextfrag.TrustWorkspace, 55, sdk.MessageRoleTool)
 }
 
+// Finding [6]: chat history carries no per-message attention data, so the
+// collector must not stamp the whole request's attention onto every history
+// fragment — that made pressure drop-reason histograms lie.
+func TestHistoryMessagesCollector_ClearsRequestScopeAttention(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{
+		BotID:     "bot-1",
+		SessionID: "s1",
+		Attention: []contextfrag.AttentionReason{contextfrag.AttentionDirect},
+	}
+	frags := collectHistoryMessages(t, scope, []sdk.Message{
+		sdk.UserMessage("hello"),
+		sdk.AssistantMessage("hi"),
+	})
+
+	if len(frags) != 2 {
+		t.Fatalf("frags = %d, want 2", len(frags))
+	}
+	for i, frag := range frags {
+		if len(frag.Scope.Attention) != 0 {
+			t.Fatalf("frags[%d].Scope.Attention = %v, want none", i, frag.Scope.Attention)
+		}
+		if frag.Scope.BotID != "bot-1" || frag.Scope.SessionID != "s1" {
+			t.Fatalf("frags[%d].Scope = %#v, want bot and session preserved", i, frag.Scope)
+		}
+	}
+}
+
 func TestCurrentUserCollector_NonEmpty(t *testing.T) {
 	t.Parallel()
 

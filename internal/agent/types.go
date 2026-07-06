@@ -65,6 +65,10 @@ type ContextStepSelectionInput struct {
 	InitialMessageCount int
 	Messages            []sdk.Message
 	BudgetMaxTokens     int
+	// RecentProtectTokens carries the run's recent-protection window override
+	// so step reselection resolves the same window as the provider view. Nil
+	// uses the view default; a pointer to zero disables the window.
+	RecentProtectTokens *int
 	// KeepRecentToolResults keeps the newest N complete tool cycles intact
 	// and truncates older bulky tool results to a size summary; <= 0 disables
 	// content truncation.

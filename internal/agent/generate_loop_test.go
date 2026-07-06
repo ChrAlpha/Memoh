@@ -186,12 +186,14 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 	})
 
 	var reselectorCalls atomic.Int32
+	recentProtect := 4096
 	_, err := a.Generate(context.Background(), RunConfig{
-		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
-		Messages:         []sdk.Message{sdk.UserMessage("start")},
-		SupportsToolCall: true,
-		Identity:         SessionContext{BotID: "bot-1"},
-		ContextMutations: ledger,
+		Model:                      &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:                   []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall:           true,
+		Identity:                   SessionContext{BotID: "bot-1"},
+		ContextMutations:           ledger,
+		ContextRecentProtectTokens: &recentProtect,
 		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
 			reselectorCalls.Add(1)
 			if input.InitialMessageCount != 1 {
@@ -199,6 +201,11 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 			}
 			if len(input.Messages) != 3 {
 				t.Fatalf("selector input messages = %d, want 3", len(input.Messages))
+			}
+			// Finding [7]: the resolved recent-protect window travels with the
+			// step reselection input.
+			if input.RecentProtectTokens == nil || *input.RecentProtectTokens != recentProtect {
+				t.Fatalf("RecentProtectTokens = %v, want %d", input.RecentProtectTokens, recentProtect)
 			}
 			return ContextStepSelectionResult{
 				Messages:    append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...),

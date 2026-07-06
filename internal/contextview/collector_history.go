@@ -42,6 +42,12 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 		return nil, nil
 	}
 
+	// History messages carry no per-message attention data on this path; the
+	// request's own attention must not color them, or budget drop histograms
+	// would report the current turn's attention for every history drop.
+	scope := req.Scope
+	scope.Attention = nil
+
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages))
 	for i, msg := range cfg.Messages {
 		estimate := 0
@@ -60,7 +66,7 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 			Priority:      contextfrag.PriorityForMessage(msg),
 			CacheClass:    cacheForSDKMessage(msg),
 			Trust:         trustForSDKMessage(msg),
-			Scope:         req.Scope,
+			Scope:         scope,
 			Source:        contextfrag.SourceRunConfig,
 			Collector:     historyMessagesCollectorName,
 			Index:         i,
@@ -69,7 +75,7 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 		}))
 	}
 	if cfg.RepairToolClosures {
-		frags = contextfrag.RepairToolClosureFrags(frags, req.Scope, historyMessagesCollectorName)
+		frags = contextfrag.RepairToolClosureFrags(frags, scope, historyMessagesCollectorName)
 	}
 	return frags, nil
 }

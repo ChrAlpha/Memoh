@@ -921,6 +921,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				InitialMessageCount:   initialProviderMessageCount,
 				Messages:              p.Messages,
 				BudgetMaxTokens:       remainingStepBudget(cfg.ContextBudgetMaxTokens, p, initialProviderMessageCount),
+				RecentProtectTokens:   cfg.ContextRecentProtectTokens,
 				KeepRecentToolResults: keepSteps,
 				MinMessages:           threshold,
 			})

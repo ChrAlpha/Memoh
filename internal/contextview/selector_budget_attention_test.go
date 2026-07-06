@@ -433,6 +433,48 @@ func TestBudgetAttention_DropReasonHistogram(t *testing.T) {
 	}
 }
 
+// Finding [6] end to end: chat-path history drops read budget:untiered in
+// the lifecycle histogram; the request's own attention no longer colors
+// history fragments that have no per-message attention data.
+func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) {
+	t.Parallel()
+
+	holder := contextfrag.NewLifecycleHolder()
+	zero := 0
+	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		Messages: []sdk.Message{
+			sdk.UserMessage("old question"),
+			sdk.AssistantMessage("old reply"),
+			sdk.UserMessage("current question"),
+		},
+		ContextHistoryTokenEstimates: []int{100, 5, 5},
+		ContextTrimmableMessages:     3,
+		ContextBudgetMaxTokens:       50,
+		ContextRecentProtectTokens:   &zero,
+		ContextQueryMaterialized:     true,
+		ContextScope: contextfrag.Scope{
+			BotID:     "bot-1",
+			SessionID: "s1",
+			Attention: []contextfrag.AttentionReason{contextfrag.AttentionDirect},
+		},
+		ContextLifecycle: holder,
+	})
+
+	if len(got.Messages) != 3 {
+		t.Fatalf("messages = %d, want notice plus two kept", len(got.Messages))
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("lifecycle holder has no snapshot")
+	}
+	if snapshot.Selection.DropReasons[budgetDropReasonUntiered] != 1 {
+		t.Fatalf("drop reasons = %#v, want one untiered history drop", snapshot.Selection.DropReasons)
+	}
+	if snapshot.Selection.DropReasons[budgetDropReasonDirected] != 0 {
+		t.Fatalf("drop reasons = %#v, want no directed drops from request attention", snapshot.Selection.DropReasons)
+	}
+}
+
 // Finding [0] end to end: the rendered provider stream keeps a tool call
 // adjacent to its result with the trim notice after the closure, never inside.
 func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
