@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -2128,6 +2129,77 @@ func TestChannelInboundProcessorGroupMentionTriggersReply(t *testing.T) {
 	if !gateway.gotReq.MentionsBot {
 		t.Fatalf("expected is_mentioned metadata to be carried into ChatRequest")
 	}
+}
+
+func TestChannelInboundProcessorQueueModePersistsHeaderWithSourceAttributes(t *testing.T) {
+	channelIdentitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "channelIdentity-q"}}
+	policySvc := &fakePolicyService{}
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{ChatID: "chat-q", RouteID: "route-q"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
+	dispatcher := NewRouteDispatcher(slog.Default())
+	injectCh := dispatcher.MarkActive("route-q")
+	processor.SetDispatcher(dispatcher)
+	sender := &fakeReplySender{}
+
+	cfg := channel.ChannelConfig{ID: "cfg-1", BotID: "bot-1"}
+	baseMsg := channel.InboundMessage{
+		BotID:   "bot-1",
+		Channel: channel.ChannelType("telegram"),
+		Message: channel.Message{
+			ID:      "msg-q-1",
+			Reply:   &channel.ReplyRef{MessageID: "orig-1", Sender: "Alice"},
+			Forward: &channel.ForwardRef{Sender: "Bob"},
+		},
+		ReplyTarget:  "chat:123",
+		Sender:       channel.Identity{SubjectID: "user-1"},
+		Conversation: channel.Conversation{ID: "g-1", Type: "group", Name: "Group One"},
+		Metadata:     map[string]any{"is_mentioned": true},
+	}
+
+	injectMsg := baseMsg
+	injectMsg.Message.Text = "/btw queued question"
+	if err := processor.HandleInbound(context.Background(), cfg, injectMsg, sender); err != nil {
+		t.Fatalf("inject handle: %v", err)
+	}
+	var injected InjectMessage
+	select {
+	case injected = <-injectCh:
+	default:
+		t.Fatalf("expected injected message in channel")
+	}
+
+	queueMsg := baseMsg
+	queueMsg.Message.Text = "/next queued question"
+	if err := processor.HandleInbound(context.Background(), cfg, queueMsg, sender); err != nil {
+		t.Fatalf("queue handle: %v", err)
+	}
+	if len(chatSvc.persistedIn) != 1 {
+		t.Fatalf("queue mode should persist 1 passive message, got %d", len(chatSvc.persistedIn))
+	}
+	var persisted conversation.ModelMessage
+	if err := json.Unmarshal(chatSvc.persistedIn[0].Content, &persisted); err != nil {
+		t.Fatalf("unmarshal persisted content: %v", err)
+	}
+	got := persisted.TextContent()
+	for _, attr := range []string{`mentions_me="true"`, `reply_to_message_id="orig-1"`, `reply_to_sender="Alice"`, `forwarded_from="Bob"`} {
+		if !strings.Contains(got, attr) {
+			t.Fatalf("queue-persisted header missing %s:\n%s", attr, got)
+		}
+	}
+	timeAttr := regexp.MustCompile(` t="[^"]*"`)
+	gotHeader := timeAttr.ReplaceAllString(firstLine(got), ` t=""`)
+	wantHeader := timeAttr.ReplaceAllString(firstLine(injected.HeaderifiedText), ` t=""`)
+	if gotHeader != wantHeader {
+		t.Fatalf("queue-persisted header diverges from inject path:\n got: %s\nwant: %s", gotHeader, wantHeader)
+	}
+}
+
+func firstLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 type failingOpenStreamSender struct {

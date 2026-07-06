@@ -1850,15 +1850,21 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 	}
 
 	headerifiedText := flow.FormatUserHeader(flow.UserMessageHeaderInput{
-		MessageID:         strings.TrimSpace(msg.Message.ID),
-		ChannelIdentityID: strings.TrimSpace(ident.ChannelIdentityID),
-		DisplayName:       strings.TrimSpace(ident.DisplayName),
-		Channel:           msg.Channel.String(),
-		ConversationType:  strings.TrimSpace(msg.Conversation.Type),
-		ConversationName:  strings.TrimSpace(msg.Conversation.Name),
-		Target:            strings.TrimSpace(msg.ReplyTarget),
-		AttachmentPaths:   attachmentPaths,
-		Time:              time.Now().UTC(),
+		MessageID:                 strings.TrimSpace(msg.Message.ID),
+		ChannelIdentityID:         strings.TrimSpace(ident.ChannelIdentityID),
+		DisplayName:               strings.TrimSpace(ident.DisplayName),
+		Channel:                   msg.Channel.String(),
+		ConversationType:          strings.TrimSpace(msg.Conversation.Type),
+		ConversationName:          strings.TrimSpace(msg.Conversation.Name),
+		Target:                    strings.TrimSpace(msg.ReplyTarget),
+		AttachmentPaths:           attachmentPaths,
+		Time:                      time.Now().UTC(),
+		MentionsMe:                metadataBool(msg.Metadata, "is_mentioned"),
+		ReplyToMessageID:          inboundReplyMessageID(msg.Message.Reply),
+		ReplyToSender:             inboundReplySender(msg.Message.Reply),
+		ForwardSender:             inboundForwardSender(msg.Message.Forward),
+		ForwardFromUserID:         inboundForwardFromUserID(msg.Message.Forward),
+		ForwardFromConversationID: inboundForwardFromConversationID(msg.Message.Forward),
 	}, trimmedText)
 
 	modelMsg := conversation.ModelMessage{Role: "user", Content: conversation.NewTextContent(headerifiedText)}
