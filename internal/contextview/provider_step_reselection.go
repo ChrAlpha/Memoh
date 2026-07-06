@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -59,19 +60,31 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 }
 
 // markInjectedLoopUserFrags types and protects user-role messages appended
-// during the tool loop (InjectCh injections, read_media payloads): they carry
-// content the run deliberately inserted mid-stream, so step budget pressure
-// must never drop them.
+// during the tool loop (InjectCh injections, read_media payloads, background
+// summaries): they carry content the run deliberately inserted mid-stream, so
+// step budget pressure must never drop them.
 func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	for i := range frags {
 		msg := discussFragMessage(frags[i])
 		if msg == nil || !isRole(msg.Role, sdk.MessageRoleUser) {
 			continue
 		}
-		frags[i].Kind = contextfrag.KindInjectedMessage
+		if isBackgroundSummarySDKMessage(msg) {
+			frags[i].Kind = contextfrag.KindBackgroundSummary
+		} else {
+			frags[i].Kind = contextfrag.KindInjectedMessage
+		}
 		frags[i].Budget.Overflow = contextfrag.OverflowKeep
 	}
 	return frags
+}
+
+func isBackgroundSummarySDKMessage(msg *sdk.Message) bool {
+	if msg == nil || len(msg.Content) != 1 {
+		return false
+	}
+	part, ok := msg.Content[0].(sdk.TextPart)
+	return ok && strings.HasPrefix(part.Text, contextfrag.BackgroundSummaryMessagePrefix)
 }
 
 // truncateOldToolResultFrags keeps the most recent keepRecent complete tool

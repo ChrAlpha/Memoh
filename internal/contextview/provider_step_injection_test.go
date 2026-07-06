@@ -70,6 +70,45 @@ func TestMarkInjectedLoopUserFragsTypesAndProtectsOnlyUserMessages(t *testing.T)
 	}
 }
 
+func selectionHasToolResult(messages []sdk.Message, callID string) bool {
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if result, ok := part.(sdk.ToolResultPart); ok && result.ToolCallID == callID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestStepReselectionBackgroundSummaryDoesNotShiftRecentAnchor(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage("task")}
+	messages := appendToolCycles(prefix, []string{"call-a", "call-b"}, 800)
+	messages = append(messages, sdk.UserMessage("<message sender=\"alice\">injected request</message>"))
+	messages = appendToolCycles(messages, []string{"call-c", "call-d"}, 800)
+	messages = append(messages, sdk.UserMessage("[Background tasks]\nCurrently running background tasks:\n- [task-1] build (started 3s ago)"))
+
+	selection := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:               contextfrag.Scope{BotID: "bot-1"},
+		InitialMessageCount: len(prefix),
+		Messages:            messages,
+		BudgetMaxTokens:     200,
+	})
+	if selection.Messages == nil || selection.Dropped == 0 {
+		t.Fatalf("budget pressure must drop loop span content: %+v", selection)
+	}
+	for _, callID := range []string{"call-c", "call-d"} {
+		if !selectionHasToolResult(selection.Messages, callID) {
+			t.Fatalf("tool work after the injected request must stay protected, lost %s", callID)
+		}
+	}
+	if !selectionHasUserText(selection.Messages, "[Background tasks]") {
+		t.Fatal("background summary message must survive reselection")
+	}
+}
+
 func TestStepReselectionKeepsInjectedUserMessagesUnderBudgetPressure(t *testing.T) {
 	t.Parallel()
 

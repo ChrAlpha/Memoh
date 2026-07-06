@@ -865,18 +865,16 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	cfg.ContextMutations.SetFinalInputHash(finalHash)
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
-		baseSystem := captureBackgroundSystem(system, messages)
 		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
+			p.Messages = removeBackgroundSummaryMessages(p.Messages, initialProviderMessageCount)
 			if basePrepare != nil {
 				if override := basePrepare(p); override != nil {
 					p = override
 				}
 			}
-			if summary := cfg.BackgroundManager.RunningTasksSummary(cfg.Identity.BotID, cfg.Identity.SessionID); summary != "" {
+			if summary := strings.TrimSpace(cfg.BackgroundManager.RunningTasksSummary(cfg.Identity.BotID, cfg.Identity.SessionID)); summary != "" {
 				cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, fmt.Sprintf("bytes=%d", len(summary)))
-				injectBackgroundSummary(p, baseSystem, summary)
-			} else {
-				injectBackgroundSummary(p, baseSystem, "")
+				p.Messages = append(p.Messages, backgroundSummaryMessage(summary))
 			}
 			return p
 		}
@@ -1316,100 +1314,42 @@ func toolStreamEventToAgentEvent(evt tools.ToolStreamEvent) StreamEvent {
 	}
 }
 
-type backgroundSystem struct {
-	system             string
-	promotedSystemText string
-	hasPromotedSystem  bool
+func backgroundSummaryMessage(summary string) sdk.Message {
+	return sdk.UserMessage(contextfrag.BackgroundSummaryMessagePrefix + summary)
 }
 
-func captureBackgroundSystem(system string, messages []sdk.Message) backgroundSystem {
-	base := backgroundSystem{system: system}
-	if len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
-		return base
+// removeBackgroundSummaryMessages strips summary carrier messages appended by
+// earlier steps so each step rebuilds exactly one fresh summary. keepPrefix
+// guards the compiled initial context: only loop-appended messages match.
+func removeBackgroundSummaryMessages(messages []sdk.Message, keepPrefix int) []sdk.Message {
+	if keepPrefix < 0 {
+		keepPrefix = 0
 	}
-	first, ok := messages[0].Content[0].(sdk.TextPart)
-	if !ok {
-		return base
-	}
-	base.promotedSystemText = first.Text
-	base.hasPromotedSystem = true
-	return base
-}
-
-func injectBackgroundSummary(p *sdk.GenerateParams, baseSystem backgroundSystem, summary string) {
-	summary = strings.TrimSpace(summary)
-	if strings.TrimSpace(baseSystem.system) != "" {
-		p.System = baseSystem.system
-		if summary != "" {
-			p.System += "\n\n" + summary
+	for i := keepPrefix; i < len(messages); i++ {
+		if !isBackgroundSummaryMessage(messages[i]) {
+			continue
 		}
-		return
-	}
-
-	if baseSystem.hasPromotedSystem {
-		text := strings.TrimSpace(baseSystem.promotedSystemText)
-		if len(p.Messages) == 0 || p.Messages[0].Role != sdk.MessageRoleSystem || len(p.Messages[0].Content) == 0 {
-			p.System = text
-			if summary != "" {
-				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
+		out := make([]sdk.Message, 0, len(messages)-1)
+		out = append(out, messages[:i]...)
+		for _, msg := range messages[i+1:] {
+			if !isBackgroundSummaryMessage(msg) {
+				out = append(out, msg)
 			}
-			return
 		}
-		first, ok := p.Messages[0].Content[0].(sdk.TextPart)
-		if !ok {
-			p.System = text
-			if summary != "" {
-				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
-			}
-			return
-		}
-		first.Text = text
-		p.Messages[0].Content[0] = first
-		p.Messages = removeGeneratedBackgroundSystemMessages(p.Messages)
-		if summary != "" {
-			next := make([]sdk.Message, 0, len(p.Messages)+1)
-			next = append(next, p.Messages[0])
-			next = append(next, backgroundSummarySystemMessage(summary))
-			next = append(next, p.Messages[1:]...)
-			p.Messages = next
-		}
-		p.System = ""
-		return
+		return out
 	}
-
-	if summary != "" {
-		p.System = summary
-		return
-	}
-	p.System = ""
+	return messages
 }
 
-func backgroundSummarySystemMessage(summary string) sdk.Message {
-	return sdk.SystemMessage(summary)
-}
-
-func removeGeneratedBackgroundSystemMessages(messages []sdk.Message) []sdk.Message {
-	if len(messages) == 0 {
-		return messages
-	}
-	out := make([]sdk.Message, 0, len(messages))
-	for _, msg := range messages {
-		if !isBackgroundSummarySystemMessage(msg) {
-			out = append(out, msg)
-		}
-	}
-	return out
-}
-
-func isBackgroundSummarySystemMessage(msg sdk.Message) bool {
-	if msg.Role != sdk.MessageRoleSystem || len(msg.Content) != 1 {
+func isBackgroundSummaryMessage(msg sdk.Message) bool {
+	if msg.Role != sdk.MessageRoleUser || len(msg.Content) != 1 {
 		return false
 	}
 	part, ok := msg.Content[0].(sdk.TextPart)
 	return ok &&
 		part.CacheControl == nil &&
 		part.ProviderMetadata == nil &&
-		strings.HasPrefix(strings.TrimSpace(part.Text), "Currently running background tasks:")
+		strings.HasPrefix(part.Text, contextfrag.BackgroundSummaryMessagePrefix)
 }
 
 func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []sdk.Tool {

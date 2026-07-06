@@ -29,6 +29,13 @@ const (
 	KindConversationSummary Kind = "conversation_summary"
 )
 
+// BackgroundSummaryMessagePrefix marks the per-step user message that carries
+// KindBackgroundSummary content. The agent rebuilds that message between steps
+// (remove by prefix, append the fresh summary) so running-task status never
+// rewrites the cached system prefix, and step reselection recognizes it as a
+// status notice rather than a conversation turn.
+const BackgroundSummaryMessagePrefix = "[Background tasks]\n"
+
 // WorkspaceInstructionAnchor is the heading that marks where the workspace
 // instruction section begins in a flattened system prompt string; it must
 // stay byte-identical to the heading system_common.md renders. Reverse-parse

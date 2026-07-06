@@ -1,0 +1,143 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
+	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/agent/background"
+	agenttools "github.com/memohai/memoh/internal/agent/tools"
+	"github.com/memohai/memoh/internal/contextfrag"
+	"github.com/memohai/memoh/internal/workspace/bridge"
+)
+
+const testBackgroundSummaryPrefix = "[Background tasks]\n"
+
+func backgroundSummaryCount(messages []sdk.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role != sdk.MessageRoleUser || len(msg.Content) != 1 {
+			continue
+		}
+		if part, ok := msg.Content[0].(sdk.TextPart); ok && strings.HasPrefix(part.Text, testBackgroundSummaryPrefix) {
+			count++
+		}
+	}
+	return count
+}
+
+func spawnBlockedBackgroundTask(t *testing.T, bgMgr *background.Manager, botID, sessionID, description string) (taskID string, release chan struct{}) {
+	t.Helper()
+	started := make(chan struct{})
+	release = make(chan struct{})
+	taskID, _ = bgMgr.Spawn(context.Background(), botID, sessionID, "long build", "", description, func(ctx context.Context, _, _ string, _ int32) (*bridge.ExecResult, error) {
+		close(started)
+		select {
+		case <-release:
+			return &bridge.ExecResult{ExitCode: 0}, nil
+		case <-ctx.Done():
+			return &bridge.ExecResult{ExitCode: -1}, ctx.Err()
+		}
+	}, nil, nil)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background task did not start")
+	}
+	return taskID, release
+}
+
+func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	bgMgr := background.New(nil)
+	taskID, release := spawnBlockedBackgroundTask(t, bgMgr, "bot-1", "sess-1", "Long build task")
+
+	var calls []sdk.GenerateParams
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			calls = append(calls, cloneGenerateParams(params))
+			if call == 3 {
+				close(release)
+				waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := bgMgr.WaitForSessionTask(waitCtx, "bot-1", "sess-1", taskID); err != nil {
+					return nil, fmt.Errorf("wait for background task: %w", err)
+				}
+			}
+			if call < 4 {
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: fmt.Sprintf("call-%d", call),
+						ToolName:   "lookup",
+						Input:      map[string]any{"step": call},
+					}},
+				}, nil
+			}
+			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		}}},
+	})
+
+	ledger := contextfrag.NewMutationLedger()
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:          []sdk.Message{sdk.UserMessage("start")},
+		System:            "You are a bot.",
+		SupportsToolCall:  true,
+		Identity:          SessionContext{BotID: "bot-1", SessionID: "sess-1"},
+		BackgroundManager: bgMgr,
+		ContextMutations:  ledger,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(calls) != 4 {
+		t.Fatalf("provider calls = %d, want 4", len(calls))
+	}
+
+	for i, params := range calls {
+		if params.System != "You are a bot." {
+			t.Fatalf("call %d system = %q, want untouched base system", i+1, params.System)
+		}
+	}
+	if got := backgroundSummaryCount(calls[0].Messages); got != 0 {
+		t.Fatalf("call 1 summary messages = %d, want 0 before the first prepared step", got)
+	}
+	for _, call := range []int{1, 2} {
+		messages := calls[call].Messages
+		if got := backgroundSummaryCount(messages); got != 1 {
+			t.Fatalf("call %d summary messages = %d, want exactly 1 (no accumulation)", call+1, got)
+		}
+		last := messages[len(messages)-1]
+		if last.Role != sdk.MessageRoleUser {
+			t.Fatalf("call %d last message role = %q, want summary as tail user message", call+1, last.Role)
+		}
+		text, _ := last.Content[0].(sdk.TextPart)
+		if !strings.HasPrefix(text.Text, testBackgroundSummaryPrefix) || !strings.Contains(text.Text, "Long build task") {
+			t.Fatalf("call %d tail message is not the background summary: %q", call+1, text.Text)
+		}
+	}
+	if got := backgroundSummaryCount(calls[3].Messages); got != 0 {
+		t.Fatalf("call 4 summary messages = %d, want 0 after task completion", got)
+	}
+	if !hasMutationKind(ledger.Records(), contextfrag.MutationBackgroundSummary) {
+		t.Fatalf("mutation records = %#v, want background_summary recorded", ledger.Records())
+	}
+}
