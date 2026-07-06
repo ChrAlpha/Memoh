@@ -289,13 +289,10 @@ func contextBudgetFromChatModel(chatModel models.GetResponse) int {
 	return chatModel.Config.ContextBudgetMaxTokens()
 }
 
-const defaultToolExchangeMinMessages = 10
-
 // defaultToolExchangePolicy returns the flow package's shared default
-// tool-exchange stripping policy. Returns a fresh pointer on every call so
-// callers never share (and risk mutating) the same underlying struct.
+// tool-exchange stripping policy.
 func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
-	return &contextfrag.ToolExchangePolicy{MinMessages: defaultToolExchangeMinMessages}
+	return contextfrag.DefaultToolExchangePolicy()
 }
 
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {

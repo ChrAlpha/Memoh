@@ -434,3 +434,12 @@ type ContextConflict struct {
 type ToolExchangePolicy struct {
 	MinMessages int
 }
+
+const defaultToolExchangeMinMessages = 10
+
+// DefaultToolExchangePolicy returns the package's shared default
+// tool-exchange stripping policy. Returns a fresh pointer on every call so
+// callers never share (and risk mutating) the same underlying struct.
+func DefaultToolExchangePolicy() *ToolExchangePolicy {
+	return &ToolExchangePolicy{MinMessages: defaultToolExchangeMinMessages}
+}

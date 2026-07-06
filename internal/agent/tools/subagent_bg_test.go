@@ -258,8 +258,8 @@ func newAgentControlProvider(t *testing.T, agent *fakeSpawnAgent) (*SpawnProvide
 	p.sessionService = sessionSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
-	p.modelResolver = func(context.Context, string) (*sdk.Model, string, string, int, error) {
-		return &sdk.Model{}, "model-1", "", 0, nil
+	p.modelResolver = func(context.Context, string) (resolvedModel, error) {
+		return resolvedModel{model: &sdk.Model{}, modelID: "model-1"}, nil
 	}
 	return p, mgr, sessionSvc, messageSvc
 }
@@ -395,8 +395,8 @@ func TestSpawnAgentPropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
 func TestSpawnAgentUsesResolvedModelContextBudgetOverParent(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, _ := newAgentControlProvider(t, agent)
-	p.modelResolver = func(context.Context, string) (*sdk.Model, string, string, int, error) {
-		return &sdk.Model{}, "model-2", "", 64000, nil
+	p.modelResolver = func(context.Context, string) (resolvedModel, error) {
+		return resolvedModel{model: &sdk.Model{}, modelID: "model-2", contextBudgetMaxTokens: 64000}, nil
 	}
 	session := SessionContext{
 		BotID:                  "bot1",

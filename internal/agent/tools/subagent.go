@@ -175,7 +175,7 @@ type SpawnProvider struct {
 	modelCreator   ModelCreator
 	bgManager      *background.Manager
 	hookService    *hooks.Service
-	modelResolver  func(ctx context.Context, botID string) (*sdk.Model, string, string, int, error)
+	modelResolver  func(ctx context.Context, botID string) (resolvedModel, error)
 	coord          *agentCoordinator
 	logger         *slog.Logger
 }
@@ -513,7 +513,7 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	if p.bgManager == nil {
 		return nil, errors.New("background task manager not available")
 	}
-	sdkModel, modelID, promptCacheTTL, contextBudgetMaxTokens, err := p.modelResolver(context.WithoutCancel(ctx), session.BotID)
+	resolved, err := p.modelResolver(context.WithoutCancel(ctx), session.BotID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
@@ -527,10 +527,10 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 		agentSessionID:         rec.SessionID,
 		message:                message,
 		parentSession:          session,
-		model:                  sdkModel,
-		modelID:                modelID,
-		promptCacheTTL:         promptCacheTTL,
-		contextBudgetMaxTokens: contextBudgetMaxTokens,
+		model:                  resolved.model,
+		modelID:                resolved.modelID,
+		promptCacheTTL:         resolved.promptCacheTTL,
+		contextBudgetMaxTokens: resolved.contextBudgetMaxTokens,
 		systemPrompt:           systemPrompt,
 	}
 	description := truncateTitle(fmt.Sprintf("%s: %s", rec.AgentID, message), 120)
@@ -1133,36 +1133,47 @@ func (p *SpawnProvider) SetModelCreator(fn ModelCreator) {
 	p.modelCreator = fn
 }
 
-func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (*sdk.Model, string, string, int, error) {
+// resolvedModel groups a resolved subagent chat model with the run knobs
+// derived alongside it, following the same file's agentRequest and the
+// chat path's resolvedContext (internal/conversation/flow/resolver.go) in
+// using a named struct instead of a positional return tuple.
+type resolvedModel struct {
+	model                  *sdk.Model
+	modelID                string
+	promptCacheTTL         string
+	contextBudgetMaxTokens int
+}
+
+func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (resolvedModel, error) {
 	if p.settings == nil || p.models == nil || p.queries == nil {
-		return nil, "", "", 0, errors.New("model resolution services not configured")
+		return resolvedModel{}, errors.New("model resolution services not configured")
 	}
 	botSettings, err := p.settings.GetBot(ctx, botID)
 	if err != nil {
-		return nil, "", "", 0, err
+		return resolvedModel{}, err
 	}
 	chatModelID := strings.TrimSpace(botSettings.ChatModelID)
 	if chatModelID == "" {
-		return nil, "", "", 0, errors.New("no chat model configured for bot")
+		return resolvedModel{}, errors.New("no chat model configured for bot")
 	}
 	modelInfo, err := p.models.GetByID(ctx, chatModelID)
 	if err != nil {
-		return nil, "", "", 0, err
+		return resolvedModel{}, err
 	}
 	if !modelInfo.Enable {
-		return nil, "", "", 0, fmt.Errorf("subagent chat model %s is disabled", modelInfo.ModelID)
+		return resolvedModel{}, fmt.Errorf("subagent chat model %s is disabled", modelInfo.ModelID)
 	}
 	provider, err := models.FetchProviderByID(ctx, p.queries, modelInfo.ProviderID)
 	if err != nil {
-		return nil, "", "", 0, err
+		return resolvedModel{}, err
 	}
 	if p.modelCreator == nil {
-		return nil, "", "", 0, errors.New("model creator not configured")
+		return resolvedModel{}, errors.New("model creator not configured")
 	}
 	authResolver := providers.NewService(nil, p.queries, "")
 	creds, err := authResolver.ResolveModelCredentials(ctx, provider)
 	if err != nil {
-		return nil, "", "", 0, err
+		return resolvedModel{}, err
 	}
 	sdkModel := p.modelCreator(
 		modelInfo.ModelID,
@@ -1172,8 +1183,12 @@ func (p *SpawnProvider) resolveModel(ctx context.Context, botID string) (*sdk.Mo
 		providers.ProviderConfigString(provider, "base_url"),
 		nil,
 	)
-	cacheTTL := providers.ProviderConfigString(provider, "prompt_cache_ttl")
-	return sdkModel, modelInfo.ID, cacheTTL, modelInfo.Config.ContextBudgetMaxTokens(), nil
+	return resolvedModel{
+		model:                  sdkModel,
+		modelID:                modelInfo.ID,
+		promptCacheTTL:         providers.ProviderConfigString(provider, "prompt_cache_ttl"),
+		contextBudgetMaxTokens: modelInfo.Config.ContextBudgetMaxTokens(),
+	}, nil
 }
 
 func truncateTitle(s string, maxRunes int) string {

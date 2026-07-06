@@ -342,7 +342,7 @@ func (d *DiscussDriver) handleReplyWithAgent(ctx context.Context, sess *discussS
 		runConfig.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}
 	if runConfig.ContextToolExchangePolicy == nil {
-		runConfig.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
+		runConfig.ContextToolExchangePolicy = contextfrag.DefaultToolExchangePolicy()
 	}
 
 	runConfig.SessionType = sessionpkg.TypeDiscuss
