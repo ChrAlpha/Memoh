@@ -182,23 +182,6 @@ func windowShiftFrags() []contextfrag.ContextFrag {
 	}
 }
 
-// The drop order is a fixed total order independent of the budget; the budget
-// only decides how far along it the drops go. Raising the budget must
-// therefore never drop a fragment the smaller budget kept.
-func TestBudgetAttention_LargerBudgetKeepsSuperset(t *testing.T) {
-	t.Parallel()
-
-	small := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: 100, RecentProtectTokens: 100})
-	large := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: 180, RecentProtectTokens: 100})
-
-	largeKept := keptIDSet(large)
-	for _, frag := range small.Selected {
-		if !largeKept[frag.ID] {
-			t.Errorf("budget 180 dropped %q that budget 100 kept", frag.ID)
-		}
-	}
-}
-
 // Kept sets nest monotonically across any increasing budget ladder: shared
 // banding (fixed recent-protect window, tier order, oldest-first) makes every
 // larger budget stop earlier along the same drop sequence.
