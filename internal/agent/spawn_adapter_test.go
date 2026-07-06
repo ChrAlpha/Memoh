@@ -195,13 +195,14 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 	}
 }
 
-// TestSpawnAdapterHistoryFragsPinnedAgainstOverflow proves Gap 1's fix:
+// TestSpawnAdapterHistoryFragsPinnedAgainstOverflow verifies that subagent
+// history fragments are pinned against budget-driven overflow trimming:
 // runConfigFromSpawnRunConfig never sets ContextTrimmableMessages, so under
 // the legacy path every subagent history message is implicitly "must keep"
 // (HistoryMessagesCollector marks index >= TrimmablePrefix(=0), i.e. every
-// index). contextfrag.Compile does not set Budget at all, so the fragments-
-// first path must mark it explicitly or a budget-constrained subagent run
-// could silently trim history that never gets trimmed today.
+// index). contextfrag.CompileFrags does not set Budget at all, so the
+// fragments-first path must mark it explicitly or a budget-constrained
+// subagent run could silently trim history that never gets trimmed today.
 func TestSpawnAdapterHistoryFragsPinnedAgainstOverflow(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}
@@ -239,8 +240,9 @@ func TestSpawnAdapterHistoryFragsPinnedAgainstOverflow(t *testing.T) {
 	}
 }
 
-// TestSpawnAdapterRepairsDanglingToolCallInHistory proves Gap 2's fix (option
-// (a), relocation): subagent history comes from a raw, unsanitized DB load
+// TestSpawnAdapterRepairsDanglingToolCallInHistory verifies that the
+// fragments-first path repairs dangling tool calls in subagent history:
+// subagent history comes from a raw, unsanitized DB load
 // (tools.SpawnProvider.loadAgentMessages), which can legitimately contain a
 // dangling assistant tool-call with no matching tool-result (e.g. a prior
 // subagent turn was interrupted mid-call). Sending that dangling call to most

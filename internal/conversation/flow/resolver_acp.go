@@ -17,7 +17,6 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
-	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	"github.com/memohai/memoh/internal/session"
@@ -234,7 +233,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		RuntimeOwnerAccountID:     runtimeOwnerAccountID,
 		ForceFreshRuntime:         req.ForceFreshRuntime,
 		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
-		ContextToolExchangePolicy: &contextfrag.ToolExchangePolicy{MinMessages: 10},
+		ContextToolExchangePolicy: defaultToolExchangePolicy(),
 		Sink:                      acpclient.EventSinkFunc(emit),
 	})
 	if err != nil {

@@ -289,6 +289,15 @@ func contextBudgetFromChatModel(chatModel models.GetResponse) int {
 	return chatModel.Config.ContextBudgetMaxTokens()
 }
 
+const defaultToolExchangeMinMessages = 10
+
+// defaultToolExchangePolicy returns the flow package's shared default
+// tool-exchange stripping policy. Returns a fresh pointer on every call so
+// callers never share (and risk mutating) the same underlying struct.
+func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
+	return &contextfrag.ToolExchangePolicy{MinMessages: defaultToolExchangeMinMessages}
+}
+
 func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (resolvedContext, error) {
 	modelQuery := modelQueryText(req)
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
@@ -443,7 +452,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	// threshold (ask_user survives) and the history collector closes
 	// dangling tool calls. The resolver only sets the policy.
 	if runCfg.ContextToolExchangePolicy == nil {
-		runCfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
+		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
 	}
 
 	// Budget trimming is a context-view selection decision now: hand over the

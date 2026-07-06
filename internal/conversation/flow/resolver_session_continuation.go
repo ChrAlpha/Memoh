@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 
 	agentpkg "github.com/memohai/memoh/internal/agent"
-	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/models"
 )
@@ -24,7 +23,7 @@ func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversati
 	cfg.ContextHistoryTokenEstimates = historyEstimates
 	cfg.ContextTrimmableMessages = len(messages)
 	if cfg.ContextToolExchangePolicy == nil {
-		cfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{MinMessages: 10}
+		cfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
 	}
 	if cfg.ContextBudgetMaxTokens == 0 {
 		cfg.ContextBudgetMaxTokens = contextBudgetMaxTokens
