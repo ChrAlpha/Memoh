@@ -212,7 +212,7 @@ func discussSegmentScope(seg pipeline.RenderedSegment, scope contextfrag.Scope) 
 		out.MentionsBot = seg.MentionsMe
 		out.RepliesToBot = seg.RepliesToMe
 		out.Attention = discussSegmentAttention(seg, out.ConversationType)
-		if name := firstNonEmptyTrimmed(meta.SenderDisplayName, meta.SenderUsername); name != "" {
+		if name := firstNonEmptyTrimmed(meta.SenderDisplayName, meta.SenderUsername, meta.SenderID); name != "" {
 			out.DisplayName = name
 		}
 		if senderID := strings.TrimSpace(meta.SenderID); senderID != "" {

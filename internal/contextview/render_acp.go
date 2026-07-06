@@ -57,7 +57,7 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 		uri = defaultDiscussACPContextURI
 	} else {
 		switch {
-		case len(input.Selected) > 0:
+		case hasNonCurrentUserSelection(input.Selected):
 			rendered, err := renderACPSelectedMarkdown(input)
 			if err != nil {
 				return RenderedPayload{}, err
@@ -65,9 +65,11 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 			markdown = rendered
 		case strings.TrimSpace(markdown) == "":
 			// Chat mode must never silently produce an empty context
-			// document: either fragments were selected or the caller
-			// explicitly provided a legacy markdown document.
-			return RenderedPayload{}, errors.New("acp chat render: no selected fragments and no legacy context markdown")
+			// document: either context fragments were selected (the current
+			// user message alone does not count — it is delivered as the
+			// prompt, never as context) or the caller explicitly provided a
+			// legacy markdown document.
+			return RenderedPayload{}, errors.New("acp chat render: no selected context fragments and no legacy context markdown")
 		}
 		if uri == "" {
 			uri = defaultACPContextURI
@@ -85,6 +87,19 @@ func (r *ACPFullContextRenderer) Render(_ context.Context, input RenderInput) (R
 		ContentHash: hash,
 		Data:        payload,
 	}, nil
+}
+
+// hasNonCurrentUserSelection reports whether the selection contains anything
+// beyond the current user message. The current-user fragment is always
+// selected (it becomes the ACP prompt), so it must not mask an otherwise
+// empty context document.
+func hasNonCurrentUserSelection(selected []contextfrag.ContextFrag) bool {
+	for _, frag := range selected {
+		if frag.Slot != contextfrag.SlotCurrentUser {
+			return true
+		}
+	}
+	return false
 }
 
 // renderACPSelectedMarkdown assembles the ACP context resource document.

@@ -375,20 +375,35 @@ func TestDiscussCollectorPerFragSenderIdentity(t *testing.T) {
 	}
 }
 
-func TestDiscussCollectorEmptySenderMetaKeepsTurnDisplayName(t *testing.T) {
+func TestDiscussCollectorSenderFallbackChain(t *testing.T) {
 	t.Parallel()
 
-	seg := renderedTextSegment(100, "hi")
-	seg.Meta = &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1"}
-	base := contextfrag.Scope{BotID: "bot-1", DisplayName: "Turn Sender", ConversationType: "group"}
-
-	frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
-
-	if len(frags) != 1 {
-		t.Fatalf("frags = %d, want 1", len(frags))
+	cases := []struct {
+		name string
+		meta *pipeline.SegmentMeta
+		want string
+	}{
+		{"display name wins", &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1", SenderDisplayName: "Alice", SenderUsername: "alice"}, "Alice"},
+		{"username next", &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1", SenderUsername: "alice"}, "alice"},
+		{"sender id next", &pipeline.SegmentMeta{MessageID: "m-1", SenderID: "u-1"}, "u-1"},
+		{"empty sender keeps turn-level", &pipeline.SegmentMeta{MessageID: "m-1"}, "Turn Sender"},
 	}
-	if frags[0].Scope.DisplayName != "Turn Sender" {
-		t.Fatalf("DisplayName = %q, want turn-level kept when segment sender has no name", frags[0].Scope.DisplayName)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			seg := renderedTextSegment(100, "hi")
+			seg.Meta = tc.meta
+			base := contextfrag.Scope{BotID: "bot-1", DisplayName: "Turn Sender", ConversationType: "group"}
+
+			frags := collectDiscussContextScoped(t, base, DiscussContextConfig{RC: pipeline.RenderedContext{seg}})
+
+			if len(frags) != 1 {
+				t.Fatalf("frags = %d, want 1", len(frags))
+			}
+			if frags[0].Scope.DisplayName != tc.want {
+				t.Fatalf("DisplayName = %q, want %q", frags[0].Scope.DisplayName, tc.want)
+			}
+		})
 	}
 }
 

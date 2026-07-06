@@ -205,6 +205,34 @@ func TestACPRenderer_ChatModeExcludesCurrentUserFragment(t *testing.T) {
 	}
 }
 
+func TestACPRenderer_ChatModeOnlyCurrentUserFragmentIsError(t *testing.T) {
+	t.Parallel()
+
+	selected := []contextfrag.ContextFrag{
+		contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:        "current_user.message",
+			Kind:      contextfrag.KindCurrentUserMessage,
+			Role:      sdk.MessageRoleUser,
+			Slot:      contextfrag.SlotCurrentUser,
+			Text:      "latest question",
+			Trust:     contextfrag.TrustUser,
+			Scope:     contextfrag.Scope{BotID: "bot-1"},
+			Source:    contextfrag.SourceRunConfig,
+			Collector: "current_user",
+		}),
+	}
+	renderer := &ACPFullContextRenderer{Config: ACPRenderConfig{Mode: ACPRenderModeChat}}
+	_, err := renderer.Render(context.Background(), RenderInput{
+		Intent:    contextfrag.IntentACPRuntimePrompt,
+		Target:    contextfrag.RenderACPFullContext,
+		Selected:  selected,
+		Placement: IdentityPlacer{}.Place(selected, contextfrag.IntentACPRuntimePrompt),
+	})
+	if err == nil {
+		t.Fatal("chat render with only the current user fragment and no legacy markdown must fail loudly")
+	}
+}
+
 func TestACPRenderer_ChatModeEmptyIsError(t *testing.T) {
 	t.Parallel()
 
