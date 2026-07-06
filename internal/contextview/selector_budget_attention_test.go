@@ -105,11 +105,11 @@ func TestBudgetAttention_RecentWindowProtectsPassive(t *testing.T) {
 	assertDroppedReason(t, result, "directed-old", budgetDropReasonDirected)
 }
 
-// Finding [2]: the effective protection window is capped at half the budget.
-// A huge RecentProtectTokens no longer swallows the whole history into the
-// window (where the old yield phase cut oldest-first regardless of tier), so
-// tiering keeps working under small budgets.
-func TestBudgetAttention_WindowCapKeepsTieringUnderSmallBudget(t *testing.T) {
+// When the budget is too small to hold the recent-protect window, the window
+// yields in the same tier order (passive first) instead of shielding recent
+// passives at the expense of older directed traffic, and the drops honestly
+// read budget:recent_window.
+func TestBudgetAttention_WindowYieldsTierOrderedUnderSmallBudget(t *testing.T) {
 	t.Parallel()
 
 	frags := []contextfrag.ContextFrag{
@@ -121,12 +121,13 @@ func TestBudgetAttention_WindowCapKeepsTieringUnderSmallBudget(t *testing.T) {
 	result := selectProviderFrags(frags, BudgetEnvelope{MaxTokens: 150, RecentProtectTokens: 1000})
 
 	assertSelectedIDs(t, result, []string{"directed-old", "latest"})
-	assertDroppedReason(t, result, "passive-new", budgetDropReasonPassive)
+	assertDroppedReason(t, result, "passive-new", budgetDropReasonRecentWindow)
 }
 
-// Finding [3]: the window can never exceed half the budget, so dropping every
-// unprotected unit always reaches the budget and the old window-yield phase is
-// structurally unreachable. Raising the budget monotonically keeps more.
+// The whole span sits inside the window here, so drops walk the in-window
+// band tier by tier (passive, then directed, oldest first) under the
+// budget:recent_window reason; raising the budget stops earlier along the
+// same order and monotonically keeps more.
 func TestBudgetAttention_MoreBudgetNeverDropsMore(t *testing.T) {
 	t.Parallel()
 
@@ -141,15 +142,74 @@ func TestBudgetAttention_MoreBudgetNeverDropsMore(t *testing.T) {
 
 	tight := selectProviderFrags(buildFrags(), BudgetEnvelope{MaxTokens: 150, RecentProtectTokens: 1000})
 	assertSelectedIDs(t, tight, []string{"window-3", "latest"})
-	assertDroppedReason(t, tight, "window-2", budgetDropReasonPassive)
-	assertDroppedReason(t, tight, "window-1", budgetDropReasonDirected)
+	assertDroppedReason(t, tight, "window-2", budgetDropReasonRecentWindow)
+	assertDroppedReason(t, tight, "window-1", budgetDropReasonRecentWindow)
 
 	mid := selectProviderFrags(buildFrags(), BudgetEnvelope{MaxTokens: 250, RecentProtectTokens: 1000})
 	assertSelectedIDs(t, mid, []string{"window-1", "window-3", "latest"})
-	assertDroppedReason(t, mid, "window-2", budgetDropReasonPassive)
+	assertDroppedReason(t, mid, "window-2", budgetDropReasonRecentWindow)
 
 	loose := selectProviderFrags(buildFrags(), BudgetEnvelope{MaxTokens: 400, RecentProtectTokens: 1000})
 	assertSelectedIDs(t, loose, []string{"window-1", "window-2", "window-3", "latest"})
+}
+
+func keptIDSet(result SelectionResult) map[string]bool {
+	kept := make(map[string]bool, len(result.Selected))
+	for _, frag := range result.Selected {
+		kept[frag.ID] = true
+	}
+	return kept
+}
+
+// windowShiftFrags is the review scenario where a budget-scaled window broke
+// cross-budget monotonicity: the larger budget widened the window, protected
+// more recent passives out of the passive band, and pushed pressure into the
+// older untiered band — dropping the 95-token message the smaller budget kept.
+func windowShiftFrags() []contextfrag.ContextFrag {
+	return []contextfrag.ContextFrag{
+		attentionMessageFrag("untiered-old", sdk.UserMessage("plain history"), 95),
+		attentionMessageFrag("passive-a", sdk.UserMessage("chatter a"), 20, contextfrag.AttentionPassive),
+		attentionMessageFrag("passive-b", sdk.UserMessage("chatter b"), 30, contextfrag.AttentionPassive),
+		attentionMessageFrag("passive-c", sdk.UserMessage("chatter c"), 60, contextfrag.AttentionPassive),
+		attentionMessageFrag("latest", sdk.UserMessage("latest"), 50, contextfrag.AttentionDirect),
+	}
+}
+
+// The drop order is a fixed total order independent of the budget; the budget
+// only decides how far along it the drops go. Raising the budget must
+// therefore never drop a fragment the smaller budget kept.
+func TestBudgetAttention_LargerBudgetKeepsSuperset(t *testing.T) {
+	t.Parallel()
+
+	small := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: 100, RecentProtectTokens: 100})
+	large := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: 180, RecentProtectTokens: 100})
+
+	largeKept := keptIDSet(large)
+	for _, frag := range small.Selected {
+		if !largeKept[frag.ID] {
+			t.Errorf("budget 180 dropped %q that budget 100 kept", frag.ID)
+		}
+	}
+}
+
+// Kept sets nest monotonically across any increasing budget ladder: shared
+// banding (fixed recent-protect window, tier order, oldest-first) makes every
+// larger budget stop earlier along the same drop sequence.
+func TestBudgetAttention_KeptSetsNestAcrossBudgets(t *testing.T) {
+	t.Parallel()
+
+	budgets := []int{60, 100, 140, 180, 205}
+	prev := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: budgets[0], RecentProtectTokens: 100})
+	for _, budget := range budgets[1:] {
+		next := selectProviderFrags(windowShiftFrags(), BudgetEnvelope{MaxTokens: budget, RecentProtectTokens: 100})
+		nextKept := keptIDSet(next)
+		for _, frag := range prev.Selected {
+			if !nextKept[frag.ID] {
+				t.Fatalf("budget %d dropped %q kept at a smaller budget", budget, frag.ID)
+			}
+		}
+		prev = next
+	}
 }
 
 // Finding [0]: the trim notice may never split a kept tool closure. When the
@@ -349,6 +409,10 @@ func messageText(t *testing.T, msg sdk.Message) string {
 	return text.Text
 }
 
+// With no override the default 20K window applies; a budget far below it puts
+// the whole history in-window, so drops follow tier order (passive first) and
+// report budget:recent_window — the window's signature — instead of the
+// windowless budget:passive.
 func TestApplyProviderRunConfigDefaultsRecentProtectWindow(t *testing.T) {
 	t.Parallel()
 
@@ -356,20 +420,20 @@ func TestApplyProviderRunConfigDefaultsRecentProtectWindow(t *testing.T) {
 	got := ApplyProviderRunConfig(context.Background(), nil, budgetAttentionRunConfig(holder))
 
 	if len(got.Messages) != 3 {
-		t.Fatalf("messages = %d, want notice plus two kept", len(got.Messages))
+		t.Fatalf("messages = %d, want directed history, notice, latest", len(got.Messages))
 	}
-	if text := messageText(t, got.Messages[0]); text != HistoryTrimNotice {
-		t.Fatalf("first message = %q, want trim notice", text)
+	if text := messageText(t, got.Messages[0]); text != "@bot old ask" {
+		t.Fatalf("first message = %q, want the directed message kept over in-window passive", text)
 	}
-	if text := messageText(t, got.Messages[1]); text != "recent group chatter" {
-		t.Fatalf("kept message = %q, want the window-protected passive message", text)
+	if text := messageText(t, got.Messages[1]); text != HistoryTrimNotice {
+		t.Fatalf("second message = %q, want trim notice at the drop point", text)
 	}
 	snapshot, ok := holder.Snapshot()
 	if !ok {
 		t.Fatal("lifecycle holder has no snapshot")
 	}
-	if snapshot.Selection.DropReasons[budgetDropReasonDirected] != 1 {
-		t.Fatalf("drop reasons = %#v, want one directed drop outside the default window", snapshot.Selection.DropReasons)
+	if snapshot.Selection.DropReasons[budgetDropReasonRecentWindow] != 1 {
+		t.Fatalf("drop reasons = %#v, want one in-window drop under the default window", snapshot.Selection.DropReasons)
 	}
 }
 

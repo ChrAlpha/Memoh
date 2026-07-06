@@ -187,7 +187,9 @@ func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
 	if !ok || call.ToolCallID != "new-call" {
 		t.Fatalf("first loop message after trim notice = %#v, want new tool call", result.Messages[3].Content[0])
 	}
-	if result.DropReasons[budgetDropReasonUntiered] != 2 {
-		t.Fatalf("DropReasons = %#v, want the droppable cause budget:untiered:2", result.DropReasons)
+	// The whole loop span sits inside the default recent window, so the
+	// drops report the window yielding rather than the windowless tier.
+	if result.DropReasons[budgetDropReasonRecentWindow] != 2 {
+		t.Fatalf("DropReasons = %#v, want the droppable cause budget:recent_window:2", result.DropReasons)
 	}
 }

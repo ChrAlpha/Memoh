@@ -23,6 +23,7 @@ const (
 	budgetDropReasonPassive      = "budget:passive"
 	budgetDropReasonUntiered     = "budget:untiered"
 	budgetDropReasonDirected     = "budget:directed"
+	budgetDropReasonRecentWindow = "budget:recent_window"
 	budgetDropReasonOrphanResult = "budget:orphan_tool_result"
 )
 
@@ -165,20 +166,22 @@ func fragToolResultCallIDs(frag contextfrag.ContextFrag) []string {
 }
 
 // budgetTrimDrops decides which droppable fragments leave the context under
-// budget pressure using attention tiers over tool-closure units:
+// budget pressure. The drop order is a fixed total order that depends only on
+// the fragments and the recent-protect window, never on the budget:
 //
 //  1. Droppable orphan tool-result units (no matching call anywhere in the
 //     set) drop unconditionally: they are a guaranteed provider 400.
-//  2. The newest units within the effective protection window survive. The
-//     window is min(recentProtectTokens, maxTokens/2), so the protected span
-//     can never exceed half the budget and tiering always has room to work.
-//  3. Unprotected units drop tier by tier (passive, then untiered, then
-//     directed), oldest first and contiguously within a tier, stopping as
-//     soon as the droppable total fits.
+//  2. Units older than the recent-protect window drop tier by tier (passive,
+//     then untiered, then directed), oldest first within a tier.
+//  3. Units inside the window follow in the same tier order, reported as
+//     budget:recent_window: the window yields last, and only under budgets
+//     too small to hold it.
 //
-// The pass is monotone by construction: the protected span totals at most
-// maxTokens/2, so dropping every unprotected unit always reaches the budget
-// and no phase ever needs to yield protected units back.
+// Each spatial drop happens only while the droppable total still exceeds the
+// budget — the fit check is the sole budget-dependent point. A larger budget
+// stops earlier along the same sequence, so it always keeps a superset of
+// what a smaller budget keeps, and dropping the whole sequence always reaches
+// the budget because only droppable tokens are counted.
 //
 // Priority never enters retention: it only orders rendering. The budget
 // counts droppable tokens only, mirroring the legacy trimMessagesByTokens
@@ -220,29 +223,31 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		return drops, reasons
 	}
 
-	window := recentProtectTokens
-	if half := maxTokens / 2; window > half {
-		window = half
-	}
 	protectedStart := len(pool)
 	acc := 0
-	for protectedStart > 0 && acc+units[pool[protectedStart-1]].tokens <= window {
+	for protectedStart > 0 && acc+units[pool[protectedStart-1]].tokens <= recentProtectTokens {
 		acc += units[pool[protectedStart-1]].tokens
 		protectedStart--
 	}
 
-	for tier := attentionTierPassive; tier <= attentionTierDirected; tier++ {
-		for _, unitIdx := range pool[:protectedStart] {
-			if total <= maxTokens {
-				return drops, reasons
+	dropBand := func(band []int, reasonForTier func(int) string) bool {
+		for tier := attentionTierPassive; tier <= attentionTierDirected; tier++ {
+			for _, unitIdx := range band {
+				if total <= maxTokens {
+					return true
+				}
+				unit := &units[unitIdx]
+				if unit.tier() != tier {
+					continue
+				}
+				dropUnit(unit, reasonForTier(tier))
+				total -= unit.tokens
 			}
-			unit := &units[unitIdx]
-			if unit.tier() != tier {
-				continue
-			}
-			dropUnit(unit, budgetDropReasonForTier(tier))
-			total -= unit.tokens
 		}
+		return total <= maxTokens
+	}
+	if !dropBand(pool[:protectedStart], budgetDropReasonForTier) {
+		dropBand(pool[protectedStart:], func(int) string { return budgetDropReasonRecentWindow })
 	}
 	return drops, reasons
 }
