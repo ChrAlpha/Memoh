@@ -648,8 +648,9 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 		firstStepCacheRead = records[0].CacheReadTokens
 	}
 	now := time.Now()
-	prev, hasPrev := a.prefixCache.observe(botID+":"+sessionID, plan.RenderedStablePrefixHash, now)
-	comparison := compareCachePrefix(prev, hasPrev, plan.RenderedStablePrefixHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
+	model := modelID(cfg.Model)
+	prev, hasPrev := a.prefixCache.observe(botID+":"+sessionID, plan.RenderedStablePrefixHash, model, now)
+	comparison := compareCachePrefix(prev, hasPrev, plan.RenderedStablePrefixHash, model, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
 	cfg.ContextMutations.SetCacheComparison(comparison)
 
 	if comparison.Outcome == contextfrag.CacheOutcomeMissSamePrefix &&

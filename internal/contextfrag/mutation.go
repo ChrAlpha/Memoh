@@ -36,6 +36,7 @@ const (
 	CacheOutcomeMissSamePrefix   = "miss_same_prefix"
 	CacheOutcomeExpired          = "expired"
 	CacheOutcomePrefixChanged    = "prefix_changed"
+	CacheOutcomeModelChanged     = "model_changed"
 )
 
 // CacheComparison links the rendered prefix of this run to the previous run

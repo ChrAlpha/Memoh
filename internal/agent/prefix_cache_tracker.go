@@ -18,17 +18,18 @@ type prefixCacheTracker struct {
 }
 
 type prefixCacheEntry struct {
-	hash string
-	at   time.Time
+	hash  string
+	model string
+	at    time.Time
 }
 
 func newPrefixCacheTracker() *prefixCacheTracker {
 	return &prefixCacheTracker{entries: make(map[string]prefixCacheEntry)}
 }
 
-// observe stores the current hash for the session key and returns the
-// previous entry, if any.
-func (t *prefixCacheTracker) observe(key, hash string, now time.Time) (prefixCacheEntry, bool) {
+// observe stores the current hash and model for the session key and returns
+// the previous entry, if any.
+func (t *prefixCacheTracker) observe(key, hash, model string, now time.Time) (prefixCacheEntry, bool) {
 	if t == nil {
 		return prefixCacheEntry{}, false
 	}
@@ -38,7 +39,7 @@ func (t *prefixCacheTracker) observe(key, hash string, now time.Time) (prefixCac
 	if !ok && len(t.entries) >= prefixCacheTrackerCap {
 		t.evictOldestLocked()
 	}
-	t.entries[key] = prefixCacheEntry{hash: hash, at: now}
+	t.entries[key] = prefixCacheEntry{hash: hash, model: model, at: now}
 	return prev, ok
 }
 
@@ -70,7 +71,7 @@ func (t *prefixCacheTracker) size() int {
 // compareCachePrefix classifies this run's rendered prefix against the
 // previous run of the same session. ttlWindow <= 0 disables the expired
 // classification (cache disabled or unknown vendor TTL).
-func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, hash string, firstStepCacheRead int, now time.Time, ttlWindow time.Duration) contextfrag.CacheComparison {
+func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, hash, model string, firstStepCacheRead int, now time.Time, ttlWindow time.Duration) contextfrag.CacheComparison {
 	comparison := contextfrag.CacheComparison{
 		FirstStepCacheReadTokens: firstStepCacheRead,
 	}
@@ -80,6 +81,8 @@ func compareCachePrefix(prev prefixCacheEntry, hasPrev bool, hash string, firstS
 	}
 	comparison.PrevAgeMs = now.Sub(prev.at).Milliseconds()
 	switch {
+	case prev.model != model:
+		comparison.Outcome = contextfrag.CacheOutcomeModelChanged
 	case prev.hash != hash:
 		comparison.Outcome = contextfrag.CacheOutcomePrefixChanged
 	case firstStepCacheRead > 0:

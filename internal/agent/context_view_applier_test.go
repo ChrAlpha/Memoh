@@ -317,6 +317,54 @@ func TestGenerateComparesPrefixCacheAcrossTurns(t *testing.T) {
 	}
 }
 
+func TestGenerateComparesPrefixCacheAcrossModelSwitch(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
+		InputTokens:       42,
+		InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 11},
+	}}
+	a := New(Deps{ContextViewApplier: contextViewStubApplier})
+
+	runOnce := func(modelID string) contextfrag.LifecycleSnapshot {
+		holder := contextfrag.NewLifecycleHolder()
+		if _, err := a.Generate(context.Background(), RunConfig{
+			Model: &sdk.Model{
+				ID:       modelID,
+				Provider: modelProvider,
+				Type:     sdk.ModelTypeChat,
+			},
+			System:           "stable system",
+			Messages:         []sdk.Message{sdk.UserMessage("stable message")},
+			Identity:         SessionContext{BotID: "bot-switch", SessionID: "session-switch"},
+			ContextLifecycle: holder,
+		}); err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+		snapshot, ok := holder.Snapshot()
+		if !ok {
+			t.Fatal("lifecycle snapshot missing")
+		}
+		return snapshot
+	}
+
+	first := runOnce("model-a")
+	if first.CacheComparison == nil || first.CacheComparison.Outcome != contextfrag.CacheOutcomeFirstObservation {
+		t.Fatalf("first turn comparison = %#v, want first observation", first.CacheComparison)
+	}
+	second := runOnce("model-a")
+	if second.CacheComparison == nil || second.CacheComparison.Outcome != contextfrag.CacheOutcomeHit {
+		t.Fatalf("second turn (same model) comparison = %#v, want hit", second.CacheComparison)
+	}
+	third := runOnce("model-b")
+	if third.CacheComparison == nil || third.CacheComparison.Outcome != contextfrag.CacheOutcomeModelChanged {
+		t.Fatalf("third turn (model switch) comparison = %#v, want model_changed", third.CacheComparison)
+	}
+	fourth := runOnce("model-a")
+	if fourth.CacheComparison == nil || fourth.CacheComparison.Outcome != contextfrag.CacheOutcomeModelChanged {
+		t.Fatalf("fourth turn (switch back to model-a) comparison = %#v, want model_changed, not hit", fourth.CacheComparison)
+	}
+}
+
 func TestGenerateSkipsPrefixComparisonForSubagents(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}
