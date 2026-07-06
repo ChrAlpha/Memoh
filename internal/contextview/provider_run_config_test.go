@@ -112,8 +112,8 @@ func TestApplyProviderRunConfigPublishesLifecycleToHolder(t *testing.T) {
 	}
 }
 
-// Finding [7]: the step reselection envelope resolves the same recent-protect
-// window as the provider view, passed through from the RunConfig override.
+// The step reselection envelope resolves the same recent-protect window as
+// the provider view, passed through from the RunConfig override.
 func TestProviderStepEnvelopeCarriesRecentProtectWindow(t *testing.T) {
 	t.Parallel()
 

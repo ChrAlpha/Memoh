@@ -202,8 +202,8 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 			if len(input.Messages) != 3 {
 				t.Fatalf("selector input messages = %d, want 3", len(input.Messages))
 			}
-			// Finding [7]: the resolved recent-protect window travels with the
-			// step reselection input.
+			// The resolved recent-protect window travels with the step
+			// reselection input.
 			if input.RecentProtectTokens == nil || *input.RecentProtectTokens != recentProtect {
 				t.Fatalf("RecentProtectTokens = %v, want %d", input.RecentProtectTokens, recentProtect)
 			}

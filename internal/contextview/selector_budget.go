@@ -97,6 +97,8 @@ func (u *budgetUnit) orphanResult() bool {
 // image of the bug it exists to prevent.
 func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
 	n := len(tagged)
+	callIDs := make([][]string, n)
+	resultIDs := make([][]string, n)
 	parent := make([]int, n)
 	for i := range parent {
 		parent[i] = i
@@ -112,7 +114,9 @@ func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
 	firstSeen := make(map[string]int)
 	for i, taggedFrag := range tagged {
 		frag := taggedFrag.Frag
-		ids := append(fragToolCallIDs(frag), fragToolResultCallIDs(frag)...)
+		callIDs[i] = fragToolCallIDs(frag)
+		resultIDs[i] = fragToolResultCallIDs(frag)
+		ids := append(append([]string{}, callIDs[i]...), resultIDs[i]...)
 		for _, id := range ids {
 			seen, ok := firstSeen[id]
 			if !ok {
@@ -148,10 +152,10 @@ func buildBudgetUnits(tagged []TaggedFrag) []budgetUnit {
 			}
 			unit.hasAttention = true
 		}
-		if len(fragToolCallIDs(frag)) > 0 {
+		if len(callIDs[i]) > 0 {
 			unit.hasCall = true
 		}
-		if len(fragToolResultCallIDs(frag)) > 0 {
+		if len(resultIDs[i]) > 0 {
 			unit.hasResult = true
 		}
 	}

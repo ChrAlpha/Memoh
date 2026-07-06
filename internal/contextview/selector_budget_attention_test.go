@@ -212,9 +212,9 @@ func TestBudgetAttention_KeptSetsNestAcrossBudgets(t *testing.T) {
 	}
 }
 
-// Finding [0]: the trim notice may never split a kept tool closure. When the
-// natural insertion point (after the last dropped fragment) falls between a
-// kept call and its result, it slides to the closure's end.
+// The trim notice may never split a kept tool closure. When the natural
+// insertion point (after the last dropped fragment) falls between a kept
+// call and its result, it slides to the closure's end.
 func TestBudgetAttention_NoticeNeverSplitsKeptClosure(t *testing.T) {
 	t.Parallel()
 
@@ -243,8 +243,8 @@ func TestBudgetAttention_NoticeNeverSplitsKeptClosure(t *testing.T) {
 	}
 }
 
-// Finding [5]: the notice wording is honest about scattered trimming — holes
-// can be mid-history, not only at the head. Model-visible change locked here.
+// The notice wording is honest about scattered trimming — holes can be
+// mid-history, not only at the head. Model-visible change locked here.
 func TestHistoryTrimNoticeWordingHonestAboutHoles(t *testing.T) {
 	t.Parallel()
 
@@ -280,9 +280,9 @@ func TestBudgetAttention_ToolClosureDropsAtomically(t *testing.T) {
 	assertDroppedReason(t, result, "passive-result", budgetDropReasonPassive)
 }
 
-// Finding [1]: a tool closure with mixed droppability (one member pinned, the
-// other droppable) must be kept whole; dropping only the droppable half leaves
-// an orphan tool_use or tool_result the provider rejects with a 400.
+// A tool closure with mixed droppability (one member pinned, the other
+// droppable) must be kept whole; dropping only the droppable half leaves an
+// orphan tool_use or tool_result the provider rejects with a 400.
 func TestBudgetAttention_MixedDroppabilityClosureKeptWhole(t *testing.T) {
 	t.Parallel()
 
@@ -313,9 +313,9 @@ func TestBudgetAttention_MixedDroppabilityClosureKeptWhole(t *testing.T) {
 	assertDroppedReason(t, result, "filler-old", budgetDropReasonUntiered)
 }
 
-// Finding [4]: a closure's tier comes from its attention-bearing members only.
-// A passive call whose tool result carries no attention data stays in the
-// passive band instead of being promoted to untiered.
+// A closure's tier comes from its attention-bearing members only. A passive
+// call whose tool result carries no attention data stays in the passive band
+// instead of being promoted to untiered.
 func TestBudgetAttention_ClosureTierIgnoresAttentionlessMembers(t *testing.T) {
 	t.Parallel()
 
@@ -339,9 +339,9 @@ func TestBudgetAttention_ClosureTierIgnoresAttentionlessMembers(t *testing.T) {
 	assertDroppedReason(t, result, "plain-result", budgetDropReasonPassive)
 }
 
-// Finding [8]: a droppable tool result whose call is absent from the set is a
-// guaranteed provider 400; with a budget in force it drops unconditionally,
-// restoring the legacy leading-orphan cut even when everything fits.
+// A droppable tool result whose call is absent from the set is a guaranteed
+// provider 400; with a budget in force it drops unconditionally, restoring
+// the legacy leading-orphan cut even when everything fits.
 //
 // An orphan drop is not a space trim: with nothing else under pressure, it
 // must not raise the trim notice either.
@@ -417,9 +417,9 @@ func TestBudgetAttention_ResultBeforeCallPairsIntoSameUnit(t *testing.T) {
 	assertDroppedReason(t, result, "later-call", budgetDropReasonPassive)
 }
 
-// Finding [9]: drops within a tier are contiguous oldest-first; priority no
-// longer reorders them, so a newer zero-estimate unit is not sacrificed for
-// zero gain before an older unit that actually frees tokens.
+// Drops within a tier are contiguous oldest-first; priority no longer
+// reorders them, so a newer zero-estimate unit is not sacrificed for zero
+// gain before an older unit that actually frees tokens.
 func TestBudgetAttention_OldestFirstWithinTierNoZeroGainScatter(t *testing.T) {
 	t.Parallel()
 
@@ -554,9 +554,9 @@ func TestBudgetAttention_DropReasonHistogram(t *testing.T) {
 	}
 }
 
-// Finding [6] end to end: chat-path history drops read budget:untiered in
-// the lifecycle histogram; the request's own attention no longer colors
-// history fragments that have no per-message attention data.
+// End to end, chat-path history drops read budget:untiered in the lifecycle
+// histogram; the request's own attention no longer colors history fragments
+// that have no per-message attention data.
 func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) {
 	t.Parallel()
 
@@ -596,8 +596,8 @@ func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) 
 	}
 }
 
-// Finding [0] end to end: the rendered provider stream keeps a tool call
-// adjacent to its result with the trim notice after the closure, never inside.
+// End to end, the rendered provider stream keeps a tool call adjacent to its
+// result with the trim notice after the closure, never inside.
 func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
 	t.Parallel()
 
@@ -636,9 +636,9 @@ func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
 	}
 }
 
-// Finding [1] end to end: a mixed-droppability closure survives budget
-// pressure whole, so the rendered stream never carries an orphan tool call or
-// orphan tool result.
+// End to end, a mixed-droppability closure survives budget pressure whole,
+// so the rendered stream never carries an orphan tool call or orphan tool
+// result.
 func TestApplyProviderRunConfigMixedClosureStaysWhole(t *testing.T) {
 	t.Parallel()
 

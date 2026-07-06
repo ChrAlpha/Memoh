@@ -126,9 +126,9 @@ func TestHistoryMessagesCollector_ToolMessage(t *testing.T) {
 	assertMessageFrag(t, frags[0], "message.000", contextfrag.KindConversationEvent, contextfrag.CacheNever, contextfrag.TrustWorkspace, 55, sdk.MessageRoleTool)
 }
 
-// Finding [6]: chat history carries no per-message attention data, so the
-// collector must not stamp the whole request's attention onto every history
-// fragment — that made pressure drop-reason histograms lie.
+// Chat history carries no per-message attention data, so the collector must
+// not stamp the whole request's attention onto every history fragment — that
+// made pressure drop-reason histograms lie.
 func TestHistoryMessagesCollector_ClearsRequestScopeAttention(t *testing.T) {
 	t.Parallel()
 
