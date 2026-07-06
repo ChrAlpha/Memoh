@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -78,7 +79,7 @@ func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
-	return append(systemFrags, discussFrags...), nil
+	return slices.Concat(systemFrags, discussFrags), nil
 }
 
 func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {

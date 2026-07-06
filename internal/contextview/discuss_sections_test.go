@@ -68,13 +68,49 @@ func TestCollectDiscussSourceFragsUsesProvidedSystemFrags(t *testing.T) {
 	}
 }
 
+// TestCollectDiscussSourceFragsDoesNotAliasProvidedSystemFrags guards the
+// returned slice against sharing a backing array with the caller-owned
+// SystemFrags: a caller append after the call must not overwrite the
+// returned discuss fragments.
+func TestCollectDiscussSourceFragsDoesNotAliasProvidedSystemFrags(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}
+	params := agentpkg.SystemPromptParams{
+		SessionType: sessionmode.Discuss,
+		Bot:         agentpkg.BotInfo{ID: "bot-1", Name: "research-bot"},
+	}
+	provided := agentpkg.SystemSectionFrags(agentpkg.GenerateSystemSections(params), scope)
+	withSpareCap := make([]contextfrag.ContextFrag, len(provided), len(provided)+8)
+	copy(withSpareCap, provided)
+	input := discussSectionsInputFixture()
+	input.SystemFrags = withSpareCap
+
+	frags, err := (&DiscussSDKContextBuilder{}).CollectDiscussSourceFrags(
+		context.Background(), scope, "", input)
+	if err != nil {
+		t.Fatalf("CollectDiscussSourceFrags error: %v", err)
+	}
+	if len(frags) <= len(withSpareCap) {
+		t.Fatalf("frags = %d, want discuss frags after the system frags", len(frags))
+	}
+	firstDiscussID := frags[len(withSpareCap)].ID
+
+	_ = append(withSpareCap, contextfrag.ContextFrag{ID: "caller-sentinel"})
+
+	if got := frags[len(withSpareCap)].ID; got != firstDiscussID {
+		t.Fatalf("returned frags share the caller's backing array: frag ID = %q, want %q", got, firstDiscussID)
+	}
+}
+
 // TestCollectDiscussSourceFragsSectionsMatchReverseParseRender is the
 // byte-equivalence gate for the discuss system prompt switch: for the same
 // SystemPromptParams, the sections-first path (SystemFrags built from
 // GenerateSystemSections) and the legacy reverse-parse path (flat
 // GenerateSystemPrompt string through SystemPromptCollector) must produce
-// identical final renders on both provider targets — the SDK messages view
-// and the discuss ACP prompt.
+// identical SDK renders, including the priority-45 tool-usage interleave.
+// The discuss ACP prompt excludes system content by design, so that target
+// is gated on non-leakage rather than parity.
 func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) {
 	t.Parallel()
 
@@ -117,10 +153,11 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 				t.Fatalf("sections CollectDiscussSourceFrags error: %v", err)
 			}
 
+			const toolUsage = "## Tool usage\n\nuse tools wisely"
 			legacyRendered := ApplyProviderRunConfig(context.Background(), nil,
-				agentpkg.RunConfig{ContextSourceFrags: legacyFrags, ContextScope: scope})
+				agentpkg.RunConfig{ContextSourceFrags: legacyFrags, ContextScope: scope, ContextToolUsage: toolUsage})
 			sectionsRendered := ApplyProviderRunConfig(context.Background(), nil,
-				agentpkg.RunConfig{ContextSourceFrags: sectionsFrags, ContextScope: scope})
+				agentpkg.RunConfig{ContextSourceFrags: sectionsFrags, ContextScope: scope, ContextToolUsage: toolUsage})
 			if sectionsRendered.System != legacyRendered.System {
 				t.Fatalf("sections System diverges from reverse-parse System:\ngot:  %q\nwant: %q",
 					sectionsRendered.System, legacyRendered.System)
@@ -130,16 +167,16 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 					sectionsRendered.Messages, legacyRendered.Messages)
 			}
 
-			legacyPrompt, err := builder.BuildDiscussACPPrompt(context.Background(), scope, legacyInput)
-			if err != nil {
-				t.Fatalf("legacy BuildDiscussACPPrompt error: %v", err)
-			}
+			// The discuss ACP prompt excludes system content by design:
+			// providing SystemFrags must not leak system sections into it.
 			sectionsPrompt, err := builder.BuildDiscussACPPrompt(context.Background(), scope, sectionsInput)
 			if err != nil {
 				t.Fatalf("sections BuildDiscussACPPrompt error: %v", err)
 			}
-			if sectionsPrompt != legacyPrompt {
-				t.Fatalf("sections ACP prompt diverges:\ngot:  %q\nwant: %q", sectionsPrompt, legacyPrompt)
+			for _, marker := range []string{"workspace rules", "Research Bot", "## Platform identities"} {
+				if strings.Contains(sectionsPrompt, marker) {
+					t.Fatalf("system section content leaked into the discuss ACP prompt: %q found in %q", marker, sectionsPrompt)
+				}
 			}
 		})
 	}
