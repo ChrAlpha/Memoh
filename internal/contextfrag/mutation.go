@@ -49,12 +49,36 @@ type CacheComparison struct {
 }
 
 type CacheUsageRecord struct {
+	Attempt            int `json:"attempt,omitempty"`
 	StepIndex          int `json:"step_index"`
 	NoCacheTokens      int `json:"no_cache_tokens,omitempty"`
 	CacheReadTokens    int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens   int `json:"cache_write_tokens,omitempty"`
 	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
+}
+
+// Loop-selection modes: which strategy governed mid-run context reselection
+// for this agent invocation.
+const (
+	LoopSelectionSuffixOnly  = "suffix_only"
+	LoopSelectionLegacyPrune = "legacy_prune"
+)
+
+// StepSnapshot is one prepare-step's provider-input hash-chain entry: the
+// hash of the payload actually sent after mid-task pruning/reselection ran
+// for that step, plus what that step's reselection (or fallback prune) did,
+// so a manifest reader can reconstruct step N's input and its provenance
+// instead of only seeing the last surviving hash of the run.
+type StepSnapshot struct {
+	Attempt              int            `json:"attempt,omitempty"`
+	StepIndex            int            `json:"step_index"`
+	PostPrepareInputHash string         `json:"post_prepare_input_hash,omitempty"`
+	ReselectionApplied   bool           `json:"reselection_applied,omitempty"`
+	Dropped              int            `json:"dropped,omitempty"`
+	Truncated            int            `json:"truncated,omitempty"`
+	DropReasons          map[string]int `json:"drop_reasons,omitempty"`
+	Pruned               int            `json:"pruned,omitempty"`
 }
 
 // MutationLedger collects the post-render mutations applied to a run's
@@ -70,6 +94,11 @@ type MutationLedger struct {
 	prevBoundaryHash             string
 	comparatorPrefixMessageCount int
 	peekedPrevCacheEntry         PeekedPrevCacheEntry
+	steps                        []StepSnapshot
+	attempt                      int
+	model                        string
+	clientType                   string
+	loopSelectionMode            string
 }
 
 // PeekedPrevCacheEntry carries the previous-turn prefix-cache tracker entry
@@ -117,6 +146,7 @@ func (l *MutationLedger) RecordCacheUsage(record CacheUsageRecord) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	record.Attempt = l.attempt
 	l.cacheUsage = append(l.cacheUsage, record)
 }
 
@@ -237,6 +267,80 @@ func (l *MutationLedger) ComparatorPrefixMessageCount() int {
 	return l.comparatorPrefixMessageCount
 }
 
+// AppendStepSnapshot records one prepare-step's hash-chain entry, stamping
+// it with the ledger's current attempt so steps across a mid-stream retry
+// stay distinguishable from the pre-retry attempt.
+func (l *MutationLedger) AppendStepSnapshot(s StepSnapshot) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s.Attempt = l.attempt
+	l.steps = append(l.steps, s)
+}
+
+func (l *MutationLedger) StepSnapshots() []StepSnapshot {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]StepSnapshot, len(l.steps))
+	copy(out, l.steps)
+	return out
+}
+
+// AdvanceAttempt marks the start of a new mid-stream retry attempt: every
+// StepSnapshot and CacheUsageRecord recorded afterward is stamped with the
+// new attempt number, so records from different attempts sharing the same
+// StepIndex/step_index stay distinguishable.
+func (l *MutationLedger) AdvanceAttempt() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempt++
+}
+
+func (l *MutationLedger) SetModelInfo(model, clientType string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.model = model
+	l.clientType = clientType
+}
+
+func (l *MutationLedger) ModelInfo() (string, string) {
+	if l == nil {
+		return "", ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.model, l.clientType
+}
+
+func (l *MutationLedger) SetLoopSelectionMode(mode string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.loopSelectionMode = mode
+}
+
+func (l *MutationLedger) LoopSelectionMode() string {
+	if l == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loopSelectionMode
+}
+
 // ProviderInputHash hashes the assembled provider payload (system prompt
 // plus message stream) deterministically.
 func ProviderInputHash(system string, messages any) string {
@@ -275,15 +379,24 @@ func nilIfEmptyValue(value any) any {
 // MarshalJSON serializes the ledger snapshot so a manifest carrying it can be
 // persisted or logged as one lifecycle document.
 func (l *MutationLedger) MarshalJSON() ([]byte, error) {
+	model, clientType := l.ModelInfo()
 	return json.Marshal(struct {
-		Records         []MutationRecord   `json:"records,omitempty"`
-		CacheUsage      []CacheUsageRecord `json:"cache_usage,omitempty"`
-		CacheComparison *CacheComparison   `json:"cache_comparison,omitempty"`
-		FinalInputHash  string             `json:"final_input_hash,omitempty"`
+		Records           []MutationRecord   `json:"records,omitempty"`
+		CacheUsage        []CacheUsageRecord `json:"cache_usage,omitempty"`
+		CacheComparison   *CacheComparison   `json:"cache_comparison,omitempty"`
+		FinalInputHash    string             `json:"final_input_hash,omitempty"`
+		Steps             []StepSnapshot     `json:"steps,omitempty"`
+		Model             string             `json:"model,omitempty"`
+		ClientType        string             `json:"client_type,omitempty"`
+		LoopSelectionMode string             `json:"loop_selection_mode,omitempty"`
 	}{
-		Records:         l.Records(),
-		CacheUsage:      l.CacheUsageRecords(),
-		CacheComparison: l.CacheComparisonValue(),
-		FinalInputHash:  l.FinalInputHash(),
+		Records:           l.Records(),
+		CacheUsage:        l.CacheUsageRecords(),
+		CacheComparison:   l.CacheComparisonValue(),
+		FinalInputHash:    l.FinalInputHash(),
+		Steps:             l.StepSnapshots(),
+		Model:             model,
+		ClientType:        clientType,
+		LoopSelectionMode: l.LoopSelectionMode(),
 	})
 }

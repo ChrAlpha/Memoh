@@ -192,6 +192,148 @@ func TestLifecycleSnapshotIncludesCacheUsage(t *testing.T) {
 	}
 }
 
+func TestMutationLedgerAppendStepSnapshotStampsCurrentAttempt(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "hash-0"})
+	ledger.AdvanceAttempt()
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "hash-1"})
+
+	steps := ledger.StepSnapshots()
+	if len(steps) != 2 {
+		t.Fatalf("steps = %#v, want 2", steps)
+	}
+	if steps[0].Attempt != 0 {
+		t.Fatalf("steps[0].Attempt = %d, want 0", steps[0].Attempt)
+	}
+	if steps[1].Attempt != 1 {
+		t.Fatalf("steps[1].Attempt = %d, want 1 after AdvanceAttempt", steps[1].Attempt)
+	}
+}
+
+func TestMutationLedgerAdvanceAttemptStampsCacheUsageRecords(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.RecordCacheUsage(CacheUsageRecord{StepIndex: 0})
+	ledger.AdvanceAttempt()
+	ledger.RecordCacheUsage(CacheUsageRecord{StepIndex: 0})
+
+	records := ledger.CacheUsageRecords()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v, want 2", records)
+	}
+	if records[0].Attempt != 0 || records[1].Attempt != 1 {
+		t.Fatalf("attempts = %d, %d, want 0, 1", records[0].Attempt, records[1].Attempt)
+	}
+}
+
+func TestMutationLedgerModelInfo(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.SetModelInfo("claude-x", "anthropic-messages")
+	model, clientType := ledger.ModelInfo()
+	if model != "claude-x" || clientType != "anthropic-messages" {
+		t.Fatalf("ModelInfo() = (%q, %q), want (claude-x, anthropic-messages)", model, clientType)
+	}
+}
+
+func TestMutationLedgerLoopSelectionMode(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
+	if got := ledger.LoopSelectionMode(); got != LoopSelectionSuffixOnly {
+		t.Fatalf("LoopSelectionMode() = %q, want %q", got, LoopSelectionSuffixOnly)
+	}
+}
+
+func TestMutationLedgerStepAttemptModelNilSafe(t *testing.T) {
+	t.Parallel()
+
+	var ledger *MutationLedger
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0})
+	ledger.AdvanceAttempt()
+	ledger.SetModelInfo("m", "c")
+	ledger.SetLoopSelectionMode(LoopSelectionLegacyPrune)
+	if ledger.StepSnapshots() != nil {
+		t.Fatal("nil ledger StepSnapshots() must be nil")
+	}
+	if model, clientType := ledger.ModelInfo(); model != "" || clientType != "" {
+		t.Fatalf("nil ledger ModelInfo() = (%q, %q), want empty", model, clientType)
+	}
+	if got := ledger.LoopSelectionMode(); got != "" {
+		t.Fatalf("nil ledger LoopSelectionMode() = %q, want empty", got)
+	}
+}
+
+func TestMutationLedgerMarshalJSONIncludesStepsModelAndLoopSelectionMode(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.Record(MutationMidTaskPrune, "pruned=2")
+	ledger.SetFinalInputHash("final-hash")
+	ledger.SetModelInfo("claude-x", "anthropic-messages")
+	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
+	ledger.AppendStepSnapshot(StepSnapshot{
+		StepIndex:            0,
+		PostPrepareInputHash: "step-hash-0",
+		ReselectionApplied:   true,
+		Dropped:              3,
+		DropReasons:          map[string]int{"budget": 3},
+	})
+	ledger.AdvanceAttempt()
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 1, PostPrepareInputHash: "step-hash-1", Pruned: 2})
+
+	raw, err := json.Marshal(ledger)
+	if err != nil {
+		t.Fatalf("marshal ledger: %v", err)
+	}
+	for _, want := range []string{
+		"mid_task_prune", "pruned=2", "final-hash",
+		`"model":"claude-x"`, `"client_type":"anthropic-messages"`, `"loop_selection_mode":"suffix_only"`,
+		`"step_index":0`, "step-hash-0", `"reselection_applied":true`, `"dropped":3`, `"budget":3`,
+		`"step_index":1`, "step-hash-1", `"attempt":1`, `"pruned":2`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("ledger JSON missing %q:\n%s", want, raw)
+		}
+	}
+}
+
+func TestBuildLifecycleSnapshotCopiesModelClientTypeLoopSelectionModeAndSteps(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.SetModelInfo("claude-x", "anthropic-messages")
+	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash-0"})
+	manifest := Manifest{Mutations: ledger}
+
+	snapshot := BuildLifecycleSnapshot(manifest)
+	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
+		t.Fatalf("snapshot model/client_type = (%q, %q), want (claude-x, anthropic-messages)", snapshot.Model, snapshot.ClientType)
+	}
+	if snapshot.LoopSelectionMode != LoopSelectionSuffixOnly {
+		t.Fatalf("snapshot loop selection mode = %q, want %q", snapshot.LoopSelectionMode, LoopSelectionSuffixOnly)
+	}
+	if len(snapshot.Steps) != 1 || snapshot.Steps[0].PostPrepareInputHash != "step-hash-0" {
+		t.Fatalf("snapshot steps = %#v", snapshot.Steps)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, want := range []string{`"model":"claude-x"`, `"client_type":"anthropic-messages"`, `"loop_selection_mode":"suffix_only"`, `"steps":`, "step-hash-0"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("snapshot JSON missing %q: %s", want, raw)
+		}
+	}
+}
+
 func TestManifestJSONIncludesCacheComparison(t *testing.T) {
 	ledger := NewMutationLedger()
 	ledger.SetCacheComparison(CacheComparison{Outcome: CacheOutcomeMissSamePrefix, PrevAgeMs: 1200})

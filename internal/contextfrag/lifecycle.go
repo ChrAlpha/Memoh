@@ -66,6 +66,9 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 			snapshot.CacheReadTokens += record.CacheReadTokens
 			snapshot.CacheWriteTokens += record.CacheWriteTokens
 		}
+		snapshot.Model, snapshot.ClientType = manifest.Mutations.ModelInfo()
+		snapshot.LoopSelectionMode = manifest.Mutations.LoopSelectionMode()
+		snapshot.Steps = manifest.Mutations.StepSnapshots()
 	}
 	return snapshot
 }
@@ -85,6 +88,10 @@ type LifecycleSnapshot struct {
 	CacheComparison             *CacheComparison   `json:"cache_comparison,omitempty"`
 	Mutations                   []MutationRecord   `json:"mutations,omitempty"`
 	FinalInputHash              string             `json:"final_input_hash,omitempty"`
+	Model                       string             `json:"model,omitempty"`
+	ClientType                  string             `json:"client_type,omitempty"`
+	LoopSelectionMode           string             `json:"loop_selection_mode,omitempty"`
+	Steps                       []StepSnapshot     `json:"steps,omitempty"`
 }
 
 func selectionSnapshot(selection *SelectionTrace) SelectionTrace {
