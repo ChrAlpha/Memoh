@@ -58,8 +58,42 @@ func TestDecoratedProviderPrefixHashZeroStableCountStillCoversPrependedSystem(t 
 	}
 
 	gotWithoutPrepend := decoratedProviderPrefixHash("", messages, nil, 0, false)
-	wantEmpty, _ := contextfrag.ProviderPayloadHashAndBytes("", messages[:0], []sdk.Tool(nil))
+	wantEmpty, _ := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message(nil), []sdk.Tool(nil))
 	if gotWithoutPrepend != wantEmpty {
 		t.Fatalf("hash = %q, want %q (empty span without a prepended system message)", gotWithoutPrepend, wantEmpty)
+	}
+}
+
+// TestDecoratedProviderPrefixHashZeroCountMatchesNilMessages is the RED test
+// for the finding: a count=0 span must hash identically to a nil message
+// slice, matching contextCachePlanWithComparatorPrefix's
+// append([]sdk.Message(nil), messages[:0]...) construction. Slicing
+// messages[:0] directly instead produces a non-nil empty slice, which
+// json.Marshal serializes as "messages":[] instead of "messages":null,
+// diverging from the comparator hash on any no-op decoration path with
+// StableMessageCount=0.
+func TestDecoratedProviderPrefixHashZeroCountMatchesNilMessages(t *testing.T) {
+	t.Parallel()
+
+	messages := []sdk.Message{sdk.UserMessage("m1"), sdk.UserMessage("m2")}
+	tools := []sdk.Tool{{Name: "alpha"}}
+
+	got := decoratedProviderPrefixHash("sys", messages, tools, 0, false)
+	want, _ := contextfrag.ProviderPayloadHashAndBytes("sys", []sdk.Message(nil), tools)
+	if got != want {
+		t.Fatalf("count=0 hash = %q, want %q (nil messages span)", got, want)
+	}
+}
+
+func TestDecoratedProviderPrefixHashNegativeCountClampsToZero(t *testing.T) {
+	t.Parallel()
+
+	messages := []sdk.Message{sdk.UserMessage("m1")}
+	tools := []sdk.Tool{{Name: "alpha"}}
+
+	got := decoratedProviderPrefixHash("sys", messages, tools, -3, false)
+	want := decoratedProviderPrefixHash("sys", messages, tools, 0, false)
+	if got != want {
+		t.Fatalf("negative count hash = %q, want %q (count=0 result)", got, want)
 	}
 }

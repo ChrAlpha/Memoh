@@ -1078,7 +1078,8 @@ func decoratedProviderPrefixHash(system string, messages []sdk.Message, tools []
 	if count > len(messages) {
 		count = len(messages)
 	}
-	hash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages[:count], tools)
+	prefixMessages := append([]sdk.Message(nil), messages[:count]...)
+	hash, _ := contextfrag.ProviderPayloadHashAndBytes(system, prefixMessages, tools)
 	return hash
 }
 
