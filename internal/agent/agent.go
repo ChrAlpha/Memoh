@@ -905,6 +905,12 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
 	cfg.ContextMutations.SetFinalInputHash(finalHash)
+	// The twilight SDK only invokes PrepareStep for model steps > 0 (step 0
+	// gets this decorated payload as-is), so step 0's own snapshot has to be
+	// recorded here rather than from within the PrepareStep closure below —
+	// otherwise step 0 has no snapshot and every later step's PrepareStep
+	// call is misattributed one model call ahead of the usage it pairs with.
+	cfg.ContextMutations.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: finalHash})
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
 		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
@@ -973,7 +979,9 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				MinMessages:           threshold,
 			})
 			appliedSelection := false
-			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex}
+			// PrepareStep call k feeds model call k+1's input (see the step-0
+			// snapshot recorded in buildGenerateOptions above).
+			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
 			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
 				p.Messages = selection.Messages
 				appliedSelection = true
@@ -1001,7 +1009,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		if truncated > 0 {
 			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
 		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex, Truncated: truncated})
+		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex + 1, Truncated: truncated})
 		return p
 	}
 	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))

@@ -163,14 +163,14 @@ func TestAgentGenerateStepReselectionAppliedPreservesDecoratedPrefix(t *testing.
 	}
 
 	steps := ledger.StepSnapshots()
-	if len(steps) != 1 {
-		t.Fatalf("step snapshots = %#v, want 1", steps)
+	if len(steps) != 2 {
+		t.Fatalf("step snapshots = %#v, want 2 (step 0 for the initial call, step 1 for the reselection prepare)", steps)
 	}
-	if !steps[0].ReselectionApplied {
-		t.Fatalf("steps[0].ReselectionApplied = false, want true: %#v", steps[0])
+	if !steps[1].ReselectionApplied {
+		t.Fatalf("steps[1].ReselectionApplied = false, want true: %#v", steps[1])
 	}
-	if steps[0].Dropped != 1 {
-		t.Fatalf("steps[0].Dropped = %d, want 1", steps[0].Dropped)
+	if steps[1].Dropped != 1 {
+		t.Fatalf("steps[1].Dropped = %d, want 1", steps[1].Dropped)
 	}
 
 	if len(secondCallMessages) < 2 {
@@ -247,11 +247,11 @@ func TestAgentGenerateStepReselectionRejectedKeepsDecoratedPrefixUnchanged(t *te
 	}
 
 	steps := ledger.StepSnapshots()
-	if len(steps) != 1 {
-		t.Fatalf("step snapshots = %#v, want 1", steps)
+	if len(steps) != 2 {
+		t.Fatalf("step snapshots = %#v, want 2 (step 0 for the initial call, step 1 for the rejected reselection prepare)", steps)
 	}
-	if steps[0].ReselectionApplied {
-		t.Fatalf("steps[0].ReselectionApplied = true, want false (cache_control-stripped prefix must be rejected): %#v", steps[0])
+	if steps[1].ReselectionApplied {
+		t.Fatalf("steps[1].ReselectionApplied = true, want false (cache_control-stripped prefix must be rejected): %#v", steps[1])
 	}
 
 	if len(secondCallMessages) < 2 {
@@ -262,11 +262,24 @@ func TestAgentGenerateStepReselectionRejectedKeepsDecoratedPrefixUnchanged(t *te
 	}
 }
 
+// TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes
+// covers Defect A: the twilight SDK only invokes PrepareStep for model steps
+// > 0 (step 0's input is the initial decorated payload, never re-prepared),
+// while every model step 0..R-1 gets a StepResult via WithOnStep. So R
+// provider calls must produce exactly R step snapshots (0..R-1), each
+// hashing that call's ACTUAL input params — not R-1 snapshots misattributed
+// one call ahead of the usage they're supposed to pair with.
 func TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes(t *testing.T) {
 	t.Parallel()
 
+	var callParams []sdk.GenerateParams
 	modelProvider := &atomicMockProvider{
-		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			callParams = append(callParams, sdk.GenerateParams{
+				System:   params.System,
+				Messages: append([]sdk.Message(nil), params.Messages...),
+				Tools:    append([]sdk.Tool(nil), params.Tools...),
+			})
 			if call <= 3 {
 				return &sdk.GenerateResult{
 					FinishReason: sdk.FinishReasonToolCalls,
@@ -305,8 +318,8 @@ func TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes(t *te
 	}
 
 	steps := ledger.StepSnapshots()
-	if len(steps) != 3 {
-		t.Fatalf("step snapshots = %#v, want 3", steps)
+	if len(steps) != len(callParams) {
+		t.Fatalf("step snapshots = %d, want %d (one per model step, matching provider calls)", len(steps), len(callParams))
 	}
 	seen := map[string]bool{}
 	for i, step := range steps {
@@ -315,6 +328,10 @@ func TestAgentGenerateRecordsOneStepSnapshotPerModelStepWithDistinctHashes(t *te
 		}
 		if step.PostPrepareInputHash == "" {
 			t.Fatalf("steps[%d].PostPrepareInputHash empty", i)
+		}
+		wantHash, _ := contextfrag.ProviderPayloadHashAndBytes(callParams[i].System, callParams[i].Messages, callParams[i].Tools)
+		if step.PostPrepareInputHash != wantHash {
+			t.Fatalf("steps[%d].PostPrepareInputHash = %q, want hash of call %d's actual input %q", i, step.PostPrepareInputHash, i, wantHash)
 		}
 		if seen[step.PostPrepareInputHash] {
 			t.Fatalf("steps[%d] hash %q duplicates an earlier step; messages differ across steps so hashes must too", i, step.PostPrepareInputHash)
