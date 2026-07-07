@@ -1013,14 +1013,15 @@ export type ContextfragCacheUsageRecord = {
 };
 
 export type ContextfragLifecycleSnapshot = {
+    cache_comparator_prefix_hash?: string;
     cache_comparison?: ContextfragCacheComparison;
     cache_read_tokens?: number;
     cache_usage?: Array<ContextfragCacheUsageRecord>;
     cache_write_tokens?: number;
     counts?: ContextfragManifestCounts;
+    decorated_provider_prefix_hash?: string;
     final_input_hash?: string;
     mutations?: Array<ContextfragMutationRecord>;
-    rendered_prefix_hash?: string;
     selection?: ContextfragSelectionTrace;
     stable_message_count?: number;
     stable_prefix_hash?: string;
@@ -1035,7 +1036,7 @@ export type ContextfragManifestCounts = {
     text_bytes?: number;
 };
 
-export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
+export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
 
 export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'read_media';
 

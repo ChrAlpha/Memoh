@@ -184,10 +184,10 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{StepIndex: 0, CacheReadTokens: 7, CacheWriteTokens: 3})
 	ledger.SetFinalInputHash("final-hash")
 	plan := contextfrag.CachePlan{
-		StablePrefixHash:          "stable-hash",
-		StableMessageCount:        2,
-		RenderedStablePrefixHash:  "rendered-hash",
-		RenderedStablePrefixBytes: 128,
+		StablePrefixHash:           "stable-hash",
+		StableMessageCount:         2,
+		CacheComparatorPrefixHash:  "rendered-hash",
+		CacheComparatorPrefixBytes: 128,
 	}
 	cfg := RunConfig{
 		System:           "base system",
@@ -211,7 +211,7 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 	if cfg.ContextManifest.Mutations != ledger {
 		t.Fatal("RefreshContextFrag dropped the existing mutation ledger")
 	}
-	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.RenderedStablePrefixHash != "rendered-hash" {
+	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.CacheComparatorPrefixHash != "rendered-hash" {
 		t.Fatalf("RefreshContextFrag cache plan = %#v, want previous cache plan", cfg.ContextManifest.CachePlan)
 	}
 	snapshot, ok := holder.Snapshot()
@@ -221,8 +221,8 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 	if snapshot.FinalInputHash != "final-hash" {
 		t.Fatalf("snapshot final hash = %q, want final-hash", snapshot.FinalInputHash)
 	}
-	if snapshot.RenderedPrefixHash != "rendered-hash" {
-		t.Fatalf("snapshot rendered prefix hash = %q, want rendered-hash", snapshot.RenderedPrefixHash)
+	if snapshot.CacheComparatorPrefixHash != "rendered-hash" {
+		t.Fatalf("snapshot cache comparator prefix hash = %q, want rendered-hash", snapshot.CacheComparatorPrefixHash)
 	}
 	if snapshot.CacheReadTokens != 7 || snapshot.CacheWriteTokens != 3 {
 		t.Fatalf("snapshot cache read/write = %d/%d, want 7/3", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)

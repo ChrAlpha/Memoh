@@ -222,7 +222,7 @@ func TestGenerateWritesFinalInputHashToManifestLedger(t *testing.T) {
 	}
 }
 
-func TestGeneratePublishesRenderedPrefixHashAndCacheUsage(t *testing.T) {
+func TestGeneratePublishesCacheComparatorPrefixHashAndCacheUsage(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{usage: sdk.Usage{
 		InputTokens: 42,
@@ -266,8 +266,8 @@ func TestGeneratePublishesRenderedPrefixHashAndCacheUsage(t *testing.T) {
 	if !ok {
 		t.Fatal("lifecycle snapshot missing")
 	}
-	if snapshot.RenderedPrefixHash == "" {
-		t.Fatalf("rendered prefix hash missing: %#v", snapshot)
+	if snapshot.CacheComparatorPrefixHash == "" {
+		t.Fatalf("cache comparator prefix hash missing: %#v", snapshot)
 	}
 	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 {
 		t.Fatalf("cache usage = read %d write %d", snapshot.CacheReadTokens, snapshot.CacheWriteTokens)

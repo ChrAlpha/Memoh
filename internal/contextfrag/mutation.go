@@ -62,14 +62,14 @@ type CacheUsageRecord struct {
 // manifest chain from rendered payload to final model input stays auditable.
 // All methods are nil-safe.
 type MutationLedger struct {
-	mu                         sync.Mutex
-	records                    []MutationRecord
-	cacheUsage                 []CacheUsageRecord
-	cacheComparison            *CacheComparison
-	finalInputHash             string
-	prevBoundaryHash           string
-	renderedPrefixMessageCount int
-	peekedPrevCacheEntry       PeekedPrevCacheEntry
+	mu                           sync.Mutex
+	records                      []MutationRecord
+	cacheUsage                   []CacheUsageRecord
+	cacheComparison              *CacheComparison
+	finalInputHash               string
+	prevBoundaryHash             string
+	comparatorPrefixMessageCount int
+	peekedPrevCacheEntry         PeekedPrevCacheEntry
 }
 
 // PeekedPrevCacheEntry carries the previous-turn prefix-cache tracker entry
@@ -215,26 +215,26 @@ func (l *MutationLedger) PeekedPrevCacheEntry() PeekedPrevCacheEntry {
 	return l.peekedPrevCacheEntry
 }
 
-// SetRenderedPrefixMessageCount carries this turn's rendered stable-prefix
-// message count from buildGenerateOptions to observePrefixCache within the
-// same run. Same-run, in-memory only; excluded from MarshalJSON like
-// PrevBoundaryHash above.
-func (l *MutationLedger) SetRenderedPrefixMessageCount(count int) {
+// SetComparatorPrefixMessageCount carries this turn's cache-comparator
+// prefix message count from buildGenerateOptions to observePrefixCache
+// within the same run. Same-run, in-memory only; excluded from MarshalJSON
+// like PrevBoundaryHash above.
+func (l *MutationLedger) SetComparatorPrefixMessageCount(count int) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.renderedPrefixMessageCount = count
+	l.comparatorPrefixMessageCount = count
 }
 
-func (l *MutationLedger) RenderedPrefixMessageCount() int {
+func (l *MutationLedger) ComparatorPrefixMessageCount() int {
 	if l == nil {
 		return 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.renderedPrefixMessageCount
+	return l.comparatorPrefixMessageCount
 }
 
 // ProviderInputHash hashes the assembled provider payload (system prompt

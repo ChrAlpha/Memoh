@@ -119,10 +119,45 @@ func TestLifecycleHolderSnapshotCondensesManifest(t *testing.T) {
 	if strings.Contains(string(raw), "large-item") {
 		t.Fatalf("condensed snapshot should not include manifest items: %s", raw)
 	}
-	for _, want := range []string{"rendered_prefix_hash", "cache_read_tokens", "cache_write_tokens"} {
+	for _, want := range []string{"cache_comparator_prefix_hash", "cache_read_tokens", "cache_write_tokens"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("snapshot schema must reserve %q for cache telemetry: %s", want, raw)
 		}
+	}
+}
+
+func TestLifecycleSnapshotJSONSplitsCacheComparatorAndDecoratedProviderHashes(t *testing.T) {
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{
+		View: ViewRunConfigPreProvider,
+		CachePlan: &CachePlan{
+			CacheComparatorPrefixHash:   "comparator-hash",
+			DecoratedProviderPrefixHash: "decorated-hash",
+		},
+	})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("snapshot should be available after SetManifest")
+	}
+	if snapshot.CacheComparatorPrefixHash != "comparator-hash" {
+		t.Fatalf("snapshot cache comparator prefix hash = %q, want comparator-hash", snapshot.CacheComparatorPrefixHash)
+	}
+	if snapshot.DecoratedProviderPrefixHash != "decorated-hash" {
+		t.Fatalf("snapshot decorated provider prefix hash = %q, want decorated-hash", snapshot.DecoratedProviderPrefixHash)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, want := range []string{`"cache_comparator_prefix_hash":"comparator-hash"`, `"decorated_provider_prefix_hash":"decorated-hash"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("snapshot JSON missing %s: %s", want, raw)
+		}
+	}
+	if strings.Contains(string(raw), "rendered_prefix_hash") {
+		t.Fatalf("snapshot JSON must not contain the old rendered_prefix_hash key: %s", raw)
 	}
 }
 

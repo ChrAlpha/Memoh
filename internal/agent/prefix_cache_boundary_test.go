@@ -42,7 +42,7 @@ func newPrefixCacheRunConfig(identity SessionContext, model *sdk.Model, system s
 // the freshly-decorated payload — but the underlying cached bytes for
 // [system, h1] are unchanged.
 //
-// Before the fix, both the stored hash (contextCachePlanWithRenderedPrefix)
+// Before the fix, both the stored hash (contextCachePlanWithComparatorPrefix)
 // and the boundary re-hash (recordPrefixCacheBoundary) were computed AFTER
 // cache_control decoration, so h1's serialized bytes differ across turns
 // purely because the breakpoint moved off it, and the growth-hit branch in
@@ -147,8 +147,8 @@ func TestRecordPrefixCacheBoundarySkipsHashWhenCountUnchanged(t *testing.T) {
 	if got := cfg.ContextMutations.PrevBoundaryHash(); got != "" {
 		t.Fatalf("boundary hash = %q, want empty: the equal-prefix branch never reads it, so it must not be computed", got)
 	}
-	if got := cfg.ContextMutations.RenderedPrefixMessageCount(); got != 2 {
-		t.Fatalf("rendered prefix message count = %d, want 2 (still recorded regardless of the boundary-hash skip)", got)
+	if got := cfg.ContextMutations.ComparatorPrefixMessageCount(); got != 2 {
+		t.Fatalf("comparator prefix message count = %d, want 2 (still recorded regardless of the boundary-hash skip)", got)
 	}
 	peeked := cfg.ContextMutations.PeekedPrevCacheEntry()
 	if !peeked.Found || peeked.StableCount != 2 {

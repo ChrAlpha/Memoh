@@ -15503,6 +15503,9 @@ const docTemplate = `{
         "contextfrag.LifecycleSnapshot": {
             "type": "object",
             "properties": {
+                "cache_comparator_prefix_hash": {
+                    "type": "string"
+                },
                 "cache_comparison": {
                     "$ref": "#/definitions/contextfrag.CacheComparison"
                 },
@@ -15521,6 +15524,9 @@ const docTemplate = `{
                 "counts": {
                     "$ref": "#/definitions/contextfrag.ManifestCounts"
                 },
+                "decorated_provider_prefix_hash": {
+                    "type": "string"
+                },
                 "final_input_hash": {
                     "type": "string"
                 },
@@ -15529,9 +15535,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/contextfrag.MutationRecord"
                     }
-                },
-                "rendered_prefix_hash": {
-                    "type": "string"
                 },
                 "selection": {
                     "$ref": "#/definitions/contextfrag.SelectionTrace"
@@ -15570,16 +15573,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
-                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt"
+                "acp_runtime_prompt",
+                "run_config_pre_provider"
             ],
             "x-enum-varnames": [
-                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt"
+                "ViewACPRuntimePrompt",
+                "ViewRunConfigPreProvider"
             ]
         },
         "contextfrag.MutationKind": {

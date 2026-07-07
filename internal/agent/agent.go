@@ -647,7 +647,7 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 		return
 	}
 	plan := cfg.ContextManifest.CachePlan
-	if plan == nil || plan.RenderedStablePrefixHash == "" {
+	if plan == nil || plan.CacheComparatorPrefixHash == "" {
 		return
 	}
 	key := prefixCacheSessionKey(cfg.Identity)
@@ -662,7 +662,7 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 	}
 	now := time.Now()
 	model := modelID(cfg.Model)
-	nowCount := cfg.ContextMutations.RenderedPrefixMessageCount()
+	nowCount := cfg.ContextMutations.ComparatorPrefixMessageCount()
 	prevBoundaryHash := cfg.ContextMutations.PrevBoundaryHash()
 	// Compare against the snapshot this run itself peeked at build time
 	// (recordPrefixCacheBoundary), not against observe()'s return value: a
@@ -672,8 +672,8 @@ func (a *Agent) observePrefixCache(cfg RunConfig) {
 	// turn. observe() below still performs the store (last-writer-wins).
 	peeked := cfg.ContextMutations.PeekedPrevCacheEntry()
 	prev := prefixCacheEntry{hash: peeked.Hash, model: peeked.Model, stableCount: peeked.StableCount, at: peeked.At}
-	a.prefixCache.observe(key, nowCount, plan.RenderedStablePrefixHash, model, now)
-	comparison := compareCachePrefix(prev, peeked.Found, nowCount, plan.RenderedStablePrefixHash, model, prevBoundaryHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
+	a.prefixCache.observe(key, nowCount, plan.CacheComparatorPrefixHash, model, now)
+	comparison := compareCachePrefix(prev, peeked.Found, nowCount, plan.CacheComparatorPrefixHash, model, prevBoundaryHash, firstStepCacheRead, now, promptCacheTTLWindow(cfg.PromptCacheTTL))
 	cfg.ContextMutations.SetCacheComparison(comparison)
 
 	if comparison.Outcome == contextfrag.CacheOutcomeMissSamePrefix &&
@@ -884,9 +884,9 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	// observePrefixCache).
 	rawPrefixCount := clampStableMessageCount(cfg.ContextCachePlan.StableMessageCount, len(cfg.Messages))
 	a.recordPrefixCacheBoundary(cfg, cfg.System, cfg.Messages, tools, rawPrefixCount)
-	plan := contextCachePlanWithRenderedPrefix(cfg.ContextCachePlan, cfg.System, cfg.Messages, tools, rawPrefixCount)
+	plan := contextCachePlanWithComparatorPrefix(cfg.ContextCachePlan, cfg.System, cfg.Messages, tools, rawPrefixCount)
 
-	system, messages, decoratedTools, _, actualStableCount := models.ApplyPromptCacheWithPlan(
+	system, messages, decoratedTools, systemPrepended, actualStableCount := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, tools,
 	)
 	// Honesty: reflect where the breakpoint actually landed (models.ApplyPromptCacheWithPlan
@@ -894,6 +894,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	// upstream claim.
 	plan.StableMessageCount = actualStableCount
 	tools = decoratedTools
+	plan.DecoratedProviderPrefixHash = decoratedProviderPrefixHash(system, messages, tools, actualStableCount, systemPrepended)
 	initialProviderMessageCount := len(messages)
 	publishContextCachePlan(cfg, plan)
 	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
@@ -1027,7 +1028,7 @@ func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages
 	if key == "" {
 		return
 	}
-	cfg.ContextMutations.SetRenderedPrefixMessageCount(prefixCount)
+	cfg.ContextMutations.SetComparatorPrefixMessageCount(prefixCount)
 	prev, ok := a.prefixCache.peek(key)
 	cfg.ContextMutations.SetPeekedPrevCacheEntry(contextfrag.PeekedPrevCacheEntry{
 		Found:       ok,
@@ -1047,17 +1048,38 @@ func (a *Agent) recordPrefixCacheBoundary(cfg RunConfig, system string, messages
 	cfg.ContextMutations.SetPrevBoundaryHash(hash)
 }
 
-// contextCachePlanWithRenderedPrefix computes the plan's cache-comparator
+// contextCachePlanWithComparatorPrefix computes the plan's cache-comparator
 // hash from the raw (pre-decoration) system/messages/tools sliced to
 // prefixCount, so the stored hash never depends on where (or whether) a
 // vendor-specific cache_control breakpoint landed.
-func contextCachePlanWithRenderedPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) contextfrag.CachePlan {
+func contextCachePlanWithComparatorPrefix(plan contextfrag.CachePlan, system string, messages []sdk.Message, tools []sdk.Tool, prefixCount int) contextfrag.CachePlan {
 	prefixMessages := append([]sdk.Message(nil), messages[:prefixCount]...)
 	hash, bytes := contextfrag.ProviderPayloadHashAndBytes(system, prefixMessages, tools)
-	plan.RenderedStablePrefixHash = hash
-	plan.RenderedStablePrefixBytes = bytes
-	plan.RenderedStablePrefixTokenEstimate = tokenEstimateFromBytes(bytes)
+	plan.CacheComparatorPrefixHash = hash
+	plan.CacheComparatorPrefixBytes = bytes
+	plan.CacheComparatorPrefixTokenEstimate = tokenEstimateFromBytes(bytes)
 	return plan
+}
+
+// decoratedProviderPrefixHash hashes the POST-decoration provider payload
+// prefix actually sent to the vendor: system/messages/tools after
+// models.ApplyPromptCacheWithPlan has run, sliced to the span that call
+// reports as covered by the applied cache breakpoint (actualStableCount),
+// plus the prepended system message when the vendor promoted one
+// (systemPrepended), unlike the pre-decoration comparator hash above.
+func decoratedProviderPrefixHash(system string, messages []sdk.Message, tools []sdk.Tool, actualStableCount int, systemPrepended bool) string {
+	count := actualStableCount
+	if systemPrepended {
+		count++
+	}
+	if count < 0 {
+		count = 0
+	}
+	if count > len(messages) {
+		count = len(messages)
+	}
+	hash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages[:count], tools)
+	return hash
 }
 
 // clampStableMessageCount bounds a stable-message count reported by context
