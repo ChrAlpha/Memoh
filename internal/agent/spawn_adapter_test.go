@@ -333,3 +333,59 @@ func TestSpawnAdapterSkipsToolUsageSystemSpliceOnceFragsFirst(t *testing.T) {
 		t.Fatalf("expected System to stay untouched by the legacy splice guard since ContextSourceFrags is non-empty, got %q", seen.System)
 	}
 }
+
+// TestSpawnAdapterGeneratePopulatesContextLifecycle verifies that a spawn's
+// RunConfig gets its own contextfrag.LifecycleHolder (runConfigFromSpawnRunConfig
+// used to leave rc.ContextLifecycle nil, so SetManifest was a no-op and the
+// snapshot was silently lost) and that Generate surfaces the resulting
+// snapshot on tools.SpawnResult with sane counts.
+func TestSpawnAdapterGeneratePopulatesContextLifecycle(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	adapter := NewSpawnAdapter(newTestAgent())
+
+	result, err := adapter.Generate(context.Background(), tools.SpawnRunConfig{
+		Model:       &sdk.Model{ID: "spawn-lifecycle-model", Provider: modelProvider, Type: sdk.ModelTypeChat},
+		Query:       "do the task",
+		SessionType: sessionmode.Subagent,
+		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+	})
+	if err != nil {
+		t.Fatalf("spawn Generate error: %v", err)
+	}
+	if result.ContextLifecycle == nil {
+		t.Fatal("expected SpawnResult.ContextLifecycle to be populated")
+	}
+	if result.ContextLifecycle.Counts.Fragments == 0 || result.ContextLifecycle.Counts.Messages == 0 {
+		t.Fatalf("expected non-zero manifest counts, got %+v", result.ContextLifecycle.Counts)
+	}
+}
+
+// TestSpawnAdapterGenerateWithWatchdogPopulatesContextLifecycle mirrors
+// TestSpawnAdapterGeneratePopulatesContextLifecycle for the streaming
+// (GenerateWithWatchdog) spawn adapter path used by the subagent tool.
+func TestSpawnAdapterGenerateWithWatchdogPopulatesContextLifecycle(t *testing.T) {
+	t.Parallel()
+	modelProvider := &atomicMockProvider{
+		handler: func(_ int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+	adapter := NewSpawnAdapter(newTestAgent())
+
+	result, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+		Model:       &sdk.Model{ID: "spawn-lifecycle-watchdog-model", Provider: modelProvider, Type: sdk.ModelTypeChat},
+		Query:       "do the task",
+		SessionType: sessionmode.Subagent,
+		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+	}, func() {})
+	if err != nil {
+		t.Fatalf("spawn GenerateWithWatchdog error: %v", err)
+	}
+	if result.ContextLifecycle == nil {
+		t.Fatal("expected SpawnResult.ContextLifecycle to be populated")
+	}
+	if result.ContextLifecycle.Counts.Fragments == 0 || result.ContextLifecycle.Counts.Messages == 0 {
+		t.Fatalf("expected non-zero manifest counts, got %+v", result.ContextLifecycle.Counts)
+	}
+}

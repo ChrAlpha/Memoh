@@ -20,8 +20,9 @@ import (
 )
 
 type fakeSpawnAgent struct {
-	block   chan struct{}
-	failFor map[string]string
+	block            chan struct{}
+	failFor          map[string]string
+	contextLifecycle *contextfrag.LifecycleSnapshot
 
 	mu    sync.Mutex
 	calls []SpawnRunConfig
@@ -52,6 +53,7 @@ func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunC
 			Role:    sdk.MessageRoleAssistant,
 			Content: []sdk.MessagePart{sdk.TextPart{Text: "report for " + cfg.Query}},
 		}},
+		ContextLifecycle: f.contextLifecycle,
 	}, nil
 }
 
@@ -141,6 +143,7 @@ func (s *fakeAgentMessageService) Persist(_ context.Context, input messagepkg.Pe
 		SessionID: input.SessionID,
 		Role:      input.Role,
 		Content:   input.Content,
+		Metadata:  input.Metadata,
 		Usage:     input.Usage,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -436,6 +439,55 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 	}
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); err == nil || !strings.Contains(err.Error(), "invalid agent id") {
 		t.Fatalf("expected invalid id error, got %v", err)
+	}
+}
+
+// TestSpawnAgentPersistsContextLifecycleOnFinalAssistantMessage verifies that
+// persistMessages attaches the spawn run's context lifecycle snapshot to the
+// final (and here, only) assistant message's metadata, mirroring
+// resolver_store.go's withContextLifecycleMetadata for the chat path.
+func TestSpawnAgentPersistsContextLifecycleOnFinalAssistantMessage(t *testing.T) {
+	snapshot := &contextfrag.LifecycleSnapshot{Version: 1, Counts: contextfrag.ManifestCounts{Fragments: 3, Messages: 2}}
+	agent := &fakeSpawnAgent{contextLifecycle: snapshot}
+	p, _, sessions, messages := newAgentControlProvider(t, agent)
+	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "worker", "task": "alpha"})
+
+	rec, ok := sessions.byAgent("parent1", "worker")
+	if !ok {
+		t.Fatal("expected child session for worker")
+	}
+	stored, err := messages.ListBySession(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatalf("ListBySession: %v", err)
+	}
+	lastAssistantIdx := -1
+	for i, msg := range stored {
+		if msg.Role == string(sdk.MessageRoleAssistant) {
+			lastAssistantIdx = i
+		}
+	}
+	if lastAssistantIdx < 0 {
+		t.Fatalf("expected a persisted assistant message, got %#v", stored)
+	}
+	got, ok := stored[lastAssistantIdx].Metadata[contextfrag.MetadataContextLifecycleKey]
+	if !ok {
+		t.Fatalf("expected final assistant message metadata to carry %q, got %#v", contextfrag.MetadataContextLifecycleKey, stored[lastAssistantIdx].Metadata)
+	}
+	gotSnapshot, ok := got.(contextfrag.LifecycleSnapshot)
+	if !ok {
+		t.Fatalf("expected metadata value to be a contextfrag.LifecycleSnapshot, got %T", got)
+	}
+	if !reflect.DeepEqual(gotSnapshot, *snapshot) {
+		t.Fatalf("stored snapshot = %+v, want %+v", gotSnapshot, *snapshot)
+	}
+	for i, msg := range stored {
+		if i != lastAssistantIdx {
+			if _, ok := msg.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
+				t.Fatalf("message %d (role %s) unexpectedly carries the lifecycle key", i, msg.Role)
+			}
+		}
 	}
 }
 

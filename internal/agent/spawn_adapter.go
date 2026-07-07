@@ -33,11 +33,15 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 		return nil, err
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: result.Messages,
 		Text:     result.Text,
 		Usage:    result.Usage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
 }
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
@@ -86,6 +90,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		LoopDetection: LoopDetectionConfig{
 			Enabled: cfg.LoopDetection.Enabled,
 		},
+		ContextLifecycle: contextfrag.NewLifecycleHolder(),
 	}
 	rc.ContextSourceFrags = SpawnContextSourceFrags(rc)
 	return rc
@@ -177,11 +182,15 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		return nil, ctx.Err()
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: finalMessages,
 		Text:     allText.String(),
 		Usage:    &totalUsage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
 }
 
 // SpawnSystemPrompt returns the system prompt for a given session type.

@@ -69,9 +69,10 @@ type SpawnLoopConfig struct {
 
 // SpawnResult mirrors agent.GenerateResult.
 type SpawnResult struct {
-	Messages []sdk.Message
-	Text     string
-	Usage    *sdk.Usage
+	Messages         []sdk.Message
+	Text             string
+	Usage            *sdk.Usage
+	ContextLifecycle *contextfrag.LifecycleSnapshot
 }
 
 const (
@@ -1081,7 +1082,14 @@ func (p *SpawnProvider) persistMessages(
 		p.persistUserMessage(ctx, botID, sessionID, query)
 	}
 
-	for _, msg := range result.Messages {
+	lastAssistantIdx := -1
+	for i, msg := range result.Messages {
+		if msg.Role == sdk.MessageRoleAssistant {
+			lastAssistantIdx = i
+		}
+	}
+
+	for i, msg := range result.Messages {
 		if msg.Role == sdk.MessageRoleUser {
 			continue
 		}
@@ -1093,11 +1101,16 @@ func (p *SpawnProvider) persistMessages(
 		if msg.Usage != nil {
 			usage, _ = json.Marshal(msg.Usage)
 		}
+		var metadata map[string]any
+		if i == lastAssistantIdx && result.ContextLifecycle != nil {
+			metadata = map[string]any{contextfrag.MetadataContextLifecycleKey: *result.ContextLifecycle}
+		}
 		if _, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:     botID,
 			SessionID: sessionID,
 			Role:      string(msg.Role),
 			Content:   content,
+			Metadata:  metadata,
 			Usage:     usage,
 			ModelID:   modelID,
 		}); err != nil {
