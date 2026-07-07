@@ -688,6 +688,76 @@ func TestAgentStreamMarksRetryTextLoopAsAbort(t *testing.T) {
 	}
 }
 
+// TestAgentStreamMidStreamRetryRecordsCacheUsageForRetryAttempt is Defect B:
+// runMidStreamRetry builds its retry stream from buildGenerateOptions alone,
+// without the sdk.WithOnStep option that records cache usage and runs the
+// after-model-call hook. So a retry step's cache usage was silently dropped
+// from the ledger — the retry attempt's step never got recorded at all.
+func TestAgentStreamMidStreamRetryRecordsCacheUsageForRetryAttempt(t *testing.T) {
+	t.Parallel()
+
+	var streamCalls atomic.Int32
+	modelProvider := &atomicMockProvider{
+		stream: func(_ context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+			call := streamCalls.Add(1)
+			ch := make(chan sdk.StreamPart, 16)
+			go func() {
+				defer close(ch)
+				ch <- &sdk.StartPart{}
+				ch <- &sdk.StartStepPart{}
+				if call == 1 {
+					ch <- &sdk.ErrorPart{Error: errors.New("api error 500")}
+					return
+				}
+				ch <- &sdk.TextStartPart{ID: "mock-retry-usage"}
+				ch <- &sdk.TextDeltaPart{ID: "mock-retry-usage", Text: "ok"}
+				ch <- &sdk.TextEndPart{ID: "mock-retry-usage"}
+				ch <- &sdk.FinishStepPart{
+					FinishReason: sdk.FinishReasonStop,
+					Usage: sdk.Usage{
+						InputTokenDetails: sdk.InputTokenDetail{CacheReadTokens: 50},
+					},
+				}
+				ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
+			}()
+			return &sdk.StreamResult{Stream: ch}, nil
+		},
+	}
+
+	a := New(Deps{})
+	ledger := contextfrag.NewMutationLedger()
+
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("retry cache usage")},
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+
+	if streamCalls.Load() != 2 {
+		t.Fatalf("stream calls = %d, want 2 (initial + one retry)", streamCalls.Load())
+	}
+	if terminal.Type != EventAgentEnd {
+		t.Fatalf("terminal event = %q, want %q", terminal.Type, EventAgentEnd)
+	}
+
+	records := ledger.CacheUsageRecords()
+	found := false
+	for _, r := range records {
+		if r.Attempt == 1 && r.CacheReadTokens == 50 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("cache usage records = %#v, want a record with attempt=1 cache_read_tokens=50 from the retry step", records)
+	}
+}
+
 func TestRunMidStreamRetryMarksTextLoopCancellationAsAborted(t *testing.T) {
 	t.Parallel()
 

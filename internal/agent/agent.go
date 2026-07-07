@@ -288,13 +288,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		cfg = cfg.RefreshContextFrag()
 	}
 	opts := a.buildGenerateOptions(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
-	modelStepIndex := 0
-	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
-		recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
-		a.runAfterModelCallHook(streamCtx, cfg, step, modelStepIndex)
-		modelStepIndex++
-		return nil
-	}))
+	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
 
 	retryCfg := cfg.Retry
 	if retryCfg.MaxAttempts <= 0 {
@@ -798,30 +792,24 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		cfg = cfg.RefreshContextFrag()
 	}
 	opts := a.buildGenerateOptions(genCtx, cfg, sdkTools, approvalTools, prepareStep)
-	modelStepIndex := 0
-	opts = append(opts,
-		sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
-			recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
-			a.runAfterModelCallHook(genCtx, cfg, step, modelStepIndex)
-			modelStepIndex++
-			if cfg.LoopDetection.Enabled {
-				if toolLoopAbortCallIDs.Any() {
-					loopAbort.Set(ErrToolLoopDetected)
-					cancel(ErrToolLoopDetected)
+	opts = append(opts, a.onStepOption(genCtx, cfg, func(step *sdk.StepResult) *sdk.GenerateParams {
+		if cfg.LoopDetection.Enabled {
+			if toolLoopAbortCallIDs.Any() {
+				loopAbort.Set(ErrToolLoopDetected)
+				cancel(ErrToolLoopDetected)
+				return nil
+			}
+			if textLoopGuard != nil && isNonEmptyString(step.Text) {
+				result := textLoopGuard.Inspect(step.Text)
+				if result.Abort {
+					loopAbort.Set(ErrTextLoopDetected)
+					cancel(ErrTextLoopDetected)
 					return nil
 				}
-				if textLoopGuard != nil && isNonEmptyString(step.Text) {
-					result := textLoopGuard.Inspect(step.Text)
-					if result.Abort {
-						loopAbort.Set(ErrTextLoopDetected)
-						cancel(ErrTextLoopDetected)
-						return nil
-					}
-				}
 			}
-			return nil
-		}),
-	)
+		}
+		return nil
+	}))
 
 	genResult, err := a.client.GenerateTextResult(genCtx, opts...)
 	if err != nil {
@@ -1197,6 +1185,27 @@ func publishContextCachePlan(cfg RunConfig, plan contextfrag.CachePlan) {
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(cfg.ContextManifest)
 	}
+}
+
+// onStepOption builds the sdk.WithOnStep option shared by every model-call
+// site (initial stream, initial generate, and each mid-stream retry
+// attempt), owning a fresh per-attempt modelStepIndex counter so cache-usage
+// recording and after-model-call hooks run identically everywhere — retry
+// attempts previously ran neither, because runMidStreamRetry built its
+// stream from buildGenerateOptions alone. after, when non-nil, runs once the
+// shared bookkeeping is done and may itself return a *sdk.GenerateParams
+// override (used by runGenerate for loop-detection cancellation).
+func (a *Agent) onStepOption(ctx context.Context, cfg RunConfig, after func(*sdk.StepResult) *sdk.GenerateParams) sdk.GenerateOption {
+	modelStepIndex := 0
+	return sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+		recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
+		a.runAfterModelCallHook(ctx, cfg, step, modelStepIndex)
+		modelStepIndex++
+		if after != nil {
+			return after(step)
+		}
+		return nil
+	})
 }
 
 func recordContextCacheUsage(ledger *contextfrag.MutationLedger, stepIndex int, step *sdk.StepResult) {
@@ -1661,6 +1670,7 @@ func (a *Agent) runMidStreamRetry(
 		// prepare-step logic — same as initial stream.
 		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages)
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
+		retryOpts = append(retryOpts, a.onStepOption(streamCtx, retryCfgCopy, nil))
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
 		if retryErr != nil {
