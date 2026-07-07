@@ -51,6 +51,7 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 	if p == nil {
 		return nil
 	}
+
 	before, err := r.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
