@@ -173,6 +173,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 		a.runTurnHook(context.WithoutCancel(ctx), cfg, event, turnError)
 	}()
+	defer func() {
+		a.logContextLifecycle(cfg)
+	}()
 
 	// Stream emitter: tools targeting the current conversation push
 	// side-effect events (attachments, reactions, speech) directly here.
@@ -619,7 +622,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 	a.observePrefixCache(cfg)
-	a.logContextLifecycle(cfg)
 	// Deliver the terminal event using a context that is NOT cancelled when
 	// the parent ctx is cancelled (user abort / idle timeout / loop-detect).
 	// Otherwise sendEvent would short-circuit on <-ctx.Done() and the consumer
@@ -738,6 +740,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 			errMsg = retErr.Error()
 		}
 		a.runTurnHook(context.WithoutCancel(ctx), cfg, event, errMsg)
+	}()
+	defer func() {
+		a.logContextLifecycle(cfg)
 	}()
 	loopAbort := newLoopAbortState()
 
@@ -864,7 +869,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		finalMessages = readMediaState.mergeMessages(genResult.Steps, finalMessages)
 	}
 	a.observePrefixCache(cfg)
-	a.logContextLifecycle(cfg)
 	return &GenerateResult{
 		Messages:    finalMessages,
 		Text:        genResult.Text,
