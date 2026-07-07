@@ -15480,6 +15480,9 @@ const docTemplate = `{
         "contextfrag.CacheUsageRecord": {
             "type": "object",
             "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
                 "cache_read_tokens": {
                     "type": "integer"
                 },
@@ -15521,6 +15524,9 @@ const docTemplate = `{
                 "cache_write_tokens": {
                     "type": "integer"
                 },
+                "client_type": {
+                    "type": "string"
+                },
                 "counts": {
                     "$ref": "#/definitions/contextfrag.ManifestCounts"
                 },
@@ -15528,6 +15534,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "final_input_hash": {
+                    "type": "string"
+                },
+                "loop_selection_mode": {
+                    "type": "string"
+                },
+                "model": {
                     "type": "string"
                 },
                 "mutations": {
@@ -15544,6 +15556,12 @@ const docTemplate = `{
                 },
                 "stable_prefix_hash": {
                     "type": "string"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.StepSnapshot"
+                    }
                 },
                 "version": {
                     "type": "integer"
@@ -15573,16 +15591,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
+                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt",
-                "run_config_pre_provider"
+                "acp_runtime_prompt"
             ],
             "x-enum-varnames": [
+                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt",
-                "ViewRunConfigPreProvider"
+                "ViewACPRuntimePrompt"
             ]
         },
         "contextfrag.MutationKind": {
@@ -15630,6 +15648,38 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "selected": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.StepSnapshot": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "dropped": {
+                    "type": "integer"
+                },
+                "post_prepare_input_hash": {
+                    "type": "string"
+                },
+                "pruned": {
+                    "type": "integer"
+                },
+                "reselection_applied": {
+                    "type": "boolean"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "truncated": {
                     "type": "integer"
                 }
             }

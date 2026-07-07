@@ -1708,6 +1708,8 @@ definitions:
     type: object
   contextfrag.CacheUsageRecord:
     properties:
+      attempt:
+        type: integer
       cache_read_tokens:
         type: integer
       cache_write_1h_tokens:
@@ -1735,11 +1737,17 @@ definitions:
         type: array
       cache_write_tokens:
         type: integer
+      client_type:
+        type: string
       counts:
         $ref: '#/definitions/contextfrag.ManifestCounts'
       decorated_provider_prefix_hash:
         type: string
       final_input_hash:
+        type: string
+      loop_selection_mode:
+        type: string
+      model:
         type: string
       mutations:
         items:
@@ -1751,6 +1759,10 @@ definitions:
         type: integer
       stable_prefix_hash:
         type: string
+      steps:
+        items:
+          $ref: '#/definitions/contextfrag.StepSnapshot'
+        type: array
       version:
         type: integer
       view:
@@ -1769,16 +1781,16 @@ definitions:
     type: object
   contextfrag.ManifestView:
     enum:
+    - run_config_pre_provider
     - compaction_candidates
     - discuss_reply
     - acp_runtime_prompt
-    - run_config_pre_provider
     type: string
     x-enum-varnames:
+    - ViewRunConfigPreProvider
     - ViewCompactionCandidates
     - ViewDiscussReply
     - ViewACPRuntimePrompt
-    - ViewRunConfigPreProvider
   contextfrag.MutationKind:
     enum:
     - before_model_call_hook
@@ -1813,6 +1825,27 @@ definitions:
       dropped:
         type: integer
       selected:
+        type: integer
+    type: object
+  contextfrag.StepSnapshot:
+    properties:
+      attempt:
+        type: integer
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      dropped:
+        type: integer
+      post_prepare_input_hash:
+        type: string
+      pruned:
+        type: integer
+      reselection_applied:
+        type: boolean
+      step_index:
+        type: integer
+      truncated:
         type: integer
     type: object
   conversation.SkillActivation:

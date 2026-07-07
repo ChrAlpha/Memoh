@@ -1004,6 +1004,7 @@ export type ContextfragCacheComparison = {
 };
 
 export type ContextfragCacheUsageRecord = {
+    attempt?: number;
     cache_read_tokens?: number;
     cache_write_1h_tokens?: number;
     cache_write_5m_tokens?: number;
@@ -1018,13 +1019,17 @@ export type ContextfragLifecycleSnapshot = {
     cache_read_tokens?: number;
     cache_usage?: Array<ContextfragCacheUsageRecord>;
     cache_write_tokens?: number;
+    client_type?: string;
     counts?: ContextfragManifestCounts;
     decorated_provider_prefix_hash?: string;
     final_input_hash?: string;
+    loop_selection_mode?: string;
+    model?: string;
     mutations?: Array<ContextfragMutationRecord>;
     selection?: ContextfragSelectionTrace;
     stable_message_count?: number;
     stable_prefix_hash?: string;
+    steps?: Array<ContextfragStepSnapshot>;
     version?: number;
     view?: ContextfragManifestView;
 };
@@ -1036,7 +1041,7 @@ export type ContextfragManifestCounts = {
     text_bytes?: number;
 };
 
-export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
+export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
 
 export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'read_media';
 
@@ -1051,6 +1056,19 @@ export type ContextfragSelectionTrace = {
     };
     dropped?: number;
     selected?: number;
+};
+
+export type ContextfragStepSnapshot = {
+    attempt?: number;
+    drop_reasons?: {
+        [key: string]: number;
+    };
+    dropped?: number;
+    post_prepare_input_hash?: string;
+    pruned?: number;
+    reselection_applied?: boolean;
+    step_index?: number;
+    truncated?: number;
 };
 
 export type ConversationSkillActivation = {
