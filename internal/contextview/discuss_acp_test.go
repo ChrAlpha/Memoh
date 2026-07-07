@@ -68,6 +68,38 @@ func TestBuildDiscussACPPromptRendersFromFragments(t *testing.T) {
 	}
 }
 
+// TestBuildDiscussACPPromptWithLifecycleMatchesPlainPromptAndReturnsManifest
+// proves the lifecycle-aware variant renders byte-identical markdown to
+// BuildDiscussACPPrompt (which must keep its existing two-value signature —
+// internal/contextview/acp_equivalence_test.go calls it directly and is a
+// hard-gated golden file) while also surfacing a manifest with sane counts.
+func TestBuildDiscussACPPromptWithLifecycleMatchesPlainPromptAndReturnsManifest(t *testing.T) {
+	t.Parallel()
+
+	builder := &DiscussSDKContextBuilder{}
+	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"}
+	input := discussACPInputFixture()
+
+	plainPrompt, err := builder.BuildDiscussACPPrompt(context.Background(), scope, input)
+	if err != nil {
+		t.Fatalf("BuildDiscussACPPrompt error: %v", err)
+	}
+
+	prompt, manifest, err := builder.BuildDiscussACPPromptWithLifecycle(context.Background(), scope, input)
+	if err != nil {
+		t.Fatalf("BuildDiscussACPPromptWithLifecycle error: %v", err)
+	}
+	if prompt != plainPrompt {
+		t.Fatalf("prompt mismatch:\n--- with lifecycle ---\n%s\n--- plain ---\n%s", prompt, plainPrompt)
+	}
+	if manifest == nil {
+		t.Fatal("expected a non-nil manifest for a successful build")
+	}
+	if manifest.Counts.Fragments == 0 || manifest.Counts.Messages == 0 {
+		t.Fatalf("expected non-zero manifest counts, got %+v", manifest.Counts)
+	}
+}
+
 func TestBuildDiscussACPPromptIncludesSummaryBlock(t *testing.T) {
 	t.Parallel()
 

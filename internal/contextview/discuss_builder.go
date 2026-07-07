@@ -82,7 +82,19 @@ func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, 
 	return slices.Concat(systemFrags, discussFrags), nil
 }
 
-func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {
+func (b *DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {
+	prompt, _, err := b.buildDiscussACPPrompt(ctx, scope, input)
+	return prompt, err
+}
+
+// BuildDiscussACPPromptWithLifecycle mirrors BuildDiscussACPPrompt but also
+// returns the context view manifest backing the prompt, letting callers
+// record a context lifecycle snapshot for the discuss-ACP build.
+func (b *DiscussSDKContextBuilder) BuildDiscussACPPromptWithLifecycle(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, *contextfrag.Manifest, error) {
+	return b.buildDiscussACPPrompt(ctx, scope, input)
+}
+
+func (*DiscussSDKContextBuilder) buildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, *contextfrag.Manifest, error) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(&DiscussContextCollector{}),
 		&FragmentSelector{},
@@ -104,11 +116,12 @@ func (*DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scop
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderACPFullContext},
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	payload, ok := view.Rendered[contextfrag.RenderACPFullContext].Data.(*ACPRenderedPayload)
 	if !ok {
-		return "", fmt.Errorf("unexpected acp payload type %T", view.Rendered[contextfrag.RenderACPFullContext].Data)
+		return "", nil, fmt.Errorf("unexpected acp payload type %T", view.Rendered[contextfrag.RenderACPFullContext].Data)
 	}
-	return payload.ContextMarkdown, nil
+	manifest := view.Manifest
+	return payload.ContextMarkdown, &manifest, nil
 }

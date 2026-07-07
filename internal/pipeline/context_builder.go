@@ -14,6 +14,10 @@ import (
 type DiscussContextBuilder interface {
 	BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) ([]sdk.Message, error)
 	BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, error)
+	// BuildDiscussACPPromptWithLifecycle mirrors BuildDiscussACPPrompt but
+	// also returns the context view manifest, so the caller can record a
+	// context lifecycle snapshot for the discuss-ACP build.
+	BuildDiscussACPPromptWithLifecycle(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, *contextfrag.Manifest, error)
 	// CollectDiscussSourceFrags returns the discuss turn as first-class
 	// source fragments (system prompt plus the discuss stream) for the
 	// fragments-first provider run config.

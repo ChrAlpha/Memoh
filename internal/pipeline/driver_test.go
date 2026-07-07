@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -993,6 +995,7 @@ func lastMessageFragContains(frags []contextfrag.ContextFrag, needle string) boo
 type fakeDiscussContextBuilder struct {
 	messages []sdk.Message
 	prompt   string
+	manifest *contextfrag.Manifest
 	frags    []contextfrag.ContextFrag
 	err      error
 	called   bool
@@ -1011,6 +1014,11 @@ func (f *fakeDiscussContextBuilder) BuildDiscussSDKMessages(_ context.Context, _
 func (f *fakeDiscussContextBuilder) BuildDiscussACPPrompt(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) (string, error) {
 	f.called = true
 	return f.prompt, f.err
+}
+
+func (f *fakeDiscussContextBuilder) BuildDiscussACPPromptWithLifecycle(_ context.Context, _ contextfrag.Scope, _ DiscussContextInput) (string, *contextfrag.Manifest, error) {
+	f.called = true
+	return f.prompt, f.manifest, f.err
 }
 
 func (f *fakeDiscussContextBuilder) CollectDiscussSourceFrags(_ context.Context, _ contextfrag.Scope, _ string, input DiscussContextInput) ([]contextfrag.ContextFrag, error) {
@@ -1086,6 +1094,84 @@ func TestDiscussACPPromptFallsBackToLegacyOnBuilderError(t *testing.T) {
 
 	if got != discussACPFullContextPrompt(composed.Messages, "late") {
 		t.Fatalf("prompt = %q, want legacy fallback", got)
+	}
+}
+
+// discussLifecycleLogHandler is a minimal slog.Handler that records every
+// emitted record, used to assert on the debug log discussACPPrompt emits in
+// place of a persisted context lifecycle snapshot.
+type discussLifecycleLogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (*discussLifecycleLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *discussLifecycleLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *discussLifecycleLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *discussLifecycleLogHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *discussLifecycleLogHandler) findSnapshot(msg string) (string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message != msg {
+			continue
+		}
+		var snapshot string
+		found := false
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "snapshot" {
+				snapshot = a.Value.String()
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return snapshot, true
+		}
+	}
+	return "", false
+}
+
+// TestDiscussACPPromptLogsContextLifecycleWithoutAttachPoint proves that
+// discuss-ACP, which has no clean point to attach a context lifecycle
+// snapshot to a persisted message (see logDiscussACPContextLifecycle's
+// doc comment), instead emits exactly one structured debug log carrying the
+// marshaled snapshot whenever the builder returns a manifest.
+func TestDiscussACPPromptLogsContextLifecycleWithoutAttachPoint(t *testing.T) {
+	t.Parallel()
+
+	rc := RenderedContext{{ReceivedAtMs: 100, Content: []RenderedContentPiece{{Type: "text", Text: "hello"}}}}
+	composed := ComposeContext(rc, nil, "")
+	manifest := &contextfrag.Manifest{Counts: contextfrag.ManifestCounts{Fragments: 4, Messages: 2}}
+	builder := &fakeDiscussContextBuilder{prompt: "from builder", manifest: manifest}
+	handler := &discussLifecycleLogHandler{}
+	driver := NewDiscussDriver(DiscussDriverDeps{ContextBuilder: builder, Logger: slog.New(handler)})
+
+	got := driver.discussACPPrompt(context.Background(), contextfrag.Scope{}, DiscussContextInput{RC: rc, LateBinding: "late"}, composed, slog.New(handler))
+
+	if got != "from builder" {
+		t.Fatalf("prompt = %q, want builder output", got)
+	}
+	snapshotJSON, ok := handler.findSnapshot("discuss acp context lifecycle")
+	if !ok {
+		t.Fatal("expected a discuss acp context lifecycle debug log with a snapshot attr")
+	}
+	var snapshot contextfrag.LifecycleSnapshot
+	if err := json.Unmarshal([]byte(snapshotJSON), &snapshot); err != nil {
+		t.Fatalf("snapshot attr is not valid JSON: %v (%s)", err, snapshotJSON)
+	}
+	if snapshot.Counts.Fragments != 4 || snapshot.Counts.Messages != 2 {
+		t.Fatalf("snapshot counts = %+v, want {Fragments:4 Messages:2}", snapshot.Counts)
 	}
 }
 

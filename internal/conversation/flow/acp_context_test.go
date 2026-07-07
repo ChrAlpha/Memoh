@@ -102,7 +102,7 @@ func TestRenderACPContextMarkdownRespectsSystemFilesBudget(t *testing.T) {
 
 func acpMarkdownViaSections(t *testing.T, input acpContextRenderInput) string {
 	t.Helper()
-	markdown, uri := acpContextViaContextView(context.Background(), nil, buildACPContextSections(input), "")
+	markdown, uri, _ := acpContextViaContextView(context.Background(), nil, buildACPContextSections(input), "")
 	if uri != acpContextURI {
 		t.Fatalf("uri = %q, want %q", uri, acpContextURI)
 	}
@@ -116,8 +116,8 @@ func TestACPContextViaContextViewKeepsQueryOutsideMarkdown(t *testing.T) {
 		{ID: "acp.preamble", Text: "# Memoh ACP Context\n\npreamble body"},
 		{ID: "acp.section.current-runtime", Text: "## Current Runtime\n\n- Bot ID: bot-1"},
 	}
-	baseMarkdown, _ := acpContextViaContextView(context.Background(), nil, sections, "")
-	markdown, uri := acpContextViaContextView(context.Background(), nil, sections, "deploy the fix")
+	baseMarkdown, _, _ := acpContextViaContextView(context.Background(), nil, sections, "")
+	markdown, uri, _ := acpContextViaContextView(context.Background(), nil, sections, "deploy the fix")
 
 	if strings.Contains(markdown, "deploy the fix") {
 		t.Fatalf("query must not join the context document: %q", markdown)

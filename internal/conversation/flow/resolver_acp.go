@@ -17,6 +17,7 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	messagepkg "github.com/memohai/memoh/internal/message"
 	"github.com/memohai/memoh/internal/session"
@@ -111,7 +112,12 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
 	req.Query = strings.TrimSpace(req.Query)
-	contextMarkdown, contextURI := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
+	contextMarkdown, contextURI, contextManifest := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
+	var contextLifecycle *contextfrag.LifecycleHolder
+	if contextManifest != nil {
+		contextLifecycle = contextfrag.NewLifecycleHolder()
+		contextLifecycle.SetManifest(*contextManifest)
+	}
 	prompt := req.Query
 
 	doneTurn, entered := r.tryEnterIdleSessionTurn(ctx, req.BotID, req.SessionID)
@@ -255,7 +261,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		if failureDelta != "" {
 			emit(agentpkg.StreamEvent{Type: agentpkg.EventTextDelta, Delta: failureDelta})
 		}
-		_ = r.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err)
+		_ = r.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, contextLifecycle)
 		emit(agentpkg.StreamEvent{Type: agentpkg.EventTextEnd})
 		emit(acpTerminalStreamEvent(agentpkg.EventAbort, failedResult))
 		return nil
@@ -265,7 +271,7 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	projected := projectedSnapshot()
 	result = ensureACPPromptOutput(result)
 	result.Output = filterACPProjectedOutput(result.Output, projected)
-	if err := r.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil); err != nil {
+	if err := r.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, contextLifecycle); err != nil {
 		r.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.SessionID))
 	}
 	emit(acpTerminalStreamEvent(agentpkg.EventEnd, result))
@@ -568,7 +574,7 @@ func (r *Resolver) cancelPendingACPApprovals(ctx context.Context, req conversati
 	}
 }
 
-func (r *Resolver) persistACPRound(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error) error {
+func (r *Resolver) persistACPRound(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error, contextLifecycle *contextfrag.LifecycleHolder) error {
 	meta := map[string]any{
 		"acp_agent_id": agentID,
 		"project_path": projectPath,
@@ -611,7 +617,15 @@ func (r *Resolver) persistACPRound(ctx context.Context, req conversation.ChatReq
 	}
 	for idx, msg := range output {
 		if msg.Role == "assistant" {
-			metadataByIndex[idx+metadataOffset] = meta
+			// Each assistant index gets its own map copy: withContextLifecycleMetadata
+			// mutates the final assistant index's map in place, and metadataByIndex
+			// entries must not alias one another or that mutation would leak onto
+			// every earlier assistant message sharing the same map.
+			entryMeta := make(map[string]any, len(meta))
+			for k, v := range meta {
+				entryMeta[k] = v
+			}
+			metadataByIndex[idx+metadataOffset] = entryMeta
 		}
 	}
 	skipMemory := promptErr != nil || req.UserMessagePersisted || req.SkipMemoryExtraction
@@ -619,6 +633,7 @@ func (r *Resolver) persistACPRound(ctx context.Context, req conversation.ChatReq
 		SkipMemory:              skipMemory,
 		AllowEmptyAssistantText: true,
 		MessageMetadataByIndex:  metadataByIndex,
+		ContextLifecycle:        contextLifecycle,
 	})
 	if err == nil && promptErr == nil && req.UserMessagePersisted && !req.SkipMemoryExtraction {
 		go r.storeMemory(context.WithoutCancel(ctx), req, round)

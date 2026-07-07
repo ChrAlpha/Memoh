@@ -18,6 +18,7 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/agent/event"
 	"github.com/memohai/memoh/internal/bots"
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -74,6 +75,65 @@ func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 	}
 	if strings.Contains(pool.input.ContextMarkdown, "inspect the app") {
 		t.Fatalf("query must not join the context document: %q", pool.input.ContextMarkdown)
+	}
+}
+
+// TestStreamACPAgentWSPersistsContextLifecycleOnFinalAssistantMessage proves
+// the production wiring end-to-end: streamACPAgentWS builds a context view
+// for the ACP prompt (acpContextViaContextView) and the resulting manifest
+// snapshot must reach persistACPRound and land on the stored final assistant
+// message's metadata, mirroring resolver_store.go's withContextLifecycleMetadata
+// for the non-ACP chat path.
+func TestStreamACPAgentWSPersistsContextLifecycleOnFinalAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "ok", StopReason: "end_turn"}}
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		acpPool:        pool,
+		botPermissions: allowWorkspaceExecFor("user-1"),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, _ string) (session.Session, error) {
+				return session.Session{
+					ID:    "session-1",
+					BotID: "bot-1",
+					Type:  session.TypeACPAgent,
+					Metadata: map[string]any{
+						"acp_agent_id":             "codex",
+						"project_path":             "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+
+	eventCh := make(chan WSStreamEvent, 8)
+	if err := resolver.StreamChatWS(context.Background(), conversation.ChatRequest{
+		BotID:     "bot-1",
+		SessionID: "session-1",
+		Query:     "inspect the app",
+	}, eventCh, make(chan struct{})); err != nil {
+		t.Fatalf("StreamChatWS() error = %v", err)
+	}
+
+	lastAssistantIdx := -1
+	for i, p := range messages.persisted {
+		if p.Role == "assistant" {
+			lastAssistantIdx = i
+		}
+	}
+	if lastAssistantIdx < 0 {
+		t.Fatalf("expected a persisted assistant message, got %#v", messages.persisted)
+	}
+	got, ok := messages.persisted[lastAssistantIdx].Metadata[contextfrag.MetadataContextLifecycleKey]
+	if !ok {
+		t.Fatalf("expected final assistant message metadata to carry %q, got %#v", contextfrag.MetadataContextLifecycleKey, messages.persisted[lastAssistantIdx].Metadata)
+	}
+	if _, ok := got.(contextfrag.LifecycleSnapshot); !ok {
+		t.Fatalf("expected metadata value to be a contextfrag.LifecycleSnapshot, got %T", got)
 	}
 }
 
@@ -1036,6 +1096,7 @@ func TestPersistACPRoundUsesDedicatedSessionMetadata(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("persistACPRound returned error: %v", err)
@@ -1090,6 +1151,7 @@ func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("persistACPRound returned error: %v", err)
@@ -1123,6 +1185,82 @@ func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
 	after := persistedModelMessage(t, messages.persisted[3].Content)
 	if got := after.TextContent(); got != "After" {
 		t.Fatalf("last assistant text = %q, want After", got)
+	}
+}
+
+// TestPersistACPRoundAttachesContextLifecycleOnlyToFinalAssistantMessage
+// drives the same two-assistant-message ACP round as
+// TestPersistACPRoundStoresACPEventsAsNativeToolMessages, but with a
+// populated context lifecycle holder, to prove withContextLifecycleMetadata's
+// in-place mutation of the final assistant index's metadata map does not leak
+// onto the earlier assistant message: persistACPRound must give each
+// assistant index its own metadata map copy rather than sharing one.
+func TestPersistACPRoundAttachesContextLifecycleOnlyToFinalAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	resolver := &Resolver{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.Manifest{Counts: contextfrag.ManifestCounts{Fragments: 3, Messages: 2}})
+
+	err := resolver.persistACPRound(
+		context.Background(),
+		conversation.ChatRequest{BotID: "bot-1", SessionID: "session-1", Query: "inspect"},
+		"codex",
+		"/data/app",
+		withTranscriptOutput(acpclient.PromptResult{
+			Events: []event.StreamEvent{
+				{Type: event.TextDelta, Delta: "Before"},
+				{
+					Type:       event.ToolCallStart,
+					ToolCallID: "read-1",
+					ToolName:   "read",
+					Input:      map[string]any{"path": "README.md"},
+				},
+				{
+					Type:       event.ToolCallEnd,
+					ToolCallID: "read-1",
+					ToolName:   "read",
+					Result:     map[string]any{"ok": true},
+				},
+				{Type: event.TextDelta, Delta: "After"},
+			},
+			StopReason: "end_turn",
+		}),
+		nil,
+		holder,
+	)
+	if err != nil {
+		t.Fatalf("persistACPRound returned error: %v", err)
+	}
+	if len(messages.persisted) != 4 {
+		t.Fatalf("persisted %d messages, want user + assistant + tool + assistant", len(messages.persisted))
+	}
+	first := messages.persisted[1]
+	if first.Role != "assistant" {
+		t.Fatalf("persisted[1].Role = %q, want assistant", first.Role)
+	}
+	if _, ok := first.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
+		t.Fatalf("first assistant message must not carry the lifecycle key, got %#v", first.Metadata)
+	}
+	last := messages.persisted[3]
+	if last.Role != "assistant" {
+		t.Fatalf("persisted[3].Role = %q, want assistant", last.Role)
+	}
+	got, ok := last.Metadata[contextfrag.MetadataContextLifecycleKey]
+	if !ok {
+		t.Fatalf("final assistant message must carry the lifecycle key, got %#v", last.Metadata)
+	}
+	snapshot, ok := got.(contextfrag.LifecycleSnapshot)
+	if !ok {
+		t.Fatalf("expected metadata value to be a contextfrag.LifecycleSnapshot, got %T", got)
+	}
+	if snapshot.Counts.Fragments != 3 || snapshot.Counts.Messages != 2 {
+		t.Fatalf("snapshot counts = %+v, want {Fragments:3 Messages:2}", snapshot.Counts)
 	}
 }
 
@@ -1188,6 +1326,7 @@ func TestPersistACPRoundStoresACPThoughtsAsReasoningParts(t *testing.T) {
 			StopReason: "end_turn",
 		}),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("persistACPRound returned error: %v", err)
@@ -1220,6 +1359,7 @@ func TestPersistACPRoundEmptyTextLeavesAssistantBlank(t *testing.T) {
 		"/data/app",
 		acpclient.PromptResult{},
 		nil,
+		nil,
 	); err != nil {
 		t.Fatalf("persistACPRound() error = %v", err)
 	}
@@ -1250,6 +1390,7 @@ func TestPersistACPRoundEmptyOutputKeepsUsage(t *testing.T) {
 				OutputTokens: 4,
 			},
 		},
+		nil,
 		nil,
 	); err != nil {
 		t.Fatalf("persistACPRound() error = %v", err)

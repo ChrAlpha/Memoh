@@ -827,12 +827,33 @@ func (d *DiscussDriver) discussACPPrompt(ctx context.Context, scope contextfrag.
 	if d.deps.ContextBuilder == nil {
 		return discussACPFullContextPrompt(composed.Messages, input.LateBinding)
 	}
-	prompt, err := d.deps.ContextBuilder.BuildDiscussACPPrompt(ctx, scope, input)
+	prompt, manifest, err := d.deps.ContextBuilder.BuildDiscussACPPromptWithLifecycle(ctx, scope, input)
 	if err != nil {
 		log.Warn("discuss acp context view build failed; using legacy prompt", slog.Any("error", err))
 		return discussACPFullContextPrompt(composed.Messages, input.LateBinding)
 	}
+	logDiscussACPContextLifecycle(log, manifest)
 	return prompt
+}
+
+// logDiscussACPContextLifecycle records the discuss-ACP context lifecycle
+// snapshot as a single structured debug log. Unlike chat ACP, where
+// persistACPRound attaches contextfrag.MetadataContextLifecycleKey to the
+// stored assistant message, discuss-ACP has no clean attach point: this
+// driver only assembles the prompt and hands it to RuntimeStreamer.StreamChat
+// as a plain conversation.ChatRequest; the assistant round is persisted deep
+// inside flow.Resolver's ACP routing, which the driver never sees and whose
+// request shape carries no manifest/snapshot field to thread one through.
+func logDiscussACPContextLifecycle(log *slog.Logger, manifest *contextfrag.Manifest) {
+	if log == nil || manifest == nil {
+		return
+	}
+	snapshot := contextfrag.BuildLifecycleSnapshot(*manifest)
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	log.Debug("discuss acp context lifecycle", slog.String("snapshot", string(data)))
 }
 
 func contextMessagesToSDK(messages []ContextMessage) []sdk.Message {
