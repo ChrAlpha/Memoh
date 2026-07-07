@@ -15591,16 +15591,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
-                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt"
+                "acp_runtime_prompt",
+                "run_config_pre_provider"
             ],
             "x-enum-varnames": [
-                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt"
+                "ViewACPRuntimePrompt",
+                "ViewRunConfigPreProvider"
             ]
         },
         "contextfrag.MutationKind": {
@@ -15669,9 +15669,6 @@ const docTemplate = `{
                 },
                 "post_prepare_input_hash": {
                     "type": "string"
-                },
-                "pruned": {
-                    "type": "integer"
                 },
                 "reselection_applied": {
                     "type": "boolean"

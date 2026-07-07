@@ -1041,7 +1041,7 @@ export type ContextfragManifestCounts = {
     text_bytes?: number;
 };
 
-export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
+export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
 
 export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'read_media';
 
@@ -1065,7 +1065,6 @@ export type ContextfragStepSnapshot = {
     };
     dropped?: number;
     post_prepare_input_hash?: string;
-    pruned?: number;
     reselection_applied?: boolean;
     step_index?: number;
     truncated?: number;

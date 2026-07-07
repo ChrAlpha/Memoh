@@ -294,6 +294,76 @@ func TestAgentGenerateFallsBackToMidTaskPruneWhenStepReselectorNoops(t *testing.
 	}
 }
 
+// TestAgentGenerateLegacyMidTaskPruneRecordsTruncatedStepSnapshot drives the
+// no-reselector legacy prune path (pruneOldToolResults truncates old
+// tool-result content in place; it never changes message count) and asserts
+// the step snapshot and mutation ledger both surface the truncation, instead
+// of the always-zero before-len(p.Messages) count.
+func TestAgentGenerateLegacyMidTaskPruneRecordsTruncatedStepSnapshot(t *testing.T) {
+	t.Parallel()
+
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call <= 5 {
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: fmt.Sprintf("call-legacy-%d", call),
+						ToolName:   "lookup",
+						Input:      map[string]any{"step": call},
+					}},
+				}, nil
+			}
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return strings.Repeat("large tool result ", 80), nil
+			},
+		}}},
+	})
+
+	ledger := contextfrag.NewMutationLedger()
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:                 &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:              []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall:      true,
+		Identity:              SessionContext{BotID: "bot-1"},
+		ContextMutations:      ledger,
+		MidTaskPruneThreshold: 4,
+		MidTaskPruneKeepSteps: 1,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+
+	var maxTruncated int
+	for _, step := range ledger.StepSnapshots() {
+		if step.Truncated > maxTruncated {
+			maxTruncated = step.Truncated
+		}
+	}
+	if maxTruncated == 0 {
+		t.Fatalf("step snapshots = %#v, want at least one snapshot with Truncated > 0", ledger.StepSnapshots())
+	}
+
+	found := false
+	for _, r := range ledger.Records() {
+		if r.Kind == contextfrag.MutationMidTaskPrune && strings.Contains(r.Detail, "truncated=") && !strings.Contains(r.Detail, "truncated=0") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("mutation records = %#v, want a mid_task_prune record with truncated=N", ledger.Records())
+	}
+}
+
 func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 	t.Parallel()
 

@@ -273,7 +273,7 @@ func TestMutationLedgerMarshalJSONIncludesStepsModelAndLoopSelectionMode(t *test
 	t.Parallel()
 
 	ledger := NewMutationLedger()
-	ledger.Record(MutationMidTaskPrune, "pruned=2")
+	ledger.Record(MutationMidTaskPrune, "truncated=2")
 	ledger.SetFinalInputHash("final-hash")
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
 	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
@@ -285,17 +285,17 @@ func TestMutationLedgerMarshalJSONIncludesStepsModelAndLoopSelectionMode(t *test
 		DropReasons:          map[string]int{"budget": 3},
 	})
 	ledger.AdvanceAttempt()
-	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 1, PostPrepareInputHash: "step-hash-1", Pruned: 2})
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 1, PostPrepareInputHash: "step-hash-1", Truncated: 2})
 
 	raw, err := json.Marshal(ledger)
 	if err != nil {
 		t.Fatalf("marshal ledger: %v", err)
 	}
 	for _, want := range []string{
-		"mid_task_prune", "pruned=2", "final-hash",
+		"mid_task_prune", "truncated=2", "final-hash",
 		`"model":"claude-x"`, `"client_type":"anthropic-messages"`, `"loop_selection_mode":"suffix_only"`,
 		`"step_index":0`, "step-hash-0", `"reselection_applied":true`, `"dropped":3`, `"budget":3`,
-		`"step_index":1`, "step-hash-1", `"attempt":1`, `"pruned":2`,
+		`"step_index":1`, "step-hash-1", `"attempt":1`, `"truncated":2`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("ledger JSON missing %q:\n%s", want, raw)

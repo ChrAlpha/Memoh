@@ -986,24 +986,22 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				}
 			}
 			if !appliedSelection {
-				before := len(p.Messages)
-				p = pruneOldToolResults(p, keepSteps, threshold)
-				pruned := before - len(p.Messages)
-				if pruned > 0 {
-					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", pruned))
+				var truncated int
+				p, truncated = pruneOldToolResults(p, keepSteps, threshold)
+				if truncated > 0 {
+					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
 				}
-				snapshot.Pruned = pruned
+				snapshot.Truncated = truncated
 			}
 			recordPreparedProviderInputHash(cfg.ContextMutations, p, snapshot)
 			return p
 		}
-		before := len(p.Messages)
-		p = pruneOldToolResults(p, keepSteps, threshold)
-		pruned := before - len(p.Messages)
-		if pruned > 0 {
-			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", pruned))
+		var truncated int
+		p, truncated = pruneOldToolResults(p, keepSteps, threshold)
+		if truncated > 0 {
+			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
 		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex, Pruned: pruned})
+		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex, Truncated: truncated})
 		return p
 	}
 	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))
@@ -1532,11 +1530,12 @@ const (
 // pruneOldToolResults prunes older tool result messages in the SDK params to
 // keep the context window manageable during long multi-tool agent runs. It
 // keeps the most recent keepSteps tool-call cycles intact and replaces older
-// tool results with size summaries.
-func pruneOldToolResults(p *sdk.GenerateParams, keepSteps, threshold int) *sdk.GenerateParams {
+// tool results with size summaries, returning how many tool-result messages
+// were actually truncated (message count is never changed).
+func pruneOldToolResults(p *sdk.GenerateParams, keepSteps, threshold int) (*sdk.GenerateParams, int) {
 	msgs := p.Messages
 	if len(msgs) < threshold {
-		return p
+		return p, 0
 	}
 
 	// Count complete tool-call cycles (tool-result pair) from the end to find the cutoff.
@@ -1571,23 +1570,27 @@ func pruneOldToolResults(p *sdk.GenerateParams, keepSteps, threshold int) *sdk.G
 		}
 	}
 	if cutoffIdx >= len(msgs) {
-		return p // not enough tool messages to prune
+		return p, 0 // not enough tool messages to prune
 	}
 
 	// Build a new slice so the original messages can be GC'd.
 	pruned := make([]sdk.Message, 0, len(msgs))
 	pruned = append(pruned, msgs[:cutoffIdx]...)
+	truncated := 0
 	for i := cutoffIdx; i < len(msgs); i++ {
 		if msgs[i].Role != sdk.MessageRoleTool {
 			pruned = append(pruned, msgs[i])
 			continue
 		}
-		replaced, _ := contextlimit.TruncateStepToolResult(msgs[i], contextlimit.StepToolResultTruncateBytes)
+		replaced, changed := contextlimit.TruncateStepToolResult(msgs[i], contextlimit.StepToolResultTruncateBytes)
+		if changed {
+			truncated++
+		}
 		pruned = append(pruned, replaced)
 	}
 
 	p.Messages = pruned
-	return p
+	return p, truncated
 }
 
 // runMidStreamRetry attempts to continue the agent stream after a retryable

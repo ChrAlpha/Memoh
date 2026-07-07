@@ -78,7 +78,6 @@ type StepSnapshot struct {
 	Dropped              int            `json:"dropped,omitempty"`
 	Truncated            int            `json:"truncated,omitempty"`
 	DropReasons          map[string]int `json:"drop_reasons,omitempty"`
-	Pruned               int            `json:"pruned,omitempty"`
 }
 
 // MutationLedger collects the post-render mutations applied to a run's
