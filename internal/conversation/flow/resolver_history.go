@@ -211,128 +211,12 @@ func modelMessagesOf(messages []messageWithUsage) []conversation.ModelMessage {
 	return result
 }
 
-func trimMessagesByTokens(log *slog.Logger, messages []messageWithUsage, maxTokens int) ([]conversation.ModelMessage, int) {
-	if maxTokens == 0 || len(messages) == 0 {
-		result := make([]conversation.ModelMessage, len(messages))
-		for i, m := range messages {
-			result[i] = m.Message
-		}
-		totalTokens := 0
-		for _, m := range messages {
-			totalTokens += estimateMessageTokens(m.Message)
-		}
-		return result, totalTokens
-	}
-
-	// Scan from newest to oldest, accumulating per-message estimated context
-	// token costs. Each message's cost represents the tokens it occupies in the
-	// context window (not the output tokens it generated). We use a character-
-	// based estimate for all messages since this measures context window impact.
-	scannedTokens := 0
-	cutoff := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		scannedTokens += estimateMessageTokens(messages[i].Message)
-		if scannedTokens > maxTokens {
-			cutoff = i + 1
-			break
-		}
-	}
-
-	// Keep provider-valid message order: a "tool" message must follow a preceding
-	// assistant tool call. When history is head-trimmed, a leading tool message
-	// may become orphaned and cause provider 400 errors.
-	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].Message.Role), "tool") {
-		cutoff++
-	}
-	cutoff, totalTokens := fitRequiredMessagesWithinBudget(messages, cutoff, maxTokens)
-
-	if cutoff > 0 && log != nil {
-		log.Info("trimMessagesByTokens: context trimmed",
-			slog.Int("total_messages", len(messages)),
-			slog.Int("estimated_tokens", totalTokens),
-			slog.Int("max_tokens", maxTokens),
-			slog.Int("cutoff_index", cutoff),
-			slog.Int("kept_messages", len(messages)-cutoff),
-		)
-	}
-
-	requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
-	result := make([]conversation.ModelMessage, 0, len(messages)-cutoff+len(requiredPrefix))
-	if cutoff > 0 {
-		// Add a truncation notice at the beginning so the LLM knows earlier
-		// context was trimmed and it can use tools (memory, search) to look up
-		// past information if needed.
-		result = append(result, conversation.ModelMessage{
-			Role: "system",
-			Content: conversation.NewTextContent(
-				"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
-					"If you need information from earlier in the conversation, use the available tools " +
-					"(such as memory_read or web search) to retrieve it.",
-			),
-		})
-	}
-	for _, m := range requiredPrefix {
-		result = append(result, m.Message)
-	}
-	for _, m := range messages[cutoff:] {
-		result = append(result, m.Message)
-	}
-	return result, totalTokens
-}
-
 func estimateModelMessagesTokens(messages []conversation.ModelMessage) int {
 	total := 0
 	for _, m := range messages {
 		total += estimateMessageTokens(m)
 	}
 	return total
-}
-
-func fitRequiredMessagesWithinBudget(messages []messageWithUsage, cutoff int, maxTokens int) (int, int) {
-	if maxTokens <= 0 || len(messages) == 0 {
-		return cutoff, estimateMessagesTokens(messages)
-	}
-	if cutoff < 0 {
-		cutoff = 0
-	}
-	if cutoff > len(messages) {
-		cutoff = len(messages)
-	}
-	for {
-		requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
-		totalTokens := estimateMessagesTokens(requiredPrefix) + estimateMessagesTokens(messages[cutoff:])
-		if totalTokens <= maxTokens || cutoff >= len(messages) {
-			return cutoff, totalTokens
-		}
-		cutoff++
-		for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].Message.Role), "tool") {
-			cutoff++
-		}
-	}
-}
-
-func estimateMessagesTokens(messages []messageWithUsage) int {
-	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m.Message)
-	}
-	return total
-}
-
-func requiredMessagesBeforeCutoff(messages []messageWithUsage, cutoff int) []messageWithUsage {
-	if cutoff <= 0 {
-		return nil
-	}
-	if cutoff > len(messages) {
-		cutoff = len(messages)
-	}
-	var required []messageWithUsage
-	for _, m := range messages[:cutoff] {
-		if m.Required {
-			required = append(required, m)
-		}
-	}
-	return required
 }
 
 func (r *Resolver) replaceCompactedMessages(ctx context.Context, messages []messageWithUsage) []messageWithUsage {

@@ -362,7 +362,7 @@ func (f *modelSelectionFakeQueries) GetModelByID(_ context.Context, id pgtype.UU
 	return sqlc.Model{}, pgx.ErrNoRows
 }
 
-func (f *modelSelectionFakeQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
+func (*modelSelectionFakeQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	return sqlc.GetBotByIDRow{}, pgx.ErrNoRows
 }
 
