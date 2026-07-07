@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/fx"
 
+	agentpkg "github.com/memohai/memoh/internal/agent"
 	agenttools "github.com/memohai/memoh/internal/agent/tools"
 	"github.com/memohai/memoh/internal/config"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -56,6 +58,59 @@ func TestAgentLimitsFromConfigUsesCustomValues(t *testing.T) {
 		got.ToolOutputMaxLines != 56 ||
 		got.SystemFilesMaxBytes != 7890 {
 		t.Fatalf("agent limits = %#v", got)
+	}
+}
+
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (*recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *recordingHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.records)
+}
+
+func TestAgentLoopReselectModeFromConfig(t *testing.T) {
+	cases := []struct {
+		name     string
+		value    string
+		wantMode agentpkg.LoopReselectMode
+		wantWarn bool
+	}{
+		{"empty defaults to active without warning", "", agentpkg.LoopReselectActive, false},
+		{"active parses without warning", "active", agentpkg.LoopReselectActive, false},
+		{"shadow parses without warning", "shadow", agentpkg.LoopReselectShadow, false},
+		{"off parses without warning", "off", agentpkg.LoopReselectOff, false},
+		{"unknown value normalizes to active and warns", "garbage", agentpkg.LoopReselectActive, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &recordingHandler{}
+			log := slog.New(h)
+
+			got := agentLoopReselectModeFromConfig(log, config.AgentConfig{ContextLoopReselect: tc.value})
+			if got != tc.wantMode {
+				t.Fatalf("mode = %q, want %q", got, tc.wantMode)
+			}
+			if warned := h.count() > 0; warned != tc.wantWarn {
+				t.Fatalf("warned = %v, want %v", warned, tc.wantWarn)
+			}
+		})
 	}
 }
 

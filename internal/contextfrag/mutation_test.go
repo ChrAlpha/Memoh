@@ -250,6 +250,19 @@ func TestMutationLedgerLoopSelectionMode(t *testing.T) {
 	}
 }
 
+func TestMutationLedgerLoopSelectionModeSuffixOnlyShadow(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnlyShadow)
+	if got := ledger.LoopSelectionMode(); got != LoopSelectionSuffixOnlyShadow {
+		t.Fatalf("LoopSelectionMode() = %q, want %q", got, LoopSelectionSuffixOnlyShadow)
+	}
+	if LoopSelectionSuffixOnlyShadow != "suffix_only_shadow" {
+		t.Fatalf("LoopSelectionSuffixOnlyShadow = %q, want suffix_only_shadow", LoopSelectionSuffixOnlyShadow)
+	}
+}
+
 func TestMutationLedgerStepAttemptModelNilSafe(t *testing.T) {
 	t.Parallel()
 

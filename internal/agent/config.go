@@ -34,6 +34,35 @@ type Deps struct {
 	Logger             *slog.Logger
 	Limits             Limits
 	ContextViewApplier ContextViewApplier
+	LoopReselectMode   LoopReselectMode
+}
+
+// LoopReselectMode is the server-level rollout mode for the in-loop context
+// step reselector (cfg.ContextStepReselector).
+type LoopReselectMode string
+
+const (
+	// LoopReselectActive invokes the reselector and applies its result.
+	LoopReselectActive LoopReselectMode = "active"
+	// LoopReselectShadow invokes the reselector but never applies its
+	// result: legacy mid-task pruning remains the actual mutation. The
+	// reselector's would-be Dropped/Truncated/DropReasons still land on the
+	// step's StepSnapshot (with ReselectionApplied=false) for comparison
+	// against the legacy prune's real MutationMidTaskPrune record.
+	LoopReselectShadow LoopReselectMode = "shadow"
+	// LoopReselectOff skips the reselector entirely, as if
+	// cfg.ContextStepReselector were nil.
+	LoopReselectOff LoopReselectMode = "off"
+)
+
+// Normalize maps an unrecognized or empty mode to LoopReselectActive.
+func (m LoopReselectMode) Normalize() LoopReselectMode {
+	switch m {
+	case LoopReselectShadow, LoopReselectOff:
+		return m
+	default:
+		return LoopReselectActive
+	}
 }
 
 func DefaultLimits() Limits {

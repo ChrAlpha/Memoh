@@ -33,6 +33,7 @@ type Agent struct {
 	limits             Limits
 	contextViewApplier ContextViewApplier
 	prefixCache        *prefixCacheTracker
+	loopReselectMode   LoopReselectMode
 }
 
 // New creates a new Agent with the given dependencies.
@@ -49,7 +50,18 @@ func New(deps Deps) *Agent {
 		limits:             deps.Limits.Normalize(),
 		contextViewApplier: deps.ContextViewApplier,
 		prefixCache:        newPrefixCacheTracker(),
+		loopReselectMode:   deps.LoopReselectMode.Normalize(),
 	}
+}
+
+// LoopReselectMode returns the normalized rollout mode for the in-loop
+// context step reselector. A nil Agent defaults to LoopReselectActive so
+// tests that construct RunConfig without an Agent keep current behavior.
+func (a *Agent) LoopReselectMode() LoopReselectMode {
+	if a == nil {
+		return LoopReselectActive
+	}
+	return a.loopReselectMode.Normalize()
 }
 
 // applyContextView routes the run config through the injected context view
@@ -865,10 +877,17 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
 	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
-	if cfg.ContextStepReselector != nil {
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
-	} else {
+	loopReselectMode := a.LoopReselectMode()
+	if loopReselectMode == LoopReselectOff {
+		cfg.ContextStepReselector = nil
+	}
+	switch {
+	case cfg.ContextStepReselector == nil:
 		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionLegacyPrune)
+	case loopReselectMode == LoopReselectShadow:
+		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnlyShadow)
+	default:
+		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
 	}
 	// The prefix-cache comparator hashes the pre-decoration payload, not the
 	// cache_control-decorated one: Anthropic's message-level breakpoint moves
@@ -970,7 +989,16 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			// PrepareStep call k feeds model call k+1's input (see the step-0
 			// snapshot recorded in buildGenerateOptions above).
 			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
-			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
+			switch {
+			case loopReselectMode == LoopReselectShadow:
+				// Shadow never applies the selection: the snapshot carries
+				// the reselector's would-be verdict, ReselectionApplied
+				// stays false, and legacy prune below performs the actual
+				// mutation.
+				snapshot.Dropped = selection.Dropped
+				snapshot.Truncated = selection.Truncated
+				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
+			case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount):
 				p.Messages = selection.Messages
 				appliedSelection = true
 				snapshot.ReselectionApplied = true
@@ -987,7 +1015,9 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				if truncated > 0 {
 					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
 				}
-				snapshot.Truncated = truncated
+				if loopReselectMode != LoopReselectShadow {
+					snapshot.Truncated = truncated
+				}
 			}
 			recordPreparedProviderInputHash(cfg.ContextMutations, p, snapshot)
 			return p

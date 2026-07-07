@@ -63,6 +63,13 @@ type CacheUsageRecord struct {
 const (
 	LoopSelectionSuffixOnly  = "suffix_only"
 	LoopSelectionLegacyPrune = "legacy_prune"
+	// LoopSelectionSuffixOnlyShadow marks a run where the step reselector was
+	// invoked but its result was never applied to the provider payload:
+	// legacy mid-task pruning performed the actual mutation instead. Each
+	// step's StepSnapshot still carries the reselector's would-be
+	// Dropped/Truncated/DropReasons verdict with ReselectionApplied=false;
+	// the paired MutationMidTaskPrune record carries the real change.
+	LoopSelectionSuffixOnlyShadow = "suffix_only_shadow"
 )
 
 // StepSnapshot is one prepare-step's provider-input hash-chain entry: the
