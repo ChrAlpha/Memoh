@@ -192,6 +192,22 @@ func TestLifecycleSnapshotIncludesCacheUsage(t *testing.T) {
 	}
 }
 
+func TestMutationLedgerAdvanceAttemptReturnsNewAttemptNumber(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	if got := ledger.AdvanceAttempt(); got != 1 {
+		t.Fatalf("AdvanceAttempt() = %d, want 1", got)
+	}
+	if got := ledger.AdvanceAttempt(); got != 2 {
+		t.Fatalf("AdvanceAttempt() = %d, want 2", got)
+	}
+	var nilLedger *MutationLedger
+	if got := nilLedger.AdvanceAttempt(); got != 0 {
+		t.Fatalf("nil ledger AdvanceAttempt() = %d, want 0", got)
+	}
+}
+
 func TestMutationLedgerAppendStepSnapshotStampsCurrentAttempt(t *testing.T) {
 	t.Parallel()
 

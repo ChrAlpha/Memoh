@@ -353,7 +353,7 @@ func TestPrepareMidStreamRetryConfigAdvancesAttemptForSubsequentRecords(t *testi
 		Messages:         []sdk.Message{sdk.UserMessage("hello")},
 		ContextMutations: ledger,
 	}
-	_ = prepareMidStreamRetryConfig(cfg, nil)
+	_ = prepareMidStreamRetryConfig(cfg, nil, "timeout")
 	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{StepIndex: 0})
 	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0})
 

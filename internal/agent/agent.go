@@ -1698,7 +1698,7 @@ func (a *Agent) runMidStreamRetry(
 		// accumulated before the failure. Use buildGenerateOptions so retry
 		// benefits from mid-task pruning, media resolution, and other
 		// prepare-step logic — same as initial stream.
-		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages)
+		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages, errMsg)
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
 		retryOpts = append(retryOpts, a.onStepOption(streamCtx, retryCfgCopy, nil))
 
@@ -1852,12 +1852,14 @@ func (a *Agent) runMidStreamRetry(
 // StreamResult.Messages excludes the input messages, so reusing it alone
 // would drop the history and the current query. The input prefix is
 // preserved unchanged, which keeps the placement-derived cache plan valid.
-func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message) RunConfig {
+func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message, errMsg string) RunConfig {
 	merged := make([]sdk.Message, 0, len(cfg.Messages)+len(accumulated))
 	merged = append(merged, cfg.Messages...)
 	merged = append(merged, accumulated...)
 	cfg.Messages = merged
-	cfg.ContextMutations.AdvanceAttempt()
+	attempt := cfg.ContextMutations.AdvanceAttempt()
+	cfg.ContextMutations.Record(contextfrag.MutationMidStreamRetry,
+		fmt.Sprintf("attempt=%d accumulated=%d error=%s", attempt, len(accumulated), errMsg))
 	return cfg.RefreshContextFrag()
 }
 

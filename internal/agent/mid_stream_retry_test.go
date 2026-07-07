@@ -12,7 +12,7 @@ func TestPrepareMidStreamRetryConfigKeepsConversationPrefix(t *testing.T) {
 		Messages: []sdk.Message{sdk.UserMessage("hello")},
 	}
 	accumulated := []sdk.Message{sdk.AssistantMessage("partial answer")}
-	out := prepareMidStreamRetryConfig(cfg, accumulated)
+	out := prepareMidStreamRetryConfig(cfg, accumulated, "api error 500")
 	if len(out.Messages) != 2 {
 		t.Fatalf("messages = %d, want input prefix + accumulated output", len(out.Messages))
 	}
@@ -26,7 +26,7 @@ func TestPrepareMidStreamRetryConfigKeepsConversationPrefix(t *testing.T) {
 
 func TestPrepareMidStreamRetryConfigStepZeroRetriesFromStart(t *testing.T) {
 	cfg := RunConfig{Messages: []sdk.Message{sdk.UserMessage("hello")}}
-	out := prepareMidStreamRetryConfig(cfg, nil)
+	out := prepareMidStreamRetryConfig(cfg, nil, "timeout")
 	if len(out.Messages) != 1 || out.Messages[0].Role != sdk.MessageRoleUser {
 		t.Fatalf("messages = %+v, want original conversation unchanged", out.Messages)
 	}
@@ -35,7 +35,7 @@ func TestPrepareMidStreamRetryConfigStepZeroRetriesFromStart(t *testing.T) {
 func TestPrepareMidStreamRetryConfigDoesNotMutateOriginal(t *testing.T) {
 	original := []sdk.Message{sdk.UserMessage("hello")}
 	cfg := RunConfig{Messages: original}
-	_ = prepareMidStreamRetryConfig(cfg, []sdk.Message{sdk.AssistantMessage("partial")})
+	_ = prepareMidStreamRetryConfig(cfg, []sdk.Message{sdk.AssistantMessage("partial")}, "timeout")
 	if len(original) != 1 {
 		t.Fatalf("original messages mutated: %d entries", len(original))
 	}

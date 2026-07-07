@@ -756,6 +756,16 @@ func TestAgentStreamMidStreamRetryRecordsCacheUsageForRetryAttempt(t *testing.T)
 	if !found {
 		t.Fatalf("cache usage records = %#v, want a record with attempt=1 cache_read_tokens=50 from the retry step", records)
 	}
+
+	retryFound := false
+	for _, r := range ledger.Records() {
+		if r.Kind == contextfrag.MutationMidStreamRetry && strings.Contains(r.Detail, "attempt=1") {
+			retryFound = true
+		}
+	}
+	if !retryFound {
+		t.Fatalf("mutation records = %#v, want a MutationMidStreamRetry record with attempt=1", ledger.Records())
+	}
 }
 
 func TestRunMidStreamRetryMarksTextLoopCancellationAsAborted(t *testing.T) {

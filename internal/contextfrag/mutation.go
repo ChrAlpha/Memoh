@@ -21,6 +21,7 @@ const (
 	MutationInjectedMessage     MutationKind = "injected_message"
 	MutationContextViewFallback MutationKind = "context_view_fallback"
 	MutationReadMedia           MutationKind = "read_media"
+	MutationMidStreamRetry      MutationKind = "mid_stream_retry"
 )
 
 // MutationRecord is one ledger entry describing a post-render mutation.
@@ -300,14 +301,15 @@ func (l *MutationLedger) StepSnapshots() []StepSnapshot {
 // AdvanceAttempt marks the start of a new mid-stream retry attempt: every
 // StepSnapshot and CacheUsageRecord recorded afterward is stamped with the
 // new attempt number, so records from different attempts sharing the same
-// StepIndex/step_index stay distinguishable.
-func (l *MutationLedger) AdvanceAttempt() {
+// StepIndex/step_index stay distinguishable. Returns the new attempt number.
+func (l *MutationLedger) AdvanceAttempt() int {
 	if l == nil {
-		return
+		return 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.attempt++
+	return l.attempt
 }
 
 func (l *MutationLedger) SetModelInfo(model, clientType string) {
