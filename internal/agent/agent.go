@@ -876,6 +876,12 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 }
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
+	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
+	if cfg.ContextStepReselector != nil {
+		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
+	} else {
+		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionLegacyPrune)
+	}
 	// The prefix-cache comparator hashes the pre-decoration payload, not the
 	// cache_control-decorated one: Anthropic's message-level breakpoint moves
 	// forward every turn as history grows, so hashing after decoration would
@@ -944,6 +950,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	if threshold <= 0 {
 		threshold = MidTaskPruneThresholdDefault
 	}
+	prepareIndex := 0
 	midTaskPrune := func(p *sdk.GenerateParams) *sdk.GenerateParams {
 		if basePrepare != nil {
 			if override := basePrepare(p); override != nil {
@@ -953,6 +960,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		if p == nil {
 			return nil
 		}
+		defer func() { prepareIndex++ }()
 		if cfg.ContextStepReselector != nil {
 			beforeMessages := append([]sdk.Message(nil), p.Messages...)
 			selection := cfg.ContextStepReselector(ctx, ContextStepSelectionInput{
@@ -965,9 +973,14 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				MinMessages:           threshold,
 			})
 			appliedSelection := false
+			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex}
 			if selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount) {
 				p.Messages = selection.Messages
 				appliedSelection = true
+				snapshot.ReselectionApplied = true
+				snapshot.Dropped = selection.Dropped
+				snapshot.Truncated = selection.Truncated
+				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
 				if selection.Dropped > 0 || selection.Truncated > 0 {
 					cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
 				}
@@ -975,19 +988,22 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			if !appliedSelection {
 				before := len(p.Messages)
 				p = pruneOldToolResults(p, keepSteps, threshold)
-				if len(p.Messages) < before {
-					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", before-len(p.Messages)))
+				pruned := before - len(p.Messages)
+				if pruned > 0 {
+					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", pruned))
 				}
+				snapshot.Pruned = pruned
 			}
-			recordPreparedProviderInputHash(cfg.ContextMutations, p)
+			recordPreparedProviderInputHash(cfg.ContextMutations, p, snapshot)
 			return p
 		}
 		before := len(p.Messages)
 		p = pruneOldToolResults(p, keepSteps, threshold)
-		if len(p.Messages) < before {
-			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", before-len(p.Messages)))
+		pruned := before - len(p.Messages)
+		if pruned > 0 {
+			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("pruned=%d", pruned))
 		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, p)
+		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex, Pruned: pruned})
 		return p
 	}
 	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))
@@ -1103,12 +1119,25 @@ func tokenEstimateFromBytes(bytes int) int {
 	return (bytes + 3) / 4
 }
 
-func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams) {
+func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams, snapshot contextfrag.StepSnapshot) {
 	if params == nil {
 		return
 	}
 	hash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
 	ledger.SetFinalInputHash(hash)
+	snapshot.PostPrepareInputHash = hash
+	ledger.AppendStepSnapshot(snapshot)
+}
+
+func copyDropReasons(reasons map[string]int) map[string]int {
+	if len(reasons) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(reasons))
+	for reason, count := range reasons {
+		out[reason] = count
+	}
+	return out
 }
 
 func remainingStepBudget(maxTokens int, params *sdk.GenerateParams, prefixCount int) int {
@@ -1777,6 +1806,7 @@ func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message) RunCo
 	merged = append(merged, cfg.Messages...)
 	merged = append(merged, accumulated...)
 	cfg.Messages = merged
+	cfg.ContextMutations.AdvanceAttempt()
 	return cfg.RefreshContextFrag()
 }
 
