@@ -130,7 +130,7 @@ func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *tes
 	if first.MemoryText != "memory v1" {
 		t.Fatalf("first memory context = %#v, want v1", first)
 	}
-	assertMemoryTrace(t, first.Trace, "miss", "", "", "v1", 1, nil, len("memory v1"))
+	assertMemoryTrace(t, first.Trace, "miss", "", "", "v1", 0, nil, len("memory v1"))
 	provider.version = "v2"
 	provider.result = &memprovider.BeforeChatResult{ContextText: "memory v2"}
 	second := resolver.loadMemoryContext(context.Background(), req)
@@ -140,7 +140,7 @@ func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *tes
 	if provider.calls != 2 {
 		t.Fatalf("provider calls = %d, want cache miss after version change", provider.calls)
 	}
-	assertMemoryTrace(t, second.Trace, "miss", "", "", "v2", 1, nil, len("memory v2"))
+	assertMemoryTrace(t, second.Trace, "miss", "", "", "v2", 0, nil, len("memory v2"))
 }
 
 func TestLoadMemoryContextTracesEmptyResult(t *testing.T) {

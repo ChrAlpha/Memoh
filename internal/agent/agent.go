@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1865,8 +1866,9 @@ func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message, errMs
 	merged = append(merged, accumulated...)
 	cfg.Messages = merged
 	attempt := cfg.ContextMutations.AdvanceAttempt()
+	errorHash := sha256.Sum256([]byte(strings.TrimSpace(errMsg)))
 	cfg.ContextMutations.Record(contextfrag.MutationMidStreamRetry,
-		fmt.Sprintf("attempt=%d accumulated=%d error=%s", attempt, len(accumulated), errMsg))
+		fmt.Sprintf("attempt=%d accumulated=%d error_sha256=%x", attempt, len(accumulated), errorHash))
 	return cfg
 }
 

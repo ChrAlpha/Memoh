@@ -35,10 +35,30 @@ func (h *LifecycleHolder) SetManifest(manifest Manifest) {
 	if h == nil {
 		return
 	}
+	manifest = cloneLifecycleManifest(manifest)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.manifest = manifest
 	h.set = true
+}
+
+func cloneLifecycleManifest(manifest Manifest) Manifest {
+	out := manifest
+	if manifest.Selection != nil {
+		selection := *manifest.Selection
+		if len(manifest.Selection.DropReasons) > 0 {
+			selection.DropReasons = make(map[string]int, len(manifest.Selection.DropReasons))
+			for reason, count := range manifest.Selection.DropReasons {
+				selection.DropReasons[reason] = count
+			}
+		}
+		out.Selection = &selection
+	}
+	if manifest.CachePlan != nil {
+		cachePlan := *manifest.CachePlan
+		out.CachePlan = &cachePlan
+	}
+	return out
 }
 
 func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {

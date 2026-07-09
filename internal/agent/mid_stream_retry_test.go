@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 func TestPrepareMidStreamRetryConfigKeepsConversationPrefix(t *testing.T) {
@@ -49,4 +52,23 @@ func TestPrepareMidStreamRetryConfigPreservesPostViewMemoryManifest(t *testing.T
 		t.Fatalf("messages = %d, want memory payload plus accumulated output", len(out.Messages))
 	}
 	assertSinglePostViewMemoryFrag(t, out)
+}
+
+func TestPrepareMidStreamRetryConfigDoesNotPersistRawError(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	secret := "provider failed authorization=Bearer secret-token"
+	_ = prepareMidStreamRetryConfig(RunConfig{ContextMutations: ledger}, nil, secret)
+
+	records := ledger.Records()
+	if len(records) != 1 {
+		t.Fatalf("mutation records = %#v, want one retry", records)
+	}
+	if strings.Contains(records[0].Detail, secret) || strings.Contains(records[0].Detail, "secret-token") {
+		t.Fatalf("retry mutation leaked raw provider error: %q", records[0].Detail)
+	}
+	if !strings.Contains(records[0].Detail, "error_sha256=") {
+		t.Fatalf("retry mutation missing error fingerprint: %q", records[0].Detail)
+	}
 }

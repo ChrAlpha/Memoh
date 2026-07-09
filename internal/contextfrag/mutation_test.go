@@ -462,3 +462,24 @@ func TestLifecycleHolderSnapshotAvailableWithMemoryRecallOnly(t *testing.T) {
 		t.Fatalf("memory recall = %#v", snapshot.MemoryRecall)
 	}
 }
+
+func TestLifecycleHolderCopiesManifestSnapshotFields(t *testing.T) {
+	t.Parallel()
+
+	cachePlan := &CachePlan{StablePrefixHash: "original-prefix", StableMessageCount: 2}
+	selection := &SelectionTrace{Dropped: 1, DropReasons: map[string]int{"budget_trim": 1}}
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{CachePlan: cachePlan, Selection: selection})
+
+	cachePlan.StablePrefixHash = "mutated-prefix"
+	selection.Dropped = 9
+	selection.DropReasons["budget_trim"] = 9
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("snapshot should be available")
+	}
+	if snapshot.StablePrefixHash != "original-prefix" || snapshot.Selection.Dropped != 1 || snapshot.Selection.DropReasons["budget_trim"] != 1 {
+		t.Fatalf("snapshot observed aliased manifest mutation: %#v", snapshot)
+	}
+}

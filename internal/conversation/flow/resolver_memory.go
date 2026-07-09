@@ -169,9 +169,6 @@ func memoryRecallTrace(cacheKey memprovider.MemoryContextCacheKey, builtQuery me
 	if result != nil {
 		contextText = strings.TrimSpace(result.ContextText)
 		resultCount = max(result.ResultCount, 0)
-		if contextText != "" && resultCount == 0 {
-			resultCount = 1
-		}
 		resultRefs = append([]string(nil), result.ResultRefs...)
 		retrievalMode = strings.TrimSpace(result.RetrievalMode)
 		if fallbackReason == "" {
