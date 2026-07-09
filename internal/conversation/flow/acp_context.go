@@ -42,7 +42,7 @@ type acpContextRenderInput struct {
 	PlatformIdentitiesSection string
 }
 
-func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string) []contextview.ACPSection {
+func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation.ChatRequest, agentID, projectPath string) ([]contextview.ACPSection, *contextfrag.MemoryRecallTrace) {
 	timezoneName, timezoneLocation := r.resolveTimezone(ctx, req.BotID, req.UserID)
 	now := time.Now().UTC()
 	if timezoneLocation != nil {
@@ -77,7 +77,7 @@ func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation
 		memoryContext = r.loadMemoryContext(ctx, req)
 	}
 
-	return buildACPContextSections(acpContextRenderInput{
+	sections := buildACPContextSections(acpContextRenderInput{
 		Now:                       now,
 		Timezone:                  timezoneName,
 		BotID:                     req.BotID,
@@ -100,6 +100,7 @@ func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation
 		SystemFilesMaxBytes:       limits.SystemFilesMaxBytes,
 		PlatformIdentitiesSection: platformIdentitiesSection,
 	})
+	return sections, memoryContext.Trace
 }
 
 func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSection {

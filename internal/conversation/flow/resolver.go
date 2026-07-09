@@ -338,6 +338,9 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		return resolvedContext{}, err
 	}
 	memoryContext := r.loadMemoryContext(ctx, req)
+	if memoryContext.Trace != nil && runCfg.ContextLifecycle != nil {
+		runCfg.ContextLifecycle.SetMemoryRecall(*memoryContext.Trace)
+	}
 	reqMessages := pruneMessagesForGateway(nonNilModelMessages(req.Messages))
 
 	// When the DCP pipeline has data for this session, build context from

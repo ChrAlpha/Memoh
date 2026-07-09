@@ -214,6 +214,19 @@ func TestStoreRoundPersistsContextLifecycleMetadataOnAssistant(t *testing.T) {
 		CachePlan: &contextfrag.CachePlan{StablePrefixHash: "prefix-hash", StableMessageCount: 1},
 		Mutations: ledger,
 	})
+	holder.SetMemoryRecall(contextfrag.MemoryRecallTrace{
+		ProviderID:    "provider-1",
+		CacheState:    "miss",
+		RetrievalMode: "graph",
+		Query: contextfrag.MemoryRecallQueryTrace{
+			Source: "current_query",
+		},
+		Result: contextfrag.MemoryRecallResultTrace{
+			Count:        1,
+			Refs:         []string{"memory-1"},
+			ContextBytes: 16,
+		},
+	})
 	messages := &recordingMessageService{}
 	resolver := &Resolver{
 		logger:         slog.Default(),
@@ -239,7 +252,7 @@ func TestStoreRoundPersistsContextLifecycleMetadataOnAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal lifecycle metadata: %v", err)
 	}
-	for _, want := range []string{"run_config_pre_provider", "prefix-hash", "final-hash", "budget_trim"} {
+	for _, want := range []string{"run_config_pre_provider", "prefix-hash", "final-hash", "budget_trim", "memory_recall", "provider-1", "memory-1"} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("lifecycle metadata missing %q: %s", want, raw)
 		}

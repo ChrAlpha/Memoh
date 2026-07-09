@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/hooks"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
@@ -17,6 +18,7 @@ const defaultMemorySearchTimeout = 1200 * time.Millisecond
 type memoryContextLoad struct {
 	MemoryText string
 	HookText   string
+	Trace      *contextfrag.MemoryRecallTrace
 }
 
 func (r *Resolver) resolveMemoryProvider(ctx context.Context, botID string) memprovider.Provider {
@@ -56,6 +58,7 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 	if p == nil {
 		return memoryContextLoad{}
 	}
+	cacheKey := r.memoryContextCacheKey(ctx, req, providerID, p, builtQuery.Query)
 
 	before, err := r.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
@@ -69,18 +72,19 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 	if err != nil {
 		r.logHookWarn(hooks.EventBeforeMemorySearch, req.BotID, req.SessionID, err)
 		if before.Decision == hooks.DecisionDeny {
-			return memoryContextLoad{}
+			return memoryContextLoad{Trace: memoryRecallTrace(cacheKey, builtQuery, nil, "bypass", "hook_denied")}
 		}
 	}
 
-	cacheKey := r.memoryContextCacheKey(ctx, req, providerID, p, builtQuery.Query)
 	if cached, ok := r.getMemoryContextCache().Get(cacheKey); ok {
 		result := &memprovider.BeforeChatResult{
 			ContextText:    cached.ContextText,
 			RetrievalMode:  cached.RetrievalMode,
 			FallbackReason: cached.FallbackReason,
+			ResultCount:    cached.ResultCount,
+			ResultRefs:     cached.ResultRefs,
 		}
-		return r.memoryContextFromResult(ctx, req, builtQuery, result, "fresh", "")
+		return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, "fresh", "")
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, r.effectiveMemorySearchTimeout())
@@ -106,40 +110,34 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 				ContextText:    cached.ContextText,
 				RetrievalMode:  cached.RetrievalMode,
 				FallbackReason: firstNonEmpty(fallbackReason, cached.FallbackReason),
+				ResultCount:    cached.ResultCount,
+				ResultRefs:     cached.ResultRefs,
 			}
-			return r.memoryContextFromResult(ctx, req, builtQuery, result, "stale", fallbackReason)
+			return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, "stale", fallbackReason)
 		}
-		return r.memoryContextFromResult(ctx, req, builtQuery, nil, "miss", fallbackReason)
+		return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, nil, "miss", fallbackReason)
 	}
 
 	if result == nil || strings.TrimSpace(result.ContextText) == "" {
-		return r.memoryContextFromResult(ctx, req, builtQuery, nil, "miss", "empty_result")
+		return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, nil, "miss", "empty_result")
 	}
 
 	r.getMemoryContextCache().Set(cacheKey, memprovider.MemoryContextCacheValue{
 		ContextText:    result.ContextText,
 		RetrievalMode:  result.RetrievalMode,
 		FallbackReason: result.FallbackReason,
+		ResultCount:    result.ResultCount,
+		ResultRefs:     result.ResultRefs,
 	})
-	return r.memoryContextFromResult(ctx, req, builtQuery, result, "miss", strings.TrimSpace(result.FallbackReason))
+	return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, "miss", strings.TrimSpace(result.FallbackReason))
 }
 
-func (r *Resolver) memoryContextFromResult(ctx context.Context, req conversation.ChatRequest, builtQuery memoryQuery, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) memoryContextLoad {
+func (r *Resolver) memoryContextFromResult(ctx context.Context, req conversation.ChatRequest, builtQuery memoryQuery, cacheKey memprovider.MemoryContextCacheKey, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) memoryContextLoad {
 	contextText := ""
-	resultCount := 0
-	contextBytes := 0
-	retrievalMode := ""
 	if result != nil {
 		contextText = strings.TrimSpace(result.ContextText)
-		if contextText != "" {
-			resultCount = 1
-			contextBytes = len(contextText)
-		}
-		retrievalMode = strings.TrimSpace(result.RetrievalMode)
-		if fallbackReason == "" {
-			fallbackReason = strings.TrimSpace(result.FallbackReason)
-		}
 	}
+	trace := memoryRecallTrace(cacheKey, builtQuery, result, cacheState, fallbackReason)
 
 	after, err := r.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
@@ -147,18 +145,56 @@ func (r *Resolver) memoryContextFromResult(ctx context.Context, req conversation
 			"query_source":          builtQuery.Source,
 			"query_recent_messages": builtQuery.RecentMessages,
 			"query_truncated":       builtQuery.Truncated,
-			"result_count":          resultCount,
-			"context_bytes":         contextBytes,
+			"result_count":          trace.Result.Count,
+			"context_bytes":         trace.Result.ContextBytes,
 			"cache_hit":             cacheState == "fresh" || cacheState == "stale",
 			"cache_state":           cacheState,
-			"retrieval_mode":        retrievalMode,
-			"fallback_reason":       strings.TrimSpace(fallbackReason),
+			"retrieval_mode":        trace.RetrievalMode,
+			"fallback_reason":       trace.FallbackReason,
 		}
 	})
 	if err != nil {
 		r.logHookWarn(hooks.EventAfterMemorySearch, req.BotID, req.SessionID, err)
 	}
-	return materializeMemoryContext(contextText, after.AppendContext)
+	load := materializeMemoryContext(contextText, after.AppendContext)
+	load.Trace = trace
+	return load
+}
+
+func memoryRecallTrace(cacheKey memprovider.MemoryContextCacheKey, builtQuery memoryQuery, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) *contextfrag.MemoryRecallTrace {
+	contextText := ""
+	resultCount := 0
+	retrievalMode := ""
+	var resultRefs []string
+	if result != nil {
+		contextText = strings.TrimSpace(result.ContextText)
+		resultCount = max(result.ResultCount, 0)
+		if contextText != "" && resultCount == 0 {
+			resultCount = 1
+		}
+		resultRefs = append([]string(nil), result.ResultRefs...)
+		retrievalMode = strings.TrimSpace(result.RetrievalMode)
+		if fallbackReason == "" {
+			fallbackReason = strings.TrimSpace(result.FallbackReason)
+		}
+	}
+	return &contextfrag.MemoryRecallTrace{
+		ProviderID:     strings.TrimSpace(cacheKey.ProviderID),
+		MemoryVersion:  strings.TrimSpace(cacheKey.MemoryVersion),
+		CacheState:     strings.TrimSpace(cacheState),
+		RetrievalMode:  retrievalMode,
+		FallbackReason: strings.TrimSpace(fallbackReason),
+		Query: contextfrag.MemoryRecallQueryTrace{
+			Source:         builtQuery.Source,
+			RecentMessages: builtQuery.RecentMessages,
+			Truncated:      builtQuery.Truncated,
+		},
+		Result: contextfrag.MemoryRecallResultTrace{
+			Count:        resultCount,
+			Refs:         resultRefs,
+			ContextBytes: len(contextText),
+		},
+	}
 }
 
 func materializeMemoryContext(memoryText, hookText string) memoryContextLoad {

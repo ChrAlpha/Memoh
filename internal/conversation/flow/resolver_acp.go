@@ -112,11 +112,15 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
 	req.Query = strings.TrimSpace(req.Query)
-	contextMarkdown, contextURI, contextManifest := acpContextViaContextView(ctx, r.logger, r.buildACPContextSections(ctx, req, agentID, projectPath), req.Query)
+	contextSections, memoryTrace := r.buildACPContextSections(ctx, req, agentID, projectPath)
+	contextMarkdown, contextURI, contextManifest := acpContextViaContextView(ctx, r.logger, contextSections, req.Query)
 	var contextLifecycle *contextfrag.LifecycleHolder
 	if contextManifest != nil {
 		contextLifecycle = contextfrag.NewLifecycleHolder()
 		contextLifecycle.SetManifest(*contextManifest)
+		if memoryTrace != nil {
+			contextLifecycle.SetMemoryRecall(*memoryTrace)
+		}
 	}
 	prompt := req.Query
 

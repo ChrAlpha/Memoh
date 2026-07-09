@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1540,7 +1541,15 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &storeRoundMemoryProvider{
+		beforeChat: &memprovider.BeforeChatResult{
+			ContextText:   "remembered fact",
+			RetrievalMode: "graph",
+			ResultCount:   1,
+			ResultRefs:    []string{"memory-1"},
+		},
+		afterChat: make(chan memprovider.AfterChatRequest, 1),
+	}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
 	pool := &recordingACPPrompter{
@@ -1597,6 +1606,25 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("memory was not called for successful ACP stream")
+	}
+
+	var snapshot *contextfrag.LifecycleSnapshot
+	for i := len(messages.persisted) - 1; i >= 0; i-- {
+		if messages.persisted[i].Role != "assistant" {
+			continue
+		}
+		value, ok := messages.persisted[i].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
+		if ok {
+			snapshot = &value
+		}
+		break
+	}
+	if snapshot == nil || snapshot.MemoryRecall == nil {
+		t.Fatalf("ACP lifecycle missing memory trace: %#v", snapshot)
+	}
+	if snapshot.MemoryRecall.ProviderID != storeRoundMemoryProviderID || snapshot.MemoryRecall.CacheState != "miss" ||
+		snapshot.MemoryRecall.Result.Count != 1 || !slices.Equal(snapshot.MemoryRecall.Result.Refs, []string{"memory-1"}) {
+		t.Fatalf("ACP memory trace = %#v", snapshot.MemoryRecall)
 	}
 }
 
@@ -1888,15 +1916,16 @@ type recordingACPPrompter struct {
 
 type storeRoundMemoryProvider struct {
 	memprovider.Provider
-	afterChat chan memprovider.AfterChatRequest
+	beforeChat *memprovider.BeforeChatResult
+	afterChat  chan memprovider.AfterChatRequest
 }
 
 func (*storeRoundMemoryProvider) Type() string {
 	return "test"
 }
 
-func (*storeRoundMemoryProvider) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
-	return nil, nil
+func (p *storeRoundMemoryProvider) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
+	return p.beforeChat, nil
 }
 
 func (p *storeRoundMemoryProvider) OnAfterChat(_ context.Context, req memprovider.AfterChatRequest) error {
