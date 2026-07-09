@@ -1895,6 +1895,10 @@ func (*storeRoundMemoryProvider) Type() string {
 	return "test"
 }
 
+func (*storeRoundMemoryProvider) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
+	return nil, nil
+}
+
 func (p *storeRoundMemoryProvider) OnAfterChat(_ context.Context, req memprovider.AfterChatRequest) error {
 	p.afterChat <- req
 	return nil

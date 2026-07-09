@@ -16,6 +16,8 @@ import (
 
 const acpContextURI = "memoh://context/current-turn"
 
+const acpDynamicContextMaxChars = 8 * 1024
+
 type acpContextRenderInput struct {
 	Now                       time.Time
 	Timezone                  string
@@ -34,6 +36,8 @@ type acpContextRenderInput struct {
 	ReplyTarget               string
 	Attachments               []conversation.ChatAttachment
 	Files                     []agentpkg.SystemFile
+	MemoryText                string
+	MemoryHookText            string
 	SystemFilesMaxBytes       int
 	PlatformIdentitiesSection string
 }
@@ -68,6 +72,10 @@ func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation
 			platformIdentitiesSection = buildPlatformIdentitiesSection(channelConfigs)
 		}
 	}
+	memoryContext := memoryContextLoad{}
+	if r != nil {
+		memoryContext = r.loadMemoryContext(ctx, req)
+	}
 
 	return buildACPContextSections(acpContextRenderInput{
 		Now:                       now,
@@ -87,6 +95,8 @@ func (r *Resolver) buildACPContextSections(ctx context.Context, req conversation
 		ReplyTarget:               req.ReplyTarget,
 		Attachments:               req.Attachments,
 		Files:                     files,
+		MemoryText:                memoryContext.MemoryText,
+		MemoryHookText:            memoryContext.HookText,
 		SystemFilesMaxBytes:       limits.SystemFilesMaxBytes,
 		PlatformIdentitiesSection: platformIdentitiesSection,
 	})
@@ -102,7 +112,7 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		timezoneName = "UTC"
 	}
 
-	sections := make([]contextview.ACPSection, 0, 8)
+	sections := make([]contextview.ACPSection, 0, 10)
 	add := func(section contextview.ACPSection, title, content string) {
 		content = strings.TrimSpace(content)
 		if content == "" {
@@ -162,6 +172,26 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 		CacheClass: contextfrag.CacheNever,
 	}, "Attachments", renderACPAttachmentsSection(input.Attachments))
 	add(contextview.ACPSection{
+		ID:         "acp.section.memory-recall",
+		Kind:       contextfrag.KindMemoryRecall,
+		Trust:      contextfrag.TrustExternal,
+		CacheClass: contextfrag.CacheNever,
+		Budget: contextfrag.BudgetPolicy{
+			MaxChars: acpDynamicContextMaxChars,
+			Overflow: contextfrag.OverflowDrop,
+		},
+	}, "Retrieved Memory", contextview.FormatMemoryContext(input.MemoryText))
+	add(contextview.ACPSection{
+		ID:         "acp.section.memory-hook",
+		Kind:       contextfrag.KindHookContext,
+		Trust:      contextfrag.TrustWorkspace,
+		CacheClass: contextfrag.CacheNever,
+		Budget: contextfrag.BudgetPolicy{
+			MaxChars: acpDynamicContextMaxChars,
+			Overflow: contextfrag.OverflowDrop,
+		},
+	}, "Memory Hook Context", input.MemoryHookText)
+	add(contextview.ACPSection{
 		ID:   "acp.section.platform-identities",
 		Kind: contextfrag.KindPlatformIdentity,
 	}, "", input.PlatformIdentitiesSection)
@@ -203,7 +233,7 @@ func acpContextSystemFiles(files []agentpkg.SystemFile, maxBytes int) []acpConte
 	titles := map[string]string{
 		"IDENTITY.md": "Bot Identity",
 		"SOUL.md":     "Bot Soul",
-		"MEMORY.md":   "Long-Term Memory",
+		"AGENTS.md":   "Agent Instructions",
 		"PROFILES.md": "Profiles",
 	}
 	out := make([]acpContextFileSection, 0, len(files))
@@ -216,11 +246,7 @@ func acpContextSystemFiles(files []agentpkg.SystemFile, maxBytes int) []acpConte
 		}
 		title, ok := titles[name]
 		if !ok {
-			if strings.HasPrefix(name, "memory/") && strings.HasSuffix(name, ".md") {
-				title = "Memory Concept - " + strings.TrimPrefix(name, "memory/")
-			} else {
-				continue
-			}
+			continue
 		}
 		remaining := maxBytes - used
 		overhead := acpContextRenderedSectionOverhead(title)
