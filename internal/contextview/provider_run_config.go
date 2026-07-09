@@ -369,10 +369,18 @@ func insertDynamicContextBeforeCurrentUser(cfg agentpkg.RunConfig, dynamic []sdk
 }
 
 func markedCurrentUserMessageIndex(messages []sdk.Message, index *int) (int, bool) {
-	if index == nil || *index < 0 || *index >= len(messages) || messages[*index].Role != sdk.MessageRoleUser {
+	if index == nil {
 		return 0, false
 	}
-	return *index, true
+	if *index >= 0 && *index < len(messages) && messages[*index].Role == sdk.MessageRoleUser {
+		return *index, true
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == sdk.MessageRoleUser {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func latestUserMessageIndex(messages []sdk.Message) *int {

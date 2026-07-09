@@ -125,13 +125,13 @@ func TestProviderViewFallbackDropsOversizedHookContext(t *testing.T) {
 func TestProviderViewFallbackPlacesDynamicContextBeforeMaterializedCurrentUser(t *testing.T) {
 	t.Parallel()
 
-	currentUserIndex := 1
+	staleCurrentUserIndex := 99
 	out := providerViewFallback(nil, agentpkg.RunConfig{
 		Messages: []sdk.Message{
 			sdk.AssistantMessage("previous answer"),
 			sdk.UserMessage("pipeline current question"),
 		},
-		ContextCurrentUserMessageIndex: &currentUserIndex,
+		ContextCurrentUserMessageIndex: &staleCurrentUserIndex,
 		ContextMemoryText:              "remembered fact",
 		ContextHookText:                "workspace hook guidance",
 	}, contextfrag.NewMutationLedger(), "build_error", "fallback", errors.New("boom"))

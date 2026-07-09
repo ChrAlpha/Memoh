@@ -53,10 +53,11 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 	// would report the current turn's attention for every history drop.
 	historyScope := req.Scope
 	historyScope.Attention = nil
+	currentUserIndex, hasCurrentUser := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex)
 
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages))
 	for i, msg := range cfg.Messages {
-		if isMarkedCurrentUserMessage(cfg.CurrentUserMessageIndex, i, msg) {
+		if hasCurrentUser && i == currentUserIndex {
 			continue
 		}
 		estimate := 0
@@ -124,10 +125,6 @@ func (*materializedCurrentUserCollector) Collect(_ context.Context, req CollectR
 		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 		TokenEstimate: estimate,
 	})}, nil
-}
-
-func isMarkedCurrentUserMessage(index *int, candidate int, msg sdk.Message) bool {
-	return index != nil && *index == candidate && msg.Role == sdk.MessageRoleUser
 }
 
 func historyMessagesConfig(config any) (HistoryMessagesConfig, error) {

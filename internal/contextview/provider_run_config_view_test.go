@@ -258,13 +258,13 @@ func TestApplyProviderContextViewStableMessageCountExcludesMemoryAndCurrent(t *t
 func TestApplyProviderContextViewPlacesDynamicContextBeforeMaterializedCurrentUser(t *testing.T) {
 	t.Parallel()
 
-	currentUserIndex := 1
+	staleCurrentUserIndex := 99
 	cfg := agentpkg.RunConfig{
 		Messages: []sdk.Message{
 			sdk.AssistantMessage("previous answer"),
 			sdk.UserMessage("pipeline current question"),
 		},
-		ContextCurrentUserMessageIndex: &currentUserIndex,
+		ContextCurrentUserMessageIndex: &staleCurrentUserIndex,
 		ContextTrimmableMessages:       2,
 		ContextMemoryText:              "remembered fact",
 		ContextHookText:                "workspace hook guidance",
