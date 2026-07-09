@@ -52,7 +52,6 @@ func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 	home := "/data"
 	filenames := []string{
 		"AGENTS.md",
-		"MEMORY.md",
 		"PROFILES.md",
 	}
 

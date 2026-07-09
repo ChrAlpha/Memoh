@@ -196,7 +196,7 @@ func buildFileSections(files []SystemFile, maxBytes int) string {
 	var sb strings.Builder
 	lineCount := 0
 	for _, f := range files {
-		if f.Content == "" {
+		if f.Content == "" || strings.EqualFold(strings.TrimSpace(f.Filename), "MEMORY.md") {
 			continue
 		}
 		separator := ""
