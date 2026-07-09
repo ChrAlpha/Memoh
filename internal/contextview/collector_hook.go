@@ -11,6 +11,8 @@ import (
 
 const hookContextCollectorName = "hook_context"
 
+const maxHookContextChars = 8 * 1024
+
 type HookContextConfig struct {
 	// Text is the combined resolver-hook AppendContext text (before/after
 	// prompt build) materialized by the resolver; the collector owns its
@@ -51,12 +53,15 @@ func (*HookContextCollector) Collect(_ context.Context, req CollectRequest) ([]c
 		Slot:       contextfrag.SlotAfterHistoryBeforeCurrent,
 		Priority:   contextfrag.PriorityForMessage(msg),
 		CacheClass: contextfrag.CacheNever,
-		Trust:      contextfrag.TrustSystem,
+		Trust:      contextfrag.TrustWorkspace,
 		Scope:      req.Scope,
 		Source:     hookContextCollectorName,
 		SourceID:   hookContextCollectorName,
 		Collector:  hookContextCollectorName,
-		Budget:     contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+		Budget: contextfrag.BudgetPolicy{
+			MaxChars: maxHookContextChars,
+			Overflow: contextfrag.OverflowDrop,
+		},
 	})}, nil
 }
 

@@ -19,6 +19,7 @@ const (
 
 	defaultMemoryToolLimit = 8
 	maxMemoryToolLimit     = 50
+	maxContextTotalChars   = 6 * 1024
 )
 
 // BuiltinProvider wraps the existing Service as a Provider.
@@ -81,10 +82,10 @@ func (p *BuiltinProvider) SetLLM(llm adapters.LLM) {
 // Zero-valued fields fall back to defaults.
 func (p *BuiltinProvider) SetPackerConfig(cfg contextPackerConfig) {
 	if cfg.TargetItems > 0 {
-		p.packer.TargetItems = cfg.TargetItems
+		p.packer.TargetItems = min(cfg.TargetItems, maxMemoryToolLimit)
 	}
 	if cfg.MaxTotalChars > 0 {
-		p.packer.MaxTotalChars = cfg.MaxTotalChars
+		p.packer.MaxTotalChars = min(cfg.MaxTotalChars, maxContextTotalChars)
 	}
 	if cfg.MinItemChars > 0 {
 		p.packer.MinItemChars = cfg.MinItemChars
@@ -218,7 +219,7 @@ func (p *BuiltinProvider) OnBeforeChat(ctx context.Context, req adapters.BeforeC
 	}
 
 	var sb strings.Builder
-	sb.WriteString("<memory-context>\nRelevant memory context (use when helpful):\n")
+	sb.WriteString("Relevant memory context:\n")
 	for _, entry := range packed.Items {
 		sb.WriteString("- ")
 		if label := memorySourceLabel(entry.Item); label != "" {
@@ -229,7 +230,6 @@ func (p *BuiltinProvider) OnBeforeChat(ctx context.Context, req adapters.BeforeC
 		sb.WriteString(entry.Snippet)
 		sb.WriteString("\n")
 	}
-	sb.WriteString("</memory-context>")
 	payload := strings.TrimSpace(sb.String())
 	if payload == "" {
 		return nil, nil

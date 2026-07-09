@@ -11,7 +11,7 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-func TestHookContextCollectorProducesPinnedFrag(t *testing.T) {
+func TestHookContextCollectorProducesBoundedWorkspaceFrag(t *testing.T) {
 	t.Parallel()
 
 	frags, err := (&HookContextCollector{}).Collect(context.Background(), CollectRequest{
@@ -32,8 +32,11 @@ func TestHookContextCollectorProducesPinnedFrag(t *testing.T) {
 	if frag.Slot != contextfrag.SlotAfterHistoryBeforeCurrent {
 		t.Fatalf("slot = %s, want after_history_before_current", frag.Slot)
 	}
-	if frag.Budget.Overflow != contextfrag.OverflowKeep {
-		t.Fatal("hook context must be pinned against budget trimming")
+	if frag.Trust != contextfrag.TrustWorkspace {
+		t.Fatalf("trust = %s, want workspace", frag.Trust)
+	}
+	if frag.Budget.Overflow != contextfrag.OverflowDrop || frag.Budget.MaxChars != maxHookContextChars {
+		t.Fatalf("budget = %#v, want drop at %d chars", frag.Budget, maxHookContextChars)
 	}
 	msg := discussFragMessage(frag)
 	if msg == nil || msg.Role != sdk.MessageRoleUser {

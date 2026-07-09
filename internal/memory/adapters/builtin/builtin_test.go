@@ -88,7 +88,7 @@ func TestBuiltinProviderOnBeforeChatEmptyQuery(t *testing.T) {
 	}
 }
 
-func TestBuiltinProviderContextPackingProducesMemoryContextTags(t *testing.T) {
+func TestBuiltinProviderContextPackingLeavesFramingToCollector(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	runtime := newFileRuntime(store)
@@ -114,11 +114,8 @@ func TestBuiltinProviderContextPackingProducesMemoryContextTags(t *testing.T) {
 		t.Fatal("expected non-nil result")
 		return
 	}
-	if !strings.Contains(result.ContextText, "<memory-context>") {
-		t.Fatalf("expected memory-context tags, got: %s", result.ContextText)
-	}
-	if !strings.Contains(result.ContextText, "</memory-context>") {
-		t.Fatalf("expected closing memory-context tag, got: %s", result.ContextText)
+	if strings.Contains(result.ContextText, "<memory-context>") || !strings.Contains(result.ContextText, "Relevant memory context:") {
+		t.Fatalf("provider must return raw recall data for the context collector to frame, got: %s", result.ContextText)
 	}
 }
 
@@ -139,6 +136,23 @@ func TestBuiltinProviderApplyProviderConfig(t *testing.T) {
 	}
 	if p.packer.MinItemChars != defaultPackerConfig.MinItemChars {
 		t.Fatalf("expected MinItemChars to remain default, got %d", p.packer.MinItemChars)
+	}
+}
+
+func TestBuiltinProviderApplyProviderConfigClampsContextBudget(t *testing.T) {
+	t.Parallel()
+
+	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p.ApplyProviderConfig(map[string]any{
+		"context_target_items":    float64(maxMemoryToolLimit + 1),
+		"context_max_total_chars": float64(maxContextTotalChars + 1),
+	})
+
+	if p.packer.TargetItems != maxMemoryToolLimit {
+		t.Fatalf("target items = %d, want hard cap %d", p.packer.TargetItems, maxMemoryToolLimit)
+	}
+	if p.packer.MaxTotalChars != maxContextTotalChars {
+		t.Fatalf("max total chars = %d, want hard cap %d", p.packer.MaxTotalChars, maxContextTotalChars)
 	}
 }
 
