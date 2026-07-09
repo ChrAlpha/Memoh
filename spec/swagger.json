@@ -15696,6 +15696,9 @@
                 "loop_selection_mode": {
                     "type": "string"
                 },
+                "memory_recall": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallTrace"
+                },
                 "model": {
                     "type": "string"
                 },
@@ -15748,17 +15751,74 @@
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
-                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt"
+                "acp_runtime_prompt",
+                "run_config_pre_provider"
             ],
             "x-enum-varnames": [
-                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt"
+                "ViewACPRuntimePrompt",
+                "ViewRunConfigPreProvider"
             ]
+        },
+        "contextfrag.MemoryRecallQueryTrace": {
+            "type": "object",
+            "properties": {
+                "recent_messages": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "contextfrag.MemoryRecallResultTrace": {
+            "type": "object",
+            "properties": {
+                "context_bytes": {
+                    "type": "integer"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "contextfrag.MemoryRecallTrace": {
+            "type": "object",
+            "properties": {
+                "cache_state": {
+                    "type": "string"
+                },
+                "fallback_reason": {
+                    "type": "string"
+                },
+                "memory_version": {
+                    "type": "string"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "query": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallQueryTrace"
+                },
+                "result": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallResultTrace"
+                },
+                "retrieval_mode": {
+                    "type": "string"
+                }
+            }
         },
         "contextfrag.MutationKind": {
             "type": "string",

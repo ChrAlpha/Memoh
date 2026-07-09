@@ -1021,6 +1021,7 @@ export type ContextfragLifecycleSnapshot = {
     decorated_provider_prefix_hash?: string;
     final_input_hash?: string;
     loop_selection_mode?: string;
+    memory_recall?: ContextfragMemoryRecallTrace;
     model?: string;
     mutations?: Array<ContextfragMutationRecord>;
     selection?: ContextfragSelectionTrace;
@@ -1038,7 +1039,29 @@ export type ContextfragManifestCounts = {
     text_bytes?: number;
 };
 
-export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
+export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
+
+export type ContextfragMemoryRecallQueryTrace = {
+    recent_messages?: number;
+    source?: string;
+    truncated?: boolean;
+};
+
+export type ContextfragMemoryRecallResultTrace = {
+    context_bytes?: number;
+    count?: number;
+    refs?: Array<string>;
+};
+
+export type ContextfragMemoryRecallTrace = {
+    cache_state?: string;
+    fallback_reason?: string;
+    memory_version?: string;
+    provider_id?: string;
+    query?: ContextfragMemoryRecallQueryTrace;
+    result?: ContextfragMemoryRecallResultTrace;
+    retrieval_mode?: string;
+};
 
 export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'read_media' | 'mid_stream_retry';
 
