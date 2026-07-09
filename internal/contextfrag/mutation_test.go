@@ -444,3 +444,21 @@ func TestLifecycleHolderPreservesBoundedMemoryRecallTrace(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycleHolderSnapshotAvailableWithMemoryRecallOnly(t *testing.T) {
+	t.Parallel()
+
+	holder := NewLifecycleHolder()
+	holder.SetMemoryRecall(MemoryRecallTrace{
+		ProviderID: "provider-1",
+		CacheState: "miss",
+	})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.MemoryRecall == nil {
+		t.Fatalf("snapshot = %#v ok=%v, want memory-only lifecycle", snapshot, ok)
+	}
+	if snapshot.MemoryRecall.ProviderID != "provider-1" {
+		t.Fatalf("memory recall = %#v", snapshot.MemoryRecall)
+	}
+}

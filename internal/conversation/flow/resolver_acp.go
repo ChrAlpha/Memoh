@@ -115,9 +115,11 @@ func (r *Resolver) streamACPAgentWS(ctx context.Context, req conversation.ChatRe
 	contextSections, memoryTrace := r.buildACPContextSections(ctx, req, agentID, projectPath)
 	contextMarkdown, contextURI, contextManifest := acpContextViaContextView(ctx, r.logger, contextSections, req.Query)
 	var contextLifecycle *contextfrag.LifecycleHolder
-	if contextManifest != nil {
+	if contextManifest != nil || memoryTrace != nil {
 		contextLifecycle = contextfrag.NewLifecycleHolder()
-		contextLifecycle.SetManifest(*contextManifest)
+		if contextManifest != nil {
+			contextLifecycle.SetManifest(*contextManifest)
+		}
 		if memoryTrace != nil {
 			contextLifecycle.SetMemoryRecall(*memoryTrace)
 		}

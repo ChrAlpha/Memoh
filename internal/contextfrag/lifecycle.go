@@ -23,6 +23,7 @@ func (h *LifecycleHolder) SetMemoryRecall(trace MemoryRecallTrace) {
 	trace.Result.Refs = normalizeMemoryRecallRefs(trace.Result.Refs)
 	h.mu.Lock()
 	h.memory = cloneMemoryRecallTrace(&trace)
+	h.set = true
 	h.mu.Unlock()
 }
 
