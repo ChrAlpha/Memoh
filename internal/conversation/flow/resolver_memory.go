@@ -14,6 +14,11 @@ import (
 
 const defaultMemorySearchTimeout = 1200 * time.Millisecond
 
+type memoryContextLoad struct {
+	MemoryText string
+	HookText   string
+}
+
 func (r *Resolver) resolveMemoryProvider(ctx context.Context, botID string) memprovider.Provider {
 	_, p := r.resolveMemoryProviderWithID(ctx, botID)
 	return p
@@ -42,21 +47,20 @@ func (r *Resolver) resolveMemoryProviderWithID(ctx context.Context, botID string
 	return providerID, p
 }
 
-func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversation.ChatRequest) *conversation.ModelMessage {
+func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatRequest) memoryContextLoad {
 	builtQuery := r.buildMemoryQuery(ctx, req)
 	if strings.TrimSpace(builtQuery.Query) == "" {
-		return nil
+		return memoryContextLoad{}
 	}
 	providerID, p := r.resolveMemoryProviderWithID(ctx, req.BotID)
 	if p == nil {
-		return nil
+		return memoryContextLoad{}
 	}
 
 	before, err := r.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
-			"query":                 builtQuery.Query,
-			"visible_query":         strings.TrimSpace(req.Query),
+			"query":                 strings.TrimSpace(req.Query),
 			"query_source":          builtQuery.Source,
 			"query_recent_messages": builtQuery.RecentMessages,
 			"query_truncated":       builtQuery.Truncated,
@@ -65,7 +69,7 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 	if err != nil {
 		r.logHookWarn(hooks.EventBeforeMemorySearch, req.BotID, req.SessionID, err)
 		if before.Decision == hooks.DecisionDeny {
-			return nil
+			return memoryContextLoad{}
 		}
 	}
 
@@ -76,7 +80,7 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 			RetrievalMode:  cached.RetrievalMode,
 			FallbackReason: cached.FallbackReason,
 		}
-		return r.memoryContextMessageFromResult(ctx, req, builtQuery, result, "fresh", "")
+		return r.memoryContextFromResult(ctx, req, builtQuery, result, "fresh", "")
 	}
 
 	searchCtx, cancel := context.WithTimeout(ctx, r.effectiveMemorySearchTimeout())
@@ -103,13 +107,13 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 				RetrievalMode:  cached.RetrievalMode,
 				FallbackReason: firstNonEmpty(fallbackReason, cached.FallbackReason),
 			}
-			return r.memoryContextMessageFromResult(ctx, req, builtQuery, result, "stale", fallbackReason)
+			return r.memoryContextFromResult(ctx, req, builtQuery, result, "stale", fallbackReason)
 		}
-		return r.memoryContextMessageFromResult(ctx, req, builtQuery, nil, "miss", fallbackReason)
+		return r.memoryContextFromResult(ctx, req, builtQuery, nil, "miss", fallbackReason)
 	}
 
 	if result == nil || strings.TrimSpace(result.ContextText) == "" {
-		return r.memoryContextMessageFromResult(ctx, req, builtQuery, nil, "miss", "empty_result")
+		return r.memoryContextFromResult(ctx, req, builtQuery, nil, "miss", "empty_result")
 	}
 
 	r.getMemoryContextCache().Set(cacheKey, memprovider.MemoryContextCacheValue{
@@ -117,10 +121,10 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 		RetrievalMode:  result.RetrievalMode,
 		FallbackReason: result.FallbackReason,
 	})
-	return r.memoryContextMessageFromResult(ctx, req, builtQuery, result, "miss", strings.TrimSpace(result.FallbackReason))
+	return r.memoryContextFromResult(ctx, req, builtQuery, result, "miss", strings.TrimSpace(result.FallbackReason))
 }
 
-func (r *Resolver) memoryContextMessageFromResult(ctx context.Context, req conversation.ChatRequest, builtQuery memoryQuery, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) *conversation.ModelMessage {
+func (r *Resolver) memoryContextFromResult(ctx context.Context, req conversation.ChatRequest, builtQuery memoryQuery, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) memoryContextLoad {
 	contextText := ""
 	resultCount := 0
 	contextBytes := 0
@@ -140,8 +144,6 @@ func (r *Resolver) memoryContextMessageFromResult(ctx context.Context, req conve
 	after, err := r.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
-			"query":                 builtQuery.Query,
-			"visible_query":         strings.TrimSpace(req.Query),
 			"query_source":          builtQuery.Source,
 			"query_recent_messages": builtQuery.RecentMessages,
 			"query_truncated":       builtQuery.Truncated,
@@ -156,20 +158,13 @@ func (r *Resolver) memoryContextMessageFromResult(ctx context.Context, req conve
 	if err != nil {
 		r.logHookWarn(hooks.EventAfterMemorySearch, req.BotID, req.SessionID, err)
 	}
-	if strings.TrimSpace(after.AppendContext) != "" {
-		hookContext := formatResolverHookContext(hooks.EventAfterMemorySearch, after.AppendContext)
-		if contextText == "" {
-			contextText = hookContext
-		} else {
-			contextText += "\n\n" + hookContext
-		}
-	}
-	if strings.TrimSpace(contextText) == "" {
-		return nil
-	}
-	return &conversation.ModelMessage{
-		Role:    "user",
-		Content: conversation.NewTextContent(contextText),
+	return materializeMemoryContext(contextText, after.AppendContext)
+}
+
+func materializeMemoryContext(memoryText, hookText string) memoryContextLoad {
+	return memoryContextLoad{
+		MemoryText: strings.TrimSpace(memoryText),
+		HookText:   formatResolverHookContext(hooks.EventAfterMemorySearch, hookText),
 	}
 }
 

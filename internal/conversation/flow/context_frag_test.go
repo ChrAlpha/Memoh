@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -147,6 +148,55 @@ func TestPrepareRunConfigClearsStaleContextHookText(t *testing.T) {
 	if got.ContextHookText != "" {
 		t.Fatalf("ContextHookText = %q, want empty (stale hook text from an earlier prepareRunConfig call must not survive a call whose hooks produce no text)", got.ContextHookText)
 	}
+}
+
+func TestPrepareRunConfigSeparatesMemoryRecallFromMemoryHookContext(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Resolver{}
+	cfg := agent.RunConfig{
+		Identity:              agent.SessionContext{BotID: "bot-1"},
+		ContextMemoryText:     "remembered fact",
+		ContextMemoryHookText: "[Hook Context: AfterMemorySearch]\nplugin guidance",
+	}
+
+	got := resolver.prepareRunConfig(context.Background(), cfg)
+	if got.ContextMemoryHookText != "" {
+		t.Fatalf("one-shot memory hook carrier survived prepare: %q", got.ContextMemoryHookText)
+	}
+	if got.ContextHookText != cfg.ContextMemoryHookText {
+		t.Fatalf("hook context = %q, want separately carried memory hook", got.ContextHookText)
+	}
+
+	var memoryText, hookText string
+	for _, frag := range got.ContextSourceFrags {
+		switch frag.Kind {
+		case contextfrag.KindMemoryRecall:
+			memoryText = contextFragText(frag)
+		case contextfrag.KindHookContext:
+			hookText = contextFragText(frag)
+		}
+	}
+	if !strings.Contains(memoryText, "remembered fact") || strings.Contains(memoryText, "plugin guidance") {
+		t.Fatalf("memory fragment = %q, want provider recall only", memoryText)
+	}
+	if !strings.Contains(hookText, "plugin guidance") {
+		t.Fatalf("hook fragment = %q, want hook output", hookText)
+	}
+}
+
+func contextFragText(frag contextfrag.ContextFrag) string {
+	for _, part := range frag.Parts {
+		if part.SDKMessage == nil {
+			continue
+		}
+		for _, messagePart := range part.SDKMessage.Content {
+			if text, ok := messagePart.(sdk.TextPart); ok {
+				return text.Text
+			}
+		}
+	}
+	return ""
 }
 
 func TestPrepareRunConfigSourceFragsCarryTypedSystemKinds(t *testing.T) {

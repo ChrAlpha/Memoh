@@ -15,9 +15,8 @@ const memoryContextCollectorName = "memory_context"
 const maxMemoryContextChars = 8 * 1024
 
 type MemoryContextConfig struct {
-	// Text is the memory recall context materialized by the resolver
-	// (provider search plus hook amendments); the collector owns its shape
-	// and placement in the prompt.
+	// Text is provider recall materialized by the resolver; the collector owns
+	// its shape and placement in the prompt.
 	Text string
 }
 

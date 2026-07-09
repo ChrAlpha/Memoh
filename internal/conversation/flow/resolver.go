@@ -337,12 +337,8 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		)
 		return resolvedContext{}, err
 	}
-	memoryMsg := r.loadMemoryContextMessage(ctx, req)
+	memoryContext := r.loadMemoryContext(ctx, req)
 	reqMessages := pruneMessagesForGateway(nonNilModelMessages(req.Messages))
-	if memoryMsg != nil {
-		pruned, _ := pruneMessageForGateway(*memoryMsg)
-		memoryMsg = &pruned
-	}
 
 	// When the DCP pipeline has data for this session, build context from
 	// the rendered event stream (RC) + bot turn responses (TR) instead of
@@ -435,10 +431,11 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		_ = estimatedTokens
 	}
 	tail := make([]conversation.ModelMessage, 0, len(reqMessages))
-	if memoryMsg != nil {
-		// Memory recall is materialized here (provider search plus hooks) but
-		// shaped and placed by the context view's memory collector.
-		runCfg.ContextMemoryText = memoryMsg.TextContent()
+	if memoryContext.MemoryText != "" {
+		runCfg.ContextMemoryText = memoryContext.MemoryText
+	}
+	if memoryContext.HookText != "" {
+		runCfg.ContextMemoryHookText = memoryContext.HookText
 	}
 	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
 		tail = append(tail, *requestedSkillMsg)
@@ -1162,6 +1159,8 @@ func (r *Resolver) ResolveRunConfig(ctx context.Context, botID, sessionID, chann
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	memoryHookContext := strings.TrimSpace(cfg.ContextMemoryHookText)
+	cfg.ContextMemoryHookText = ""
 	beforePromptContext := r.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
@@ -1203,9 +1202,9 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		PlatformIdentitiesSection: platformIdentitiesSection,
 	}
 	cfg.System = agentpkg.GenerateSystemPrompt(systemParams)
-	var hookTexts []string
+	var promptHookTexts []string
 	if beforePromptContext != "" {
-		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventBeforePromptBuild, beforePromptContext))
+		promptHookTexts = append(promptHookTexts, formatResolverHookContext(hooks.EventBeforePromptBuild, beforePromptContext))
 	}
 	afterPromptContext := r.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
@@ -1213,11 +1212,16 @@ func (r *Resolver) prepareRunConfig(ctx context.Context, cfg agentpkg.RunConfig)
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  afterPromptHookSystemBytes(cfg.System, hookTexts),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, promptHookTexts),
 	}, hooks.EventAfterPromptBuild)
 	if afterPromptContext != "" {
-		hookTexts = append(hookTexts, formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext))
+		promptHookTexts = append(promptHookTexts, formatResolverHookContext(hooks.EventAfterPromptBuild, afterPromptContext))
 	}
+	hookTexts := make([]string, 0, len(promptHookTexts)+1)
+	if memoryHookContext != "" {
+		hookTexts = append(hookTexts, memoryHookContext)
+	}
+	hookTexts = append(hookTexts, promptHookTexts...)
 	cfg.ContextHookText = strings.Join(hookTexts, "\n\n")
 
 	// Fragments are the first-class context carrier: build the system

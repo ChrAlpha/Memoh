@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/hooks"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	"github.com/memohai/memoh/internal/settings"
 )
@@ -16,13 +17,13 @@ func TestLoadMemoryContextMessage_NoProvider(t *testing.T) {
 	resolver := &Resolver{
 		logger: slog.Default(),
 	}
-	msg := resolver.loadMemoryContextMessage(context.Background(), conversation.ChatRequest{
+	got := resolver.loadMemoryContext(context.Background(), conversation.ChatRequest{
 		Query:  "hello",
 		BotID:  "bot-1",
 		ChatID: "chat-1",
 	})
-	if msg != nil {
-		t.Fatalf("expected nil message when no memory provider is configured")
+	if got.MemoryText != "" || got.HookText != "" {
+		t.Fatalf("expected empty memory context when no provider is configured: %#v", got)
 	}
 }
 
@@ -36,14 +37,14 @@ func TestLoadMemoryContextMessageSkipsEmptyQuery(t *testing.T) {
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
 	}
-	msg := resolver.loadMemoryContextMessage(context.Background(), conversation.ChatRequest{
+	got := resolver.loadMemoryContext(context.Background(), conversation.ChatRequest{
 		Query:      "",
 		ModelQuery: "The user activated the following skill for this turn without an additional prompt: alpha.",
 		BotID:      storeRoundBotID,
 		ChatID:     "chat-1",
 	})
-	if msg != nil {
-		t.Fatalf("expected nil message for empty visible query, got %#v", msg)
+	if got.MemoryText != "" || got.HookText != "" {
+		t.Fatalf("expected empty memory context for empty visible query, got %#v", got)
 	}
 }
 
@@ -78,15 +79,15 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 		ChatID: "chat-1",
 	}
 
-	first := resolver.loadMemoryContextMessage(context.Background(), req)
-	if first == nil || !strings.Contains(first.TextContent(), "cached memory") {
+	first := resolver.loadMemoryContext(context.Background(), req)
+	if !strings.Contains(first.MemoryText, "cached memory") {
 		t.Fatalf("expected first memory context, got %#v", first)
 	}
 
 	now = now.Add(2 * time.Millisecond)
 	provider.waitForContext = true
-	second := resolver.loadMemoryContextMessage(context.Background(), req)
-	if second == nil || !strings.Contains(second.TextContent(), "cached memory") {
+	second := resolver.loadMemoryContext(context.Background(), req)
+	if !strings.Contains(second.MemoryText, "cached memory") {
 		t.Fatalf("expected stale memory context after timeout, got %#v", second)
 	}
 	if provider.calls < 2 {
@@ -110,18 +111,33 @@ func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *tes
 	}
 	req := conversation.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
 
-	first := resolver.loadMemoryContextMessage(context.Background(), req)
-	if first == nil || first.TextContent() != "memory v1" {
+	first := resolver.loadMemoryContext(context.Background(), req)
+	if first.MemoryText != "memory v1" {
 		t.Fatalf("first memory context = %#v, want v1", first)
 	}
 	provider.version = "v2"
 	provider.result = &memprovider.BeforeChatResult{ContextText: "memory v2"}
-	second := resolver.loadMemoryContextMessage(context.Background(), req)
-	if second == nil || second.TextContent() != "memory v2" {
+	second := resolver.loadMemoryContext(context.Background(), req)
+	if second.MemoryText != "memory v2" {
 		t.Fatalf("second memory context = %#v, want v2", second)
 	}
 	if provider.calls != 2 {
 		t.Fatalf("provider calls = %d, want cache miss after version change", provider.calls)
+	}
+}
+
+func TestMaterializeMemoryContextSeparatesHookOutput(t *testing.T) {
+	t.Parallel()
+
+	got := materializeMemoryContext("remembered fact", "plugin guidance")
+	if got.MemoryText != "remembered fact" {
+		t.Fatalf("memory text = %q, want provider result only", got.MemoryText)
+	}
+	if got.HookText != "[Hook Context: "+hooks.EventAfterMemorySearch+"]\nplugin guidance" {
+		t.Fatalf("hook text = %q, want separately attributed hook context", got.HookText)
+	}
+	if strings.Contains(got.MemoryText, "plugin guidance") {
+		t.Fatalf("hook output leaked into memory text: %q", got.MemoryText)
 	}
 }
 
