@@ -108,6 +108,13 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 	if provider.calls < 2 {
 		t.Fatalf("expected provider to be called again after fresh TTL expired, got %d calls", provider.calls)
 	}
+
+	now = now.Add(2 * time.Minute)
+	third := resolver.loadMemoryContext(context.Background(), req)
+	if third.MemoryText != "" || third.HookText != "" {
+		t.Fatalf("expired stale cache materialized context: %#v", third)
+	}
+	assertMemoryTrace(t, third.Trace, "miss", "", "timeout", "", 0, nil, 0)
 }
 
 func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *testing.T) {

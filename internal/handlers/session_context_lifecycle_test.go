@@ -53,6 +53,41 @@ func TestLifecycleTurnsFromRowsFiltersAndOrders(t *testing.T) {
 	}
 }
 
+func TestLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *testing.T) {
+	t.Parallel()
+
+	base := time.Unix(1000, 0).UTC()
+	rows := []sqlc.ListRecentAssistantMessagesBySessionRow{
+		lifecycleRow(t, "assistant", base.Add(time.Minute), &contextfrag.LifecycleSnapshot{
+			Version: 1,
+			MemoryRecall: &contextfrag.MemoryRecallTrace{
+				ProviderID: "provider-1",
+				CacheState: "miss",
+				Result: contextfrag.MemoryRecallResultTrace{
+					Count: 1,
+					Refs:  []string{"memory-1"},
+				},
+			},
+		}),
+		lifecycleRow(t, "assistant", base, &contextfrag.LifecycleSnapshot{
+			Version:        1,
+			FinalInputHash: "legacy-snapshot",
+		}),
+	}
+
+	turns := lifecycleTurnsFromRows(rows, 10)
+	if len(turns) != 2 {
+		t.Fatalf("turns = %d, want memory and legacy snapshots", len(turns))
+	}
+	if turns[0].Snapshot.MemoryRecall == nil || turns[0].Snapshot.MemoryRecall.ProviderID != "provider-1" ||
+		turns[0].Snapshot.MemoryRecall.Result.Count != 1 {
+		t.Fatalf("memory-only snapshot = %#v", turns[0].Snapshot)
+	}
+	if turns[1].Snapshot.MemoryRecall != nil || turns[1].Snapshot.FinalInputHash != "legacy-snapshot" {
+		t.Fatalf("legacy snapshot changed compatibility semantics: %#v", turns[1].Snapshot)
+	}
+}
+
 func TestAggregateContextLifecycle(t *testing.T) {
 	t.Parallel()
 
