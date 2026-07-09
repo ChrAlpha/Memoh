@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -285,8 +286,10 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + usage)
 		}
 	}
-	if text := strings.TrimSpace(cfg.ContextMemoryText); text != "" {
-		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+	if raw := strings.TrimSpace(cfg.ContextMemoryText); raw != "" {
+		if text := fallbackMemoryContext(raw); text != "" {
+			cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+		}
 		cfg.ContextMemoryText = ""
 	}
 	if text := strings.TrimSpace(cfg.ContextHookText); text != "" {
@@ -320,6 +323,14 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	}
 	cfg.ContextQueryMaterialized = true
 	return cfg
+}
+
+func fallbackMemoryContext(text string) string {
+	formatted := FormatMemoryContext(text)
+	if utf8.RuneCountInString(formatted) > maxMemoryContextChars {
+		return ""
+	}
+	return formatted
 }
 
 // cachePlanFromPlacement projects the placement plan onto the rendered
