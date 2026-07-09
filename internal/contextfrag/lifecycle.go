@@ -1,13 +1,29 @@
 package contextfrag
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 const MetadataContextLifecycleKey = "context_lifecycle"
+
+const maxMemoryRecallTraceRefs = 32
 
 type LifecycleHolder struct {
 	mu       sync.Mutex
 	manifest Manifest
+	memory   *MemoryRecallTrace
 	set      bool
+}
+
+func (h *LifecycleHolder) SetMemoryRecall(trace MemoryRecallTrace) {
+	if h == nil {
+		return
+	}
+	trace.Result.Refs = normalizeMemoryRecallRefs(trace.Result.Refs)
+	h.mu.Lock()
+	h.memory = cloneMemoryRecallTrace(&trace)
+	h.mu.Unlock()
 }
 
 func NewLifecycleHolder() *LifecycleHolder {
@@ -30,12 +46,15 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 	}
 	h.mu.Lock()
 	manifest := h.manifest
+	memory := cloneMemoryRecallTrace(h.memory)
 	ok := h.set
 	h.mu.Unlock()
 	if !ok {
 		return LifecycleSnapshot{}, false
 	}
-	return BuildLifecycleSnapshot(manifest), true
+	snapshot := BuildLifecycleSnapshot(manifest)
+	snapshot.MemoryRecall = memory
+	return snapshot, true
 }
 
 func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
@@ -92,6 +111,58 @@ type LifecycleSnapshot struct {
 	ClientType                  string             `json:"client_type,omitempty"`
 	LoopSelectionMode           string             `json:"loop_selection_mode,omitempty"`
 	Steps                       []StepSnapshot     `json:"steps,omitempty"`
+	MemoryRecall                *MemoryRecallTrace `json:"memory_recall,omitempty"`
+}
+
+type MemoryRecallTrace struct {
+	ProviderID     string                  `json:"provider_id"`
+	MemoryVersion  string                  `json:"memory_version,omitempty"`
+	CacheState     string                  `json:"cache_state"`
+	RetrievalMode  string                  `json:"retrieval_mode,omitempty"`
+	FallbackReason string                  `json:"fallback_reason,omitempty"`
+	Query          MemoryRecallQueryTrace  `json:"query"`
+	Result         MemoryRecallResultTrace `json:"result"`
+}
+
+type MemoryRecallQueryTrace struct {
+	Source         string `json:"source"`
+	RecentMessages int    `json:"recent_messages"`
+	Truncated      bool   `json:"truncated"`
+}
+
+type MemoryRecallResultTrace struct {
+	Count        int      `json:"count"`
+	Refs         []string `json:"refs,omitempty"`
+	ContextBytes int      `json:"context_bytes"`
+}
+
+func cloneMemoryRecallTrace(trace *MemoryRecallTrace) *MemoryRecallTrace {
+	if trace == nil {
+		return nil
+	}
+	out := *trace
+	out.Result.Refs = append([]string(nil), trace.Result.Refs...)
+	return &out
+}
+
+func normalizeMemoryRecallRefs(refs []string) []string {
+	out := make([]string, 0, min(len(refs), maxMemoryRecallTraceRefs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+		if len(out) == maxMemoryRecallTraceRefs {
+			break
+		}
+	}
+	return out
 }
 
 func selectionSnapshot(selection *SelectionTrace) SelectionTrace {

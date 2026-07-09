@@ -2,6 +2,7 @@ package contextfrag
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -379,5 +380,67 @@ func TestManifestJSONIncludesCacheComparison(t *testing.T) {
 	snapshot := BuildLifecycleSnapshot(manifest)
 	if snapshot.CacheComparison == nil || snapshot.CacheComparison.Outcome != CacheOutcomeMissSamePrefix {
 		t.Fatalf("snapshot comparison = %#v", snapshot.CacheComparison)
+	}
+}
+
+func TestLifecycleHolderPreservesBoundedMemoryRecallTrace(t *testing.T) {
+	t.Parallel()
+
+	refs := make([]string, 0, maxMemoryRecallTraceRefs+3)
+	refs = append(refs, "", "memory-0", "memory-0")
+	for i := 1; i <= maxMemoryRecallTraceRefs+1; i++ {
+		refs = append(refs, "memory-"+strconv.Itoa(i))
+	}
+	trace := MemoryRecallTrace{
+		ProviderID:     "provider-1",
+		MemoryVersion:  "version-7",
+		CacheState:     "stale",
+		RetrievalMode:  "graph",
+		FallbackReason: "timeout",
+		Query: MemoryRecallQueryTrace{
+			Source:         "current_plus_recent_user_messages",
+			RecentMessages: 4,
+			Truncated:      true,
+		},
+		Result: MemoryRecallResultTrace{
+			Count:        40,
+			Refs:         refs,
+			ContextBytes: 1800,
+		},
+	}
+	holder := NewLifecycleHolder()
+	holder.SetMemoryRecall(trace)
+	refs[1] = "mutated-after-set"
+	holder.SetManifest(Manifest{Counts: ManifestCounts{Fragments: 1}})
+	holder.SetManifest(Manifest{Counts: ManifestCounts{Fragments: 2}})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.MemoryRecall == nil {
+		t.Fatalf("snapshot = %#v ok=%v, want memory recall trace", snapshot, ok)
+	}
+	got := snapshot.MemoryRecall
+	if got.ProviderID != "provider-1" || got.MemoryVersion != "version-7" || got.CacheState != "stale" {
+		t.Fatalf("memory recall trace = %#v", got)
+	}
+	if got.Result.Count != 40 || len(got.Result.Refs) != maxMemoryRecallTraceRefs {
+		t.Fatalf("result trace = %#v, want full count and %d bounded refs", got.Result, maxMemoryRecallTraceRefs)
+	}
+	if got.Result.Refs[0] != "memory-0" || got.Result.Refs[1] != "memory-1" {
+		t.Fatalf("refs were not normalized and copied: %#v", got.Result.Refs)
+	}
+	got.Result.Refs[0] = "mutated-after-snapshot"
+	again, _ := holder.Snapshot()
+	if again.MemoryRecall.Result.Refs[0] != "memory-0" {
+		t.Fatalf("snapshot refs alias holder state: %#v", again.MemoryRecall.Result.Refs)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, forbidden := range []string{"raw query sentinel", "raw memory body sentinel"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("lifecycle JSON leaked %q: %s", forbidden, raw)
+		}
 	}
 }
