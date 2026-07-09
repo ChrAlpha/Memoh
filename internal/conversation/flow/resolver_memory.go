@@ -34,8 +34,8 @@ func (r *Resolver) resolveMemoryProvider(ctx context.Context, botID string) memp
 }
 
 func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversation.ChatRequest) *conversation.ModelMessage {
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
+	builtQuery := r.buildMemoryQuery(ctx, req)
+	if strings.TrimSpace(builtQuery.Query) == "" {
 		return nil
 	}
 	p := r.resolveMemoryProvider(ctx, req.BotID)
@@ -44,8 +44,12 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 	}
 	before, err := r.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
-			"scope": "before_chat",
-			"query": query,
+			"scope":                 "before_chat",
+			"query":                 builtQuery.Query,
+			"visible_query":         strings.TrimSpace(req.Query),
+			"query_source":          builtQuery.Source,
+			"query_recent_messages": builtQuery.RecentMessages,
+			"query_truncated":       builtQuery.Truncated,
 		}
 	})
 	if err != nil {
@@ -55,7 +59,7 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 		}
 	}
 	result, err := p.OnBeforeChat(ctx, memprovider.BeforeChatRequest{
-		Query:  query,
+		Query:  builtQuery.Query,
 		BotID:  req.BotID,
 		ChatID: req.ChatID,
 	})
@@ -66,9 +70,13 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 	if result == nil || strings.TrimSpace(result.ContextText) == "" {
 		after, err := r.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 			hreq.Memory = map[string]any{
-				"scope":        "before_chat",
-				"query":        query,
-				"result_count": 0,
+				"scope":                 "before_chat",
+				"query":                 builtQuery.Query,
+				"visible_query":         strings.TrimSpace(req.Query),
+				"query_source":          builtQuery.Source,
+				"query_recent_messages": builtQuery.RecentMessages,
+				"query_truncated":       builtQuery.Truncated,
+				"result_count":          0,
 			}
 		})
 		if err != nil {
@@ -84,10 +92,14 @@ func (r *Resolver) loadMemoryContextMessage(ctx context.Context, req conversatio
 	}
 	after, err := r.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
-			"scope":         "before_chat",
-			"query":         query,
-			"result_count":  1,
-			"context_bytes": len(result.ContextText),
+			"scope":                 "before_chat",
+			"query":                 builtQuery.Query,
+			"visible_query":         strings.TrimSpace(req.Query),
+			"query_source":          builtQuery.Source,
+			"query_recent_messages": builtQuery.RecentMessages,
+			"query_truncated":       builtQuery.Truncated,
+			"result_count":          1,
+			"context_bytes":         len(result.ContextText),
 		}
 	})
 	if err != nil {
