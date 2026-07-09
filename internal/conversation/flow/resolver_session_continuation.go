@@ -29,6 +29,7 @@ func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversati
 		cfg.ContextBudgetMaxTokens = contextBudgetMaxTokens
 	}
 	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(messages))
+	cfg.ContextCurrentUserMessageIndex = nil
 	cfg.Query = ""
 	cfg.LiveToolStream = liveToolStream
 	cfg.CanRequestUserInput = canRequestUserInput

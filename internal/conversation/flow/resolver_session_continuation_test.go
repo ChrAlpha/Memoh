@@ -28,13 +28,19 @@ func TestFinalizeContinuationRunConfigSetsHistorySignalsFromSanitizedMessages(t 
 		t.Fatalf("test fixture is broken: expected sanitizeMessages to drop the empty-role message, got %d messages", sanitizedCount)
 	}
 
-	cfg := finalizeContinuationRunConfig(agentpkg.RunConfig{}, messages, 0, false, false)
+	staleCurrentUserIndex := 0
+	cfg := finalizeContinuationRunConfig(agentpkg.RunConfig{
+		ContextCurrentUserMessageIndex: &staleCurrentUserIndex,
+	}, messages, 0, false, false)
 
 	if len(cfg.ContextHistoryTokenEstimates) != sanitizedCount {
 		t.Errorf("ContextHistoryTokenEstimates length = %d, want %d (post-sanitize count, not raw %d)", len(cfg.ContextHistoryTokenEstimates), sanitizedCount, len(messages))
 	}
 	if cfg.ContextTrimmableMessages != sanitizedCount {
 		t.Errorf("ContextTrimmableMessages = %d, want %d (post-sanitize count, not raw %d)", cfg.ContextTrimmableMessages, sanitizedCount, len(messages))
+	}
+	if cfg.ContextCurrentUserMessageIndex != nil {
+		t.Errorf("ContextCurrentUserMessageIndex = %d, want nil after continuation replaces Messages", *cfg.ContextCurrentUserMessageIndex)
 	}
 }
 
