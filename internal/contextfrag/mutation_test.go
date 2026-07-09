@@ -482,4 +482,16 @@ func TestLifecycleHolderCopiesManifestSnapshotFields(t *testing.T) {
 	if snapshot.StablePrefixHash != "original-prefix" || snapshot.Selection.Dropped != 1 || snapshot.Selection.DropReasons["budget_trim"] != 1 {
 		t.Fatalf("snapshot observed aliased manifest mutation: %#v", snapshot)
 	}
+
+	emptyReasons := map[string]int{}
+	emptyHolder := NewLifecycleHolder()
+	emptyHolder.SetManifest(Manifest{Selection: &SelectionTrace{DropReasons: emptyReasons}})
+	emptyReasons["added-after-set"] = 1
+	emptySnapshot, ok := emptyHolder.Snapshot()
+	if !ok {
+		t.Fatal("empty-map snapshot should be available")
+	}
+	if _, exists := emptySnapshot.Selection.DropReasons["added-after-set"]; exists {
+		t.Fatalf("snapshot retained aliased empty map: %#v", emptySnapshot.Selection.DropReasons)
+	}
 }

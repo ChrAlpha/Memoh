@@ -46,7 +46,7 @@ func cloneLifecycleManifest(manifest Manifest) Manifest {
 	out := manifest
 	if manifest.Selection != nil {
 		selection := *manifest.Selection
-		if len(manifest.Selection.DropReasons) > 0 {
+		if manifest.Selection.DropReasons != nil {
 			selection.DropReasons = make(map[string]int, len(manifest.Selection.DropReasons))
 			for reason, count := range manifest.Selection.DropReasons {
 				selection.DropReasons[reason] = count
