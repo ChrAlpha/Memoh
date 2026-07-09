@@ -32,6 +32,14 @@ type MemoryContextCacheKey struct {
 	MemoryVersion string
 }
 
+// MemoryContextCacheState classifies an available cache entry by age.
+type MemoryContextCacheState string
+
+const (
+	MemoryContextCacheFresh MemoryContextCacheState = "fresh"
+	MemoryContextCacheStale MemoryContextCacheState = "stale"
+)
+
 // MemoryContextCacheValue is a cached rendered memory context.
 type MemoryContextCacheValue struct {
 	ContextText    string
@@ -117,6 +125,28 @@ func (c *MemoryContextCache) GetStale(key MemoryContextCacheKey) (MemoryContextC
 	entry.LastAccessedAt = now
 	c.entries[key] = entry
 	return cloneMemoryContextCacheValue(entry), true
+}
+
+// GetFreshOrStale returns an available value and atomically classifies its age.
+func (c *MemoryContextCache) GetFreshOrStale(key MemoryContextCacheKey) (MemoryContextCacheValue, MemoryContextCacheState, bool) {
+	if c == nil || !validMemoryContextCacheKey(key) {
+		return MemoryContextCacheValue{}, "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+	entry, ok := c.entries[key]
+	if !ok || now.After(entry.StaleUntil) {
+		return MemoryContextCacheValue{}, "", false
+	}
+	state := MemoryContextCacheFresh
+	if now.After(entry.ExpiresAt) {
+		state = MemoryContextCacheStale
+	}
+	entry.LastAccessedAt = now
+	c.entries[key] = entry
+	return cloneMemoryContextCacheValue(entry), state, true
 }
 
 // Set stores a rendered memory context.

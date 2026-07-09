@@ -43,6 +43,10 @@ func TestMemoryContextCacheFreshAndStale(t *testing.T) {
 		t.Fatalf("fresh result trace = count %d refs %#v", fresh.ResultCount, fresh.ResultRefs)
 	}
 	fresh.ResultRefs[0] = "mutated-after-get"
+	available, state, ok := cache.GetFreshOrStale(key)
+	if !ok || state != MemoryContextCacheFresh || available.ContextText == "" {
+		t.Fatalf("available fresh cache = value=%+v state=%q ok=%v", available, state, ok)
+	}
 
 	now = now.Add(11 * time.Second)
 	if _, ok := cache.Get(key); ok {
@@ -58,10 +62,17 @@ func TestMemoryContextCacheFreshAndStale(t *testing.T) {
 	if stale.ResultCount != 2 || stale.ResultRefs[0] != "memory-1" {
 		t.Fatalf("stale result trace aliased a caller slice: count %d refs %#v", stale.ResultCount, stale.ResultRefs)
 	}
+	available, state, ok = cache.GetFreshOrStale(key)
+	if !ok || state != MemoryContextCacheStale || available.ContextText == "" {
+		t.Fatalf("available stale cache = value=%+v state=%q ok=%v", available, state, ok)
+	}
 
 	now = now.Add(31 * time.Second)
 	if _, ok := cache.GetStale(key); ok {
 		t.Fatal("expected stale cache miss after grace window")
+	}
+	if _, _, ok := cache.GetFreshOrStale(key); ok {
+		t.Fatal("expected available cache miss after grace window")
 	}
 }
 

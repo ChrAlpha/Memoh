@@ -117,6 +117,54 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 	assertMemoryTrace(t, third.Trace, "miss", "", "timeout", "", 0, nil, 0)
 }
 
+func TestLoadMemoryContextMessageClassifiesCacheFilledDuringProviderWait(t *testing.T) {
+	t.Parallel()
+
+	provider := &blockingBeforeChatProvider{started: make(chan struct{})}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(storeRoundMemoryProviderID, provider)
+	cache := memprovider.NewMemoryContextCache(memprovider.MemoryContextCacheConfig{})
+	resolver := &Resolver{
+		memoryRegistry:      registry,
+		settingsService:     settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		logger:              slog.New(slog.DiscardHandler),
+		memorySearchTimeout: 100 * time.Millisecond,
+		memoryContextCache:  cache,
+	}
+	req := conversation.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
+	result := make(chan memoryContextLoad, 1)
+	go func() {
+		result <- resolver.loadMemoryContext(context.Background(), req)
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not start")
+	}
+	cache.Set(memprovider.MemoryContextCacheKey{
+		BotID:      storeRoundBotID,
+		ChatID:     "chat-1",
+		ProviderID: storeRoundMemoryProviderID,
+		QueryHash:  memprovider.MemoryContextQueryHash("tea"),
+	}, memprovider.MemoryContextCacheValue{
+		ContextText:   "<memory-context>concurrent result</memory-context>",
+		RetrievalMode: "graph",
+		ResultCount:   1,
+		ResultRefs:    []string{"memory-1"},
+	})
+
+	select {
+	case got := <-result:
+		if !strings.Contains(got.MemoryText, "concurrent result") {
+			t.Fatalf("expected concurrently cached memory, got %#v", got)
+		}
+		assertMemoryTrace(t, got.Trace, "fresh", "graph", "timeout", "", 1, []string{"memory-1"}, len("<memory-context>concurrent result</memory-context>"))
+	case <-time.After(time.Second):
+		t.Fatal("memory lookup did not finish")
+	}
+}
+
 func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *testing.T) {
 	t.Parallel()
 
@@ -191,6 +239,21 @@ type slowBeforeChatProvider struct {
 	result         *memprovider.BeforeChatResult
 	waitForContext bool
 	calls          int
+}
+
+type blockingBeforeChatProvider struct {
+	memprovider.Provider
+	started chan struct{}
+}
+
+func (*blockingBeforeChatProvider) Type() string {
+	return "test"
+}
+
+func (p *blockingBeforeChatProvider) OnBeforeChat(ctx context.Context, _ memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
+	close(p.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (*slowBeforeChatProvider) Type() string {

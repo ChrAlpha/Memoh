@@ -105,7 +105,7 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 			slog.String("fallback_reason", fallbackReason),
 			slog.Any("error", err),
 		)
-		if cached, ok := r.getMemoryContextCache().GetStale(cacheKey); ok {
+		if cached, cacheState, ok := r.getMemoryContextCache().GetFreshOrStale(cacheKey); ok {
 			result := &memprovider.BeforeChatResult{
 				ContextText:    cached.ContextText,
 				RetrievalMode:  cached.RetrievalMode,
@@ -113,7 +113,7 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 				ResultCount:    cached.ResultCount,
 				ResultRefs:     cached.ResultRefs,
 			}
-			return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, "stale", fallbackReason)
+			return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, string(cacheState), fallbackReason)
 		}
 		return r.memoryContextFromResult(ctx, req, builtQuery, cacheKey, nil, "miss", fallbackReason)
 	}
