@@ -3,6 +3,8 @@ package flow
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextview"
@@ -54,7 +56,12 @@ func acpContextViaContextView(ctx context.Context, logger *slog.Logger, sections
 func finalizeACPSections(sections []contextview.ACPSection) string {
 	blocks := make([]string, 0, len(sections))
 	for _, section := range sections {
-		blocks = append(blocks, section.Text)
+		text := strings.TrimSpace(section.Text)
+		if section.Budget.MaxChars > 0 && utf8.RuneCountInString(text) > section.Budget.MaxChars &&
+			section.Budget.Overflow == contextfrag.OverflowDrop {
+			continue
+		}
+		blocks = append(blocks, text)
 	}
 	return contextview.FinalizeACPContextMarkdown(blocks)
 }

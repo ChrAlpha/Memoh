@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/contextview"
 )
 
@@ -44,5 +45,36 @@ func TestACPContextSectionsSafeWithHeadingInsideFileExcerpt(t *testing.T) {
 
 	if !strings.Contains(markdown, "line before heading\n## Preferences\nprefers small patches") {
 		t.Fatalf("fence content must survive byte-for-byte:\n%s", markdown)
+	}
+}
+
+func TestFinalizeACPSectionsDropsOversizedDynamicSections(t *testing.T) {
+	t.Parallel()
+
+	sections := []contextview.ACPSection{
+		{
+			ID:     "acp.preamble",
+			Text:   "# Memoh ACP Context",
+			Budget: contextfrag.BudgetPolicy{MaxChars: 1, Overflow: contextfrag.OverflowKeep},
+		},
+		{
+			ID:     "acp.section.memory-recall",
+			Text:   "## Retrieved Memory\n\n" + strings.Repeat("memory ", 20),
+			Budget: contextfrag.BudgetPolicy{MaxChars: 32, Overflow: contextfrag.OverflowDrop},
+		},
+		{
+			ID:     "acp.section.memory-hook",
+			Text:   "## Memory Hook Context\n\n" + strings.Repeat("hook ", 20),
+			Budget: contextfrag.BudgetPolicy{MaxChars: 32, Overflow: contextfrag.OverflowDrop},
+		},
+		{ID: "acp.section.runtime-notes", Text: "## Runtime Notes\n\nkeep me"},
+	}
+
+	markdown := finalizeACPSections(sections)
+	if !strings.Contains(markdown, "# Memoh ACP Context") || !strings.Contains(markdown, "keep me") {
+		t.Fatalf("fallback dropped retained sections: %q", markdown)
+	}
+	if strings.Contains(markdown, "Retrieved Memory") || strings.Contains(markdown, "Memory Hook Context") {
+		t.Fatalf("fallback retained oversized dynamic sections: %q", markdown)
 	}
 }
