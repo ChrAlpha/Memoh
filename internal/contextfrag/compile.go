@@ -15,16 +15,19 @@ const (
 
 // CompileInput contains the legacy RunConfig fields used as phase-1 sources.
 type CompileInput struct {
-	Source          string
-	Scope           Scope
-	System          string
-	Messages        []sdk.Message
-	Query           string
-	InlineImages    []sdk.ImagePart
-	ToolUsage       string
-	View            ManifestView
-	DynamicMutators []DynamicMutator
-	Existing        []ContextFrag
+	Source   string
+	Scope    Scope
+	System   string
+	Messages []sdk.Message
+	// CurrentUserMessageIndex identifies a current request already carried in
+	// Messages so legacy manifests retain its typed slot.
+	CurrentUserMessageIndex *int
+	Query                   string
+	InlineImages            []sdk.ImagePart
+	ToolUsage               string
+	View                    ManifestView
+	DynamicMutators         []DynamicMutator
+	Existing                []ContextFrag
 }
 
 // CompileFrags builds the typed fragment list from the current SDK-shaped
@@ -64,18 +67,32 @@ func CompileFrags(input CompileInput) []ContextFrag {
 			frags = append(frags, frag)
 			continue
 		}
+		kind := kindForMessage(msg)
+		slot := SlotHistory
+		cacheClass := cacheForMessage(msg)
+		trust := trustForMessage(msg)
+		budget := BudgetPolicy{}
+		messageScope := scope
+		if isCurrentUserMessage(input.CurrentUserMessageIndex, i, msg) {
+			kind = KindCurrentUserMessage
+			slot = SlotCurrentUser
+			cacheClass = CacheNever
+			trust = TrustUser
+			budget.Overflow = OverflowKeep
+		}
 		frags = append(frags, MessageFrag(MessageFragInput{
 			ID:         id,
 			Message:    msg,
-			Kind:       kindForMessage(msg),
-			Slot:       SlotHistory,
+			Kind:       kind,
+			Slot:       slot,
 			Priority:   priorityForMessage(msg),
-			CacheClass: cacheForMessage(msg),
-			Trust:      trustForMessage(msg),
-			Scope:      scope,
+			CacheClass: cacheClass,
+			Trust:      trust,
+			Scope:      messageScope,
 			Source:     source,
 			Collector:  CollectorRunConfigFields,
 			Index:      i,
+			Budget:     budget,
 		}))
 	}
 	if strings.TrimSpace(input.Query) != "" {
@@ -102,6 +119,10 @@ func CompileFrags(input CompileInput) []ContextFrag {
 	}
 
 	return normalizeContextRefs(frags)
+}
+
+func isCurrentUserMessage(index *int, candidate int, msg sdk.Message) bool {
+	return index != nil && *index == candidate && msg.Role == sdk.MessageRoleUser
 }
 
 // Compile builds typed fragments from the current SDK-shaped fields, preserving

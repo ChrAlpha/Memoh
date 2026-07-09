@@ -254,3 +254,61 @@ func TestApplyProviderContextViewStableMessageCountExcludesMemoryAndCurrent(t *t
 		t.Fatalf("stable message count = %d, want 3 (memory/current must stay cache-volatile)", got.ContextCachePlan.StableMessageCount)
 	}
 }
+
+func TestApplyProviderContextViewPlacesDynamicContextBeforeMaterializedCurrentUser(t *testing.T) {
+	t.Parallel()
+
+	currentUserIndex := 1
+	cfg := agentpkg.RunConfig{
+		Messages: []sdk.Message{
+			sdk.AssistantMessage("previous answer"),
+			sdk.UserMessage("pipeline current question"),
+		},
+		ContextCurrentUserMessageIndex: &currentUserIndex,
+		ContextTrimmableMessages:       2,
+		ContextMemoryText:              "remembered fact",
+		ContextHookText:                "workspace hook guidance",
+	}
+
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+
+	if len(got.Messages) != 4 {
+		t.Fatalf("messages = %#v, want history, memory, hook, then current user", got.Messages)
+	}
+	if text := messageText(t, got.Messages[1]); text != FormatMemoryContext("remembered fact") {
+		t.Fatalf("messages[1] = %q, want framed memory", text)
+	}
+	if text := messageText(t, got.Messages[2]); text != "workspace hook guidance" {
+		t.Fatalf("messages[2] = %q, want hook context", text)
+	}
+	if text := messageText(t, got.Messages[3]); text != "pipeline current question" {
+		t.Fatalf("messages[3] = %q, want materialized current user", text)
+	}
+	if got.ContextManifest.Items[len(got.ContextManifest.Items)-1].Slot != contextfrag.SlotCurrentUser {
+		t.Fatalf("last manifest item = %#v, want current-user slot", got.ContextManifest.Items[len(got.ContextManifest.Items)-1])
+	}
+}
+
+func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure(t *testing.T) {
+	t.Parallel()
+
+	currentUserIndex := 1
+	zero := 0
+	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		Messages: []sdk.Message{
+			sdk.AssistantMessage("old answer"),
+			sdk.UserMessage("pipeline current question"),
+		},
+		ContextCurrentUserMessageIndex: &currentUserIndex,
+		ContextHistoryTokenEstimates:   []int{100, 100},
+		ContextTrimmableMessages:       2,
+		ContextMemoryText:              "remembered fact",
+		ContextHookText:                "workspace hook guidance",
+		ContextBudgetMaxTokens:         1,
+		ContextRecentProtectTokens:     &zero,
+	})
+
+	if len(got.Messages) == 0 || messageText(t, got.Messages[len(got.Messages)-1]) != "pipeline current question" {
+		t.Fatalf("messages = %#v, materialized current user must survive as the trailing request", got.Messages)
+	}
+}

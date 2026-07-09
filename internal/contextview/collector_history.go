@@ -9,10 +9,16 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-const historyMessagesCollectorName = "history_messages"
+const (
+	historyMessagesCollectorName         = "history_messages"
+	materializedCurrentUserCollectorName = "materialized_current_user"
+)
 
 type HistoryMessagesConfig struct {
 	Messages []sdk.Message
+	// CurrentUserMessageIndex identifies a current request already carried in
+	// Messages. The collector gives it the current-user slot and scope.
+	CurrentUserMessageIndex *int
 	// TokenEstimates carries per-message context token estimates computed at
 	// the source (parallel to Messages; may be shorter). Entries beyond the
 	// array fall back to renderer-side estimation.
@@ -45,11 +51,14 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 	// History messages carry no per-message attention data on this path; the
 	// request's own attention must not color them, or budget drop histograms
 	// would report the current turn's attention for every history drop.
-	scope := req.Scope
-	scope.Attention = nil
+	historyScope := req.Scope
+	historyScope.Attention = nil
 
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages))
 	for i, msg := range cfg.Messages {
+		if isMarkedCurrentUserMessage(cfg.CurrentUserMessageIndex, i, msg) {
+			continue
+		}
 		estimate := 0
 		if i < len(cfg.TokenEstimates) {
 			estimate = cfg.TokenEstimates[i]
@@ -66,7 +75,7 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 			Priority:      contextfrag.PriorityForMessage(msg),
 			CacheClass:    cacheForSDKMessage(msg),
 			Trust:         trustForSDKMessage(msg),
-			Scope:         scope,
+			Scope:         historyScope,
 			Source:        contextfrag.SourceRunConfig,
 			Collector:     historyMessagesCollectorName,
 			Index:         i,
@@ -75,9 +84,50 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 		}))
 	}
 	if cfg.RepairToolClosures {
-		frags = contextfrag.RepairToolClosureFrags(frags, scope, historyMessagesCollectorName)
+		frags = contextfrag.RepairToolClosureFrags(frags, historyScope, historyMessagesCollectorName)
 	}
 	return frags, nil
+}
+
+type materializedCurrentUserCollector struct{}
+
+func (*materializedCurrentUserCollector) Name() string {
+	return materializedCurrentUserCollectorName
+}
+
+func (*materializedCurrentUserCollector) Collect(_ context.Context, req CollectRequest) ([]contextfrag.ContextFrag, error) {
+	cfg, err := historyMessagesConfig(req.Config)
+	if err != nil {
+		return nil, err
+	}
+	index, ok := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex)
+	if !ok {
+		return nil, nil
+	}
+	estimate := 0
+	if index < len(cfg.TokenEstimates) {
+		estimate = cfg.TokenEstimates[index]
+	}
+	msg := cfg.Messages[index]
+	return []contextfrag.ContextFrag{contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            fmt.Sprintf("message.%03d", index),
+		Message:       msg,
+		Kind:          contextfrag.KindCurrentUserMessage,
+		Slot:          contextfrag.SlotCurrentUser,
+		Priority:      contextfrag.PriorityForMessage(msg),
+		CacheClass:    contextfrag.CacheNever,
+		Trust:         contextfrag.TrustUser,
+		Scope:         req.Scope,
+		Source:        contextfrag.SourceRunConfig,
+		Collector:     materializedCurrentUserCollectorName,
+		Index:         index,
+		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+		TokenEstimate: estimate,
+	})}, nil
+}
+
+func isMarkedCurrentUserMessage(index *int, candidate int, msg sdk.Message) bool {
+	return index != nil && *index == candidate && msg.Role == sdk.MessageRoleUser
 }
 
 func historyMessagesConfig(config any) (HistoryMessagesConfig, error) {

@@ -105,3 +105,47 @@ func TestProviderViewFallbackDropsOversizedMemoryRecall(t *testing.T) {
 		t.Fatalf("fallback retained oversized memory carrier: %d chars", len(out.ContextMemoryText))
 	}
 }
+
+func TestProviderViewFallbackDropsOversizedHookContext(t *testing.T) {
+	t.Parallel()
+
+	out := providerViewFallback(nil, agentpkg.RunConfig{
+		ContextHookText: strings.Repeat("x", maxHookContextChars+1),
+		Query:           "current question",
+	}, contextfrag.NewMutationLedger(), "build_error", "fallback", errors.New("boom"))
+
+	if len(out.Messages) != 1 || messageText(t, out.Messages[0]) != "current question" {
+		t.Fatalf("messages = %#v, want only current query after oversized hook is dropped", out.Messages)
+	}
+	if out.ContextHookText != "" {
+		t.Fatalf("fallback retained oversized hook carrier: %d chars", len(out.ContextHookText))
+	}
+}
+
+func TestProviderViewFallbackPlacesDynamicContextBeforeMaterializedCurrentUser(t *testing.T) {
+	t.Parallel()
+
+	currentUserIndex := 1
+	out := providerViewFallback(nil, agentpkg.RunConfig{
+		Messages: []sdk.Message{
+			sdk.AssistantMessage("previous answer"),
+			sdk.UserMessage("pipeline current question"),
+		},
+		ContextCurrentUserMessageIndex: &currentUserIndex,
+		ContextMemoryText:              "remembered fact",
+		ContextHookText:                "workspace hook guidance",
+	}, contextfrag.NewMutationLedger(), "build_error", "fallback", errors.New("boom"))
+
+	if len(out.Messages) != 4 {
+		t.Fatalf("messages = %#v, want previous answer, memory, hook, current user", out.Messages)
+	}
+	if messageText(t, out.Messages[1]) != FormatMemoryContext("remembered fact") ||
+		messageText(t, out.Messages[2]) != "workspace hook guidance" ||
+		messageText(t, out.Messages[3]) != "pipeline current question" {
+		t.Fatalf("fallback dynamic/current ordering = %#v", out.Messages)
+	}
+	items := out.ContextManifest.Items
+	if len(items) == 0 || items[len(items)-1].Slot != contextfrag.SlotCurrentUser {
+		t.Fatalf("fallback manifest items = %#v, want materialized current-user slot last", items)
+	}
+}

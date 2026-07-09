@@ -15,15 +15,16 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 		inlineImages = nil
 	}
 	assembled := contextfrag.Compile(contextfrag.CompileInput{
-		Source:          contextfrag.SourceRunConfig,
-		Scope:           cfg.ContextScope,
-		System:          cfg.System,
-		Messages:        cfg.Messages,
-		Query:           query,
-		InlineImages:    inlineImages,
-		ToolUsage:       cfg.ContextToolUsage,
-		DynamicMutators: cfg.ContextDynamicMutators,
-		Existing:        cfg.ContextFrags,
+		Source:                  contextfrag.SourceRunConfig,
+		Scope:                   cfg.ContextScope,
+		System:                  cfg.System,
+		Messages:                cfg.Messages,
+		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+		Query:                   query,
+		InlineImages:            inlineImages,
+		ToolUsage:               cfg.ContextToolUsage,
+		DynamicMutators:         cfg.ContextDynamicMutators,
+		Existing:                cfg.ContextFrags,
 	})
 	cfg.ContextFrags = assembled.Frags
 	cfg.ContextManifest = preserveLifecycleAccounting(cfg.ContextManifest, assembled.Manifest)

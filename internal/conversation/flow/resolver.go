@@ -501,6 +501,9 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		headerifiedModelQuery = FormatUserHeader(headerInput, modelQuery)
 	}
 	runCfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(messages))
+	if usePipeline {
+		runCfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(runCfg.Messages)
+	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
 	// for storeRound so the user message gets persisted.
@@ -1258,6 +1261,16 @@ func normalizeGatewaySkill(entry SkillEntry) (agentpkg.SkillEntry, bool) {
 		Path:        strings.TrimSpace(entry.Path),
 		Metadata:    entry.Metadata,
 	}, true
+}
+
+func latestUserMessageIndex(messages []sdk.Message) *int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == sdk.MessageRoleUser {
+			index := i
+			return &index
+		}
+	}
+	return nil
 }
 
 func normalizeUserMessageContent(msg conversation.ModelMessage) conversation.ModelMessage {

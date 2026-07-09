@@ -117,9 +117,12 @@ type RunConfig struct {
 	ContextManifest          contextfrag.Manifest
 	ContextScope             contextfrag.Scope
 	ContextQueryMaterialized bool
-	ContextToolUsage         string
-	ContextDynamicMutators   []contextfrag.DynamicMutator
-	ContextBudgetMaxTokens   int
+	// ContextCurrentUserMessageIndex identifies a current request already
+	// materialized in Messages, as on the pipeline path.
+	ContextCurrentUserMessageIndex *int
+	ContextToolUsage               string
+	ContextDynamicMutators         []contextfrag.DynamicMutator
+	ContextBudgetMaxTokens         int
 	// ContextRecentProtectTokens overrides the recent-protection window the
 	// provider view applies under budget pressure: the newest droppable
 	// history within this many estimated tokens survives trimming. Nil uses

@@ -62,13 +62,19 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 		config    any
 	}{
 		{&HistoryMessagesCollector{}, HistoryMessagesConfig{
-			Messages:           cfg.Messages,
-			TokenEstimates:     cfg.ContextHistoryTokenEstimates,
-			TrimmablePrefix:    cfg.ContextTrimmableMessages,
-			RepairToolClosures: true,
+			Messages:                cfg.Messages,
+			CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+			TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+			TrimmablePrefix:         cfg.ContextTrimmableMessages,
+			RepairToolClosures:      true,
 		}},
 		{&MemoryContextCollector{}, MemoryContextConfig{Text: cfg.ContextMemoryText}},
 		{&HookContextCollector{}, HookContextConfig{Text: cfg.ContextHookText}},
+		{&materializedCurrentUserCollector{}, HistoryMessagesConfig{
+			Messages:                cfg.Messages,
+			CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+			TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+		}},
 		{&CurrentUserCollector{}, CurrentUserConfig{Query: query}},
 		{&InlineImageCollector{}, InlineImageConfig{Images: inlineImages}},
 	}
@@ -154,19 +160,26 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 			&HistoryMessagesCollector{},
 			&MemoryContextCollector{},
 			&HookContextCollector{},
+			&materializedCurrentUserCollector{},
 			&CurrentUserCollector{},
 			&InlineImageCollector{},
 		)
 		sources = []SourceSpec{
 			{Name: "system_prompt", Config: SystemPromptConfig{System: cfg.System, ToolUsage: cfg.ContextToolUsage}},
 			{Name: "history_messages", Config: HistoryMessagesConfig{
-				Messages:           cfg.Messages,
-				TokenEstimates:     cfg.ContextHistoryTokenEstimates,
-				TrimmablePrefix:    cfg.ContextTrimmableMessages,
-				RepairToolClosures: true,
+				Messages:                cfg.Messages,
+				CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+				TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+				TrimmablePrefix:         cfg.ContextTrimmableMessages,
+				RepairToolClosures:      true,
 			}},
 			{Name: "memory_context", Config: MemoryContextConfig{Text: cfg.ContextMemoryText}},
 			{Name: "hook_context", Config: HookContextConfig{Text: cfg.ContextHookText}},
+			{Name: materializedCurrentUserCollectorName, Config: HistoryMessagesConfig{
+				Messages:                cfg.Messages,
+				CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+				TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+			}},
 			{Name: "current_user", Config: CurrentUserConfig{Query: query}},
 			{Name: "inline_images", Config: InlineImageConfig{Images: inlineImages}},
 		}
@@ -202,6 +215,9 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 
 	cfg.System = payload.System
 	cfg.Messages = materializeRenderedQuery(payload, cfg.ContextQueryMaterialized)
+	if hasCurrentUserFrag(view.Selected) {
+		cfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(cfg.Messages)
+	}
 	cfg.ContextQueryMaterialized = true
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
@@ -286,16 +302,20 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 			cfg.System = strings.TrimSpace(cfg.System + "\n\n" + usage)
 		}
 	}
+	dynamicMessages := make([]sdk.Message, 0, 2)
 	if raw := strings.TrimSpace(cfg.ContextMemoryText); raw != "" {
 		if text := fallbackMemoryContext(raw); text != "" {
-			cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+			dynamicMessages = append(dynamicMessages, sdk.UserMessage(text))
 		}
 		cfg.ContextMemoryText = ""
 	}
-	if text := strings.TrimSpace(cfg.ContextHookText); text != "" {
-		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
-		cfg.ContextHookText = ""
+	if raw := strings.TrimSpace(cfg.ContextHookText); raw != "" {
+		if text := fallbackHookContext(raw); text != "" {
+			dynamicMessages = append(dynamicMessages, sdk.UserMessage(text))
+		}
 	}
+	cfg.ContextHookText = ""
+	cfg = insertDynamicContextBeforeCurrentUser(cfg, dynamicMessages)
 	if cfg.ContextQueryMaterialized {
 		return cfg
 	}
@@ -308,6 +328,8 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	switch {
 	case strings.TrimSpace(cfg.Query) != "":
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query, imageParts...))
+		index := len(cfg.Messages) - 1
+		cfg.ContextCurrentUserMessageIndex = &index
 	case len(imageParts) > 0:
 		injected := false
 		for i := len(cfg.Messages) - 1; i >= 0; i-- {
@@ -319,10 +341,57 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 		}
 		if !injected {
 			cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
+			index := len(cfg.Messages) - 1
+			cfg.ContextCurrentUserMessageIndex = &index
 		}
 	}
 	cfg.ContextQueryMaterialized = true
 	return cfg
+}
+
+func insertDynamicContextBeforeCurrentUser(cfg agentpkg.RunConfig, dynamic []sdk.Message) agentpkg.RunConfig {
+	if len(dynamic) == 0 {
+		return cfg
+	}
+	currentIndex, ok := markedCurrentUserMessageIndex(cfg.Messages, cfg.ContextCurrentUserMessageIndex)
+	if !ok {
+		cfg.Messages = append(cfg.Messages, dynamic...)
+		return cfg
+	}
+	messages := make([]sdk.Message, 0, len(cfg.Messages)+len(dynamic))
+	messages = append(messages, cfg.Messages[:currentIndex]...)
+	messages = append(messages, dynamic...)
+	messages = append(messages, cfg.Messages[currentIndex:]...)
+	cfg.Messages = messages
+	currentIndex += len(dynamic)
+	cfg.ContextCurrentUserMessageIndex = &currentIndex
+	return cfg
+}
+
+func markedCurrentUserMessageIndex(messages []sdk.Message, index *int) (int, bool) {
+	if index == nil || *index < 0 || *index >= len(messages) || messages[*index].Role != sdk.MessageRoleUser {
+		return 0, false
+	}
+	return *index, true
+}
+
+func latestUserMessageIndex(messages []sdk.Message) *int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == sdk.MessageRoleUser {
+			index := i
+			return &index
+		}
+	}
+	return nil
+}
+
+func hasCurrentUserFrag(frags []contextfrag.ContextFrag) bool {
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			return true
+		}
+	}
+	return false
 }
 
 func fallbackMemoryContext(text string) string {
@@ -331,6 +400,14 @@ func fallbackMemoryContext(text string) string {
 		return ""
 	}
 	return formatted
+}
+
+func fallbackHookContext(text string) string {
+	text = strings.TrimSpace(text)
+	if utf8.RuneCountInString(text) > maxHookContextChars {
+		return ""
+	}
+	return text
 }
 
 // cachePlanFromPlacement projects the placement plan onto the rendered
