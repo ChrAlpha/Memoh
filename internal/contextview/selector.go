@@ -26,10 +26,11 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	case contextfrag.IntentACPRuntimePrompt:
 		// The ACP prompt is one rendered document: its system slot marks
 		// document position, not instruction authority, so external-trust
-		// sections (attachment metadata) legitimately live there.
+		// sections legitimately live there and their explicit budgets must
+		// remain enforceable. The preamble declares OverflowKeep directly.
 		return IntentProfile{
 			Intent:        intent,
-			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			MustKeepSlots: []contextfrag.Slot{contextfrag.SlotCurrentUser},
 		}
 	default:
 		return IntentProfile{Intent: intent}

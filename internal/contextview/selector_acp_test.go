@@ -8,7 +8,7 @@ import (
 	"github.com/memohai/memoh/internal/contextfrag"
 )
 
-func TestACPSelector_ProfileMustKeepSystemAndCurrentUser(t *testing.T) {
+func TestACPSelector_ProfileKeepsCurrentUserButNotDocumentSections(t *testing.T) {
 	t.Parallel()
 
 	profile := (&FragmentSelector{}).ProfileFor(contextfrag.IntentACPRuntimePrompt)
@@ -16,8 +16,8 @@ func TestACPSelector_ProfileMustKeepSystemAndCurrentUser(t *testing.T) {
 	if profile.Intent != contextfrag.IntentACPRuntimePrompt {
 		t.Fatalf("Intent = %q, want %q", profile.Intent, contextfrag.IntentACPRuntimePrompt)
 	}
-	if !slotInProfile(profile, contextfrag.SlotSystem) {
-		t.Fatalf("MustKeepSlots = %#v, want system", profile.MustKeepSlots)
+	if slotInProfile(profile, contextfrag.SlotSystem) {
+		t.Fatalf("MustKeepSlots = %#v, system is document position and must retain per-section budgets", profile.MustKeepSlots)
 	}
 	if !slotInProfile(profile, contextfrag.SlotCurrentUser) {
 		t.Fatalf("MustKeepSlots = %#v, want current_user", profile.MustKeepSlots)

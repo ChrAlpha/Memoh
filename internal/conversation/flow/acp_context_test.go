@@ -237,6 +237,22 @@ func TestBuildACPContextSectionsAssignsMetadata(t *testing.T) {
 	}
 }
 
+func TestACPContextDropsOversizedMemoryRecall(t *testing.T) {
+	t.Parallel()
+
+	sections := buildACPContextSections(acpContextRenderInput{
+		BotID:      "bot-1",
+		MemoryText: strings.Repeat("oversized-memory ", acpDynamicContextMaxChars),
+	})
+	markdown, _, manifest := acpContextViaContextView(context.Background(), nil, sections, "current question")
+	if strings.Contains(markdown, "oversized-memory") || strings.Contains(markdown, "Retrieved Memory") {
+		t.Fatalf("oversized memory survived ACP selection: %q", markdown)
+	}
+	if manifest == nil || manifest.Selection == nil || manifest.Selection.Dropped == 0 {
+		t.Fatalf("manifest did not record oversized memory drop: %#v", manifest)
+	}
+}
+
 func TestACPContextSystemFilesExcludeDerivedMemory(t *testing.T) {
 	t.Parallel()
 
