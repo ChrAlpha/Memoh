@@ -23,10 +23,14 @@ func TestMemoryContextCacheFreshAndStale(t *testing.T) {
 		QueryHash:  MemoryContextQueryHash("hello"),
 	}
 
+	refs := []string{"memory-1", "memory-2"}
 	cache.Set(key, MemoryContextCacheValue{
 		ContextText:   "<memory-context>hello</memory-context>",
 		RetrievalMode: "graph",
+		ResultCount:   2,
+		ResultRefs:    refs,
 	})
+	refs[0] = "mutated-after-set"
 
 	fresh, ok := cache.Get(key)
 	if !ok {
@@ -35,6 +39,10 @@ func TestMemoryContextCacheFreshAndStale(t *testing.T) {
 	if fresh.RetrievalMode != "graph" {
 		t.Fatalf("retrieval mode = %q, want graph", fresh.RetrievalMode)
 	}
+	if fresh.ResultCount != 2 || fresh.ResultRefs[0] != "memory-1" {
+		t.Fatalf("fresh result trace = count %d refs %#v", fresh.ResultCount, fresh.ResultRefs)
+	}
+	fresh.ResultRefs[0] = "mutated-after-get"
 
 	now = now.Add(11 * time.Second)
 	if _, ok := cache.Get(key); ok {
@@ -46,6 +54,9 @@ func TestMemoryContextCacheFreshAndStale(t *testing.T) {
 	}
 	if stale.ContextText == "" {
 		t.Fatal("expected stale context text")
+	}
+	if stale.ResultCount != 2 || stale.ResultRefs[0] != "memory-1" {
+		t.Fatalf("stale result trace aliased a caller slice: count %d refs %#v", stale.ResultCount, stale.ResultRefs)
 	}
 
 	now = now.Add(31 * time.Second)

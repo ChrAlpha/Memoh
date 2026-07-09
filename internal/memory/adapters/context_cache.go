@@ -37,6 +37,8 @@ type MemoryContextCacheValue struct {
 	ContextText    string
 	RetrievalMode  string
 	FallbackReason string
+	ResultCount    int
+	ResultRefs     []string
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 	StaleUntil     time.Time
@@ -96,7 +98,7 @@ func (c *MemoryContextCache) Get(key MemoryContextCacheKey) (MemoryContextCacheV
 	}
 	entry.LastAccessedAt = now
 	c.entries[key] = entry
-	return entry, true
+	return cloneMemoryContextCacheValue(entry), true
 }
 
 // GetStale returns a value inside its stale grace window.
@@ -114,7 +116,7 @@ func (c *MemoryContextCache) GetStale(key MemoryContextCacheKey) (MemoryContextC
 	}
 	entry.LastAccessedAt = now
 	c.entries[key] = entry
-	return entry, true
+	return cloneMemoryContextCacheValue(entry), true
 }
 
 // Set stores a rendered memory context.
@@ -130,12 +132,18 @@ func (c *MemoryContextCache) Set(key MemoryContextCacheKey, value MemoryContextC
 	defer c.mu.Unlock()
 
 	now := c.now()
+	value = cloneMemoryContextCacheValue(value)
 	value.CreatedAt = now
 	value.LastAccessedAt = now
 	value.ExpiresAt = now.Add(c.ttl)
 	value.StaleUntil = value.ExpiresAt.Add(c.staleTTL)
 	c.entries[key] = value
 	c.pruneLocked()
+}
+
+func cloneMemoryContextCacheValue(value MemoryContextCacheValue) MemoryContextCacheValue {
+	value.ResultRefs = append([]string(nil), value.ResultRefs...)
+	return value
 }
 
 func (c *MemoryContextCache) pruneLocked() {

@@ -117,6 +117,12 @@ func TestBuiltinProviderContextPackingLeavesFramingToCollector(t *testing.T) {
 	if strings.Contains(result.ContextText, "<memory-context>") || !strings.Contains(result.ContextText, "Relevant memory context:") {
 		t.Fatalf("provider must return raw recall data for the context collector to frame, got: %s", result.ContextText)
 	}
+	if result.ResultCount != 1 || len(result.ResultRefs) != 1 {
+		t.Fatalf("result trace = count %d refs %#v, want the one packed match", result.ResultCount, result.ResultRefs)
+	}
+	if result.ResultRefs[0] == "" {
+		t.Fatalf("result ref must be the stable packed memory id: %#v", result.ResultRefs)
+	}
 }
 
 func TestBuiltinProviderApplyProviderConfig(t *testing.T) {
