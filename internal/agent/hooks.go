@@ -216,7 +216,7 @@ func applyBeforeModelCallAppendContext(cfg RunConfig, appendContext string) RunC
 	}
 	cfg.Messages = append(cfg.Messages, sdk.UserMessage(formatHookContext(hooks.EventBeforeModelCall, appendContext)))
 	cfg.ContextMutations.Record(contextfrag.MutationBeforeModelCallHook, fmt.Sprintf("append_bytes=%d", len(appendContext)))
-	return cfg.RefreshContextFrag()
+	return cfg
 }
 
 func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig, base func(*sdk.GenerateParams) *sdk.GenerateParams) func(*sdk.GenerateParams) *sdk.GenerateParams {

@@ -40,3 +40,13 @@ func TestPrepareMidStreamRetryConfigDoesNotMutateOriginal(t *testing.T) {
 		t.Fatalf("original messages mutated: %d entries", len(original))
 	}
 }
+
+func TestPrepareMidStreamRetryConfigPreservesPostViewMemoryManifest(t *testing.T) {
+	cfg := postViewMemoryConfig()
+	out := prepareMidStreamRetryConfig(cfg, []sdk.Message{sdk.AssistantMessage("partial")}, "timeout")
+
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages = %d, want memory payload plus accumulated output", len(out.Messages))
+	}
+	assertSinglePostViewMemoryFrag(t, out)
+}

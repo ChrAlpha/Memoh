@@ -1703,6 +1703,9 @@ func (a *Agent) runMidStreamRetry(
 		// benefits from mid-task pruning, media resolution, and other
 		// prepare-step logic — same as initial stream.
 		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages, errMsg)
+		if a == nil || a.contextViewApplier == nil {
+			retryCfgCopy = retryCfgCopy.RefreshContextFrag()
+		}
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
 		retryOpts = append(retryOpts, a.onStepOption(streamCtx, retryCfgCopy, nil))
 
@@ -1864,7 +1867,7 @@ func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message, errMs
 	attempt := cfg.ContextMutations.AdvanceAttempt()
 	cfg.ContextMutations.Record(contextfrag.MutationMidStreamRetry,
 		fmt.Sprintf("attempt=%d accumulated=%d error=%s", attempt, len(accumulated), errMsg))
-	return cfg.RefreshContextFrag()
+	return cfg
 }
 
 // sleepWithContext sleeps for the given duration or returns context error.
