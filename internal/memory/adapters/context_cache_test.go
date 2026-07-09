@@ -1,0 +1,106 @@
+package adapters
+
+import (
+	"testing"
+	"time"
+)
+
+func TestMemoryContextCacheFreshAndStale(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	cache := NewMemoryContextCache(MemoryContextCacheConfig{
+		TTL:      10 * time.Second,
+		StaleTTL: 30 * time.Second,
+		Now: func() time.Time {
+			return now
+		},
+	})
+	key := MemoryContextCacheKey{
+		BotID:      "bot-1",
+		ChatID:     "chat-1",
+		ProviderID: "provider-1",
+		QueryHash:  MemoryContextQueryHash("hello"),
+	}
+
+	cache.Set(key, MemoryContextCacheValue{
+		ContextText:   "<memory-context>hello</memory-context>",
+		RetrievalMode: "graph",
+	})
+
+	fresh, ok := cache.Get(key)
+	if !ok {
+		t.Fatal("expected fresh cache hit")
+	}
+	if fresh.RetrievalMode != "graph" {
+		t.Fatalf("retrieval mode = %q, want graph", fresh.RetrievalMode)
+	}
+
+	now = now.Add(11 * time.Second)
+	if _, ok := cache.Get(key); ok {
+		t.Fatal("expected fresh cache miss after TTL")
+	}
+	stale, ok := cache.GetStale(key)
+	if !ok {
+		t.Fatal("expected stale cache hit inside grace window")
+	}
+	if stale.ContextText == "" {
+		t.Fatal("expected stale context text")
+	}
+
+	now = now.Add(31 * time.Second)
+	if _, ok := cache.GetStale(key); ok {
+		t.Fatal("expected stale cache miss after grace window")
+	}
+}
+
+func TestMemoryContextCachePrunesLeastRecentlyUsedEntry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(100, 0)
+	cache := NewMemoryContextCache(MemoryContextCacheConfig{
+		TTL:        time.Minute,
+		StaleTTL:   time.Minute,
+		MaxEntries: 2,
+		Now: func() time.Time {
+			return now
+		},
+	})
+	key1 := MemoryContextCacheKey{BotID: "bot-1", ChatID: "chat-1", ProviderID: "provider-1", QueryHash: "q1"}
+	key2 := MemoryContextCacheKey{BotID: "bot-1", ChatID: "chat-1", ProviderID: "provider-1", QueryHash: "q2"}
+	key3 := MemoryContextCacheKey{BotID: "bot-1", ChatID: "chat-1", ProviderID: "provider-1", QueryHash: "q3"}
+
+	cache.Set(key1, MemoryContextCacheValue{ContextText: "one"})
+	now = now.Add(time.Second)
+	cache.Set(key2, MemoryContextCacheValue{ContextText: "two"})
+	now = now.Add(time.Second)
+	if _, ok := cache.Get(key1); !ok {
+		t.Fatal("expected first entry to be refreshed")
+	}
+	now = now.Add(time.Second)
+	cache.Set(key3, MemoryContextCacheValue{ContextText: "three"})
+
+	if _, ok := cache.Get(key2); ok {
+		t.Fatal("expected least recently used entry to be pruned")
+	}
+	if value, ok := cache.Get(key1); !ok || value.ContextText != "one" {
+		t.Fatalf("expected refreshed entry to remain, got value=%+v ok=%v", value, ok)
+	}
+	if value, ok := cache.Get(key3); !ok || value.ContextText != "three" {
+		t.Fatalf("expected newest entry to remain, got value=%+v ok=%v", value, ok)
+	}
+}
+
+func TestMemoryContextCacheSeparatesMemoryVersions(t *testing.T) {
+	t.Parallel()
+
+	cache := NewMemoryContextCache(MemoryContextCacheConfig{})
+	oldKey := MemoryContextCacheKey{BotID: "bot-1", ChatID: "chat-1", ProviderID: "provider-1", QueryHash: "q1", MemoryVersion: "v1"}
+	newKey := oldKey
+	newKey.MemoryVersion = "v2"
+	cache.Set(oldKey, MemoryContextCacheValue{ContextText: "old"})
+
+	if _, ok := cache.Get(newKey); ok {
+		t.Fatal("cache must not reuse context after the memory version changes")
+	}
+}
