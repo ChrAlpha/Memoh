@@ -24,7 +24,7 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 		return discussTurnPlan{}, false
 	}
 
-	isMentioned := wasRecentlyMentioned(rc, afterMs)
+	isMentioned := wasRecentlyMentioned(timeline.ActiveRenderedContext(rc, artifacts), afterMs)
 	addressed := isMentioned || turn.IsPrivateConversationType(cfg.ConversationType)
 	msgs := make([]turn.DiscussMessage, 0, len(composed.Messages))
 	for _, message := range composed.Messages {
@@ -86,7 +86,7 @@ func latestRCReceivedAtMs(rc timeline.RenderedContext) int64 {
 func extractNewImageRefs(rc timeline.RenderedContext, afterMs int64) []timeline.ImageAttachmentRef {
 	var refs []timeline.ImageAttachmentRef
 	for _, segment := range rc {
-		if segment.ReceivedAtMs > afterMs && !segment.IsMyself {
+		if segment.ReceivedAtMs > afterMs && !segment.IsMyself && !segment.IsSelfSent {
 			refs = append(refs, segment.ImageRefs...)
 		}
 	}
@@ -95,6 +95,9 @@ func extractNewImageRefs(rc timeline.RenderedContext, afterMs int64) []timeline.
 
 func wasRecentlyMentioned(rc timeline.RenderedContext, afterMs int64) bool {
 	for _, segment := range rc {
+		if segment.IsMyself || segment.IsSelfSent {
+			continue
+		}
 		if segment.ReceivedAtMs > afterMs && (segment.MentionsMe || segment.RepliesToMe) {
 			return true
 		}

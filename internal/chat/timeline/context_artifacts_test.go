@@ -247,3 +247,32 @@ func TestComposeContextWithArtifactsEmptyInputs(t *testing.T) {
 		t.Fatalf("expected nil result for empty inputs, got %+v", composed)
 	}
 }
+
+func TestLatestExternalEventMsSkipsSelfSent(t *testing.T) {
+	selfSent := textSegment("m2", 2000, "bot echo")
+	selfSent.IsSelfSent = true
+	myself := textSegment("m3", 3000, "bot own")
+	myself.IsMyself = true
+	rc := RenderedContext{textSegment("m1", 1000, "external"), selfSent, myself}
+
+	if got := LatestExternalEventMs(rc, 0); got != 1000 {
+		t.Fatalf("LatestExternalEventMs = %d, want 1000", got)
+	}
+	if got := LatestExternalEventMs(rc, 1000); got != 0 {
+		t.Fatalf("expected no external events after 1000, got %d", got)
+	}
+}
+
+func TestActiveRenderedContextFiltersCoveredSegments(t *testing.T) {
+	rc := RenderedContext{textSegment("m1", 1000, "covered"), textSegment("m2", 2000, "live")}
+	artifacts := []CompactionArtifact{{
+		ID:      "a1",
+		Summary: "covers m1",
+		Sources: []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+	}}
+
+	active := ActiveRenderedContext(rc, artifacts)
+	if len(active) != 1 || active[0].MessageID != "m2" {
+		t.Fatalf("expected only live segment, got %+v", active)
+	}
+}

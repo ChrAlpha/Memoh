@@ -102,3 +102,57 @@ func TestHandleReplyWithTurn_NilArtifactProviderComposesPlain(t *testing.T) {
 		t.Fatalf("expected plain composition, got %+v", svc.lastCmd.DiscussMessages)
 	}
 }
+
+func TestWasRecentlyMentionedSkipsSelfSent(t *testing.T) {
+	selfMention := timeline.RenderedSegment{ReceivedAtMs: 200, MentionsMe: true, IsSelfSent: true}
+	ownMention := timeline.RenderedSegment{ReceivedAtMs: 300, RepliesToMe: true, IsMyself: true}
+	rc := timeline.RenderedContext{selfMention, ownMention}
+
+	if wasRecentlyMentioned(rc, 0) {
+		t.Fatal("self-sent mentions must not wake the bot")
+	}
+
+	external := timeline.RenderedSegment{ReceivedAtMs: 400, MentionsMe: true}
+	if !wasRecentlyMentioned(append(rc, external), 0) {
+		t.Fatal("external mention must wake the bot")
+	}
+}
+
+func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
+	coveredMention := timeline.RenderedSegment{
+		MessageID:    "m1",
+		ReceivedAtMs: 100,
+		MentionsMe:   true,
+		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "old @bot ping"}},
+	}
+	rc := timeline.RenderedContext{
+		coveredMention,
+		{
+			MessageID:    "m2",
+			ReceivedAtMs: 200,
+			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "unrelated chatter"}},
+		},
+	}
+	artifacts := []timeline.CompactionArtifact{{
+		ID:      "a1",
+		Summary: "covers the old mention",
+		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
+	}}
+
+	plan, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, 0, artifacts)
+	if !ok {
+		t.Fatal("expected a composed plan")
+	}
+	if plan.command.DiscussMentioned {
+		t.Fatal("compacted mention must not mark the session as mentioned")
+	}
+
+	uncovered := discussTriggerBuilder{}
+	planLive, ok := uncovered.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, 0, nil)
+	if !ok {
+		t.Fatal("expected a composed plan without artifacts")
+	}
+	if !planLive.command.DiscussMentioned {
+		t.Fatal("uncovered mention must mark the session as mentioned")
+	}
+}
