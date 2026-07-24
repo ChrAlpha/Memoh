@@ -261,3 +261,27 @@ func TestActiveRenderedContextFiltersCoveredSegments(t *testing.T) {
 		t.Fatalf("expected only live segment, got %+v", active)
 	}
 }
+
+func TestComposeContextWithArtifactsKeepsSlotOrderWithinSameMs(t *testing.T) {
+	rc := RenderedContext{
+		textSegment("m1", 1000, "covered first"),
+		textSegment("m2", 1000, "uncovered second"),
+	}
+	artifacts := []CompactionArtifact{{
+		ID:            "a1",
+		Summary:       "first slot",
+		AnchorStartMs: 1000,
+		Sources:       []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+	}}
+
+	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
+	if composed == nil || len(composed.Messages) != 2 {
+		t.Fatalf("expected summary + uncovered message, got %+v", composed)
+	}
+	if composed.Messages[0].CompactionArtifactID != "a1" {
+		t.Fatalf("summary must keep the covered segment's slot, got %v", messageTexts(composed.Messages))
+	}
+	if !strings.Contains(composed.Messages[1].Content, "uncovered second") {
+		t.Fatalf("uncovered same-ms message must follow the summary, got %v", messageTexts(composed.Messages))
+	}
+}

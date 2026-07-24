@@ -87,12 +87,35 @@ func MergeContext(rc RenderedContext, trs []TurnResponseEntry) []ContextMessage 
 }
 
 func appendRenderedContextEntries(entries []mergeEntry, rc RenderedContext) []mergeEntry {
-	for _, seg := range rc {
+	for i, seg := range rc {
 		entries = append(entries, mergeEntry{
 			kind:      "rc",
 			time:      seg.ReceivedAtMs,
-			step:      -1,
+			step:      i,
 			rcContent: seg.Content,
+		})
+	}
+	return entries
+}
+
+// appendActiveRenderedContextEntries appends uncovered segments keyed by their
+// position in the full rendered context, so slot summaries and surviving
+// segments share one index space.
+func appendActiveRenderedContextEntries(
+	entries []mergeEntry,
+	rc RenderedContext,
+	coveredMessages map[string]externalMessageCoverage,
+) []mergeEntry {
+	for i, segment := range rc {
+		coverage, covered := coveredMessages[strings.TrimSpace(segment.MessageID)]
+		if covered && renderedSegmentCovered(segment, coverage) {
+			continue
+		}
+		entries = append(entries, mergeEntry{
+			kind:      "rc",
+			time:      segment.ReceivedAtMs,
+			step:      i,
+			rcContent: segment.Content,
 		})
 	}
 	return entries
@@ -117,8 +140,9 @@ func mergeEntries(entries []mergeEntry) []ContextMessage {
 		if entries[i].time != entries[j].time {
 			return entries[i].time < entries[j].time
 		}
-		if entries[i].kind != entries[j].kind {
-			return mergeKindOrder(entries[i].kind) < mergeKindOrder(entries[j].kind)
+		leftOrder, rightOrder := mergeKindOrder(entries[i].kind), mergeKindOrder(entries[j].kind)
+		if leftOrder != rightOrder {
+			return leftOrder < rightOrder
 		}
 		return entries[i].step < entries[j].step
 	})
@@ -129,7 +153,7 @@ func mergeKindOrder(kind string) int {
 	switch kind {
 	case "summary_before_rc":
 		return 0
-	case "rc":
+	case "rc", "summary_slot":
 		return 1
 	case "summary":
 		return 2
@@ -162,7 +186,7 @@ func materializeMergeEntries(entries []mergeEntry) []ContextMessage {
 					pendingText.WriteString(piece.Text)
 				}
 			}
-		case "summary", "summary_before_rc":
+		case "summary", "summary_slot", "summary_before_rc":
 			flushRC()
 			messages = append(messages, ContextMessage{
 				Role:                 "user",
@@ -192,23 +216,18 @@ func ComposeContext(rc RenderedContext, trs []TurnResponseEntry) *ComposeContext
 // artifact at the covered rendered slot when available, or its durable anchor.
 func ComposeContextWithArtifacts(rc RenderedContext, trs []TurnResponseEntry, artifacts []CompactionArtifact) *ComposeContextResult {
 	coveredMessages := coveredExternalMessages(artifacts)
-	activeRC := filterCoveredRenderedContext(rc, coveredMessages)
 	activeTRs := filterCoveredTurnResponses(trs, artifacts)
-	entries := make([]mergeEntry, 0, len(activeRC)+len(activeTRs)+len(artifacts))
-	entries = appendRenderedContextEntries(entries, activeRC)
+	entries := make([]mergeEntry, 0, len(rc)+len(activeTRs)+len(artifacts))
+	entries = appendActiveRenderedContextEntries(entries, rc, coveredMessages)
 	for i, artifact := range artifacts {
 		if !artifact.usable() {
 			continue
 		}
-		kind := "summary"
-		summaryAtMs, precedesRenderedContext := artifactSummaryPlacement(artifact, rc, coveredMessages)
-		if precedesRenderedContext {
-			kind = "summary_before_rc"
-		}
+		summaryAtMs, kind, step := artifactSummaryPlacement(artifact, rc, coveredMessages, i)
 		entries = append(entries, mergeEntry{
 			kind:              kind,
 			time:              summaryAtMs,
-			step:              i,
+			step:              step,
 			summaryContent:    "<summary>\n" + strings.TrimSpace(artifact.Summary) + "\n</summary>",
 			summaryArtifactID: artifact.ID,
 		})
@@ -229,7 +248,8 @@ func artifactSummaryPlacement(
 	artifact CompactionArtifact,
 	rc RenderedContext,
 	coveredMessages map[string]externalMessageCoverage,
-) (int64, bool) {
+	artifactIndex int,
+) (int64, string, int) {
 	for _, source := range artifact.Sources {
 		if source.CreatedAtMs <= 0 {
 			continue
@@ -242,17 +262,20 @@ func artifactSummaryPlacement(
 		if !covered {
 			break
 		}
-		for _, segment := range rc {
+		for i, segment := range rc {
 			if strings.TrimSpace(segment.MessageID) == id {
-				return segment.ReceivedAtMs, !renderedSegmentCovered(segment, coverage)
+				if renderedSegmentCovered(segment, coverage) {
+					return segment.ReceivedAtMs, "summary_slot", i
+				}
+				return segment.ReceivedAtMs, "summary_before_rc", i
 			}
 		}
 		break
 	}
 	if artifact.AnchorStartMs <= 0 {
-		return earliestMergeTime, false
+		return earliestMergeTime, "summary", artifactIndex
 	}
-	return artifact.AnchorStartMs, false
+	return artifact.AnchorStartMs, "summary", artifactIndex
 }
 
 func filterCoveredRenderedContext(
