@@ -20,8 +20,15 @@ func (f *fakeArtifactProvider) ActiveCompactionArtifacts(_ context.Context, botI
 	return f.artifacts, nil
 }
 
-func TestHandleReplyWithTurn_InsertsArtifactSummary(t *testing.T) {
+func TestHandleReplyWithTurn_InsertsArtifactSummaryAtCoveredSlot(t *testing.T) {
+	// The covered message sits between two survivors, so a blind prepend and a
+	// slot insert produce different orders and this test can tell them apart.
 	rc := timeline.RenderedContext{
+		{
+			MessageID:    "m0",
+			ReceivedAtMs: 50,
+			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m0">earliest survivor</message>`}},
+		},
 		{
 			MessageID:    "m1",
 			ReceivedAtMs: 100,
@@ -55,29 +62,23 @@ func TestHandleReplyWithTurn_InsertsArtifactSummary(t *testing.T) {
 		t.Fatalf("artifact provider scoped to %q/%q", provider.botID, provider.sessionID)
 	}
 
-	cmd := svc.lastCmd
-	expected := timeline.ComposeContextWithArtifacts(rc, nil, artifacts)
-	if expected == nil || len(cmd.DiscussMessages) != len(expected.Messages) {
-		t.Fatalf("discuss messages diverge from shared composition: got %d, want %d", len(cmd.DiscussMessages), len(expected.Messages))
+	msgs := svc.lastCmd.DiscussMessages
+	if len(msgs) != 3 {
+		t.Fatalf("expected survivor + summary + survivor, got %d: %+v", len(msgs), msgs)
 	}
-	for i, message := range expected.Messages {
-		if cmd.DiscussMessages[i].Role != message.Role || cmd.DiscussMessages[i].Content != message.Content {
-			t.Fatalf("message %d diverges: %+v vs %+v", i, cmd.DiscussMessages[i], message)
+	if !strings.Contains(msgs[0].Content, "earliest survivor") {
+		t.Fatalf("summary must not be prepended ahead of an earlier survivor, got %+v", msgs)
+	}
+	if msgs[1].CompactionArtifactID != "a1" || !strings.Contains(msgs[1].Content, "compacted window") {
+		t.Fatalf("summary must occupy the covered slot, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[2].Content, "current question") {
+		t.Fatalf("later survivor must follow the summary, got %+v", msgs)
+	}
+	for _, message := range msgs {
+		if strings.Contains(message.Content, "old original") {
+			t.Fatalf("covered original must be replaced, got %+v", msgs)
 		}
-	}
-	if !strings.Contains(cmd.DiscussMessages[0].Content, "<summary>") || !strings.Contains(cmd.DiscussMessages[0].Content, "compacted window") {
-		t.Fatalf("expected leading summary, got %+v", cmd.DiscussMessages[0])
-	}
-	var joinedParts []string
-	for _, message := range cmd.DiscussMessages {
-		joinedParts = append(joinedParts, message.Content)
-	}
-	joined := strings.Join(joinedParts, "|")
-	if strings.Contains(joined, "old original") {
-		t.Fatalf("covered original must be replaced, got %s", joined)
-	}
-	if !strings.Contains(joined, "current question") {
-		t.Fatalf("uncovered message must survive, got %s", joined)
 	}
 }
 

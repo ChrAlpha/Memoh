@@ -160,3 +160,37 @@ func TestTrimPipelineMessagesKeepsPinnedSummaries(t *testing.T) {
 		t.Fatalf("recent message must survive trim, got %s", messagesDebug(trimmed))
 	}
 }
+
+func TestBuildMessagesFromPipelineKeepsSummaryUnderBudget(t *testing.T) {
+	t.Parallel()
+
+	pipeline := timeline.NewPipeline(timeline.RenderParams{})
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, strings.Repeat("x", 4000)))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "current question"))
+
+	svc := &Service{
+		pipeline: pipeline,
+		queries:  fakeArtifactLineageQueries{rows: []sqlc.BotHistoryMessageCompact{compactionLogRow(t, "compacted window", "m1", 1000)}},
+		logger:   slog.New(slog.DiscardHandler),
+	}
+
+	messages := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+		BotID:    pipelineTestBotID,
+		ThreadID: pipelineTestSessionID,
+	}, 200)
+
+	// Consecutive rendered segments merge into one user message, so the tail
+	// here is a single oversized block: without pinning the budget would drop
+	// everything and the model would receive no context at all.
+	if len(messages) == 0 {
+		t.Fatal("artifact summary must survive a budget that drops the whole tail")
+	}
+	joined := messagesDebug(messages)
+	if !strings.Contains(joined, "compacted window") {
+		t.Fatalf("artifact summary must survive the dropped prefix, got %s", joined)
+	}
+	if strings.Contains(joined, strings.Repeat("x", 4000)) {
+		t.Fatalf("oversized tail should have been trimmed, got %d messages", len(messages))
+	}
+}

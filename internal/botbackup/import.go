@@ -1267,14 +1267,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			if !sessionID.Valid || strings.TrimSpace(cursor.ScopeKey) == "" {
 				continue
 			}
-			if _, err := q.UpsertSessionDiscussCursor(ctx, sqlc.UpsertSessionDiscussCursorParams{
-				SessionID:           sessionID,
-				ScopeKey:            cursor.ScopeKey,
-				RouteID:             pgtype.UUID{},
-				Source:              cursor.Source,
-				ConsumedCursor:      cursor.ConsumedCursor,
-				ConsumedEventCursor: 0,
-			}); err != nil {
+			if _, err := q.UpsertSessionDiscussCursor(ctx, restoredDiscussCursorParams(sessionID, cursor)); err != nil {
 				return fmt.Errorf("discuss cursor: %w", err)
 			}
 		}
@@ -1294,15 +1287,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			if !sessionID.Valid {
 				continue
 			}
-			created, err := q.CreateSessionEvent(ctx, sqlc.CreateSessionEventParams{
-				BotID:                   pgBotID,
-				SessionID:               sessionID,
-				EventKind:               item.EventKind,
-				EventData:               sanitizeRestoredEventData(defaultJSONMap(item.EventData)),
-				ExternalMessageID:       item.ExternalMessageID,
-				SenderChannelIdentityID: pgtype.UUID{},
-				ReceivedAtMs:            item.ReceivedAtMs,
-			})
+			created, err := q.CreateSessionEvent(ctx, restoredSessionEventParams(pgBotID, sessionID, item))
 			if err != nil {
 				return fmt.Errorf("session event: %w", err)
 			}
@@ -2146,6 +2131,35 @@ func stringMapFromAny(value any) map[string]string {
 		return out
 	default:
 		return nil
+	}
+}
+
+// restoredSessionEventParams builds the insert for one restored event. The
+// source deployment's cursors are instance-local coordinates that cannot be
+// compared against this deployment's sequence, so they are dropped and the
+// restored history gates in the source-time domain.
+func restoredSessionEventParams(botID, sessionID pgtype.UUID, item sqlc.BotSessionEvent) sqlc.CreateSessionEventParams {
+	return sqlc.CreateSessionEventParams{
+		BotID:                   botID,
+		SessionID:               sessionID,
+		EventKind:               item.EventKind,
+		EventData:               sanitizeRestoredEventData(defaultJSONMap(item.EventData)),
+		ExternalMessageID:       item.ExternalMessageID,
+		SenderChannelIdentityID: pgtype.UUID{},
+		ReceivedAtMs:            item.ReceivedAtMs,
+	}
+}
+
+// restoredDiscussCursorParams keeps the source-time watermark and drops the
+// instance-local event watermark for the same reason.
+func restoredDiscussCursorParams(sessionID pgtype.UUID, cursor sqlc.BotSessionDiscussCursor) sqlc.UpsertSessionDiscussCursorParams {
+	return sqlc.UpsertSessionDiscussCursorParams{
+		SessionID:           sessionID,
+		ScopeKey:            cursor.ScopeKey,
+		RouteID:             pgtype.UUID{},
+		Source:              cursor.Source,
+		ConsumedCursor:      cursor.ConsumedCursor,
+		ConsumedEventCursor: 0,
 	}
 }
 
