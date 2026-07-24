@@ -6,6 +6,7 @@ vi.mock('./auth-session', () => ({
 
 let client: typeof import('@memohai/sdk/client')['client']
 let setupApiClient: typeof import('./api-client')['setupApiClient']
+let sdkApiBaseUrl: typeof import('./api-client')['sdkApiBaseUrl']
 let mockedNotifyAuthSessionCleared: ReturnType<typeof vi.fn>
 
 function stubLocalStorage() {
@@ -39,6 +40,7 @@ describe('setupApiClient auth handling', () => {
     const authSession = await import('./auth-session')
     client = sdkClientModule.client
     setupApiClient = apiClientModule.setupApiClient
+    sdkApiBaseUrl = apiClientModule.sdkApiBaseUrl
     mockedNotifyAuthSessionCleared = vi.mocked(authSession.notifyAuthSessionCleared) as unknown as ReturnType<typeof vi.fn>
     mockedNotifyAuthSessionCleared.mockClear()
     client.interceptors.request.clear()
@@ -104,6 +106,51 @@ describe('setupApiClient auth handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
     expect(localStorage.getItem('token')).toBeNull()
+  })
+
+  it('runs the unauthorized flow before a REST 401 is thrown', async () => {
+    localStorage.setItem('token', 'stale-token')
+    const onUnauthorized = vi.fn()
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ message: 'expired' }),
+      {
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: { 'Content-Type': 'application/json' },
+      },
+    ))
+
+    setupApiClient({
+      baseUrl: 'http://example.test',
+      fetch: fetchMock as unknown as typeof fetch,
+      onUnauthorized,
+    })
+
+    await expect(client.get({
+      url: '/users/me',
+      throwOnError: true,
+    })).rejects.toEqual({ message: 'expired' })
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem('token')).toBeNull()
+  })
+
+  it('returns network errors without inventing a response', async () => {
+    const networkError = new TypeError('network unavailable')
+    const fetchMock = vi.fn(async () => {
+      throw networkError
+    })
+
+    setupApiClient({
+      baseUrl: 'http://example.test',
+      fetch: fetchMock as unknown as typeof fetch,
+    })
+
+    const result = await client.get({ url: '/users/me' })
+
+    expect(result.error).toBe(networkError)
+    expect(result.request).toBeInstanceOf(Request)
+    expect(result.response).toBeUndefined()
   })
 
   it('normalizes stored token whitespace before comparing 401 request tokens', async () => {
@@ -251,5 +298,31 @@ describe('setupApiClient auth handling', () => {
 
     const request = fetchMock.mock.calls[0]?.[0] as Request
     expect(request.headers.get('Authorization')).toBe('Bearer valid-token')
+  })
+
+  it('resolves the browser API prefix for Remote Runtime commands', () => {
+    vi.stubGlobal('window', {
+      location: {
+        protocol: 'https:',
+        host: 'memoh.example.test',
+        origin: 'https://memoh.example.test',
+      },
+    })
+    setupApiClient({ baseUrl: '/api' })
+
+    expect(sdkApiBaseUrl()).toBe('https://memoh.example.test/api')
+  })
+
+  it('keeps the desktop direct-server API base for Remote Runtime commands', () => {
+    vi.stubGlobal('window', {
+      location: {
+        protocol: 'app:',
+        host: 'memoh.local',
+        origin: 'null',
+      },
+    })
+    setupApiClient({ baseUrl: 'http://127.0.0.1:18731/' })
+
+    expect(sdkApiBaseUrl()).toBe('http://127.0.0.1:18731')
   })
 })

@@ -30,6 +30,7 @@ import (
 	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
+	"github.com/memohai/memoh/internal/historyfrag"
 	"github.com/memohai/memoh/internal/hooks"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	messagepkg "github.com/memohai/memoh/internal/message"
@@ -42,6 +43,7 @@ import (
 	"github.com/memohai/memoh/internal/settings"
 	"github.com/memohai/memoh/internal/toolapproval"
 	"github.com/memohai/memoh/internal/userinput"
+	"github.com/memohai/memoh/internal/workspace"
 )
 
 const (
@@ -114,6 +116,8 @@ type Resolver struct {
 	sessionTurnMu       sync.Mutex
 	sessionTurnRefs     map[string]int // key: "botID:sessionID" → active turn refcount
 	sessionTurnLocks    map[string]*sync.Mutex
+	sessionCompactionMu sync.Mutex
+	sessionCompactions  map[string]*sessionCompactionGate
 	timeout             time.Duration
 	memorySearchTimeout time.Duration
 	clockLocation       *time.Location
@@ -274,11 +278,6 @@ func (r *Resolver) InlineImageAttachments(ctx context.Context, botID string, ref
 	return parts
 }
 
-type usageInfo struct {
-	InputTokens  *int `json:"inputTokens"`
-	OutputTokens *int `json:"outputTokens"`
-}
-
 type resolvedContext struct {
 	runConfig                   agentpkg.RunConfig
 	model                       models.GetResponse
@@ -287,6 +286,9 @@ type resolvedContext struct {
 	userMessageAlreadyInContext bool
 	injectedRecords             *[]conversation.InjectedMessageRecord
 	estimatedTokens             int // estimated input token count for compaction
+	compactableTokens           int // raw history eligible for compaction
+	compactableTokensKnown      bool
+	contextTokenBudget          int // token budget used to clamp compaction triggers
 }
 
 func contextBudgetFromChatModel(chatModel models.GetResponse) int {
@@ -361,77 +363,71 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
 	var messages []conversation.ModelMessage
+	var historyRecords []historyfrag.HistoryRecord
 	var estimatedTokens int
+	var compactableTokens int
+	var compactableTokensKnown bool
 	if usePipeline {
 		messages = r.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 	} else if r.conversationSvc != nil {
-		loaded, loadErr := r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
+		historyFallback := historyScopeFallbackFromChatRequest(req)
+		prepared, loadErr := r.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
 		if loadErr != nil {
-			r.logger.Error("resolve: loadMessages failed",
+			r.logger.Error("resolve: prepare history context failed",
 				slog.String("bot_id", req.BotID),
+				slog.String("stage", "initial"),
 				slog.Any("error", loadErr),
 			)
 			return resolvedContext{}, loadErr
 		}
-		loaded = pruneHistoryForGateway(loaded)
-		loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
-		loaded = dedupePersistedCurrentUserMessage(loaded, req)
-		loaded, loadErr = r.ensureRequiredHistoryMessage(ctx, loaded, req)
-		if loadErr != nil {
-			r.logger.Error("resolve: load required history message failed",
-				slog.String("bot_id", req.BotID),
-				slog.Any("error", loadErr),
-			)
-			return resolvedContext{}, loadErr
-		}
-		loaded = r.replaceCompactedMessages(ctx, loaded)
-		messages = modelMessagesOf(loaded)
-		estimatedTokens = estimateModelMessagesTokens(messages)
-		// When context reaches 70% of the contextTokenBudget (the user-configured
-		// budget cap), run synchronous compaction before sending the request.
-		// contextTokenBudget is the authoritative limit for how much context
-		// the user wants to send to the LLM. We compact at 70% to keep the
-		// context healthy and avoid edge-case timeouts.
+		messages = prepared.messages
+		historyRecords = prepared.records
+		estimatedTokens = prepared.estimatedTokens
+		compactableTokens = prepared.compactableTokens
+		compactableTokensKnown = true
+		// When context reaches the shared budget share, run synchronous
+		// compaction before sending the request. contextTokenBudget is the
+		// authoritative limit for how much context the user wants to send
+		// to the LLM.
 		compactionThreshold := 0
 		if contextTokenBudget > 0 {
-			compactionThreshold = contextTokenBudget * 70 / 100
+			compactionThreshold = contextTokenBudget * compactionBudgetThresholdPercent / 100
 		}
-		if compactionThreshold > 0 && estimatedTokens >= compactionThreshold {
+		// The trigger only counts raw (compactable) rows: active summaries can
+		// never be compacted away, so including them would make the trigger
+		// self-sustaining once accumulated summaries cross the threshold.
+		if compactionThreshold > 0 && compactableTokens >= compactionThreshold {
 			r.logger.Warn("resolve: context reached compaction threshold, running synchronous compaction",
 				slog.String("bot_id", req.BotID),
 				slog.Int("estimated_tokens", estimatedTokens),
+				slog.Int("compactable_tokens", compactableTokens),
 				slog.Int("context_token_budget", contextTokenBudget),
 				slog.Int("compaction_threshold", compactionThreshold),
 			)
-			r.runCompactionSync(ctx, req, estimatedTokens)
-			// Reload messages after compaction.
-			loaded, loadErr = r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
-			if loadErr != nil {
-				r.logger.Error("resolve: reload messages after compaction failed",
-					slog.String("bot_id", req.BotID),
-					slog.Any("error", loadErr),
-				)
-				return resolvedContext{}, loadErr
+			// Reload and post-process only when this run actually produced a
+			// summary. A noop (cooldown, in-flight, nothing markable) keeps
+			// this turn's context untouched — possibly still above the
+			// threshold — and the next turn re-evaluates.
+			if res := r.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget); res.Status == compaction.StatusOK {
+				prepared, loadErr = r.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
+				if loadErr != nil {
+					r.logger.Error("resolve: prepare history context failed",
+						slog.String("bot_id", req.BotID),
+						slog.String("stage", "post_compaction"),
+						slog.Any("error", loadErr),
+					)
+					return resolvedContext{}, loadErr
+				}
+				messages = prepared.messages
+				historyRecords = prepared.records
+				estimatedTokens = prepared.estimatedTokens
+				compactableTokens = prepared.compactableTokens
+				// After compaction the summary replaces tool detail: ask the
+				// selection engine to strip tool exchanges unconditionally
+				// (ask_user closures survive; the engine owns tool stripping).
+				runCfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{}
 			}
-			loaded = pruneHistoryForGateway(loaded)
-			loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
-			loaded = dedupePersistedCurrentUserMessage(loaded, req)
-			loaded, loadErr = r.ensureRequiredHistoryMessage(ctx, loaded, req)
-			if loadErr != nil {
-				r.logger.Error("resolve: reload required history message failed",
-					slog.String("bot_id", req.BotID),
-					slog.Any("error", loadErr),
-				)
-				return resolvedContext{}, loadErr
-			}
-			loaded = r.replaceCompactedMessages(ctx, loaded)
-			messages = modelMessagesOf(loaded)
-			estimatedTokens = estimateModelMessagesTokens(messages)
-			// After compaction the summary replaces tool detail: ask the
-			// selection engine to strip tool exchanges unconditionally.
-			runCfg.ContextToolExchangePolicy = &contextfrag.ToolExchangePolicy{}
 		}
-		_ = estimatedTokens
 	}
 	tail := make([]conversation.ModelMessage, 0, len(reqMessages))
 	if memoryContext.MemoryText != "" {
@@ -500,6 +496,7 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 	if strings.TrimSpace(modelQuery) != strings.TrimSpace(req.Query) {
 		headerifiedModelQuery = FormatUserHeader(headerInput, modelQuery)
 	}
+	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
 	runCfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(messages))
 	if usePipeline {
 		runCfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(runCfg.Messages)
@@ -555,6 +552,9 @@ func (r *Resolver) resolve(ctx context.Context, req conversation.ChatRequest) (r
 		userMessageAlreadyInContext: usePipeline,
 		injectedRecords:             injectedRecords,
 		estimatedTokens:             estimatedTokens,
+		compactableTokens:           compactableTokens,
+		compactableTokensKnown:      compactableTokensKnown,
+		contextTokenBudget:          contextTokenBudget,
 	}, nil
 }
 
@@ -855,10 +855,11 @@ func pickEffort(requested string, botSettings settings.Settings, effortLevels []
 }
 
 // effectiveReasoningEfforts intersects the model's advertised effort levels
-// with the wire format's accepted set. OpenAI-format clients reject "max", so
-// it is excluded here. This is the primary filter; openAIWireEffort in
-// models/sdk.go and the Twilight SDK provider layer act as defence-in-depth.
-// Keep isOpenAIReasoningWire in sync with the frontend OPENAI_FORMAT_CLIENT_TYPES.
+// with the selected client's current wire policy. Generic OpenAI-format clients
+// retain the existing max-to-xhigh compatibility behavior, while Codex uses its
+// catalog levels directly. openAIWireEffort in models/sdk.go is defence-in-depth.
+// Keep normalizesMaxReasoningEffort in sync with the frontend
+// MAX_NORMALIZED_CLIENT_TYPES.
 func effectiveReasoningEfforts(effortLevels []string, clientType string) []string {
 	levels := effortLevels
 	if len(levels) == 0 {
@@ -866,7 +867,7 @@ func effectiveReasoningEfforts(effortLevels []string, clientType string) []strin
 	}
 	out := make([]string, 0, len(levels))
 	for _, e := range levels {
-		if isOpenAIReasoningWire(clientType) && e == models.ReasoningEffortMax {
+		if normalizesMaxReasoningEffort(clientType) && e == models.ReasoningEffortMax {
 			continue
 		}
 		if !hasEffort(out, e) {
@@ -876,11 +877,12 @@ func effectiveReasoningEfforts(effortLevels []string, clientType string) []strin
 	return out
 }
 
-// isOpenAIReasoningWire returns true for client types whose wire format rejects
-// "max" effort. Keep in sync with OPENAI_FORMAT_CLIENT_TYPES in reasoning-effort.ts.
-func isOpenAIReasoningWire(clientType string) bool {
+// normalizesMaxReasoningEffort reports whether the current compatibility policy
+// maps "max" to "xhigh". Keep in sync with MAX_NORMALIZED_CLIENT_TYPES in
+// reasoning-effort.ts.
+func normalizesMaxReasoningEffort(clientType string) bool {
 	switch models.ClientType(clientType) {
-	case models.ClientTypeOpenAICompletions, models.ClientTypeOpenAIResponses, models.ClientTypeOpenAICodex:
+	case models.ClientTypeOpenAICompletions, models.ClientTypeOpenAIResponses:
 		return true
 	default:
 		return false
@@ -991,6 +993,7 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			SourcePlatform:               p.CurrentPlatform,
 			ReplyTarget:                  p.ReplyTarget,
 			ConversationType:             p.ConversationType,
+			WorkspaceTargeted:            isWorkspaceTargetTool(call.ToolName),
 		}
 		forcedApprovalReason, forcedApproval := agentpkg.HookForcedApprovalReason(ctx)
 		if r.toolApproval == nil {
@@ -1002,14 +1005,43 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 			}
 			return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
 		}
-		if !forcedApproval {
-			eval, err := r.toolApproval.EvaluatePolicy(ctx, input)
-			if err != nil {
-				return sdk.ToolApprovalResult{}, err
-			}
-			if eval.Decision == toolapproval.DecisionBypass {
+		eval, err := r.toolApproval.EvaluatePolicy(ctx, input)
+		if err != nil {
+			if input.WorkspaceTargeted && errors.Is(err, workspace.ErrWorkspaceTargetNotFound) {
+				requestedTargetID := ""
+				if args, ok := call.Input.(map[string]any); ok {
+					requestedTargetID = strings.TrimSpace(readAnyString(args["target_id"]))
+				}
+				if r.logger != nil {
+					r.logger.Warn("workspace tool target not found during approval",
+						slog.String("bot_id", p.BotID),
+						slog.String("tool_name", call.ToolName),
+						slog.String("tool_call_id", call.ToolCallID),
+						slog.String("requested_target_id", requestedTargetID),
+					)
+				}
+				// Twilight treats approval handler errors as fatal to the whole run.
+				// A missing target is invalid model input, so let the tool execute
+				// and return its normal, instructional error instead. This is safe
+				// only for not-found targets: they cannot execute or bypass policy.
 				return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
 			}
+			return sdk.ToolApprovalResult{}, err
+		}
+		input.ExecutionLocation = eval.ExecutionLocation
+		locationMetadata := executionLocationResultMetadata(eval.ExecutionLocation)
+		if eval.Decision == toolapproval.DecisionDeny {
+			return r.limitToolApprovalResult(sdk.ToolApprovalResult{
+				Decision: sdk.ToolApprovalDecisionRejected,
+				Reason:   toolapproval.PolicyDeniedReason,
+				Metadata: locationMetadata,
+			}, call.ToolName), nil
+		}
+		if eval.Decision == toolapproval.DecisionBypass && !forcedApproval {
+			return sdk.ToolApprovalResult{
+				Decision: sdk.ToolApprovalDecisionApproved,
+				Metadata: locationMetadata,
+			}, nil
 		}
 		if !isInteractiveApprovalSession(p.SessionType) {
 			req, err := r.toolApproval.CreatePending(ctx, input)
@@ -1028,37 +1060,42 @@ func (r *Resolver) buildToolApprovalHandler(p baseRunConfigParams) func(context.
 				Metadata:   approvalResultMetadata(rejected),
 			}, call.ToolName), nil
 		}
-		if forcedApproval {
-			req, err := r.toolApproval.CreatePending(ctx, input)
-			if err != nil {
-				return sdk.ToolApprovalResult{}, err
-			}
-			return sdk.ToolApprovalResult{
-				Decision:   sdk.ToolApprovalDecisionDeferred,
-				ApprovalID: req.ID,
-				Metadata:   approvalResultMetadata(req),
-			}, nil
-		}
-		eval, err := r.toolApproval.Evaluate(ctx, input)
+		req, err := r.toolApproval.CreatePending(ctx, input)
 		if err != nil {
 			return sdk.ToolApprovalResult{}, err
 		}
 		return sdk.ToolApprovalResult{
 			Decision:   sdk.ToolApprovalDecisionDeferred,
-			ApprovalID: eval.Request.ID,
-			Metadata:   approvalResultMetadata(eval.Request),
+			ApprovalID: req.ID,
+			Metadata:   approvalResultMetadata(req),
 		}, nil
 	}
 }
 
+func isWorkspaceTargetTool(toolName string) bool {
+	_, ok := toolapproval.OperationForTool(toolName)
+	return ok
+}
+
 func approvalResultMetadata(req toolapproval.Request) map[string]any {
-	return map[string]any{
+	metadata := map[string]any{
 		"short_id":     req.ShortID,
 		"status":       req.Status,
 		"tool_name":    req.ToolName,
 		"operation":    req.Operation,
 		"tool_call_id": req.ToolCallID,
 	}
+	if req.ExecutionLocation != nil {
+		metadata[toolapproval.ExecutionLocationMetadataKey] = req.ExecutionLocation
+	}
+	return metadata
+}
+
+func executionLocationResultMetadata(location *toolapproval.ExecutionLocation) map[string]any {
+	if location == nil {
+		return nil
+	}
+	return map[string]any{toolapproval.ExecutionLocationMetadataKey: location}
 }
 
 func isInteractiveApprovalSession(sessionType string) bool {

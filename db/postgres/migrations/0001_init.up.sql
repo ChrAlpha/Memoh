@@ -211,6 +211,46 @@ CREATE TABLE IF NOT EXISTS bots (
 CREATE INDEX IF NOT EXISTS idx_bots_owner_user_id ON bots(owner_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bots_name ON bots(name);
 
+-- user_runtimes: API tokens for Remote Runtime WebSocket clients. Tokens stay
+-- readable so an authenticated owner can copy the connection command again.
+CREATE TABLE IF NOT EXISTS user_runtimes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (btrim(name) <> ''),
+  api_token TEXT NOT NULL UNIQUE,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_runtimes_active_user_name
+  ON user_runtimes(user_id, lower(name))
+  WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_runtimes_user_id ON user_runtimes(user_id);
+
+-- bot_remote_runtime_bindings: persistent Bot workspace placement on a
+-- user-owned Remote Runtime. Paths are relative to the Runtime's advertised
+-- workspace base; the Runtime client resolves and confines them locally.
+CREATE TABLE IF NOT EXISTS bot_remote_runtime_bindings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  runtime_id UUID NOT NULL REFERENCES user_runtimes(id) ON DELETE RESTRICT,
+  workspace_path TEXT NOT NULL CHECK (btrim(workspace_path) <> ''),
+  is_primary BOOLEAN NOT NULL DEFAULT false,
+  tool_approval_config JSONB NOT NULL DEFAULT '{"enabled":true,"read":{"mode":"allow","bypass_globs":[],"force_review_globs":[]},"write":{"mode":"ask","bypass_globs":[],"force_review_globs":[]},"exec":{"mode":"ask","bypass_commands":[],"force_review_commands":[]}}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (bot_id, runtime_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_runtime_id
+  ON bot_remote_runtime_bindings(runtime_id);
+CREATE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_bot_id
+  ON bot_remote_runtime_bindings(bot_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_primary
+  ON bot_remote_runtime_bindings(bot_id)
+  WHERE is_primary = TRUE;
+
 CREATE TABLE IF NOT EXISTS bot_acl_rules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -458,6 +498,7 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   title TEXT NOT NULL DEFAULT '',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   next_turn_position BIGINT NOT NULL DEFAULT 1,
+  compaction_epoch BIGINT NOT NULL DEFAULT 0,
   parent_session_id UUID REFERENCES bot_sessions(id) ON DELETE SET NULL,
   created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -835,17 +876,28 @@ CREATE INDEX IF NOT EXISTS idx_heartbeat_logs_bot_started ON bot_heartbeat_logs(
 CREATE TABLE IF NOT EXISTS bot_history_message_compacts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-  session_id UUID REFERENCES bot_sessions(id) ON DELETE SET NULL,
+  session_id UUID REFERENCES bot_sessions(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ok', 'error')),
   summary TEXT NOT NULL DEFAULT '',
   message_count INTEGER NOT NULL DEFAULT 0,
   error_message TEXT NOT NULL DEFAULT '',
   usage JSONB,
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
+  artifact_version INTEGER NOT NULL DEFAULT 1,
+  coverage JSONB NOT NULL DEFAULT '[]'::jsonb,
+  anchor_start_ms BIGINT NOT NULL DEFAULT 0,
+  anchor_end_ms BIGINT NOT NULL DEFAULT 0,
+  artifact_level INTEGER NOT NULL DEFAULT 0,
+  parent_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
+  superseded_by UUID REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL,
+  superseded_at TIMESTAMPTZ,
+  compaction_epoch BIGINT NOT NULL DEFAULT 0,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_compacts_bot_session ON bot_history_message_compacts(bot_id, session_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_compacts_owner_epoch ON bot_history_message_compacts(bot_id, session_id, compaction_epoch, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_compacts_active_session ON bot_history_message_compacts(session_id, anchor_start_ms, started_at) WHERE status = 'ok' AND superseded_at IS NULL;
 
 ALTER TABLE bot_history_messages ADD CONSTRAINT fk_compact_id FOREIGN KEY (compact_id) REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL;
 
@@ -947,13 +999,15 @@ CREATE TABLE IF NOT EXISTS provider_oauth_tokens (
   token_type TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL DEFAULT '',
   pkce_code_verifier TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_provider_oauth_tokens_state ON provider_oauth_tokens(state) WHERE state != '';
 
--- user_provider_oauth_tokens: per-user OAuth2 tokens for providers with user-scoped auth (e.g. GitHub Copilot)
+-- user_provider_oauth_tokens: legacy per-user OAuth2 storage retained for rollback compatibility.
+-- Active Codex and GitHub Copilot credentials are provider-scoped in provider_oauth_tokens.
 CREATE TABLE IF NOT EXISTS user_provider_oauth_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   provider_id UUID NOT NULL REFERENCES providers(id) ON DELETE CASCADE,

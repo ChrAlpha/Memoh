@@ -5,7 +5,7 @@
 // always reflects the source of truth. Tune a token → the whole app + this
 // wall move together.
 import { onMounted, ref } from 'vue'
-import { Button } from '@memohai/ui'
+import { Button } from '@felinic/ui'
 import { RefreshCw } from 'lucide-vue-next'
 import SectionShell from '../components/SectionShell.vue'
 import Specimen from '../components/Specimen.vue'
@@ -207,7 +207,7 @@ onMounted(measure)
             Workspace runtime
           </h3>
           <p class="text-body text-muted-foreground">
-            Each bot can run in an isolated container, or a trusted local workspace in
+            Each bot can run in an isolated workspace, or a trusted local workspace in
             desktop mode — editing files, executing commands, building itself.
           </p>
           <span class="text-caption text-muted-foreground/60">Updated 2 minutes ago</span>

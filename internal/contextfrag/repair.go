@@ -116,7 +116,7 @@ func syntheticToolClosureFrag(callID, toolName string, index int, scope Scope, c
 		Message:    msg,
 		Kind:       KindConversationEvent,
 		Slot:       SlotHistory,
-		Priority:   priorityForMessage(msg),
+		Priority:   PriorityForMessage(msg),
 		CacheClass: CacheNever,
 		Trust:      TrustWorkspace,
 		Scope:      scope,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, provide, reactive, ref, watch } from 'vue'
 import { useQuery, useQueryCache } from '@pinia/colada'
-import { Button } from '@memohai/ui'
+import { Button } from '@felinic/ui'
 import { getSpeechProviders, getTranscriptionProviders, postSpeechProvidersByIdImportModels, postTranscriptionProvidersByIdImportModels } from '@memohai/sdk'
 import type { AudioSpeechProviderResponse } from '@memohai/sdk'
 import { Plus } from 'lucide-vue-next'
@@ -12,7 +12,7 @@ import BackendCard from '@/components/settings/backend-card.vue'
 import DetailPane from '@/components/settings/detail-pane.vue'
 import PageShell from '@/components/page-shell/index.vue'
 import SectionGroup from '@/components/section-group/index.vue'
-import { useViewSwap } from '@/composables/useViewSwap'
+import { useRoutedViewSwap } from '@/composables/useViewSwap'
 import SwapTransition from '@/components/settings/swap-transition.vue'
 import SpeechSetting from '@/pages/speech/components/provider-setting.vue'
 import TranscriptionSetting from '@/pages/transcription/provider-setting.vue'
@@ -20,14 +20,14 @@ import TranscriptionSetting from '@/pages/transcription/provider-setting.vue'
 const { t } = useI18n()
 const queryCache = useQueryCache()
 
-const { data: speechData } = useQuery({
+const { data: speechData, isLoading: speechLoading } = useQuery({
   key: () => ['speech-providers'],
   query: async () => {
     const { data } = await getSpeechProviders({ throwOnError: true })
     return data
   },
 })
-const { data: transcriptionData } = useQuery({
+const { data: transcriptionData, isLoading: transcriptionLoading } = useQuery({
   key: () => ['transcription-providers'],
   query: async () => {
     const { data } = await getTranscriptionProviders({ throwOnError: true })
@@ -40,8 +40,9 @@ const curTranscription = ref<AudioSpeechProviderResponse>()
 provide('curTtsProvider', curTts)
 provide('curTranscriptionProvider', curTranscription)
 
-const { view, direction, openDetail, backToList } = useViewSwap()
-const detailKind = ref<'speech' | 'transcription'>('speech')
+type VoiceDetailKind = 'speech' | 'transcription'
+type VoiceDetail = { kind: VoiceDetailKind, provider: AudioSpeechProviderResponse }
+const detailKind = ref<VoiceDetailKind>('speech')
 const openStatus = reactive({ addSpeechOpen: false, addTranscriptionOpen: false })
 
 async function importSpeechModels(providerId: string) {
@@ -77,6 +78,42 @@ const transcriptionProviders = computed<AudioSpeechProviderResponse[]>(() =>
   Array.isArray(transcriptionData.value) ? sortByEnabled(transcriptionData.value) : [],
 )
 
+// Page-owned query key, valued `kind:id` so refresh restores which pane.
+const {
+  view,
+  direction,
+  isDetailLoading,
+  openDetail,
+  backToList: closeProvider,
+} = useRoutedViewSwap<VoiceDetail>({
+  key: 'voiceProvider',
+  items: () => [
+    ...speechProviders.value.map(provider => ({ kind: 'speech' as const, provider })),
+    ...transcriptionProviders.value.map(provider => ({ kind: 'transcription' as const, provider })),
+  ],
+  selected: () => {
+    const provider = detailKind.value === 'speech' ? curTts.value : curTranscription.value
+    return provider ? { kind: detailKind.value, provider } : undefined
+  },
+  select: (detail) => {
+    detailKind.value = detail?.kind ?? 'speech'
+    curTts.value = detail?.kind === 'speech' ? detail.provider : undefined
+    curTranscription.value = detail?.kind === 'transcription' ? detail.provider : undefined
+  },
+  getRouteValue: detail => `${detail.kind}:${detail.provider.id}`,
+  isLoading: (routeValue) => {
+    if (routeValue.startsWith('speech:')) return speechLoading.value
+    if (routeValue.startsWith('transcription:')) return transcriptionLoading.value
+    return false
+  },
+  isReady: (routeValue) => {
+    if (routeValue.startsWith('speech:')) return speechData.value !== undefined
+    if (routeValue.startsWith('transcription:')) return transcriptionData.value !== undefined
+    // Malformed / unknown kind — ready to reject immediately.
+    return true
+  },
+})
+
 const addProviderNames = computed(() => [
   ...speechProviders.value.map((p) => ({ name: p.name })),
   ...transcriptionProviders.value.map((p) => ({ name: p.name })),
@@ -88,15 +125,11 @@ function getInitials(name: string | undefined) {
 }
 
 function openSpeech(provider: AudioSpeechProviderResponse) {
-  curTts.value = provider
-  detailKind.value = 'speech'
-  openDetail()
+  openDetail({ kind: 'speech', provider })
 }
 
 function openTranscription(provider: AudioSpeechProviderResponse) {
-  curTranscription.value = provider
-  detailKind.value = 'transcription'
-  openDetail()
+  openDetail({ kind: 'transcription', provider })
 }
 
 // Each section adds its own kind of provider, so refresh just that list when
@@ -110,21 +143,6 @@ watch(() => openStatus.addTranscriptionOpen, (isOpen, wasOpen) => {
   if (wasOpen && !isOpen) {
     queryCache.invalidateQueries({ key: ['transcription-providers'] })
   }
-})
-
-watch(speechProviders, (list) => {
-  const id = curTts.value?.id
-  if (!id) return
-  const found = list.find((p) => p.id === id)
-  if (found) curTts.value = found
-  else if (view.value === 'detail' && detailKind.value === 'speech') backToList()
-})
-watch(transcriptionProviders, (list) => {
-  const id = curTranscription.value?.id
-  if (!id) return
-  const found = list.find((p) => p.id === id)
-  if (found) curTranscription.value = found
-  else if (view.value === 'detail' && detailKind.value === 'transcription') backToList()
 })
 </script>
 
@@ -262,7 +280,8 @@ watch(transcriptionProviders, (list) => {
       v-else
       width="narrow"
       :back-label="t('voice.title')"
-      @back="backToList()"
+      :loading="isDetailLoading || !(detailKind === 'speech' ? curTts?.id : curTranscription?.id)"
+      @back="closeProvider"
     >
       <SpeechSetting v-if="detailKind === 'speech' && curTts?.id" />
       <TranscriptionSetting v-else-if="detailKind === 'transcription' && curTranscription?.id" />

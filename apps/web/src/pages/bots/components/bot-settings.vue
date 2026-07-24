@@ -7,7 +7,7 @@
       <Transition name="fade">
         <div
           v-if="hasChanges"
-          class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-muted/40 border border-border/50"
+          class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-muted-soft border border-border/50"
         >
           <div class="size-1 rounded-full bg-muted-foreground/40" />
           <span class="text-[10px] text-muted-foreground font-medium whitespace-nowrap">{{ $t('common.unsaved') }}</span>
@@ -126,12 +126,12 @@
 import {
   Button,
   Input,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { Check, X, LoaderCircle } from 'lucide-vue-next'
 import { reactive, ref, computed, watch, onMounted, onActivated, nextTick } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import SettingsGlobalCard from './settings-global-card.vue'
 import SettingsInteractionCard from './settings-interaction-card.vue'
@@ -146,7 +146,7 @@ import { useQuery, useMutation, useQueryCache } from '@pinia/colada'
 import { getAcpProfiles, getBotsById, putBotsById, getBotsByBotIdSettings, putBotsByBotIdSettings, deleteBotsById, getModels, getProviders, getSearchProviders, getFetchProviders, getMemoryProviders, getSpeechProviders, getSpeechModels, getTranscriptionProviders, getTranscriptionModels, getVideoProviders, getVideoModels, getBotsByBotIdMemoryStatus, postBotsByBotIdMemoryRebuild, getBotsNameAvailability } from '@memohai/sdk'
 import type { AcpprofilePublicProfile, SettingsSettings } from '@memohai/sdk'
 import type { Ref } from 'vue'
-import { resolveApiErrorMessage } from '@/utils/api-error'
+import { apiErrorStatus, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
 import { useChatStore } from '@/store/chat-list'
 
 const props = defineProps<{
@@ -541,8 +541,11 @@ const hasChanges = computed(() => hasSettingsChanges.value || hasTimezoneChanges
 const saveLoading = computed(() => isLoading.value || isUpdatingBot.value)
 
 function isNameConflict(error: unknown): boolean {
-  const e = error as { status?: number, response?: { status?: number } } | null
-  if (e?.status === 409 || e?.response?.status === 409) return true
+  const code = parseMemohError(error)?.code
+  if (code) return code === 'bot.name_taken'
+  if (apiErrorStatus(error) === 409) return true
+  // Desktop can connect to older hosted servers whose conflict response
+  // carries neither a code nor a status field — only the English message.
   return resolveApiErrorMessage(error, '').toLowerCase().includes('already taken')
 }
 

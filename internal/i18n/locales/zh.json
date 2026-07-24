@@ -20,6 +20,9 @@
     "intro": "直接发消息给我，我们就能开始聊。",
     "tip": "第一次来？用 {help} 看看我能做什么；想从头开始，随时用 {new}。"
   },
+  "groupCommand": {
+    "telegramTip": "群聊提示：手动输入命令时请明确发给我，例如 {example}。"
+  },
   "newSession": {
     "title": "✨ 已开启新{mode}。",
     "modeChat": "对话",
@@ -184,7 +187,7 @@
         "approve": "批准待执行的工具调用",
         "reject": "拒绝待执行的工具调用"
       },
-      "globalHint": "发送命令即可执行。查看某组操作：/help <group>，如 /help model。",
+      "globalHint": "点击上面的命令即可执行。",
       "runForDetails": "运行 {command} 查看详情。",
       "summaryLabel": "说明：",
       "usageLabel": "用法：",
@@ -251,8 +254,8 @@
           "list": "列出全部技能"
         },
         "fs": {
-          "list": "列出容器中的文件",
-          "read": "读取容器中的文件"
+          "list": "列出工作区中的文件",
+          "read": "读取工作区中的文件"
         },
         "status": {
           "show": "查看当前会话状态",
@@ -453,6 +456,7 @@
     "compact": {
       "unavailable": "上下文压缩暂不可用。",
       "done": "✅ 上下文已压缩。",
+      "noop": "当前没有可压缩的内容。",
       "noModel": "此机器人未配置压缩模型或对话模型。"
     },
     "toolApproval": {
@@ -532,7 +536,7 @@
     "email": "查看邮箱配置",
     "heartbeat": "查看心跳日志",
     "skill": "查看技能",
-    "fs": "浏览容器文件",
+    "fs": "浏览工作区文件",
     "access": "查看身份与权限",
     "compact": "压缩对话上下文"
   }

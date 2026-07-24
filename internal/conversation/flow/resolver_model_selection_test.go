@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/memohai/memoh/internal/conversation"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -163,6 +164,14 @@ func TestResolveReasoningConfig(t *testing.T) {
 			},
 		},
 	}
+	codexModel := models.GetResponse{
+		Model: models.Model{
+			Config: models.ModelConfig{
+				ThinkingMode:     models.ThinkingModeToggle,
+				ReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"},
+			},
+		},
+	}
 	noneEffortModel := models.GetResponse{
 		Model: models.Model{
 			Config: models.ModelConfig{
@@ -267,11 +276,18 @@ func TestResolveReasoningConfig(t *testing.T) {
 			want:          &models.ReasoningConfig{Active: true, Adaptive: true, Effort: models.ReasoningEffortXHigh},
 		},
 		{
-			name:          "openai wire drops max and falls back to medium",
+			name:          "generic openai compatibility drops max and falls back to medium",
 			model:         adaptiveModel,
 			requestEffort: models.ReasoningEffortMax,
 			clientType:    string(models.ClientTypeOpenAICompletions),
 			want:          &models.ReasoningConfig{Active: true, Adaptive: true, Effort: models.ReasoningEffortMedium},
+		},
+		{
+			name:          "codex wire preserves max",
+			model:         codexModel,
+			requestEffort: models.ReasoningEffortMax,
+			clientType:    string(models.ClientTypeOpenAICodex),
+			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortMax},
 		},
 		{
 			name:          "anthropic wire preserves max",
@@ -334,8 +350,9 @@ func TestResolveReasoningConfig(t *testing.T) {
 type modelSelectionFakeQueries struct {
 	dbstore.Queries
 
-	models   map[string]sqlc.Model
-	provider sqlc.Provider
+	models         map[string]sqlc.Model
+	provider       sqlc.Provider
+	sessionModelID pgtype.UUID
 }
 
 func (f *modelSelectionFakeQueries) ListModelsByModelID(_ context.Context, modelID string) ([]sqlc.Model, error) {
@@ -346,6 +363,15 @@ func (f *modelSelectionFakeQueries) ListModelsByModelID(_ context.Context, model
 	return []sqlc.Model{model}, nil
 }
 
+func (f *modelSelectionFakeQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
+	for _, model := range f.models {
+		if id.Valid && model.ID == id {
+			return model, nil
+		}
+	}
+	return sqlc.Model{}, pgx.ErrNoRows
+}
+
 func (f *modelSelectionFakeQueries) GetProviderByID(_ context.Context, id pgtype.UUID) (sqlc.Provider, error) {
 	if !id.Valid || id != f.provider.ID {
 		return sqlc.Provider{}, pgx.ErrNoRows
@@ -353,17 +379,23 @@ func (f *modelSelectionFakeQueries) GetProviderByID(_ context.Context, id pgtype
 	return f.provider, nil
 }
 
-func (f *modelSelectionFakeQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
-	for _, m := range f.models {
-		if m.ID == id {
-			return m, nil
-		}
-	}
-	return sqlc.Model{}, pgx.ErrNoRows
-}
-
 func (*modelSelectionFakeQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	return sqlc.GetBotByIDRow{}, pgx.ErrNoRows
+}
+
+func (*modelSelectionFakeQueries) ListCompactionLogsBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
+	return nil, nil
+}
+
+func (*modelSelectionFakeQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
+	return nil, nil
+}
+
+func (f *modelSelectionFakeQueries) GetLatestSessionModelID(_ context.Context, _ pgtype.UUID) (pgtype.UUID, error) {
+	if !f.sessionModelID.Valid {
+		return pgtype.UUID{}, pgx.ErrNoRows
+	}
+	return f.sessionModelID, nil
 }
 
 func newModelSelectionResolver(t *testing.T, fake *modelSelectionFakeQueries) *Resolver {
@@ -404,6 +436,51 @@ func modelSelectionModelRow(t *testing.T, id string, modelID string, providerID 
 		Type:       string(modelType),
 		Enable:     enable,
 		Config:     []byte(`{}`),
+	}
+}
+
+func TestSelectChatModelFallsBackToSessionLastModel(t *testing.T) {
+	ctx := context.Background()
+	provider := modelSelectionProviderRow(t, "00000000-0000-0000-0000-000000000601", "openai-completions", true)
+	model := modelSelectionModelRow(t, "00000000-0000-0000-0000-000000000602", "gpt-session", provider.ID, models.ModelTypeChat, true)
+	fake := &modelSelectionFakeQueries{
+		models:         map[string]sqlc.Model{model.ModelID: model},
+		provider:       provider,
+		sessionModelID: model.ID,
+	}
+	resolver := newModelSelectionResolver(t, fake)
+
+	// No request model, no chat settings, no bot default: a resumed turn
+	// (ask_user / tool approval) must fall back to the model that produced
+	// the session's latest round instead of erroring.
+	req := conversation.ChatRequest{
+		BotID:     "00000000-0000-0000-0000-000000000600",
+		SessionID: "00000000-0000-0000-0000-000000000603",
+	}
+	got, prov, err := resolver.selectChatModel(ctx, req, settings.Settings{}, conversation.Settings{})
+	if err != nil {
+		t.Fatalf("selectChatModel session fallback error = %v, want nil", err)
+	}
+	if got.ModelID != "gpt-session" {
+		t.Fatalf("selectChatModel model_id = %q, want %q", got.ModelID, "gpt-session")
+	}
+	if prov.Name != provider.Name {
+		t.Fatalf("selectChatModel provider = %q, want %q", prov.Name, provider.Name)
+	}
+}
+
+func TestSelectChatModelWithoutAnyModelStillErrors(t *testing.T) {
+	ctx := context.Background()
+	fake := &modelSelectionFakeQueries{}
+	resolver := newModelSelectionResolver(t, fake)
+
+	req := conversation.ChatRequest{
+		BotID:     "00000000-0000-0000-0000-000000000700",
+		SessionID: "00000000-0000-0000-0000-000000000701",
+	}
+	_, _, err := resolver.selectChatModel(ctx, req, settings.Settings{}, conversation.Settings{})
+	if err == nil || !strings.Contains(err.Error(), "chat model not configured") {
+		t.Fatalf("selectChatModel without any model error = %v, want chat model not configured", err)
 	}
 }
 
@@ -464,5 +541,125 @@ func TestFetchChatModelReturnsEnabledModelAndProvider(t *testing.T) {
 	}
 	if !prov.Enable {
 		t.Fatal("fetchChatModel returned disabled provider, want enabled")
+	}
+}
+
+func TestFetchChatModelRejectsImageOnlyModel(t *testing.T) {
+	ctx := context.Background()
+	provider := modelSelectionProviderRow(t, "00000000-0000-0000-0000-000000000401", "openai-completions", true)
+	model := modelSelectionModelRow(t, "00000000-0000-0000-0000-000000000402", "qwen-image", provider.ID, models.ModelTypeChat, true)
+	model.Config = []byte(`{"compatibilities":["image-output"]}`)
+	fake := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{model.ModelID: model},
+		provider: provider,
+	}
+	resolver := newModelSelectionResolver(t, fake)
+
+	_, _, err := resolver.fetchChatModel(ctx, "qwen-image")
+	if err == nil || !strings.Contains(err.Error(), "image generation model") || !strings.Contains(err.Error(), "bot image model") {
+		t.Fatalf("fetchChatModel image-only model error = %v, want image model guidance", err)
+	}
+}
+
+func TestFetchChatModelRejectsImportedImageModelWithoutCompatibility(t *testing.T) {
+	ctx := context.Background()
+	provider := modelSelectionProviderRow(t, "00000000-0000-0000-0000-000000000501", "openai-completions", true)
+	model := modelSelectionModelRow(t, "00000000-0000-0000-0000-000000000502", "wan2.7-image-pro", provider.ID, models.ModelTypeChat, true)
+	fake := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{model.ModelID: model},
+		provider: provider,
+	}
+	resolver := newModelSelectionResolver(t, fake)
+
+	_, _, err := resolver.fetchChatModel(ctx, "wan2.7-image-pro")
+	if err == nil || !strings.Contains(err.Error(), "image generation model") {
+		t.Fatalf("fetchChatModel imported image model error = %v, want image model guidance", err)
+	}
+}
+
+func TestValidateSelectedChatModelAllowsToolCallingImageOutputModel(t *testing.T) {
+	t.Parallel()
+
+	model := models.GetResponse{
+		ModelID: "openrouter/auto",
+		Model: models.Model{
+			Type:   models.ModelTypeChat,
+			Enable: true,
+			Config: models.ModelConfig{
+				Compatibilities: []string{models.CompatToolCall, models.CompatImageOutput},
+			},
+		},
+	}
+	if err := validateSelectedChatModel(model, sqlc.Provider{}); err != nil {
+		t.Fatalf("validateSelectedChatModel() error = %v, want nil", err)
+	}
+}
+
+func TestValidateSelectedChatModelAllowsGoogleImageOutputModel(t *testing.T) {
+	t.Parallel()
+
+	model := models.GetResponse{
+		ModelID: "gemini-2.5-flash-image-preview",
+		Model: models.Model{
+			Type:   models.ModelTypeChat,
+			Enable: true,
+			Config: models.ModelConfig{
+				Compatibilities: []string{models.CompatImageOutput},
+			},
+		},
+	}
+	provider := sqlc.Provider{ClientType: string(models.ClientTypeGoogleGenerativeAI)}
+	if err := validateSelectedChatModel(model, provider); err != nil {
+		t.Fatalf("validateSelectedChatModel() error = %v, want nil", err)
+	}
+}
+
+func TestIsKnownStandaloneImageModelID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{
+		"qwen-image-2.0", "wan2.7-image", "z-image-turbo",
+		"flux-schnell", "stable-diffusion-3.5-large-turbo",
+		"gpt-image-1", "dall-e-3", "doubao-seedream-4-0-250828",
+	} {
+		if !isKnownStandaloneImageModelID(id) {
+			t.Errorf("isKnownStandaloneImageModelID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{
+		"gpt-4o", "qwen-max", "deepseek-chat", "",
+		// Chat models that merely share a leading token must not match: the
+		// "wan"/"flux" prefixes are scoped to image-model naming conventions.
+		"wanjuan-chat", "want-to-talk", "fluxion-7b", "fluent-chat",
+	} {
+		if isKnownStandaloneImageModelID(id) {
+			t.Errorf("isKnownStandaloneImageModelID(%q) = true, want false", id)
+		}
+	}
+}
+
+func TestIsImageOnlyChatModelToolCallEscape(t *testing.T) {
+	t.Parallel()
+
+	// A model whose name looks like an image model but which advertises tool
+	// calling must not be classified as image-only — tool calling is the
+	// override that lets a name collision be used as a chat model.
+	toolCaller := models.GetResponse{
+		ModelID: "wan2.7-omni",
+		Model: models.Model{
+			Config: models.ModelConfig{Compatibilities: []string{models.CompatToolCall, models.CompatImageOutput}},
+		},
+	}
+	if isImageOnlyChatModel(toolCaller, sqlc.Provider{}) {
+		t.Fatal("a tool-calling model must not be treated as image-only, even with an image-like name")
+	}
+
+	// Without tool calling, the same name is still rejected.
+	imageOnly := models.GetResponse{
+		ModelID: "wan2.7-image",
+		Model:   models.Model{Config: models.ModelConfig{Compatibilities: []string{models.CompatImageOutput}}},
+	}
+	if !isImageOnlyChatModel(imageOnly, sqlc.Provider{}) {
+		t.Fatal("a non-tool-calling image model name should be treated as image-only")
 	}
 }

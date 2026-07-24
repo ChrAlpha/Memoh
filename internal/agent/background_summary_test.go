@@ -100,7 +100,7 @@ func TestAgentGenerateBackgroundSummaryMessageRoundtrip(t *testing.T) {
 				close(release)
 				waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				if _, err := bgMgr.WaitForSessionTask(waitCtx, "bot-1", "sess-1", taskID); err != nil {
+				if _, _, err := bgMgr.WaitForSessionTask(waitCtx, "bot-1", "sess-1", taskID, 0); err != nil {
 					return nil, fmt.Errorf("wait for background task: %w", err)
 				}
 			}

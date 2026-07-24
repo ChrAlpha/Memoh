@@ -21,8 +21,8 @@
         <div
           class="flex-1 flex flex-col overflow-hidden min-h-0"
           :class="flush
-            ? 'bg-sidebar border-r border-sidebar-border'
-            : 'border border-border/60 bg-muted/10 rounded-lg'"
+            ? 'workspace-divider-r bg-sidebar'
+            : 'border border-border-soft bg-muted/10 rounded-lg'"
         >
           <!-- Integrated Header (if provided) -->
           <div
@@ -55,7 +55,7 @@
         <slot name="detail" />
       </section>
 
-      <div class="absolute right-4 top-0 h-10 z-20 md:hidden flex items-center">
+      <div class="absolute right-4 top-0 h-10 z-(--z-sticky) md:hidden flex items-center">
         <Menu
           class="cursor-pointer p-2 size-9"
           @click="mobileOpen = !mobileOpen"
@@ -111,7 +111,7 @@ import {
   Sidebar,
   SidebarInset,
   ScrollArea
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { DesktopShellKey } from '@/lib/desktop-shell'
 
 withDefaults(defineProps<{

@@ -63,7 +63,8 @@ func (r *Resolver) loadMemoryContext(ctx context.Context, req conversation.ChatR
 	before, err := r.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
-			"query":                 strings.TrimSpace(req.Query),
+			"query":                 builtQuery.Query,
+			"visible_query":         strings.TrimSpace(req.Query),
 			"query_source":          builtQuery.Source,
 			"query_recent_messages": builtQuery.RecentMessages,
 			"query_truncated":       builtQuery.Truncated,
@@ -142,6 +143,8 @@ func (r *Resolver) memoryContextFromResult(ctx context.Context, req conversation
 	after, err := r.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
+			"query":                 builtQuery.Query,
+			"visible_query":         strings.TrimSpace(req.Query),
 			"query_source":          builtQuery.Source,
 			"query_recent_messages": builtQuery.RecentMessages,
 			"query_truncated":       builtQuery.Truncated,

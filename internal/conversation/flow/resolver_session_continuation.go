@@ -3,38 +3,12 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
-	agentpkg "github.com/memohai/memoh/internal/agent"
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/historyfrag"
 	"github.com/memohai/memoh/internal/models"
 )
-
-// finalizeContinuationRunConfig mirrors resolve()'s post-sanitize ordering
-// (sanitize, then snapshot history estimates/trimmable count, then build the
-// SDK message list) so tool-approval and user-input session resumption carry
-// the same budget-trimming and tool-exchange-policy signals as the main chat
-// path.
-func finalizeContinuationRunConfig(cfg agentpkg.RunConfig, messages []conversation.ModelMessage, contextBudgetMaxTokens int, liveToolStream, canRequestUserInput bool) agentpkg.RunConfig {
-	messages = sanitizeMessages(messages)
-	historyEstimates := make([]int, len(messages))
-	for i := range messages {
-		historyEstimates[i] = estimateMessageTokens(messages[i])
-	}
-	cfg.ContextHistoryTokenEstimates = historyEstimates
-	cfg.ContextTrimmableMessages = len(messages)
-	if cfg.ContextToolExchangePolicy == nil {
-		cfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
-	}
-	if cfg.ContextBudgetMaxTokens == 0 {
-		cfg.ContextBudgetMaxTokens = contextBudgetMaxTokens
-	}
-	cfg.Messages = modelMessagesToSDKMessages(nonNilModelMessages(messages))
-	cfg.ContextCurrentUserMessageIndex = nil
-	cfg.Query = ""
-	cfg.LiveToolStream = liveToolStream
-	cfg.CanRequestUserInput = canRequestUserInput
-	return cfg
-}
 
 type continuationParams struct {
 	BotID             string
@@ -44,6 +18,9 @@ type continuationParams struct {
 	ReplyTarget       string
 	ConversationType  string
 	ChatToken         string
+	// SummaryScopeBotID scopes compaction summaries when the originating
+	// request carries its own bot id; falls back to BotID when empty.
+	SummaryScopeBotID string
 }
 
 // resumeAgentSession is the shared core of continueToolApprovalSession and
@@ -57,16 +34,21 @@ func (r *Resolver) resumeAgentSession(ctx context.Context, p continuationParams,
 		return err
 	}
 
-	loaded, err := r.loadMessages(ctx, p.BotID, p.SessionID, defaultMaxContextMinutes)
+	base := resolved.RunConfig
+	base.ContextBudgetMaxTokens = resolved.ContextBudgetMaxTokens
+	cfg, err := r.prepareContinuationRunConfig(
+		ctx,
+		base,
+		historyfrag.ScopeFallback{
+			ConversationType: strings.TrimSpace(p.ConversationType),
+			ReplyTarget:      strings.TrimSpace(p.ReplyTarget),
+		},
+		compactionSummaryScope(firstNonEmpty(p.SummaryScopeBotID, p.BotID), "", p.SessionID, p.ConversationType, "", p.ReplyTarget),
+		eventCh,
+	)
 	if err != nil {
 		return err
 	}
-	loaded = pruneHistoryForGateway(loaded)
-	loaded = r.replaceCompactedMessages(ctx, loaded)
-	messages := modelMessagesOf(loaded)
-
-	cfg := finalizeContinuationRunConfig(resolved.RunConfig, messages, resolved.ContextBudgetMaxTokens, eventCh != nil, r.canDeliverUserInputWS(eventCh))
-	cfg = r.prepareRunConfig(ctx, cfg)
 
 	chatReq := conversation.ChatRequest{
 		BotID:                   p.BotID,

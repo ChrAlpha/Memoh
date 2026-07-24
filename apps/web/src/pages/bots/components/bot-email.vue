@@ -50,12 +50,10 @@
           </Popover>
         </SettingsRow>
 
-        <!-- ui-allow-shape: loading skeleton — matches the binding-row height so the
-             list holds its space and doesn't jump (CLS) as bindings load. -->
         <InlineLoadingRow
           v-if="bindingsLoading"
           size="md"
-          class="mx-4 min-h-[3.75rem] border-b border-border py-3 last:border-b-0"
+          surface="card-row"
         >
           {{ $t('common.loading') }}
         </InlineLoadingRow>
@@ -209,11 +207,11 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import { Plus } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import {

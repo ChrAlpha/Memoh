@@ -190,6 +190,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -1729,7 +1735,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Get container info for bot",
+                "summary": "Get workspace info for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -1764,7 +1770,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Create and start MCP container for bot",
+                "summary": "Create and start workspace for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -1774,7 +1780,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Create container payload",
+                        "description": "Create workspace payload",
                         "name": "payload",
                         "in": "body",
                         "required": true,
@@ -1785,7 +1791,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "SSE stream of container creation events",
+                        "description": "SSE stream of workspace creation events",
                         "schema": {
                             "$ref": "#/definitions/handlers.CreateContainerResponse"
                         }
@@ -1808,7 +1814,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Delete MCP container for bot",
+                "summary": "Delete workspace for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -1997,7 +2003,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Restore previously preserved data into container",
+                "summary": "Restore previously preserved data into workspace",
                 "parameters": [
                     {
                         "type": "string",
@@ -2034,7 +2040,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Check workspace display availability for bot container",
+                "summary": "Check workspace display availability for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -2209,7 +2215,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/container/fs": {
             "get": {
-                "description": "Returns metadata about a file or directory at the given container path",
+                "description": "Returns metadata about a file or directory at the given workspace path",
                 "tags": [
                     "containerd"
                 ],
@@ -2224,7 +2230,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Container path",
+                        "description": "Workspace path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -2259,6 +2265,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -2322,13 +2334,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
         },
         "/bots/{bot_id}/container/fs/delete": {
             "post": {
-                "description": "Deletes a file or directory at the given container path",
+                "description": "Deletes a file or directory at the given workspace path",
                 "tags": [
                     "containerd"
                 ],
@@ -2381,13 +2399,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
         },
         "/bots/{bot_id}/container/fs/download": {
             "get": {
-                "description": "Downloads a file from the container with appropriate Content-Type",
+                "description": "Downloads a file from the workspace with appropriate Content-Type",
                 "produces": [
                     "application/octet-stream"
                 ],
@@ -2405,7 +2429,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Container file path",
+                        "description": "Workspace file path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -2434,6 +2458,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -2500,13 +2530,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
         },
         "/bots/{bot_id}/container/fs/list": {
             "get": {
-                "description": "Lists files and directories at the given container path",
+                "description": "Lists files and directories at the given workspace path",
                 "tags": [
                     "containerd"
                 ],
@@ -2521,7 +2557,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Container directory path",
+                        "description": "Workspace directory path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -2551,13 +2587,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
         },
         "/bots/{bot_id}/container/fs/mkdir": {
             "post": {
-                "description": "Creates a directory (and parents) at the given container path",
+                "description": "Creates a directory (and parents) at the given workspace path",
                 "tags": [
                     "containerd"
                 ],
@@ -2604,6 +2646,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
@@ -2625,7 +2673,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Container file path",
+                        "description": "Workspace file path",
                         "name": "path",
                         "in": "query",
                         "required": true
@@ -2654,6 +2702,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -2714,13 +2768,19 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
         },
         "/bots/{bot_id}/container/fs/upload": {
             "post": {
-                "description": "Uploads a binary file to the given container path",
+                "description": "Uploads a binary file to the given workspace path",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -2738,7 +2798,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Destination container path",
+                        "description": "Destination workspace path",
                         "name": "path",
                         "in": "formData",
                         "required": true
@@ -2774,6 +2834,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -2828,6 +2894,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
@@ -2837,7 +2909,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Get current container metrics for bot",
+                "summary": "Get current workspace metrics for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -2866,7 +2938,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Update container metrics settings for bot",
+                "summary": "Update workspace metrics settings for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -2912,7 +2984,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "List skills from the bot container",
+                "summary": "List skills from the bot workspace",
                 "parameters": [
                     {
                         "type": "string",
@@ -3002,6 +3074,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             },
@@ -3051,6 +3129,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -3104,6 +3188,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
@@ -3148,7 +3238,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Create container snapshot for bot",
+                "summary": "Create workspace snapshot for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -3200,7 +3290,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Rollback container to a previous snapshot version",
+                "summary": "Roll back workspace to a previous snapshot version",
                 "parameters": [
                     {
                         "type": "string",
@@ -3246,7 +3336,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Start container task for bot",
+                "summary": "Start workspace for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -3283,7 +3373,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Stop container task for bot",
+                "summary": "Stop workspace for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -3320,7 +3410,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Check terminal availability for bot container",
+                "summary": "Check terminal availability for bot workspace",
                 "parameters": [
                     {
                         "type": "string",
@@ -3351,7 +3441,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Interactive WebSocket terminal for bot container",
+                "summary": "Interactive WebSocket terminal for bot workspace",
                 "parameters": [
                     {
                         "type": "string",
@@ -3993,7 +4083,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/mcp-stdio": {
             "post": {
-                "description": "Start a stdio MCP process in the bot container and expose it as MCP HTTP endpoint.",
+                "description": "Start a stdio MCP process in the bot workspace and expose it as an MCP HTTP endpoint.",
                 "tags": [
                     "containerd"
                 ],
@@ -4046,7 +4136,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/mcp-stdio/{connection_id}": {
             "post": {
-                "description": "Proxies MCP JSON-RPC requests to a stdio MCP process in the container.",
+                "description": "Proxies MCP JSON-RPC requests to a stdio MCP process in the workspace.",
                 "tags": [
                     "containerd"
                 ],
@@ -4946,7 +5036,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/memory/rebuild": {
             "post": {
-                "description": "Read memory files from the container filesystem (source of truth) and restore missing entries to memory storage",
+                "description": "Read memory files from the workspace filesystem (source of truth) and restore missing entries to memory storage",
                 "produces": [
                     "application/json"
                 ],
@@ -7330,7 +7420,7 @@ const docTemplate = `{
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "Install skill from supermarket to bot container",
+                "summary": "Install skill from supermarket to bot workspace",
                 "parameters": [
                     {
                         "type": "string",
@@ -8192,6 +8282,271 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/workspace-targets": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspace-targets"
+                ],
+                "summary": "List a Bot's workspace targets",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workspace.WorkspaceTargetsResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workspace-targets/primary": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspace-targets"
+                ],
+                "summary": "Set a Bot's Primary workspace target",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Primary target",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workspace.SetPrimaryWorkspaceTargetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workspace-targets/remotes/{runtime_id}": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspace-targets"
+                ],
+                "summary": "Add or update a Remote Runtime workspace target",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Runtime ID",
+                        "name": "runtime_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Remote workspace mount",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workspace.MountRemoteWorkspaceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workspace.WorkspaceTarget"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workspace-targets/{target_id}": {
+            "delete": {
+                "description": "Remote files and the Native workspace are not deleted.",
+                "tags": [
+                    "workspace-targets"
+                ],
+                "summary": "Delete a Remote Runtime workspace target",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace target ID",
+                        "name": "target_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workspace-targets/{target_id}/tool-approval": {
+            "put": {
+                "description": "The read/write/exec fields are mode shortcuts. tool_approval_config preserves and updates advanced bypass/force rules.",
+                "consumes": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workspace-targets"
+                ],
+                "summary": "Update tool approval for one workspace target",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace target ID",
+                        "name": "target_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Target tool approval",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workspace.UpdateWorkspaceTargetToolApprovalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{id}": {
             "get": {
                 "description": "Get a bot by ID (owner/admin only)",
@@ -8288,6 +8643,12 @@ const docTemplate = `{
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "500": {
@@ -12615,6 +12976,124 @@ const docTemplate = `{
                 }
             }
         },
+        "/users/me/runtimes": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-runtimes"
+                ],
+                "summary": "List Remote Runtime credentials",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/userruntime.Runtime"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Register a Remote Runtime and return its reusable API token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user-runtimes"
+                ],
+                "summary": "Create a Remote Runtime credential",
+                "parameters": [
+                    {
+                        "description": "Runtime configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/userruntime.CreateRuntimeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/userruntime.Runtime"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/users/me/runtimes/{id}": {
+            "delete": {
+                "tags": [
+                    "user-runtimes"
+                ],
+                "summary": "Revoke a Remote Runtime credential",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Runtime ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/users/{id}": {
             "get": {
                 "description": "Get user details (self or admin only)",
@@ -13987,6 +14466,39 @@ const docTemplate = `{
                 }
             }
         },
+        "apperror.Problem": {
+            "type": "object",
+            "required": [
+                "args",
+                "code",
+                "detail",
+                "status",
+                "type"
+            ],
+            "properties": {
+                "args": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "code": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "request_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "integer"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "audio.ConfigSchema": {
             "type": "object",
             "properties": {
@@ -14905,7 +15417,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "path": {
-                    "description": "container-local filesystem path",
+                    "description": "workspace-local filesystem path",
                     "type": "string"
                 },
                 "platform_key": {
@@ -16026,6 +16538,17 @@ const docTemplate = `{
                 }
             }
         },
+        "conversation.UIExecutionLocation": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "conversation.UIForwardRef": {
             "type": "object",
             "properties": {
@@ -16063,6 +16586,9 @@ const docTemplate = `{
                 },
                 "content": {
                     "type": "string"
+                },
+                "execution_location": {
+                    "$ref": "#/definitions/conversation.UIExecutionLocation"
                 },
                 "id": {
                     "type": "integer"
@@ -19297,6 +19823,9 @@ const docTemplate = `{
         "models.ModelConfig": {
             "type": "object",
             "properties": {
+                "catalog_available": {
+                    "type": "boolean"
+                },
                 "compatibilities": {
                     "type": "array",
                     "items": {
@@ -19305,6 +19834,9 @@ const docTemplate = `{
                 },
                 "context_window": {
                     "type": "integer"
+                },
+                "description": {
+                    "type": "string"
                 },
                 "dimensions": {
                     "type": "integer"
@@ -20456,6 +20988,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "mode": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
                 "require_approval": {
                     "type": "boolean"
                 }
@@ -20476,10 +21011,26 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "mode": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
                 "require_approval": {
                     "type": "boolean"
                 }
             }
+        },
+        "settings.ToolApprovalMode": {
+            "type": "string",
+            "enum": [
+                "allow",
+                "ask",
+                "deny"
+            ],
+            "x-enum-varnames": [
+                "ToolApprovalAllow",
+                "ToolApprovalAsk",
+                "ToolApprovalDeny"
+            ]
         },
         "settings.UpsertRequest": {
             "type": "object",
@@ -20645,6 +21196,55 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "userruntime.CreateRuntimeRequest": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "userruntime.Runtime": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "client_version": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "online": {
+                    "type": "boolean"
+                },
+                "os": {
+                    "type": "string"
+                },
+                "workspace_base": {
                     "type": "string"
                 }
             }
@@ -20845,6 +21445,102 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "workspace.MountRemoteWorkspaceRequest": {
+            "type": "object",
+            "properties": {
+                "workspace_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "workspace.SetPrimaryWorkspaceTargetRequest": {
+            "type": "object",
+            "required": [
+                "target_id"
+            ],
+            "properties": {
+                "target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "workspace.UpdateWorkspaceTargetToolApprovalRequest": {
+            "type": "object",
+            "properties": {
+                "exec": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
+                "read": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
+                "tool_approval_config": {
+                    "$ref": "#/definitions/settings.ToolApprovalConfig"
+                },
+                "write": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                }
+            }
+        },
+        "workspace.WorkspaceTarget": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "online": {
+                    "type": "boolean"
+                },
+                "primary": {
+                    "type": "boolean"
+                },
+                "runtime_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "target_id": {
+                    "type": "string"
+                },
+                "tool_approval": {
+                    "$ref": "#/definitions/workspace.WorkspaceTargetToolApproval"
+                },
+                "tool_approval_config": {
+                    "$ref": "#/definitions/settings.ToolApprovalConfig"
+                },
+                "workspace_path": {
+                    "type": "string"
+                }
+            }
+        },
+        "workspace.WorkspaceTargetToolApproval": {
+            "type": "object",
+            "properties": {
+                "exec": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
+                "read": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                },
+                "write": {
+                    "$ref": "#/definitions/settings.ToolApprovalMode"
+                }
+            }
+        },
+        "workspace.WorkspaceTargetsResponse": {
+            "type": "object",
+            "properties": {
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workspace.WorkspaceTarget"
+                    }
                 }
             }
         }

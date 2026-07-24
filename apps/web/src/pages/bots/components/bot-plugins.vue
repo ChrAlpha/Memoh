@@ -17,12 +17,13 @@
     </template>
 
     <SettingsSection :title="$t('bots.plugins.installedTitle')">
-      <!-- ui-allow-shape: loading skeleton — matches the plugin-row height so the
-           list keeps its space and doesn't jump (CLS) when plugins arrive. -->
+      <!-- Loading borrows the row height so the list keeps its space and
+           doesn't jump (CLS) when plugins arrive — same card-row family as the
+           SettingsRow list it stands in for. -->
       <InlineLoadingRow
         v-if="loading && !plugins.length"
         size="md"
-        class="mx-4 min-h-[3.75rem] py-3"
+        surface="card-row"
       >
         {{ $t('common.loading') }}
       </InlineLoadingRow>
@@ -136,7 +137,7 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { ExternalLink, PackageOpen, Store } from 'lucide-vue-next'
-import { Badge, Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle, Switch, toast } from '@memohai/ui'
+import { Badge, Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle, Switch, toast } from '@felinic/ui'
 import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
 import {
   getBotsByBotIdPlugins,

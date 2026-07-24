@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/historyfrag"
 	"github.com/memohai/memoh/internal/prune"
 	"github.com/memohai/memoh/internal/textutil"
 )
@@ -42,13 +43,14 @@ func defaultMemoryQueryBuilder() memoryQueryBuilder {
 
 func (r *Resolver) buildMemoryQuery(ctx context.Context, req conversation.ChatRequest) memoryQuery {
 	builder := defaultMemoryQueryBuilder()
-	if strings.TrimSpace(req.Query) == "" {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
 		return memoryQuery{}
 	}
 	if r == nil || r.messageService == nil {
 		return builder.Build(req, nil)
 	}
-	loaded, err := r.loadMessages(ctx, req.ChatID, req.SessionID, defaultMaxContextMinutes)
+	loaded, err := r.loadHistoryRecords(ctx, historyScopeFallbackFromChatRequest(req), req.SessionID, defaultMaxContextMinutes)
 	if err != nil {
 		if r.logger != nil {
 			r.logger.Warn("memory query history load failed",
@@ -60,12 +62,21 @@ func (r *Resolver) buildMemoryQuery(ctx context.Context, req conversation.ChatRe
 		}
 		return builder.Build(req, nil)
 	}
-	loaded = r.replaceCompactedMessages(ctx, loaded)
+	loaded = pruneHistoryForGateway(loaded)
+	artifactBoundary := r.loadCompactionArtifactBoundary(ctx, loaded, req.SessionID, req.HistoryCutoffBeforeMessageID)
+	loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
+	loaded, err = r.replaceCompactedMessages(ctx, req.SessionID, compactionSummaryScope(req.BotID, req.ChatID, req.SessionID, req.ConversationType, req.ConversationName, req.ReplyTarget), loaded, artifactBoundary)
+	if err != nil {
+		if r.logger != nil {
+			r.logger.Warn("memory query compaction frontier load failed", slog.String("session_id", req.SessionID), slog.Any("error", err))
+		}
+		return builder.Build(req, nil)
+	}
 	loaded = dedupePersistedCurrentUserMessage(loaded, req)
-	return builder.Build(req, modelMessagesOf(loaded))
+	return builder.Build(req, loaded)
 }
 
-func (b memoryQueryBuilder) Build(req conversation.ChatRequest, history []conversation.ModelMessage) memoryQuery {
+func (b memoryQueryBuilder) Build(req conversation.ChatRequest, history []historyfrag.HistoryRecord) memoryQuery {
 	current := strings.TrimSpace(req.Query)
 	if current == "" {
 		return memoryQuery{}
@@ -94,7 +105,7 @@ func (b memoryQueryBuilder) Build(req conversation.ChatRequest, history []conver
 	}
 }
 
-func (b memoryQueryBuilder) recentUserMessages(current string, history []conversation.ModelMessage) []string {
+func (b memoryQueryBuilder) recentUserMessages(current string, history []historyfrag.HistoryRecord) []string {
 	if len(history) == 0 || b.MaxRecentMessages <= 0 {
 		return nil
 	}
@@ -102,7 +113,7 @@ func (b memoryQueryBuilder) recentUserMessages(current string, history []convers
 	seen := map[string]bool{currentKey: true}
 	reversed := make([]string, 0, b.MaxRecentMessages)
 	for i := len(history) - 1; i >= 0 && len(reversed) < b.MaxRecentMessages; i-- {
-		msg := history[i]
+		msg := history[i].ModelMessage
 		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
 			continue
 		}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/memohai/memoh/internal/contextlimit"
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/historyfrag"
 	textprune "github.com/memohai/memoh/internal/prune"
 )
 
@@ -18,16 +19,16 @@ const (
 	gatewayToolPayloadPrunedMarker = textprune.DefaultMarker
 )
 
-func pruneHistoryForGateway(messages []messageWithUsage) []messageWithUsage {
+func pruneHistoryForGateway(messages []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
 	if len(messages) == 0 {
 		return messages
 	}
-	out := make([]messageWithUsage, 0, len(messages))
+	out := make([]historyfrag.HistoryRecord, 0, len(messages))
 	staleUsage := false
 	for _, item := range messages {
-		msg, changed := pruneMessageForGateway(item.Message)
+		msg, changed := pruneMessageForGateway(item.ModelMessage)
 		if changed {
-			item.Message = msg
+			item.ModelMessage = msg
 			staleUsage = true
 		}
 		if staleUsage {

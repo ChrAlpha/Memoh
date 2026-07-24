@@ -80,6 +80,7 @@ vi.mock('@/store/capabilities', () => ({
 vi.mock('@/store/bot-create-progress', () => ({
   useBotCreateProgressStore: () => ({
     bot: null,
+    errorCode: null,
     setupError: null,
     start: mocks.startBotCreate,
     status: 'idle',
@@ -91,7 +92,7 @@ vi.mock('@/composables/useAvatarInitials', () => ({
   useAvatarInitials: () => 'P',
 }))
 
-vi.mock('@memohai/ui', async () => {
+vi.mock('@felinic/ui', async () => {
   const { h } = await import('vue')
   const Passthrough = (_props: Record<string, unknown>, { slots }: { slots: Slots }) => h('div', slots.default?.())
   const Button = (props: Record<string, unknown>, { attrs, slots }: { attrs: Record<string, unknown>, slots: Slots }) =>

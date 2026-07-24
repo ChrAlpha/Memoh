@@ -7,9 +7,15 @@ RUN npm install -g pnpm@10
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY patches ./patches
+# Root lifecycle hooks validate the UI submodule and patched dependencies; both
+# scripts must exist before `pnpm install` runs preinstall and postinstall.
+COPY scripts/ensure-submodules.mjs scripts/check-patched-deps.mjs ./scripts/
 
 COPY packages ./packages
 COPY apps ./apps
+
+RUN test -f packages/ui/package.json || \
+    (echo "packages/ui is missing. Initialize git submodules before building: git submodule update --init --recursive" >&2; exit 1)
 
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install

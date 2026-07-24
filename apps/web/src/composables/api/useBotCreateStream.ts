@@ -2,6 +2,13 @@ import { client } from '@memohai/sdk/client'
 import type { Options } from '@memohai/sdk'
 import type { BotsBot, HandlersCreateContainerResponse, PostBotsData } from '@memohai/sdk'
 import type { ContainerCreateLayerStatus } from './useContainerStream'
+import {
+  fetchSSEProblem,
+  isSSEErrorEvent,
+  localizeSSEErrorEvent,
+  normalizeSSEFailure,
+  type SSEErrorEvent,
+} from './sse-error'
 
 // codesync(bot-create-stream): keep these manual SSE payload types in sync
 // with internal/handlers/users.go.
@@ -15,7 +22,7 @@ export type BotCreateStreamEvent =
   | { type: 'restoring' }
   | { type: 'complete'; container: HandlersCreateContainerResponse }
   | { type: 'ready'; bot: BotsBot }
-  | { type: 'error'; message: string }
+  | SSEErrorEvent
 
 export type BotCreateStreamResult = {
   stream: AsyncGenerator<BotCreateStreamEvent, void, unknown>
@@ -32,6 +39,7 @@ export type BotCreateProgressState = {
   bot?: BotsBot
   progress?: BotCreateProgress
   setupError?: string
+  errorCode?: string
 }
 
 export function botCreateProgressPercent(progress: BotCreateProgress | null | undefined): number {
@@ -84,6 +92,7 @@ export function reduceBotCreateProgressEvent(
       return {
         ...state,
         setupError: event.message,
+        errorCode: event.code,
         progress: { phase: 'error', error: event.message },
       }
   }
@@ -167,7 +176,7 @@ function isBotCreateStreamEvent(value: unknown): value is BotCreateStreamEvent {
     case 'complete':
       return !!event.container && typeof event.container === 'object'
     case 'error':
-      return typeof event.message === 'string'
+      return isSSEErrorEvent(event)
     default:
       return false
   }
@@ -193,6 +202,7 @@ export async function postBotsStream(
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
     },
+    fetch: fetchSSEProblem,
     onSseError: (error) => {
       streamError = error
     },
@@ -211,11 +221,13 @@ export async function postBotsStream(
           throw new Error('Invalid bot create stream event')
         }
         streamError = undefined
-        yield event
+        yield event.type === 'error'
+          ? localizeSSEErrorEvent(event)
+          : event
       }
 
       if (streamError) {
-        throw toError(streamError)
+        throw normalizeSSEFailure(streamError, 'Bot create stream failed')
       }
     })(),
   }

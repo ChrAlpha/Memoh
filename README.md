@@ -28,7 +28,7 @@
 
 ## What is Memoh?
 
-Memoh is an open-source multi-agent platform. Each agent gets its own cloud computer — a dedicated container with a filesystem, desktop, browser, network, and long-term memory. Your agents stay online 24/7, even when your laptop is closed.
+Memoh is an open-source multi-agent platform. Each agent gets its own cloud computer — a dedicated workspace with a filesystem, desktop, browser, network, and long-term memory. Your agents stay online 24/7, even when your laptop is closed.
 
 Use your own API keys to run Memoh's built-in agent, or host your existing Claude Code and Codex agents inside Memoh workspaces.
 
@@ -55,12 +55,18 @@ curl -fsSL https://memoh.sh | sh
 Manual deployment:
 
 ```bash
-git clone --depth 1 https://github.com/memohai/Memoh.git
+git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/memohai/Memoh.git
 cd Memoh
 cp conf/app.docker.toml config.toml
 # Edit config.toml
 docker compose up -d
 ```
+
+Existing setup checkouts can keep using `git pull`: the post-merge hook initializes the new
+submodule, and setup enables recursive updates for future pulls. If that hook was never installed,
+run `mise run submodule-init` once after upgrading.
+GitHub's automatic “Source code” archives omit submodule contents. For a buildable release archive,
+use the attached `Memoh-<version>-source.zip` or `.tar.gz` asset instead.
 
 > **Use CN mirror for slow image pulls:**
 > ```bash
@@ -74,27 +80,23 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for custom configuration and production setup
 
 </details>
 
-### Desktop
-
-A native client for macOS, Windows, and Linux that connects to Memoh Cloud or your hosted server. [Download Memoh Desktop](https://memoh.ai/desktop)
-
 ## Why Memoh?
 
-- **Every agent gets its own computer**: An isolated container with its own filesystem, network, desktop, and browser.
+- **Every agent gets its own computer**: An isolated workspace with its own filesystem, network, desktop, and browser.
 - **Multi-user, multi-bot**: Run one for yourself, deploy one for each family member, run a fleet on a single machine.
 - **Lightweight**: Self-host the server on your own infrastructure, or connect through Memoh Cloud.
 
 ## Features
 
 - **Multi-bot & multi-user**: Multiple bots that chat privately, in groups, or with each other. Cross-platform identity binding.
-- **Containerized workspaces**: Each bot runs in its own container with a dedicated filesystem, network, tools, and desktop.
+- **Isolated workspaces**: Each bot has a dedicated filesystem, network, tools, and desktop.
 - **Built-in memory**: Long-term memory across sessions and platforms, out of the box. Also supports [Mem0](https://mem0.ai), OpenViking.
 - **10+ channels**: Telegram, Discord, Lark, WeChat, QQ, Email, and more.
 - **MCP**: Connect external tool servers. Each bot manages its own connections.
 - **Plugins**: Install packaged skills, tools, and integrations to extend what bots can do.
 - **Agent Hosting**: Host external agents inside Memoh workspaces via ACP. Currently supports Codex and Claude Code, configured per bot.
-- **Browser Use**: Drive a browser inside the container.
-- **Computer Use**: Operate the container desktop for GUI workflows.
+- **Browser Use**: Drive a browser inside the workspace.
+- **Computer Use**: Operate the workspace desktop for GUI workflows.
 - **Skills & Supermarket**: Modular skills, install curated templates from Supermarket, delegate to sub-agents.
 - **Automation**: Scheduled tasks and periodic heartbeat.
 

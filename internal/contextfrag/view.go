@@ -1,7 +1,5 @@
 package contextfrag
 
-import sdk "github.com/memohai/twilight-ai/sdk"
-
 // Intent names why a context is being built; RenderTarget names what it is
 // rendered into. One intent may fan out to several render targets.
 type Intent string
@@ -38,22 +36,6 @@ func NormalizeContextRefs(frags []ContextFrag) []ContextFrag {
 	return normalizeContextRefs(frags)
 }
 
-// PriorityForMessage exposes the compile-path priority mapping to collectors.
-func PriorityForMessage(msg sdk.Message) int {
-	return priorityForMessage(msg)
-}
-
-// NewSummaryCoverage builds the coverage envelope linking a summary fragment
-// to the fragments it covers.
-func NewSummaryCoverage(summaryRef ContextRef, coveredRefs []ContextRef) SummaryCoverage {
-	return SummaryCoverage{
-		CoverageID:  "coverage:" + summaryRef.StableKey(),
-		SummaryRef:  summaryRef,
-		CoveredRefs: coveredRefs,
-		Schema:      SchemaVersion{Name: SchemaSummaryCoverage, Version: CurrentSchemaVersion},
-	}
-}
-
 // CachePlan is the placement-derived prompt cache shape handed to the
 // provider call: the stable prefix identity plus how many leading rendered
 // messages are cache-stable and may carry a cache breakpoint.
@@ -65,5 +47,3 @@ type CachePlan struct {
 	CacheComparatorPrefixTokenEstimate int    `json:"cache_comparator_prefix_token_estimate,omitempty"`
 	DecoratedProviderPrefixHash        string `json:"decorated_provider_prefix_hash,omitempty"`
 }
-
-const HashScopeSourcePayload = "source_payload"

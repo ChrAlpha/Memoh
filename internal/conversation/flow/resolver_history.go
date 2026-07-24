@@ -8,26 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/memohai/memoh/internal/contextfrag"
 	"github.com/memohai/memoh/internal/conversation"
-	"github.com/memohai/memoh/internal/db"
+	"github.com/memohai/memoh/internal/historyfrag"
 	messagepkg "github.com/memohai/memoh/internal/message"
-	pipelinepkg "github.com/memohai/memoh/internal/pipeline"
+	"github.com/memohai/memoh/internal/toolapproval"
+	"github.com/memohai/memoh/internal/userinput"
 )
 
-type messageWithUsage struct {
-	ID                string
-	Message           conversation.ModelMessage
-	UsageInputTokens  *int
-	UsageOutputTokens *int
-	SessionID         string
-	ExternalMessageID string
-	Platform          string
-	SenderChannelID   string
-	CompactID         string
-	Required          bool
-}
-
-func (r *Resolver) loadMessages(ctx context.Context, chatID string, sessionID string, maxContextMinutes int) ([]messageWithUsage, error) {
+func (r *Resolver) loadHistoryRecords(ctx context.Context, fallback historyfrag.ScopeFallback, sessionID string, maxContextMinutes int) ([]historyfrag.HistoryRecord, error) {
 	if r.messageService == nil {
 		return nil, nil
 	}
@@ -37,56 +26,52 @@ func (r *Resolver) loadMessages(ctx context.Context, chatID string, sessionID st
 	if strings.TrimSpace(sessionID) != "" {
 		msgs, err = r.messageService.ListActiveSinceBySession(ctx, sessionID, since)
 	} else {
-		msgs, err = r.messageService.ListActiveSince(ctx, chatID, since)
+		msgs, err = r.messageService.ListActiveSince(ctx, fallback.ChatID, since)
 	}
 	if err != nil {
 		return nil, err
 	}
-	var result []messageWithUsage
+	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for _, m := range msgs {
-		result = append(result, r.messageWithUsageFromPersisted(chatID, m))
+		record, err := historyfrag.FromDBMessageWithLogger(r.logger, m, fallback)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, record)
 	}
 	return result, nil
 }
 
-func (r *Resolver) messageWithUsageFromPersisted(chatID string, m messagepkg.Message) messageWithUsage {
-	var mm conversation.ModelMessage
-	if err := json.Unmarshal(m.Content, &mm); err != nil {
-		r.logger.Warn("loadMessages: content unmarshal failed, treating as raw text",
-			slog.String("chat_id", chatID), slog.Any("error", err))
-		mm = conversation.ModelMessage{Role: m.Role, Content: m.Content}
-	} else {
-		mm.Role = m.Role
-	}
-	var inputTokens *int
-	var outputTokens *int
-	if len(m.Usage) > 0 {
-		var u usageInfo
-		if json.Unmarshal(m.Usage, &u) == nil {
-			inputTokens = u.InputTokens
-			outputTokens = u.OutputTokens
-		}
-	}
-	return messageWithUsage{
-		ID:                strings.TrimSpace(m.ID),
-		Message:           mm,
-		UsageInputTokens:  inputTokens,
-		UsageOutputTokens: outputTokens,
-		SessionID:         strings.TrimSpace(m.SessionID),
-		ExternalMessageID: strings.TrimSpace(m.ExternalMessageID),
-		Platform:          strings.TrimSpace(m.Platform),
-		SenderChannelID:   strings.TrimSpace(m.SenderChannelIdentityID),
-		CompactID:         strings.TrimSpace(m.CompactID),
+func historyScopeFallbackFromChatRequest(req conversation.ChatRequest) historyfrag.ScopeFallback {
+	return historyfrag.ScopeFallback{
+		ChatID:           strings.TrimSpace(req.ChatID),
+		ConversationType: strings.TrimSpace(req.ConversationType),
+		ConversationName: strings.TrimSpace(req.ConversationName),
+		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
 	}
 }
 
-func (r *Resolver) ensureRequiredHistoryMessage(ctx context.Context, messages []messageWithUsage, req conversation.ChatRequest) ([]messageWithUsage, error) {
+func historyScopeFallbackFromUserInputRequest(req userinput.Request) historyfrag.ScopeFallback {
+	return historyfrag.ScopeFallback{
+		ConversationType: strings.TrimSpace(req.ConversationType),
+		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
+	}
+}
+
+func historyScopeFallbackFromToolApprovalRequest(req toolapproval.Request) historyfrag.ScopeFallback {
+	return historyfrag.ScopeFallback{
+		ConversationType: strings.TrimSpace(req.ConversationType),
+		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
+	}
+}
+
+func (r *Resolver) ensureRequiredHistoryMessage(ctx context.Context, messages []historyfrag.HistoryRecord, req conversation.ChatRequest) ([]historyfrag.HistoryRecord, error) {
 	messageID := strings.TrimSpace(req.RequiredHistoryMessageID)
 	if messageID == "" || r.messageService == nil || strings.TrimSpace(req.SessionID) == "" {
 		return messages, nil
 	}
 	for i, item := range messages {
-		if strings.TrimSpace(item.ID) == messageID {
+		if strings.TrimSpace(item.DBMessageID) == messageID {
 			messages[i].Required = true
 			return messages, nil
 		}
@@ -95,49 +80,54 @@ func (r *Resolver) ensureRequiredHistoryMessage(ctx context.Context, messages []
 	if err != nil {
 		return nil, err
 	}
-	required := make([]messageWithUsage, 0, len(window))
+	fallback := historyScopeFallbackFromChatRequest(req)
+	required := make([]historyfrag.HistoryRecord, 0, len(window))
 	for _, msg := range window {
-		required = append(required, r.messageWithUsageFromPersisted(req.ChatID, msg))
+		record, err := historyfrag.FromDBMessage(msg, fallback)
+		if err != nil {
+			return nil, err
+		}
+		required = append(required, record)
 	}
 	required = pruneHistoryForGateway(required)
 	required = filterMessagesBeforeID(required, req.HistoryCutoffBeforeMessageID)
-	if !containsMessageWithUsage(required, messageID) {
+	if !containsHistoryRecord(required, messageID) {
 		return nil, errors.New("required history message is not visible")
 	}
 	for i := range required {
-		if strings.TrimSpace(required[i].ID) == messageID {
+		if strings.TrimSpace(required[i].DBMessageID) == messageID {
 			required[i].Required = true
 		}
 	}
 	return mergeRequiredHistoryWindow(messages, required), nil
 }
 
-func containsMessageWithUsage(messages []messageWithUsage, messageID string) bool {
+func containsHistoryRecord(messages []historyfrag.HistoryRecord, messageID string) bool {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
 		return false
 	}
 	for _, item := range messages {
-		if strings.TrimSpace(item.ID) == messageID {
+		if strings.TrimSpace(item.DBMessageID) == messageID {
 			return true
 		}
 	}
 	return false
 }
 
-func mergeRequiredHistoryWindow(messages []messageWithUsage, required []messageWithUsage) []messageWithUsage {
+func mergeRequiredHistoryWindow(messages []historyfrag.HistoryRecord, required []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
 	if len(required) == 0 {
 		return messages
 	}
 	requiredIDs := make(map[string]struct{}, len(required))
 	for _, item := range required {
-		if id := strings.TrimSpace(item.ID); id != "" {
+		if id := strings.TrimSpace(item.DBMessageID); id != "" {
 			requiredIDs[id] = struct{}{}
 		}
 	}
-	merged := make([]messageWithUsage, 0, len(messages)+len(required))
+	merged := make([]historyfrag.HistoryRecord, 0, len(messages)+len(required))
 	for _, item := range messages {
-		if _, ok := requiredIDs[strings.TrimSpace(item.ID)]; ok {
+		if _, ok := requiredIDs[strings.TrimSpace(item.DBMessageID)]; ok {
 			continue
 		}
 		merged = append(merged, item)
@@ -145,20 +135,31 @@ func mergeRequiredHistoryWindow(messages []messageWithUsage, required []messageW
 	return append(merged, required...)
 }
 
-func filterMessagesBeforeID(messages []messageWithUsage, messageID string) []messageWithUsage {
+func filterMessagesBeforeID(messages []historyfrag.HistoryRecord, messageID string) []historyfrag.HistoryRecord {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
 		return messages
 	}
 	for i, item := range messages {
-		if strings.TrimSpace(item.ID) == messageID {
+		if strings.TrimSpace(item.DBMessageID) == messageID {
 			return messages[:i]
 		}
 	}
-	return messages
+	return nil
 }
 
-func dedupePersistedCurrentUserMessage(messages []messageWithUsage, req conversation.ChatRequest) []messageWithUsage {
+func compactionSummaryScope(botID, chatID, sessionID, conversationType, conversationName, replyTarget string) contextfrag.Scope {
+	return contextfrag.Scope{
+		BotID:            strings.TrimSpace(botID),
+		ChatID:           strings.TrimSpace(chatID),
+		SessionID:        strings.TrimSpace(sessionID),
+		ConversationType: strings.TrimSpace(conversationType),
+		ConversationName: strings.TrimSpace(conversationName),
+		ReplyTarget:      strings.TrimSpace(replyTarget),
+	}
+}
+
+func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req conversation.ChatRequest) []historyfrag.HistoryRecord {
 	if !req.UserMessagePersisted || len(messages) == 0 {
 		return messages
 	}
@@ -173,7 +174,7 @@ func dedupePersistedCurrentUserMessage(messages []messageWithUsage, req conversa
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		item := messages[i]
-		if !strings.EqualFold(strings.TrimSpace(item.Message.Role), "user") {
+		if !strings.EqualFold(strings.TrimSpace(item.ModelMessage.Role), "user") {
 			continue
 		}
 		if strings.TrimSpace(item.ExternalMessageID) != targetExternalID {
@@ -185,7 +186,7 @@ func dedupePersistedCurrentUserMessage(messages []messageWithUsage, req conversa
 		if targetPlatform != "" && item.Platform != "" && !strings.EqualFold(item.Platform, targetPlatform) {
 			continue
 		}
-		if targetSenderChannelID != "" && item.SenderChannelID != "" && item.SenderChannelID != targetSenderChannelID {
+		if targetSenderChannelID != "" && item.SenderChannelIdentityID != "" && item.SenderChannelIdentityID != targetSenderChannelID {
 			continue
 		}
 		return append(messages[:i], messages[i+1:]...)
@@ -203,185 +204,134 @@ func estimateMessageTokens(msg conversation.ModelMessage) int {
 	return len(text) / 4
 }
 
-func modelMessagesOf(messages []messageWithUsage) []conversation.ModelMessage {
-	result := make([]conversation.ModelMessage, len(messages))
-	for i, m := range messages {
-		result[i] = m.Message
-	}
-	return result
+func trimMessagesByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]conversation.ModelMessage, int) {
+	trimmed, _, totalTokens := trimMessagesAndRecordsByTokens(log, messages, maxTokens)
+	return trimmed, totalTokens
 }
 
-func estimateModelMessagesTokens(messages []conversation.ModelMessage) int {
+// totalCompactableHistoryTokens estimates the tokens held by raw history rows
+// only. Active summaries are excluded: compaction can never shrink them, so
+// counting them toward the compaction trigger would re-fire it on every
+// request once accumulated summaries alone cross the threshold.
+func totalCompactableHistoryTokens(records []historyfrag.HistoryRecord) int {
 	total := 0
-	for _, m := range messages {
-		total += estimateMessageTokens(m)
+	for _, record := range records {
+		if record.Kind == contextfrag.KindConversationSummary || record.Lifecycle == historyfrag.LifecycleActiveSummary {
+			continue
+		}
+		total += estimateMessageTokens(record.ModelMessage)
 	}
 	return total
 }
 
-func (r *Resolver) replaceCompactedMessages(ctx context.Context, messages []messageWithUsage) []messageWithUsage {
-	if r.queries == nil {
-		return messages
-	}
-
-	compactGroups := make(map[string][]int) // compact_id -> indices
-	requiredCompactGroups := make(map[string]bool)
-	for i, m := range messages {
-		if m.CompactID != "" {
-			compactGroups[m.CompactID] = append(compactGroups[m.CompactID], i)
-			if m.Required {
-				requiredCompactGroups[m.CompactID] = true
-			}
+func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]conversation.ModelMessage, []historyfrag.HistoryRecord, int) {
+	if maxTokens == 0 || len(messages) == 0 {
+		totalTokens := 0
+		for _, m := range messages {
+			totalTokens += estimateMessageTokens(m.ModelMessage)
 		}
-	}
-	if len(compactGroups) == 0 {
-		return messages
+		return historyfrag.ToModelMessages(messages), messages, totalTokens
 	}
 
-	summaries := make(map[string]string)
-	for compactID := range compactGroups {
-		cUUID, err := db.ParseUUID(compactID)
-		if err != nil {
-			continue
-		}
-		log, err := r.queries.GetCompactionLogByID(ctx, cUUID)
-		if err != nil {
-			r.logger.Warn("replaceCompactedMessages: failed to load compact log", slog.String("compact_id", compactID), slog.Any("error", err))
-			continue
-		}
-		if log.Status == "ok" && log.Summary != "" {
-			summaries[compactID] = log.Summary
-		}
-	}
-
-	var result []messageWithUsage
-	replaced := make(map[string]bool)
-	for _, m := range messages {
-		if m.CompactID == "" {
-			result = append(result, m)
-			continue
-		}
-		if replaced[m.CompactID] {
-			continue
-		}
-		replaced[m.CompactID] = true
-		if requiredCompactGroups[m.CompactID] {
-			for _, idx := range compactGroups[m.CompactID] {
-				result = append(result, messages[idx])
-			}
-			continue
-		}
-		summary, ok := summaries[m.CompactID]
-		if !ok || summary == "" {
-			for _, idx := range compactGroups[m.CompactID] {
-				result = append(result, messages[idx])
-			}
-			continue
-		}
-		result = append(result, messageWithUsage{
-			Message: conversation.ModelMessage{
-				Role:    "user",
-				Content: json.RawMessage(`"<summary>\n` + summary + `\n</summary>"`),
-			},
-		})
-	}
-	return result
-}
-
-// buildMessagesFromPipeline assembles chat context from the DCP pipeline's
-// RenderedContext (RC) merged with assistant/tool turns (TR) from
-// bot_history_messages. This gives chat mode the same event-driven context
-// that discuss mode uses, replacing the legacy loadMessages path.
-func (r *Resolver) buildMessagesFromPipeline(ctx context.Context, req conversation.ChatRequest, contextTokenBudget int) []conversation.ModelMessage {
-	sessionID := strings.TrimSpace(req.SessionID)
-	if r.pipeline == nil || sessionID == "" {
-		return nil
-	}
-	rc := r.pipeline.GetRC(sessionID)
-	if len(rc) == 0 {
-		return nil
-	}
-
-	trs := r.loadTurnResponses(ctx, sessionID)
-
-	composed := pipelinepkg.ComposeContext(rc, trs, "")
-	if composed == nil {
-		return nil
-	}
-
-	messages := make([]conversation.ModelMessage, 0, len(composed.Messages))
-	for _, m := range composed.Messages {
-		contentJSON := m.RawContent
-		if len(contentJSON) == 0 {
-			var err error
-			contentJSON, err = json.Marshal(m.Content)
-			if err != nil {
-				continue
-			}
-		}
-		messages = append(messages, conversation.ModelMessage{
-			Role:    m.Role,
-			Content: contentJSON,
-		})
-	}
-
-	// Apply context token budget trimming to pipeline path as well.
-	if contextTokenBudget > 0 && len(messages) > 0 {
-		messages = trimPipelineMessagesByTokens(r.logger, messages, contextTokenBudget)
-	}
-
-	return messages
-}
-
-// trimPipelineMessagesByTokens trims pipeline-assembled messages to fit within
-// the context token budget using character-based estimation.
-func trimPipelineMessagesByTokens(log *slog.Logger, messages []conversation.ModelMessage, maxTokens int) []conversation.ModelMessage {
-	totalTokens := 0
+	// Scan from newest to oldest, accumulating per-message estimated context
+	// token costs. Each message's cost represents the tokens it occupies in the
+	// context window (not the output tokens it generated). We use a character-
+	// based estimate for all messages since this measures context window impact.
+	scannedTokens := 0
 	cutoff := 0
 	for i := len(messages) - 1; i >= 0; i-- {
-		totalTokens += estimateMessageTokens(messages[i])
-		if totalTokens > maxTokens {
+		scannedTokens += estimateMessageTokens(messages[i].ModelMessage)
+		if scannedTokens > maxTokens {
 			cutoff = i + 1
 			break
 		}
 	}
 
-	// Avoid orphaned tool messages at the cutoff boundary.
-	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].Role), "tool") {
+	// Keep provider-valid message order: a "tool" message must follow a preceding
+	// assistant tool call. When history is head-trimmed, a leading tool message
+	// may become orphaned and cause provider 400 errors.
+	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
 		cutoff++
 	}
+	cutoff, totalTokens := fitRequiredMessagesWithinBudget(messages, cutoff, maxTokens)
 
 	if cutoff > 0 && log != nil {
-		log.Info("trimPipelineMessagesByTokens: context trimmed",
+		log.Info("trimMessagesByTokens: context trimmed",
 			slog.Int("total_messages", len(messages)),
 			slog.Int("estimated_tokens", totalTokens),
 			slog.Int("max_tokens", maxTokens),
+			slog.Int("cutoff_index", cutoff),
 			slog.Int("kept_messages", len(messages)-cutoff),
 		)
 	}
 
-	return messages[cutoff:]
+	requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
+	retained := make([]historyfrag.HistoryRecord, 0, len(messages)-cutoff+len(requiredPrefix))
+	retained = append(retained, requiredPrefix...)
+	retained = append(retained, messages[cutoff:]...)
+	result := make([]conversation.ModelMessage, 0, len(retained))
+	if cutoff > 0 {
+		// Add a truncation notice at the beginning so the LLM knows earlier
+		// context was trimmed and it can use tools (memory, search) to look up
+		// past information if needed.
+		result = append(result, conversation.ModelMessage{
+			Role: "system",
+			Content: conversation.NewTextContent(
+				"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
+					"If you need information from earlier in the conversation, use the available tools " +
+					"(such as memory_read or web search) to retrieve it.",
+			),
+		})
+	}
+	for _, m := range retained {
+		result = append(result, m.ModelMessage)
+	}
+	return result, retained, totalTokens
 }
 
-// loadTurnResponses loads recent assistant/tool messages from bot_history_messages
-// for use as the TR stream in pipeline-based context assembly.
-func (r *Resolver) loadTurnResponses(ctx context.Context, sessionID string) []pipelinepkg.TurnResponseEntry {
-	if r.messageService == nil {
-		return nil
+func fitRequiredMessagesWithinBudget(messages []historyfrag.HistoryRecord, cutoff int, maxTokens int) (int, int) {
+	if maxTokens <= 0 || len(messages) == 0 {
+		return cutoff, estimateMessagesTokens(messages)
 	}
-	since := time.Now().UTC().Add(-24 * time.Hour)
-	msgs, err := r.messageService.ListActiveSinceBySession(ctx, sessionID, since)
-	if err != nil {
-		r.logger.Warn("load TRs failed", slog.String("session_id", sessionID), slog.Any("error", err))
-		return nil
+	if cutoff < 0 {
+		cutoff = 0
 	}
-	var trs []pipelinepkg.TurnResponseEntry
-	for _, m := range msgs {
-		entry, ok := pipelinepkg.DecodeTurnResponseEntry(m)
-		if !ok {
-			continue
+	if cutoff > len(messages) {
+		cutoff = len(messages)
+	}
+	for {
+		requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
+		totalTokens := estimateMessagesTokens(requiredPrefix) + estimateMessagesTokens(messages[cutoff:])
+		if totalTokens <= maxTokens || cutoff >= len(messages) {
+			return cutoff, totalTokens
 		}
-		trs = append(trs, entry)
+		cutoff++
+		for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
+			cutoff++
+		}
 	}
-	return trs
+}
+
+func estimateMessagesTokens(messages []historyfrag.HistoryRecord) int {
+	total := 0
+	for _, m := range messages {
+		total += estimateMessageTokens(m.ModelMessage)
+	}
+	return total
+}
+
+func requiredMessagesBeforeCutoff(messages []historyfrag.HistoryRecord, cutoff int) []historyfrag.HistoryRecord {
+	if cutoff <= 0 {
+		return nil
+	}
+	if cutoff > len(messages) {
+		cutoff = len(messages)
+	}
+	var required []historyfrag.HistoryRecord
+	for _, m := range messages[:cutoff] {
+		if m.Required {
+			required = append(required, m)
+		}
+	}
+	return required
 }

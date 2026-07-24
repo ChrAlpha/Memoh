@@ -1,6 +1,6 @@
 {
   "name": "@memohai/sdk",
-  "version": "0.14.0",
+  "version": "0.16.0",
   "description": "",
   "exports": {
     ".": "./src/index.ts",
@@ -9,7 +9,7 @@
   },
   "main": "index.js",
   "scripts": {
-    
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "packageManager": "pnpm@10.27.0",
   "peerDependencies": {

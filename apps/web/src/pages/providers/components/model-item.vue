@@ -14,9 +14,11 @@
       :class="{ 'pl-1': searchAligned }"
     >
       <div class="flex min-w-0 items-center gap-2">
-        <span class="truncate text-[13px] font-medium text-foreground">
-          {{ model.name || model.model_id }}
-        </span>
+        <ModelDescriptionTooltip :description="modelDescription">
+          <span class="truncate text-[13px] font-medium text-foreground">
+            {{ model.name || model.model_id }}
+          </span>
+        </ModelDescriptionTooltip>
         <Badge
           v-if="model.type === 'embedding'"
           variant="outline"
@@ -61,6 +63,13 @@
           {{ testResult?.message }}
         </span>
       </div>
+      <p
+        v-if="modelDescription"
+        data-model-description
+        class="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-body text-muted-foreground"
+      >
+        {{ modelDescription }}
+      </p>
     </div>
 
     <div class="flex shrink-0 items-center gap-0.5">
@@ -84,6 +93,7 @@
       </Button>
 
       <Button
+        v-if="!managed"
         type="button"
         variant="ghost"
         size="icon-sm"
@@ -94,6 +104,7 @@
       </Button>
 
       <ConfirmPopover
+        v-if="!managed"
         :message="$t('models.deleteModelConfirm')"
         :loading="deleteLoading"
         @confirm="$emit('delete', model.id ?? '')"
@@ -120,21 +131,25 @@ import {
   Spinner,
   Switch,
   toast,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { Zap, Settings, Trash2, Binary } from 'lucide-vue-next'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
+import ModelDescriptionTooltip from '@/components/model-description-tooltip/index.vue'
 import { postModelsByIdTest, putModelsById } from '@memohai/sdk'
 import type { ModelsGetResponse, ModelsTestResponse, ModelsUpdateRequest } from '@memohai/sdk'
 import { useQueryCache } from '@pinia/colada'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getModelDescription } from '@/utils/model-description'
 
 const props = withDefaults(defineProps<{
   model: ModelsGetResponse
   deleteLoading: boolean
   searchAligned?: boolean
+  managed?: boolean
 }>(), {
   searchAligned: false,
+  managed: false,
 })
 
 defineEmits<{
@@ -150,6 +165,7 @@ const enableLoading = ref(false)
 const enableOverride = ref<boolean | null>(null)
 
 const enabled = computed(() => enableOverride.value ?? props.model.enable ?? true)
+const modelDescription = computed(() => getModelDescription(props.model.config))
 
 // Show the id as a second line only when a real custom name is hiding it.
 const showModelId = computed(() => {

@@ -1,8 +1,9 @@
 {
   "name": "@memohai/monorepo",
   "private": true,
-  "version": "0.14.0",
+  "version": "0.16.0",
   "scripts": {
+    "preinstall": "node scripts/ensure-submodules.mjs --check",
     "web:dev": "pnpm --filter @memohai/web dev",
     "web:build": "pnpm --filter @memohai/web build",
     "web:start": "pnpm --filter @memohai/web start",
@@ -16,13 +17,15 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest",
-    "prepare": "husky"
+    "prepare": "husky",
+    "postinstall": "node scripts/check-patched-deps.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@hey-api/openapi-ts": "0.92.3",
+    "@hey-api/openapi-ts": "0.99.0",
+    "@memohai/runtime": "workspace:*",
     "@types/node": "^25.0.3",
     "@vitejs/plugin-vue": "^6.0.5",
     "bumpp": "^10.4.1",

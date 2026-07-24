@@ -40,7 +40,7 @@ type snapshotMountProvider interface {
 func (m *Manager) ExportData(ctx context.Context, botID string) (io.ReadCloser, error) {
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
-		return nil, fmt.Errorf("get container: %w", err)
+		return nil, fmt.Errorf("get workspace runtime: %w", err)
 	}
 	defer ref.Close()
 
@@ -54,7 +54,7 @@ func (m *Manager) ExportData(ctx context.Context, botID string) (io.ReadCloser, 
 
 	restartTask, err := ref.StopTaskForMutation(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("stop container: %w", err)
+		return nil, fmt.Errorf("stop workspace runtime: %w", err)
 	}
 
 	pr, pw := io.Pipe()
@@ -83,7 +83,7 @@ func (m *Manager) ExportData(ctx context.Context, botID string) (io.ReadCloser, 
 func (m *Manager) ImportData(ctx context.Context, botID string, r io.Reader) error {
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
-		return fmt.Errorf("get container: %w", err)
+		return fmt.Errorf("get workspace runtime: %w", err)
 	}
 	defer ref.Close()
 
@@ -97,7 +97,7 @@ func (m *Manager) ImportData(ctx context.Context, botID string, r io.Reader) err
 
 	restartTask, err := ref.StopTaskForMutation(ctx)
 	if err != nil {
-		return fmt.Errorf("stop container: %w", err)
+		return fmt.Errorf("stop workspace runtime: %w", err)
 	}
 	defer restartTask()
 
@@ -118,7 +118,7 @@ func (m *Manager) ImportData(ctx context.Context, botID string, r io.Reader) err
 func (m *Manager) PreserveData(ctx context.Context, botID string) error {
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
-		return fmt.Errorf("get container: %w", err)
+		return fmt.Errorf("get workspace runtime: %w", err)
 	}
 	defer ref.Close()
 
@@ -231,7 +231,7 @@ func (m *Manager) restorePreservedIntoSnapshot(ctx context.Context, botID string
 
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
-		return fmt.Errorf("get container: %w", err)
+		return fmt.Errorf("get workspace runtime: %w", err)
 	}
 	defer ref.Close()
 
@@ -354,7 +354,7 @@ func (m *Manager) preserveDataToBackup(ctx context.Context, botID string, mounts
 func (m *Manager) preserveDataBeforeDelete(ctx context.Context, botID string) error {
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
-		return fmt.Errorf("get container for preserve: %w", err)
+		return fmt.Errorf("get workspace runtime for preserve: %w", err)
 	}
 	defer ref.Close()
 
@@ -402,7 +402,7 @@ func (m *Manager) archiveSnapshotPath(key string) string {
 // It is best-effort context for the export dialog; callers should treat an
 // error (e.g. a stopped or unreachable container) as "unknown".
 func (m *Manager) CountData(ctx context.Context, botID string) (int, error) {
-	client, err := m.MCPClient(ctx, botID)
+	client, err := m.nativeMCPClient(ctx, botID)
 	if err != nil {
 		return 0, fmt.Errorf("grpc connect: %w", err)
 	}
@@ -420,7 +420,7 @@ func (m *Manager) CountData(ctx context.Context, botID string) (int, error) {
 }
 
 func (m *Manager) exportDataViaGRPC(ctx context.Context, botID string) (io.ReadCloser, error) {
-	client, err := m.MCPClient(ctx, botID)
+	client, err := m.nativeMCPClient(ctx, botID)
 	if err != nil {
 		return nil, fmt.Errorf("grpc connect: %w", err)
 	}
@@ -526,7 +526,7 @@ func (m *Manager) createArchiveSnapshotFromRef(ctx context.Context, ref *lockedC
 	}
 	restartTask, err := ref.StopTaskForMutation(ctx)
 	if err != nil {
-		return fmt.Errorf("stop container: %w", err)
+		return fmt.Errorf("stop workspace runtime: %w", err)
 	}
 	defer restartTask()
 	return m.preserveDataToArchive(ctx, archivePath, mounts)
@@ -540,7 +540,7 @@ func (m *Manager) restoreArchiveSnapshotFromRef(ctx context.Context, ref *locked
 	}
 	defer func() { _ = f.Close() }()
 
-	client, err := m.MCPClient(ctx, ref.botID)
+	client, err := m.nativeMCPClient(ctx, ref.botID)
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}
@@ -552,7 +552,7 @@ func (m *Manager) restoreArchiveSnapshotFromRef(ctx context.Context, ref *locked
 }
 
 func (m *Manager) importDataViaGRPC(ctx context.Context, botID string, r io.Reader) error {
-	client, err := m.MCPClient(ctx, botID)
+	client, err := m.nativeMCPClient(ctx, botID)
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}

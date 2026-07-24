@@ -99,12 +99,10 @@
       </FormStack>
     </div>
 
-    <!-- ui-allow-shape: loading skeleton — borrows the grant-row height to keep
-         the list's space steady (no CLS) until grants load. -->
     <InlineLoadingRow
       v-if="isLoading"
       size="md"
-      class="mx-4 min-h-[3.75rem] border-b border-border py-3 last:border-b-0"
+      surface="card-row"
     >
       {{ $t('common.loading') }}
     </InlineLoadingRow>
@@ -220,7 +218,7 @@ import {
   EmptyHeader,
   EmptyTitle,
   SegmentedControl,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
 import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'

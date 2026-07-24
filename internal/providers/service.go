@@ -11,11 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	githubcopilot "github.com/memohai/twilight-ai/provider/github/copilot"
-	openaicodex "github.com/memohai/twilight-ai/provider/openai/codex"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	memohcopilot "github.com/memohai/memoh/internal/copilot"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -335,19 +332,19 @@ func (s *Service) FetchRemoteModels(ctx context.Context, id string) ([]RemoteMod
 		return nil, fmt.Errorf("get provider: %w", err)
 	}
 
+	clientType := models.ClientType(provider.ClientType)
+	switch clientType {
+	case models.ClientTypeOpenAICodex:
+		return s.fetchCodexRemoteModels(ctx, provider)
+	case models.ClientTypeGitHubCopilot:
+		return s.fetchGitHubCopilotModels(ctx, provider)
+	}
+
 	if models, ok := s.fetchTemplateModels(provider); ok {
 		return models, nil
 	}
 
-	var remoteModels []RemoteModel
-	switch {
-	case models.ClientType(provider.ClientType) == models.ClientTypeGitHubCopilot:
-		remoteModels, err = s.fetchGitHubCopilotModels(ctx, provider)
-	case supportsOAuth(provider):
-		remoteModels = fetchCodexCatalogModels()
-	default:
-		remoteModels, err = s.fetchRemoteModelsViaSDK(ctx, provider)
-	}
+	remoteModels, err := s.fetchRemoteModelsViaSDK(ctx, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -391,6 +388,7 @@ func remoteModelsFromTemplate(def registry.ProviderDefinition) []RemoteModel {
 		out = append(out, RemoteModel{
 			ID:               model.ModelID,
 			Name:             model.Name,
+			Description:      configStringPtr(cfg, "description"),
 			Type:             modelType,
 			Compatibilities:  configStringSlice(cfg, "compatibilities"),
 			ReasoningEfforts: configStringSlice(cfg, "reasoning_efforts"),
@@ -400,59 +398,6 @@ func remoteModelsFromTemplate(def registry.ProviderDefinition) []RemoteModel {
 		})
 	}
 	return out
-}
-
-func (s *Service) fetchGitHubCopilotModels(ctx context.Context, provider sqlc.Provider) ([]RemoteModel, error) {
-	creds, err := s.ResolveModelCredentials(ctx, provider)
-	if err != nil {
-		return nil, err
-	}
-	sdkProvider := memohcopilot.NewProvider(creds.APIKey, nil)
-	if result := sdkProvider.Test(ctx); result.Status != sdk.ProviderStatusOK {
-		return nil, fmt.Errorf("github copilot provider test failed: %s", result.Message)
-	}
-
-	catalog := githubcopilot.Catalog()
-	remoteModels := make([]RemoteModel, 0, len(catalog))
-	for _, model := range catalog {
-		remoteModels = append(remoteModels, RemoteModel{
-			ID:      model.ID,
-			Name:    model.DisplayName,
-			Object:  "model",
-			OwnedBy: "github-copilot",
-			Type:    "chat",
-			Compatibilities: []string{
-				models.CompatVision,
-				models.CompatToolCall,
-				models.CompatReasoning,
-			},
-		})
-	}
-	return remoteModels, nil
-}
-
-func fetchCodexCatalogModels() []RemoteModel {
-	catalog := openaicodex.Catalog()
-	remoteModels := make([]RemoteModel, 0, len(catalog))
-	for _, model := range catalog {
-		compatibilities := make([]string, 0, 2)
-		if model.SupportsToolCall {
-			compatibilities = append(compatibilities, models.CompatToolCall)
-		}
-		if model.SupportsReasoning {
-			compatibilities = append(compatibilities, models.CompatReasoning)
-		}
-		remoteModels = append(remoteModels, RemoteModel{
-			ID:               model.ID,
-			Name:             model.DisplayName,
-			Object:           "model",
-			OwnedBy:          "openai-codex",
-			Type:             "chat",
-			Compatibilities:  compatibilities,
-			ReasoningEfforts: append([]string(nil), model.ReasoningEfforts...),
-		})
-	}
-	return remoteModels
 }
 
 func (s *Service) fetchRemoteModelsViaSDK(ctx context.Context, provider sqlc.Provider) ([]RemoteModel, error) {
@@ -589,6 +534,18 @@ func configStringSlice(cfg map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+func configStringPtr(cfg map[string]any, key string) *string {
+	if cfg == nil {
+		return nil
+	}
+	value, ok := cfg[key].(string)
+	if !ok {
+		return nil
+	}
+	value = strings.TrimSpace(value)
+	return &value
 }
 
 func configIntPtr(cfg map[string]any, key string) *int {

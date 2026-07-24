@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, provide } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Toaster } from '@memohai/ui'
+import { Toaster } from '@felinic/ui'
 import { useSettingsStore } from '@memohai/web/store/settings'
 import { useUpdateStore } from '@memohai/web/store/update'
-import { DesktopShellKey } from '@memohai/web/lib/desktop-shell'
+import {
+  DesktopRuntimeKey,
+  DesktopShellKey,
+  type DesktopRuntimeBridge,
+} from '@memohai/web/lib/desktop-shell'
 import MainSection from '@memohai/web/pages/main-section/index.vue'
 
 provide(DesktopShellKey, true)
+provide(DesktopRuntimeKey, {
+  runtimeState: window.api.desktop.runtimeState,
+  configureRuntime: window.api.desktop.configureRuntime,
+  onRuntimeStateChanged: window.api.desktop.onRuntimeStateChanged,
+} satisfies DesktopRuntimeBridge)
 useSettingsStore()
 const updateStore = useUpdateStore()
 

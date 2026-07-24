@@ -15,7 +15,7 @@ import {
   TextButton,
   TextGenerateEffect,
   Toggle,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import {
   ArrowRight,
   Bell,
@@ -63,7 +63,11 @@ function runLoad(key: string) {
   setTimeout(() => { loading.value[key] = false }, 1600)
 }
 
-// Segmented control: now a REAL @memohai/ui component (the hand-rolled carryover
+// Selected state demo — mirrors the real onboarding theme picker (Step2Appearance.vue),
+// the one call site [data-ui-selected] actually replaced an injected bg-accent/border-foreground class.
+const selectedTheme = ref<'light' | 'dark'>('light')
+
+// Segmented control: now a REAL @felinic/ui component (the hand-rolled carryover
 // that used to live here was productionized into SegmentedControl).
 const range = ref('week')
 const rangeItems = [
@@ -82,13 +86,13 @@ const fmtTint = ref({ bold: true, italic: false, underline: false, strike: false
   <SectionShell
     id="atoms"
     label="Atoms"
-    description="Real primitives from @memohai/ui. The button card mirrors Controls contract so extraction can be judged in the same visual language."
+    description="Real primitives from @felinic/ui. The button card mirrors Controls contract so extraction can be judged in the same visual language."
   >
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <div class="lg:col-span-2">
         <div class="rounded-xl border border-border bg-card p-6">
           <div class="mb-5 flex flex-col gap-1">
-            <code class="text-[11px] font-mono text-muted-foreground">&lt;Button&gt; contract set — real @memohai/ui</code>
+            <code class="text-[11px] font-mono text-muted-foreground">&lt;Button&gt; contract set — real @felinic/ui</code>
             <span class="text-xs text-muted-foreground/75">Mirrors Controls contract: default=primary, outline=secondary, ghost=toolbar.</span>
           </div>
           <div class="mb-5 flex flex-wrap items-center gap-2 text-xs">
@@ -409,7 +413,30 @@ const fmtTint = ref({ bold: true, italic: false, underline: false, strike: false
             </div>
 
             <div class="flex flex-col gap-3 border-t border-border pt-6">
-              <span class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Segmented control · &lt;SegmentedControl&gt; @memohai/ui</span>
+              <span class="text-caption font-medium uppercase tracking-wide text-muted-foreground">Selected state · [data-ui-selected] on outline (click to pick)</span>
+              <div class="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  :class="shapeClass"
+                  :data-ui-selected="selectedTheme === 'light' ? '' : undefined"
+                  @click="selectedTheme = 'light'"
+                >
+                  Light
+                </Button>
+                <Button
+                  variant="outline"
+                  :class="shapeClass"
+                  :data-ui-selected="selectedTheme === 'dark' ? '' : undefined"
+                  @click="selectedTheme = 'dark'"
+                >
+                  Dark
+                </Button>
+                <span class="text-caption text-muted-foreground">no injected class — fill/ring live on style.css chrome, same shell as hover/press</span>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-3 border-t border-border pt-6">
+              <span class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Segmented control · &lt;SegmentedControl&gt; @felinic/ui</span>
               <div class="flex flex-wrap items-center gap-4">
                 <SegmentedControl
                   v-model="range"

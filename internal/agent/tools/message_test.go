@@ -159,7 +159,7 @@ func TestExecSendDiscussTextUsesChannelAdapter(t *testing.T) {
 		SessionType:     sessionmode.Discuss,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
-	}, map[string]any{
+	}, "call-test", map[string]any{
 		"text": "observed reply",
 	})
 	if err != nil {
@@ -187,7 +187,7 @@ func TestExecSendDiscussExplicitTargetReportsTargetDelivery(t *testing.T) {
 		SessionType:     sessionmode.Discuss,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
-	}, map[string]any{
+	}, "call-test", map[string]any{
 		"target": "chat-2",
 		"text":   "cross target",
 	})
@@ -213,7 +213,7 @@ func TestExecSendCurrentConversationWithoutEmitterUsesChannelAdapter(t *testing.
 		SessionType:     sessionmode.Chat,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
-	}, map[string]any{
+	}, "call-test", map[string]any{
 		"attachments": []any{"screenshot.png"},
 	})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestExecSendCurrentConversationCollectingEmitterUsesChannelAdapter(t *testi
 		Emitter: func(ToolStreamEvent) {
 			emitted = true
 		},
-	}, map[string]any{
+	}, "call-test", map[string]any{
 		"attachments": []any{"screenshot.png"},
 	})
 	if err != nil {
@@ -287,7 +287,7 @@ func TestExecSendCurrentConversationLiveStreamUsesEmitter(t *testing.T) {
 		Emitter: func(ToolStreamEvent) {
 			emitted++
 		},
-	}, map[string]any{
+	}, "call-test", map[string]any{
 		"attachments": []any{"screenshot.png"},
 	})
 	if err != nil {
@@ -302,6 +302,47 @@ func TestExecSendCurrentConversationLiveStreamUsesEmitter(t *testing.T) {
 	resp, ok := result.(map[string]any)
 	if !ok || resp["ok"] != true || resp["delivered"] != "current_conversation" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestExecSendCurrentConversationLiveStreamAttachmentWithTextEmitsAndFlagsText(t *testing.T) {
+	t.Parallel()
+
+	sender := &recordingSender{}
+	provider := NewMessageProvider(nil, sender, usageTestReactor{}, usageTestResolver{}, messageTestAssetResolver{})
+	var emitted int
+	result, err := provider.execSend(context.Background(), SessionContext{
+		BotID:           "bot_1",
+		SessionType:     sessionmode.Chat,
+		CurrentPlatform: "telegram",
+		ReplyTarget:     "chat-1",
+		LiveStream:      true,
+		Emitter: func(ToolStreamEvent) {
+			emitted++
+		},
+	}, "call-test", map[string]any{
+		"text":        "这是当前 blog 的页面截图。",
+		"attachments": []any{"screenshot.png"},
+	})
+	if err != nil {
+		t.Fatalf("execSend returned error: %v", err)
+	}
+	if emitted != 1 {
+		t.Fatalf("expected live stream emitter called once, got %d", emitted)
+	}
+	if sender.called != 0 {
+		t.Fatalf("expected sender not called for live stream shortcut, got %d", sender.called)
+	}
+	resp, ok := result.(map[string]any)
+	if !ok || resp["ok"] != true || resp["delivered"] != "current_conversation" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if resp["text_delivered"] != false {
+		t.Fatalf("expected text_delivered=false in result, got %#v", result)
+	}
+	note, _ := resp["note"].(string)
+	if !strings.Contains(note, "assistant reply") {
+		t.Fatalf("expected note guiding assistant reply, got %#v", result)
 	}
 }
 

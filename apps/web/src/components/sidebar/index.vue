@@ -6,7 +6,7 @@
        transitioned, so the resize handle still tracks the pointer 1:1. `inert`
        while closed so focus can't tab into the parked-off-screen rail. -->
   <aside
-    class="relative flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar"
+    class="workspace-divider-r relative flex shrink-0 flex-col bg-sidebar"
     :style="asideStyle"
     :inert="!workbenchOpen || undefined"
   >
@@ -144,7 +144,7 @@
 
     <!-- Width resize handle -->
     <div
-      class="group absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize"
+      class="group absolute right-0 top-0 z-(--z-raised) h-full w-1 cursor-col-resize"
       @mousedown="onResizeStart"
     >
       <div
@@ -163,7 +163,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { Files, MessageCircle, Search, Settings, Calendar } from 'lucide-vue-next'
-import { BadgeCount, Button } from '@memohai/ui'
+import { BadgeCount, Button } from '@felinic/ui'
 import { useChatStore } from '@/store/chat-list'
 import { useWorkspaceTabsStore, type SidebarView } from '@/store/workspace-tabs'
 import { hasBotPermission } from '@/utils/bot-permissions'

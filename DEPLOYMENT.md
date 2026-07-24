@@ -14,11 +14,16 @@ The one-click Docker Compose installer uses the `containerd` workspace backend. 
 ## Manual Install
 
 ```bash
-git clone https://github.com/memohai/Memoh.git
+git clone --recurse-submodules https://github.com/memohai/Memoh.git
 cd Memoh
 cp conf/app.docker.toml config.toml
 nano config.toml   # Change passwords and JWT secret
 ```
+
+GitHub's automatic “Source code” archives omit submodule contents. Use a recursive clone or the
+complete `Memoh-<version>-source.zip` / `.tar.gz` asset attached to each release. Existing setup
+checkouts can continue using `git pull`; run `mise run submodule-init` once only if the post-merge
+hook was never installed.
 
 > On macOS or if your user is in the `docker` group, `sudo` is not required.
 

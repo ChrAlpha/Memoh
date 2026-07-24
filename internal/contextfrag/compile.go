@@ -85,7 +85,7 @@ func CompileFrags(input CompileInput) []ContextFrag {
 			Message:    msg,
 			Kind:       kind,
 			Slot:       slot,
-			Priority:   priorityForMessage(msg),
+			Priority:   PriorityForMessage(msg),
 			CacheClass: cacheClass,
 			Trust:      trust,
 			Scope:      messageScope,
@@ -390,12 +390,14 @@ func kindForMessage(msg sdk.Message) Kind {
 	}
 }
 
-func priorityForMessage(msg sdk.Message) int {
+func PriorityForMessage(msg sdk.Message) int {
 	switch msg.Role {
 	case sdk.MessageRoleSystem:
 		return 30
 	case sdk.MessageRoleTool:
 		return 55
+	case sdk.MessageRoleUser, sdk.MessageRoleAssistant:
+		return 70
 	default:
 		return 70
 	}
@@ -418,6 +420,8 @@ func trustForMessage(msg sdk.Message) TrustLevel {
 		return TrustSystem
 	case sdk.MessageRoleAssistant, sdk.MessageRoleTool:
 		return TrustWorkspace
+	case sdk.MessageRoleUser:
+		return TrustExternal
 	default:
 		return TrustExternal
 	}

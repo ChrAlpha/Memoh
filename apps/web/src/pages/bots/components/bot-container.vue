@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { useQuery } from '@pinia/colada'
@@ -43,7 +43,7 @@ import {
   DialogTitle,
   DialogFooter,
   DialogClose,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import ContainerCreateProgress from './container-create-progress.vue'
 import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
@@ -181,7 +181,7 @@ async function loadContainerData(showLoadingToast: boolean) {
   try {
     const result = await getBotsByBotIdContainer({ path: { bot_id: botId.value } })
     if (result.error !== undefined) {
-      if (result.response.status === 404) {
+      if (result.response?.status === 404) {
         containerInfo.value = null
         containerMetrics.value = null
         containerMissing.value = true
@@ -983,7 +983,7 @@ watch([activeTab, botId], ([tab]) => {
     <InlineLoadingRow
       v-if="containerLoading && !containerInfo && !containerMissing"
       size="md"
-      class="px-2 py-8"
+      surface="tab"
     >
       {{ $t('common.loading') }}
     </InlineLoadingRow>

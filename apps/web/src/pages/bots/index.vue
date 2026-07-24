@@ -77,7 +77,7 @@
           @click="router.push({ name: 'bot-new' })"
         >
           <template #media>
-            <div class="flex size-14 items-center justify-center rounded-full bg-[color:var(--accent-gray-soft-active)]">
+            <div class="flex size-14 items-center justify-center rounded-full bg-accent-gray-soft-active">
               <Plus class="size-6" />
             </div>
           </template>
@@ -100,10 +100,11 @@ import {
   Button,
   Input,
   Skeleton,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { Search, Plus, Upload } from 'lucide-vue-next'
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import PersonaTile from '@/components/persona-tile/index.vue'
 import BotCard from './components/bot-card.vue'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { getBotsQuery, getBotsQueryKey } from '@memohai/sdk/colada'

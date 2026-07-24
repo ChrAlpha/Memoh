@@ -30,12 +30,13 @@
     </template>
 
     <SettingsSection :title="$t('bots.skills.libraryTitle')">
-      <!-- ui-allow-shape: loading skeleton — borrows the skill-row height to hold
-           the list's space steady (no CLS) until skills load. -->
+      <!-- Loading borrows the skill-row height to hold the list's space steady
+           (no CLS) until skills load — same card-row family as the row list it
+           stands in for. -->
       <InlineLoadingRow
         v-if="isLoading"
         size="md"
-        class="mx-4 min-h-[3.75rem] py-3"
+        surface="card-row"
       >
         {{ $t('common.loading') }}
       </InlineLoadingRow>
@@ -345,7 +346,7 @@
 import { ArrowDownToLine, Eye, EyeOff, Plus, SlidersHorizontal, SquarePen, Trash2 } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import {
   Badge,
@@ -353,7 +354,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
   Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle,
   Label, Textarea,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import MonacoEditor from '@/components/monaco-editor/index.vue'
 import SettingsSection from '@/components/settings/section.vue'

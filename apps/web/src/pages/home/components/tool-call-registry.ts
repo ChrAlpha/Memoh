@@ -80,6 +80,7 @@ import ToolCallDetailSpawn from './tool-call-detail-spawn.vue'
 import ToolCallDetailWebFetch from './tool-call-detail-web-fetch.vue'
 import ToolCallDetailWebSearch from './tool-call-detail-web-search.vue'
 import ToolCallDetailWrite from './tool-call-detail-write.vue'
+import { isGuiToolName } from '@/utils/gui-tools'
 
 export interface ToolDisplay {
   icon: Component
@@ -116,6 +117,7 @@ export function isDirPathTool(toolName: string): boolean {
 // along with whichever segment it sits next to.
 const READONLY_TOOLS = new Set([
   'read', 'list', 'web_search', 'web_fetch', 'search_memory', 'search_messages',
+  'list_execution_locations',
   'get_contacts', 'list_sessions', 'list_email', 'read_email', 'list_email_accounts',
   'list_schedule', 'get_schedule', 'list_skills', 'bg_status', 'list_background', 'get_background_status', 'wait', 'wait_until',
   'browser_observe', 'computer_observe',
@@ -129,20 +131,15 @@ export function isReadOnlyTool(toolName: string): boolean {
 // side-effecting "action" calls as one continuous browsing activity. Splitting
 // them on every observe↔action flip would strand each step in its own segment,
 // so they share a single category and stay grouped together.
-const GUI_TOOLS = new Set([
-  'browser_action', 'browser_observe', 'browser_remote_session',
-  'computer_action', 'computer_observe',
-])
-
 export type ToolSegmentCategory = 'explore' | 'action' | 'gui'
 
 export function isGuiTool(toolName: string): boolean {
-  return GUI_TOOLS.has(toolName)
+  return isGuiToolName(toolName)
 }
 
 // Segment category used to group consecutive tool calls in a process run.
 export function toolSegmentCategory(toolName: string): ToolSegmentCategory {
-  if (GUI_TOOLS.has(toolName)) return 'gui'
+  if (isGuiToolName(toolName)) return 'gui'
   return isReadOnlyTool(toolName) ? 'explore' : 'action'
 }
 
@@ -469,6 +466,8 @@ export function getToolDisplay(block: ToolCallBlock): ToolDisplay {
       const path = pickString(input, 'path')
       return { icon: FolderOpen, actionKey: 'list', target: basename(path), fullTarget: path, detail: ToolCallDetailOutput }
     }
+    case 'list_execution_locations':
+      return { icon: Monitor, actionKey: 'list_execution_locations', target: '' }
     case 'exec': {
       const cmd = pickString(input, 'command')
       return {

@@ -26,23 +26,17 @@ func FromDBMessage(msg messagepkg.Message, fallback ScopeFallback) (HistoryRecor
 }
 
 func FromDBMessageWithLogger(log *slog.Logger, msg messagepkg.Message, fallback ScopeFallback) (HistoryRecord, error) {
-	rowID := strings.TrimSpace(msg.ID)
-	if rowID == "" {
-		return HistoryRecord{}, errors.New("history db message id is required")
+	ref, err := DBMessageIdentityRef(msg.ID)
+	if err != nil {
+		return HistoryRecord{}, err
 	}
+	rowID := ref.ID
 
 	modelMessage := modelMessageFromDBMessage(log, msg)
 	inputTokens, outputTokens := parseUsage(msg.Usage)
-	ref := contextfrag.ContextRef{
-		Namespace:   NamespaceDBHistoryMessage,
-		ID:          rowID,
-		Version:     1,
-		Schema:      contextfrag.SchemaContextRef,
-		Durability:  contextfrag.RefDurable,
-		HashAlgo:    contextfrag.HashAlgoSHA256,
-		HashScope:   contextfrag.HashScopeSourcePayload,
-		ContentHash: DBMessageSourceHash(msg).Value,
-	}
+	ref.HashAlgo = contextfrag.HashAlgoSHA256
+	ref.HashScope = contextfrag.HashScopeSourcePayload
+	ref.ContentHash = DBMessageSourceHash(msg).Value
 	scope := scopeFromDBMessage(msg, fallback)
 	provenance := contextfrag.Provenance{
 		Source:    string(SourceDBMessage),
@@ -67,6 +61,7 @@ func FromDBMessageWithLogger(log *slog.Logger, msg messagepkg.Message, fallback 
 		ExternalMessageID: strings.TrimSpace(msg.ExternalMessageID),
 		EventID:           strings.TrimSpace(msg.EventID),
 		SessionID:         strings.TrimSpace(msg.SessionID),
+		SessionIDKnown:    true,
 		BotID:             strings.TrimSpace(msg.BotID),
 
 		SessionMode: strings.TrimSpace(msg.SessionMode),
@@ -86,6 +81,20 @@ func FromDBMessageWithLogger(log *slog.Logger, msg messagepkg.Message, fallback 
 	}, nil
 }
 
+func DBMessageIdentityRef(id string) (contextfrag.ContextRef, error) {
+	rowID := strings.TrimSpace(id)
+	if rowID == "" {
+		return contextfrag.ContextRef{}, errors.New("history db message id is required")
+	}
+	return contextfrag.ContextRef{
+		Namespace:  NamespaceDBHistoryMessage,
+		ID:         rowID,
+		Version:    1,
+		Schema:     contextfrag.SchemaContextRef,
+		Durability: contextfrag.RefDurable,
+	}, nil
+}
+
 func DBMessageSourceHash(msg messagepkg.Message) contextfrag.FragmentHash {
 	payload := dbMessageSourceHashPayload{
 		ID:                      strings.TrimSpace(msg.ID),
@@ -95,7 +104,6 @@ func DBMessageSourceHash(msg messagepkg.Message) contextfrag.FragmentHash {
 		RuntimeType:             strings.TrimSpace(msg.RuntimeType),
 		SenderChannelIdentityID: strings.TrimSpace(msg.SenderChannelIdentityID),
 		SenderUserID:            strings.TrimSpace(msg.SenderUserID),
-		SenderDisplayName:       strings.TrimSpace(msg.SenderDisplayName),
 		Platform:                strings.TrimSpace(msg.Platform),
 		ExternalMessageID:       strings.TrimSpace(msg.ExternalMessageID),
 		SourceReplyToMessageID:  strings.TrimSpace(msg.SourceReplyToMessageID),
@@ -132,7 +140,6 @@ type dbMessageSourceHashPayload struct {
 	RuntimeType             string         `json:"runtime_type,omitempty"`
 	SenderChannelIdentityID string         `json:"sender_channel_identity_id,omitempty"`
 	SenderUserID            string         `json:"sender_user_id,omitempty"`
-	SenderDisplayName       string         `json:"sender_display_name,omitempty"`
 	Platform                string         `json:"platform,omitempty"`
 	ExternalMessageID       string         `json:"external_message_id,omitempty"`
 	SourceReplyToMessageID  string         `json:"source_reply_to_message_id,omitempty"`
@@ -158,10 +165,35 @@ func modelMessageFromDBMessage(log *slog.Logger, msg messagepkg.Message) convers
 			Role:    strings.TrimSpace(msg.Role),
 			Content: cloneRawMessage(msg.Content),
 		}
-	} else {
-		modelMessage.Role = strings.TrimSpace(msg.Role)
+		return modelMessage
 	}
+
+	// A bare content-part object (e.g. {"type":"text","text":"hello"}) has no
+	// role/content/tool_calls keys, so it unmarshals successfully into an empty
+	// ModelMessage instead of erroring — unknown JSON fields are ignored. Detect
+	// that shape before the row's Role column gets stamped below, and normalize
+	// it into a one-element parts array so TextContent/ContentParts still see it.
+	if modelMessage.Role == "" && !modelMessage.HasContent() {
+		if wrapped, ok := bareContentPartArray(msg.Content); ok {
+			modelMessage.Content = wrapped
+		}
+	}
+
+	modelMessage.Role = strings.TrimSpace(msg.Role)
 	return modelMessage
+}
+
+// bareContentPartArray wraps a raw JSON object into a single-element parts
+// array, e.g. {"type":"text","text":"hello"} -> [{"type":"text","text":"hello"}].
+// Only a non-empty object is wrapped: `{}` carries no content to recover, and
+// unmarshal already guarantees non-object payloads (arrays/strings/scalars)
+// took the error branch above.
+func bareContentPartArray(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '{' || trimmed == "{}" {
+		return nil, false
+	}
+	return json.RawMessage("[" + trimmed + "]"), true
 }
 
 func parseUsage(raw json.RawMessage) (*int, *int) {

@@ -17,10 +17,10 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { SquarePen, CircleHelp, Bot, Copy } from 'lucide-vue-next'
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { getModels, getProviders, getMemoryProviders, getAcpProfiles, type AcpprofilePublicProfile } from '@memohai/sdk'
@@ -476,7 +476,7 @@ function skipOAuth() {
                  text-xs 表单提示 —— 关系不同,留在本地。 -->
             <div
               v-if="isACPSelected"
-              class="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5 transition-all duration-[350ms] ease-out delay-[120ms]"
+              class="flex items-center gap-3 rounded-lg border border-border bg-muted-soft px-3 py-2.5 transition-all duration-[350ms] ease-out delay-[120ms]"
               :class="visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'"
             >
               <component

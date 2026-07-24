@@ -28,7 +28,7 @@
 
 ## Memoh 是什么？
 
-Memoh 是一个开源的多智能体平台。每个 Agent 都有一台自己的云端电脑 — 独立的容器环境，配有文件系统、桌面、浏览器、网络和长期记忆。你的 Agent 全天候在线，即使关上笔记本也不会停。
+Memoh 是一个开源的多智能体平台。每个 Agent 都有一台自己的云端电脑 — 独立的 Workspace，配有文件系统、桌面、浏览器、网络和长期记忆。你的 Agent 全天候在线，即使关上笔记本也不会停。
 
 你可以用自己的 API Key 运行 Memoh 内置 Agent，也可以把已有的 Claude Code、Codex Agent 托管到 Memoh Workspace 里。
 
@@ -53,12 +53,18 @@ curl -fsSL https://memoh.sh | sh
 <summary><strong>更多部署选项</strong></summary>
 
 ```bash
-git clone --depth 1 https://github.com/memohai/Memoh.git
+git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/memohai/Memoh.git
 cd Memoh
 cp conf/app.docker.toml config.toml
 # 编辑 config.toml
 docker compose up -d
 ```
+
+执行过 setup 的已有仓库仍然可以继续使用 `git pull`：post-merge hook 会初始化新增的
+submodule，setup 也会为后续 pull 启用递归更新。如果从未安装过该 hook，升级后只需执行
+一次 `mise run submodule-init`。GitHub 自动生成的
+“Source code” 压缩包不包含 submodule，请改用 Release 附件中的
+`Memoh-<version>-source.zip` 或 `.tar.gz` 完整源码包。
 
 > **镜像拉取慢时可用国内镜像：**
 > ```bash
@@ -71,27 +77,23 @@ docker compose up -d
 
 </details>
 
-### Desktop
-
-连接 Memoh Cloud 或自托管服务器的 macOS、Windows、Linux 原生客户端。[下载 Memoh Desktop](https://memoh.ai/desktop)
-
 ## 为什么选 Memoh？
 
-- **每个 Agent 一台电脑**：独立容器，自带文件系统、网络、桌面和浏览器
+- **每个 Agent 一台电脑**：独立 Workspace，自带文件系统、网络、桌面和浏览器
 - **多用户、多机器人**：给自己跑一个，给家人各部署一个，在一台机器上同时跑一群
 - **轻量**：可以自托管在自己的基础设施上，也可以连接 Memoh Cloud
 
 ## 功能概览
 
 - **多机多人**：多个机器人，可私聊、可群聊、可互相对话，支持跨平台身份绑定
-- **容器化 Workspace**：每个机器人运行在独立容器里，拥有自己的文件系统、网络、工具和桌面环境
+- **隔离 Workspace**：每个机器人都有独立的文件系统、网络、工具和桌面环境
 - **内置记忆**：跨会话、跨平台的长期记忆，开箱即用，也支持接入 [Mem0](https://mem0.ai)、OpenViking
 - **十余种渠道**：Telegram、Discord、飞书、微信、QQ、邮件等
 - **MCP**：接入外部工具服务，每个机器人独立管理连接
 - **插件**：安装打包好的技能、工具和集成，扩展机器人的能力
 - **Agent 托管**：通过 ACP 在 Memoh Workspace 内托管外部 Agent，目前支持 Codex 和 Claude Code，每个机器人独立配置
-- **Browser Use**：在容器内驱动浏览器
-- **Computer Use**：操作容器桌面，处理需要 GUI 的工作流
+- **Browser Use**：在 Workspace 内驱动浏览器
+- **Computer Use**：操作 Workspace 桌面，处理需要 GUI 的工作流
 - **技能与应用超市**：模块化技能，从超市安装模板，重活交给子智能体
 - **自动化**：定时任务与周期心跳
 

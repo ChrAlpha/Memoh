@@ -10,7 +10,7 @@
   >
     <Sidebar
       collapsible="none"
-      :class="['border-r border-sidebar-border', desktopShell && 'h-dvh']"
+      :class="['workspace-divider-r', desktopShell && 'h-dvh']"
     >
       <div
         v-if="macTrafficReserve"
@@ -133,7 +133,7 @@
            minimum. Sits on the sidebar's right edge. -->
       <div
         v-if="!desktopShell"
-        class="group/resize absolute right-0 top-0 z-20 h-full w-1 cursor-col-resize"
+        class="group/resize absolute right-0 top-0 z-(--z-sticky) h-full w-1 cursor-col-resize"
         @mousedown="onResizeStart"
       >
         <div
@@ -161,6 +161,7 @@ import {
   Globe,
   Info,
   Keyboard,
+  Laptop,
   Mail,
   MousePointer2,
   Store,
@@ -180,7 +181,7 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuItem,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { DesktopShellKey } from '@/lib/desktop-shell'
 import NavItem from './nav-item.vue'
 
@@ -288,6 +289,7 @@ function filterItems(items: NavItem[]): NavItem[] {
 
 const coreNavItems = computed<NavItem[]>(() => filterItems([
   { title: t('sidebar.bots'), name: 'bots', icon: MousePointer2, flipX: true },
+  { title: t('sidebar.runtimes'), name: 'runtimes', icon: Laptop },
   { title: t('sidebar.providers'), name: 'providers', icon: Box },
   { title: t('sidebar.memory'), name: 'memory', icon: Database },
 ]))

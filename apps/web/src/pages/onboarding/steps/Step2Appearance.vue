@@ -3,7 +3,7 @@ import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/store/settings'
 import { useOnboarding } from '@/composables/useOnboarding'
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@memohai/ui'
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@felinic/ui'
 import { Moon, Sun } from 'lucide-vue-next'
 import ColorSchemeCard from '@/components/color-scheme-card/index.vue'
 import FieldStack from '@/components/settings/field-stack.vue'
@@ -68,7 +68,7 @@ const { visible, exiting, leave } = useStepTransition()
                   type="button"
                   variant="outline"
                   class="justify-start gap-2"
-                  :class="theme === 'light' ? 'border-foreground bg-accent text-foreground' : ''"
+                  :data-ui-selected="theme === 'light' ? '' : undefined"
                   @click="setTheme('light')"
                 >
                   <Sun class="size-4" />
@@ -78,7 +78,7 @@ const { visible, exiting, leave } = useStepTransition()
                   type="button"
                   variant="outline"
                   class="justify-start gap-2"
-                  :class="theme === 'dark' ? 'border-foreground bg-accent text-foreground' : ''"
+                  :data-ui-selected="theme === 'dark' ? '' : undefined"
                   @click="setTheme('dark')"
                 >
                   <Moon class="size-4" />

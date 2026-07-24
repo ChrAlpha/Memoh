@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@memohai/ui/style.css";
+@import "@felinic/ui/style.css";
 
 /* Bundled MiSans Variable (Apache-2.0) as the CJK fallback so Chinese renders
  * identically on Web / Windows / macOS instead of each OS's system font.
@@ -69,6 +69,22 @@
    * separate .dark override is needed here. */
   --surface-chrome-hover: var(--sidebar-accent);
 
+  /* Workspace structural dividers separate the large shell planes (sidebar,
+   * dock groups, tab strip) without borrowing the darker component/card edge. */
+  --workspace-divider-width: 1.2px;
+  --workspace-tab-stroke-width: 1px;
+  --workspace-divider-color: rgb(240 239 237);
+  --workspace-tab-strip-color: color-mix(
+    in oklab,
+    var(--workspace-divider-color) 75%,
+    var(--border)
+  );
+  --workspace-tab-outline-color: color-mix(
+    in oklab,
+    var(--workspace-divider-color) 50%,
+    var(--border)
+  );
+
   /* Composer input surface — the chat input capsule. Differentiated from the
    * reading surface by COLOR in dark mode (gray body above the dark canvas),
    * but in light mode it stays the SAME pure white as the editor surface — a
@@ -110,6 +126,7 @@
   --surface-editor: var(--background);
   --surface-chrome: var(--sidebar);
   --surface-composer: var(--card);
+  --workspace-divider-color: var(--border);
   --composer-edge-rest: oklch(0.255 0 0);
   /* Dark = a solid deep purple ≈ rgb(83,45,141) with pure-white ink (a filled
    * "sent" bubble); same relative recipe, just a darker L and near-full C. */
@@ -127,10 +144,16 @@
   --color-cop-title: var(--cop-title);
 }
 
+/* Shell-divider owners outside dockview. Keep the colour role on the component;
+ * this utility only shares the workspace family's physical stroke width. */
+.workspace-divider-r {
+  border-right: var(--workspace-divider-width) solid var(--workspace-divider-color);
+}
+
 /* Chat composer edge — fainter at rest than a standard field, brightening to
  * the normal field hairline on hover and one notch past it on focus. Reuses the
  * shared --field-edge-* tokens so it themes with everything else. Unlayered so
- * it overrides the @memohai/ui input-group rules without a specificity war. */
+ * it overrides the @felinic/ui input-group rules without a specificity war. */
 [data-slot="input-group"].chat-composer-edge:not(:has([aria-invalid="true"])) {
   --field-edge: var(--composer-edge-rest);
 }
@@ -694,7 +717,7 @@
  * keeps the dotted run continuous under descenders; the offset + visible
  * overflow stop a glyph tail (the "p" in https) from being clipped. The floating
  * URL tooltip is disabled at the renderer (showTooltips=false) — it was an
- * off-language popover, not the @memohai/ui Tooltip. */
+ * off-language popover, not the @felinic/ui Tooltip. */
 .markstream-vue .link-node {
   color: var(--color-foreground);
   text-decoration-line: underline;
@@ -1031,4 +1054,3 @@
     transform: none;
   }
 }
-

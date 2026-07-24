@@ -12,7 +12,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { useSettingsStore } from '@/store/settings'
 import { colorSchemes, type ColorSchemeId } from '@/constants/color-schemes'
 import { DesktopShellKey } from '@/lib/desktop-shell'
@@ -34,7 +34,7 @@ const macTopInset = computed(() =>
 
 <template>
   <header
-    class="sticky top-0 z-30 flex flex-wrap items-center gap-3 border-b border-border bg-background/90 px-4 py-2.5 backdrop-blur [-webkit-app-region:drag]"
+    class="sticky top-0 z-(--z-panel) flex flex-wrap items-center gap-3 border-b border-border bg-background/90 px-4 py-2.5 backdrop-blur [-webkit-app-region:drag]"
     :class="macTopInset ? 'pl-[84px]' : ''"
   >
     <div class="flex items-center gap-1.5">

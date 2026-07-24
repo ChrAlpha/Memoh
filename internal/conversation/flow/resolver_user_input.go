@@ -282,6 +282,7 @@ func (r *Resolver) continueUserInputSession(ctx context.Context, req userinput.R
 		ReplyTarget:       req.ReplyTarget,
 		ConversationType:  req.ConversationType,
 		ChatToken:         input.ChatToken,
+		SummaryScopeBotID: firstNonEmpty(req.BotID, input.BotID),
 	}, eventCh)
 }
 

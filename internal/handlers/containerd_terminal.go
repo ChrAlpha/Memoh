@@ -37,7 +37,7 @@ type terminalControlMessage struct {
 }
 
 // GetTerminalInfo godoc
-// @Summary Check terminal availability for bot container
+// @Summary Check terminal availability for bot workspace
 // @Tags containerd
 // @Param bot_id path string true "Bot ID"
 // @Success 200 {object} terminalInfoResponse
@@ -54,7 +54,7 @@ func (h *ContainerdHandler) GetTerminalInfo(c echo.Context) error {
 		return c.JSON(http.StatusOK, terminalInfoResponse{Available: false})
 	}
 
-	client, clientErr := h.manager.MCPClient(ctx, botID)
+	client, clientErr := h.manager.NativeMCPClient(ctx, botID)
 	if clientErr != nil || client == nil {
 		return c.JSON(http.StatusOK, terminalInfoResponse{Available: false})
 	}
@@ -67,7 +67,7 @@ func (h *ContainerdHandler) GetTerminalInfo(c echo.Context) error {
 }
 
 // HandleTerminalWS godoc
-// @Summary Interactive WebSocket terminal for bot container
+// @Summary Interactive WebSocket terminal for bot workspace
 // @Tags containerd
 // @Param bot_id path string true "Bot ID"
 // @Param cols query int false "Initial terminal columns" default(80)
@@ -88,9 +88,9 @@ func (h *ContainerdHandler) HandleTerminalWS(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "manager not configured")
 	}
 
-	client, err := h.manager.MCPClient(ctx, botID)
+	client, err := h.manager.NativeMCPClient(ctx, botID)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "container not reachable: "+err.Error())
+		return echo.NewHTTPError(http.StatusInternalServerError, "workspace is not reachable")
 	}
 
 	cols := parseUint32Query(c, "cols", 80)

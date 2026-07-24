@@ -1,4 +1,7 @@
 <template>
+  <!-- ui-allow-z: tab-local paint order (shape → label → hover-fill → divider
+       → dot/close), never compared against another component's z-index — see
+       dockview-theme.css's ::before/::after for the other half of this stack. -->
   <div
     ref="rootEl"
     class="group/tab relative z-[1] flex h-full min-w-0 items-center overflow-visible pr-[var(--tab-close-reserve)] pb-[var(--tab-inset)] pl-[var(--tab-pad-inline)]"
@@ -13,6 +16,32 @@
       aria-hidden="true"
       focusable="false"
     >
+      <defs>
+        <linearGradient
+          :id="activeTabStrokeGradientId"
+          x1="0"
+          y1="0"
+          x2="1"
+          y2="0"
+        >
+          <stop
+            offset="0%"
+            stop-color="var(--dock-stroke)"
+          />
+          <stop
+            offset="5%"
+            stop-color="var(--workspace-tab-outline-color)"
+          />
+          <stop
+            offset="95%"
+            stop-color="var(--workspace-tab-outline-color)"
+          />
+          <stop
+            offset="100%"
+            stop-color="var(--dock-stroke)"
+          />
+        </linearGradient>
+      </defs>
       <path
         :d="activeTabFillPath"
         fill="var(--surface-editor)"
@@ -20,12 +49,13 @@
       <path
         :d="activeTabStrokePath"
         fill="none"
-        stroke="var(--dock-stroke)"
-        stroke-width="1"
-        vector-effect="non-scaling-stroke"
+        :stroke="`url(#${activeTabStrokeGradientId})`"
+        :stroke-width="activeTabStrokeWidth"
       />
     </svg>
-    <!-- Active state is signalled by text colour, fill, and the connected chip
+    <!-- ui-allow-z: same tab-local stack as the root div above — this label
+         only needs to sit above the active-tab SVG fill, nothing global.
+         Active state is signalled by text colour, fill, and the connected chip
          shape, not by weight or size. Every tab is the same height. Label and
          close share the strip's one optical centre (see the geometry contract in
          dockview-theme.css): the tab's top inset plus this bottom padding give
@@ -36,7 +66,9 @@
         isActive ? 'text-foreground' : 'text-muted-foreground',
       ]"
     >{{ title }}</span>
-    <!-- Unsaved-changes dot: sits in the close slot at rest so the affordance never
+    <!-- ui-allow-z: same tab-local stack — this dot only orders against its own
+         tab's SVG/label/hover-fill siblings.
+         Unsaved-changes dot: sits in the close slot at rest so the affordance never
          shifts; hovering fades it out as the close button fades in. It borrows the
          close-fade GEOMETRY (identical top/bottom/right) so the dot sits exactly
          where the close button will appear — no positional jump on hover — but the
@@ -57,7 +89,9 @@
         />
       </span>
     </div>
-    <!-- Close affordance: RESIDENT on the active tab (fills the reserved slot so it
+    <!-- ui-allow-z: same tab-local stack — this close affordance only orders
+         against its own tab's SVG/label/hover-fill/dot siblings.
+         Close affordance: RESIDENT on the active tab (fills the reserved slot so it
          never reads as an empty gap), hover/focus-only on inactive tabs. Absolutely
          positioned so it never reserves a slot or resizes the chip (geometry is
          identical hovered or not). It paints the chip's own OPAQUE hover colour
@@ -88,10 +122,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X } from 'lucide-vue-next'
-import { Button } from '@memohai/ui'
+import { Button } from '@felinic/ui'
 import type { DockviewApi, DockviewPanelApi } from 'dockview-vue'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 
@@ -109,6 +143,8 @@ const { t } = useI18n()
 const workspaceTabs = useWorkspaceTabsStore()
 
 const rootEl = ref<HTMLElement | null>(null)
+const DEFAULT_WORKSPACE_TAB_STROKE_WIDTH = 1
+const activeTabStrokeGradientId = `active-tab-stroke-${useId()}`
 const panelId = props.params.api.id
 const title = ref(props.params.api.title ?? '')
 const isActive = ref(props.params.api.isActive)
@@ -121,7 +157,7 @@ const isActive = ref(props.params.api.isActive)
 // carry this per-group signal the shape needs.
 const isVisible = ref(props.params.api.isVisible)
 // First-paint placeholder ONLY — these mirror the CSS contract (200≈12.5rem tab,
-// 35 = 40px strip − 5px inset, 8 = --tab-radius, 1px stroke) just so the active
+// 35 = 40px strip − 5px inset, 8 = --tab-radius, workspace hairline stroke) so the active
 // SVG has a sane shape for the one frame before onMounted measures the real DOM.
 // updateActiveTabShape() overwrites all of it; do NOT treat these as a source of
 // truth — the CSS tokens are. They exist because the path can't be empty pre-mount.
@@ -129,8 +165,9 @@ const initialTabShape = buildActiveTabShape({
   width: 200,
   height: 35,
   radius: 8,
-  strokeWidth: 1,
+  strokeWidth: DEFAULT_WORKSPACE_TAB_STROKE_WIDTH,
 })
+const activeTabStrokeWidth = ref(DEFAULT_WORKSPACE_TAB_STROKE_WIDTH)
 const activeTabViewBox = ref(initialTabShape.viewBox)
 const activeTabFillPath = ref(initialTabShape.fillPath)
 const activeTabStrokePath = ref(initialTabShape.strokePath)
@@ -257,15 +294,28 @@ function updateActiveTabShape() {
   const tabRect = tab.getBoundingClientRect()
   if (tabRect.width <= 0 || tabRect.height <= 0) return
 
-  const scale = window.devicePixelRatio || 1
-  const alignedLeft = snapToDevicePixel(tabRect.left, scale)
-  const alignedTop = snapToDevicePixel(tabRect.top, scale)
-  const alignedRight = snapToDevicePixel(tabRect.right, scale)
-  const alignedBottom = snapToDevicePixel(tabRect.bottom, scale)
+  // getBoundingClientRect includes ancestor transforms. The first-entry shell
+  // scales from 1.15 to 1, so writing that visual size back as a local CSS size
+  // permanently enlarged the SVG until a resize forced another measurement.
+  // Normalize the relative rect back into the tab's untransformed layout space.
+  const tabStyle = getComputedStyle(tab)
+  const layoutWidth = readLayoutDimension(tabStyle.width, tab.offsetWidth)
+  const layoutHeight = readLayoutDimension(tabStyle.height, tab.offsetHeight)
+  const visualScaleX = readVisualScale(tabRect.width, layoutWidth)
+  const visualScaleY = readVisualScale(tabRect.height, layoutHeight)
+  const relativeLeft = (tabRect.left - rootRect.left) / visualScaleX
+  const relativeTop = (tabRect.top - rootRect.top) / visualScaleY
+
+  const pixelRatio = window.devicePixelRatio || 1
+  const alignedLeft = snapToDevicePixel(relativeLeft, pixelRatio)
+  const alignedTop = snapToDevicePixel(relativeTop, pixelRatio)
+  const alignedRight = snapToDevicePixel(relativeLeft + layoutWidth, pixelRatio)
+  const alignedBottom = snapToDevicePixel(relativeTop + layoutHeight, pixelRatio)
   const width = alignedRight - alignedLeft
   const height = alignedBottom - alignedTop
+  const strokeWidth = readWorkspaceTabStrokeWidth(tab)
   const radius = Math.min(
-    snapToDevicePixel(readTabRadius(tab), scale),
+    snapToDevicePixel(readTabRadius(tab), pixelRatio),
     Math.max(0, width / 2),
     Math.max(0, height),
   )
@@ -274,18 +324,24 @@ function updateActiveTabShape() {
     width,
     height,
     radius,
-    strokeWidth: 1,
+    strokeWidth,
   })
 
+  activeTabStrokeWidth.value = strokeWidth
   activeTabViewBox.value = shape.viewBox
   activeTabFillPath.value = shape.fillPath
   activeTabStrokePath.value = shape.strokePath
   activeTabShapeStyle.value = {
-    left: `${formatPx(alignedLeft - rootRect.left - radius)}`,
-    top: `${formatPx(alignedTop - rootRect.top)}`,
+    left: `${formatPx(alignedLeft - radius)}`,
+    top: `${formatPx(alignedTop)}`,
     width: `${formatPx(width + radius * 2)}`,
     height: `${formatPx(height)}`,
   }
+}
+
+function readWorkspaceTabStrokeWidth(tab: HTMLElement) {
+  const width = Number.parseFloat(getComputedStyle(tab).getPropertyValue('--workspace-tab-stroke-width'))
+  return Number.isFinite(width) && width > 0 ? width : DEFAULT_WORKSPACE_TAB_STROKE_WIDTH
 }
 
 function buildActiveTabShape({
@@ -336,6 +392,16 @@ function buildActiveTabShape({
 function readTabRadius(tab: HTMLElement) {
   const radius = Number.parseFloat(getComputedStyle(tab).borderTopLeftRadius)
   return Number.isFinite(radius) && radius > 0 ? radius : 8
+}
+
+function readLayoutDimension(value: string, fallback: number) {
+  const dimension = Number.parseFloat(value)
+  return Number.isFinite(dimension) && dimension > 0 ? dimension : fallback
+}
+
+function readVisualScale(visualDimension: number, layoutDimension: number) {
+  const scale = visualDimension / layoutDimension
+  return Number.isFinite(scale) && scale > 0 ? scale : 1
 }
 
 function snapToDevicePixel(value: number, scale: number) {

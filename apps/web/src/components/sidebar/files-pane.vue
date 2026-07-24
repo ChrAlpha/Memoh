@@ -321,7 +321,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { CloudUpload, Download, FilePlus, FolderPlus, ListChecks, RefreshCw, Trash2, Upload, X } from 'lucide-vue-next'
 import {
   Button,
@@ -341,7 +341,7 @@ import {
   DialogTitle,
   DialogFooter,
   ScrollArea,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import {
   getBotsByBotIdContainerFsList,
   postBotsByBotIdContainerFsUpload,
@@ -351,7 +351,7 @@ import {
   postBotsByBotIdContainerFsWrite,
 } from '@memohai/sdk'
 import type { HandlersFsFileInfo } from '@memohai/sdk'
-import { resolveApiErrorMessage } from '@/utils/api-error'
+import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import { sdkApiUrl, sdkAuthQuery } from '@/lib/api-client'
 import { joinPath, parentPath } from '@/components/file-manager/utils'
 import FileTree from '@/components/file-manager/file-tree.vue'
@@ -430,8 +430,12 @@ type FileSystemHandleLike =
   | (FileSystemFileHandleLike & { kind: 'file' })
 
 function isTransientWorkspaceError(error: unknown): boolean {
+  if (isApiErrorCode(error, 'workspace.unreachable')) return true
+
+  // Desktop can connect to older hosted servers that only expose a message.
   const detail = resolveApiErrorMessage(error, '').toLowerCase()
-  return detail.includes('container not reachable')
+  return detail.includes('workspace is not reachable')
+    || detail.includes('container not reachable')
     || detail.includes('unavailable')
     || detail.includes('client connection is closing')
     || detail.includes('transport is closing')

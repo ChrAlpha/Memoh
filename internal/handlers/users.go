@@ -18,11 +18,13 @@ import (
 	"github.com/memohai/memoh/internal/acl"
 	"github.com/memohai/memoh/internal/acpclient"
 	"github.com/memohai/memoh/internal/acpprofile"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/route"
 	"github.com/memohai/memoh/internal/db"
+	"github.com/memohai/memoh/internal/httpx"
 	"github.com/memohai/memoh/internal/identity"
 	"github.com/memohai/memoh/internal/workspace"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -436,6 +438,7 @@ func (h *UsersHandler) RemoveMember(c echo.Context) error {
 // @Success 201 {object} bots.Bot
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
+// @Failure 409 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots [post].
 func (h *UsersHandler) CreateBot(c echo.Context) error {
@@ -525,7 +528,7 @@ func createBotHTTPError(err error, ownerFromToken bool) error {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if errors.Is(err, bots.ErrBotNameTaken) {
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		return apperror.New(apperror.CodeBotNameTaken, map[string]string{"field": "name"})
 	}
 	if errors.Is(err, bots.ErrBotNameInvalid) || errors.Is(err, bots.ErrBotNameReserved) {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -569,8 +572,15 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 		}
 		return true
 	}
-	sendError := func(message string) {
-		_ = send(createContainerErrorEvent{Type: "error", Message: message})
+	sendError := func(code, i18nKey, message string) {
+		_ = send(createContainerErrorEvent{
+			Type:      "error",
+			Code:      code,
+			I18nKey:   i18nKey,
+			Args:      map[string]string{},
+			Message:   message,
+			RequestID: httpx.RequestID(c),
+		})
 	}
 
 	send(createBotStreamBotEvent{Type: "bot_created", Bot: scrubBotForResponse(bot)})
@@ -622,10 +632,10 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 				slog.String("bot_id", bot.ID),
 				slog.Any("error", readyErr),
 			)
-			sendError("container setup failed: " + err.Error() + "; ready status update failed: " + readyErr.Error())
+			sendError("workspace_setup_failed", "bots.create.failedSubtitle", "workspace setup failed; ready status update failed")
 			return nil
 		}
-		sendError("container setup failed: " + err.Error())
+		sendError("workspace_setup_failed", "bots.create.failedSubtitle", "workspace setup failed")
 		return nil
 	}
 
@@ -641,7 +651,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 			slog.String("bot_id", bot.ID),
 			slog.Any("error", err),
 		)
-		sendError("ready status update failed: " + err.Error())
+		sendError("bot_ready_update_failed", "bots.create.failedSubtitle", "ready status update failed: "+err.Error())
 		return nil
 	}
 	// Mirror the non-streaming path: write ACP workspace config (e.g.
@@ -652,7 +662,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 		if err := h.prepareACPWorkspaceConfig(lifecycleCtx, readyBot); err != nil {
 			h.logger.Warn("write ACP workspace config after stream bot create failed",
 				slog.String("bot_id", readyBot.ID), slog.Any("error", err))
-			sendError("write ACP workspace config: " + err.Error())
+			sendError("workspace_config_write_failed", "bots.create.failedSubtitle", "write ACP workspace config: "+err.Error())
 		}
 	}
 	send(createBotStreamBotEvent{Type: "ready", Bot: scrubBotForResponse(readyBot)})
@@ -817,6 +827,7 @@ func (h *UsersHandler) ListBotChecks(c echo.Context) error {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{id} [put].
 func (h *UsersHandler) UpdateBot(c echo.Context) error {
@@ -964,7 +975,7 @@ func stringMapEqual(a, b map[string]string) bool {
 
 func updateBotHTTPError(err error) error {
 	if errors.Is(err, bots.ErrBotNameTaken) {
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		return apperror.New(apperror.CodeBotNameTaken, map[string]string{"field": "name"})
 	}
 	if errors.Is(err, bots.ErrBotNameInvalid) || errors.Is(err, bots.ErrBotNameReserved) {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())

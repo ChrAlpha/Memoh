@@ -49,6 +49,7 @@ type HistoryRecord struct {
 	ExternalMessageID string
 	EventID           string
 	SessionID         string
+	SessionIDKnown    bool
 	BotID             string
 
 	SessionMode string
@@ -65,6 +66,10 @@ type HistoryRecord struct {
 
 	UsageInputTokens  *int
 	UsageOutputTokens *int
+
+	// Required marks a record that must survive trimming/compaction because it
+	// is pinned by a retry/edit request (conversation.ChatRequest.RequiredHistoryMessageID).
+	Required bool
 
 	Budget   contextfrag.BudgetPolicy
 	Coverage *contextfrag.SummaryCoverage

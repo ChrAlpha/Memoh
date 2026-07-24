@@ -1,12 +1,19 @@
 import { client } from '@memohai/sdk/client'
 import type { Options } from '@memohai/sdk'
+import {
+  fetchSSEProblem,
+  isSSEErrorEvent,
+  localizeSSEErrorEvent,
+  normalizeSSEFailure,
+  type SSEErrorEvent,
+} from './sse-error'
 
 // codesync(display-prepare-stream): keep these manual SSE payload types in sync
 // with internal/handlers/display.go.
 export type DisplayPrepareStreamEvent =
   | { type: 'progress'; step?: string; message?: string; percent?: number }
   | { type: 'complete'; step?: string; message?: string; percent?: number }
-  | { type: 'error'; step?: string; message: string }
+  | (SSEErrorEvent & { step?: string })
 
 export type DisplayPrepareStreamData = {
   path: { bot_id: string }
@@ -25,17 +32,11 @@ function isDisplayPrepareStreamEvent(value: unknown): value is DisplayPrepareStr
         && (event.message === undefined || typeof event.message === 'string')
         && (event.percent === undefined || typeof event.percent === 'number')
     case 'error':
-      return typeof event.message === 'string'
+      return isSSEErrorEvent(event)
         && (event.step === undefined || typeof event.step === 'string')
     default:
       return false
   }
-}
-
-function toError(error: unknown): Error {
-  if (error instanceof Error) return error
-  if (typeof error === 'string' && error.trim()) return new Error(error)
-  return new Error('Display preparation stream failed')
 }
 
 export async function postBotsByBotIdContainerDisplayPrepareStream(
@@ -50,6 +51,7 @@ export async function postBotsByBotIdContainerDisplayPrepareStream(
       ...options.headers as Record<string, string>,
       Accept: 'text/event-stream',
     },
+    fetch: fetchSSEProblem,
     onSseError: (error) => {
       streamError = error
     },
@@ -67,10 +69,12 @@ export async function postBotsByBotIdContainerDisplayPrepareStream(
         if (!isDisplayPrepareStreamEvent(event)) {
           throw new Error('Invalid display preparation stream event')
         }
-        yield event
+        yield event.type === 'error'
+          ? localizeSSEErrorEvent(event)
+          : event
       }
       if (streamError) {
-        throw toError(streamError)
+        throw normalizeSSEFailure(streamError, 'Display preparation stream failed')
       }
     })(),
   }

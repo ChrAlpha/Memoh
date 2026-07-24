@@ -1,7 +1,7 @@
 <template>
   <div
     ref="rootRef"
-    class=" inset-0 flex flex-col z-10 "
+    class=" inset-0 flex flex-col z-(--z-raised) "
     :class="isFullScroll?'fixed':'absolute'"
     @click="closeStatsMenu"
   >
@@ -93,7 +93,7 @@
     </div>
     <div
       v-if="statsMenu.open"
-      class="absolute z-20 w-44 rounded-md border border-border bg-surface-editor/95 p-1 text-xs text-foreground shadow-lg"
+      class="absolute z-(--z-sticky) w-44 rounded-md border border-border bg-surface-editor/95 p-1 text-xs text-foreground shadow-lg"
       :style="{ left: `${statsMenu.x}px`, top: `${statsMenu.y}px` }"
       @click.stop
       @mousedown.stop
@@ -111,7 +111,7 @@
     </div>
     <div
       v-if="statsVisible"
-      class="pointer-events-none absolute left-3 top-12 z-10 w-[min(400px,calc(100%-24px))] rounded-md border border-white/20 bg-black/85 p-3 font-mono text-[11px] leading-5 text-white shadow-xl"
+      class="pointer-events-none absolute left-3 top-12 z-(--z-raised) w-[min(400px,calc(100%-24px))] rounded-md border border-white/20 bg-black/85 p-3 font-mono text-[11px] leading-5 text-white shadow-xl"
     >
       <div class="mb-2 flex items-center justify-between gap-3 font-sans text-xs font-medium">
         <span>{{ t('chat.display.stats.title') }}</span>
@@ -213,7 +213,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button, Spinner } from '@memohai/ui'
+import { Button, Spinner } from '@felinic/ui'
 import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-vue-next'
 import { useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'

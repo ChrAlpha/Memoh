@@ -289,7 +289,7 @@
       </div>
 
       <!-- Hint -->
-      <div class="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground mt-6">
+      <div class="rounded-md border bg-muted-soft px-3 py-2 text-xs text-muted-foreground mt-6">
         {{ $t('bots.createBotWaitHint') }}
       </div>
 
@@ -341,12 +341,12 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from '@memohai/ui'
+} from '@felinic/ui'
 import { SquarePen, CircleHelp, Check, X, LoaderCircle } from 'lucide-vue-next'
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
-import { toast } from '@memohai/ui'
+import { toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { getModels, getProviders, getMemoryProviders, getBotsNameAvailability } from '@memohai/sdk'
@@ -628,7 +628,7 @@ async function handleSubmit() {
 function finishLocalCreate() {
   if (store.status === 'error') {
     const message = store.setupError ?? ''
-    if (message.toLowerCase().includes('already taken')) {
+    if (store.errorCode === 'bot.name_taken') {
       nameStatus.value = 'taken'
       toast.error(t('bots.nameStatus.taken'))
     } else {

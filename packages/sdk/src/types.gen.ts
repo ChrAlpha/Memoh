@@ -350,6 +350,17 @@ export type AdaptersUsageResponse = {
     total_text_bytes?: number;
 };
 
+export type ApperrorProblem = {
+    args: {
+        [key: string]: string;
+    };
+    code: string;
+    detail: string;
+    request_id?: string;
+    status: number;
+    type: string;
+};
+
 export type AudioConfigSchema = {
     fields?: Array<AudioFieldSchema>;
 };
@@ -715,7 +726,7 @@ export type ChannelAttachment = {
     mime?: string;
     name?: string;
     /**
-     * container-local filesystem path
+     * workspace-local filesystem path
      */
     path?: string;
     platform_key?: string;
@@ -1135,6 +1146,11 @@ export type ConversationUiBackgroundTask = {
     task_id?: string;
 };
 
+export type ConversationUiExecutionLocation = {
+    kind?: string;
+    name?: string;
+};
+
 export type ConversationUiForwardRef = {
     date?: number;
     from_conversation_id?: string;
@@ -1148,6 +1164,7 @@ export type ConversationUiMessage = {
     attachments?: Array<ConversationUiAttachment>;
     background_task?: ConversationUiBackgroundTask;
     content?: string;
+    execution_location?: ConversationUiExecutionLocation;
     id?: number;
     input?: unknown;
     name?: string;
@@ -2450,8 +2467,10 @@ export type ModelsGetResponse = {
 };
 
 export type ModelsModelConfig = {
+    catalog_available?: boolean;
     compatibilities?: Array<string>;
     context_window?: number;
+    description?: string;
     dimensions?: number;
     reasoning_efforts?: Array<string>;
     thinking_mode?: string;
@@ -2878,14 +2897,18 @@ export type SettingsToolApprovalConfig = {
 export type SettingsToolApprovalExecPolicy = {
     bypass_commands?: Array<string>;
     force_review_commands?: Array<string>;
+    mode?: SettingsToolApprovalMode;
     require_approval?: boolean;
 };
 
 export type SettingsToolApprovalFilePolicy = {
     bypass_globs?: Array<string>;
     force_review_globs?: Array<string>;
+    mode?: SettingsToolApprovalMode;
     require_approval?: boolean;
 };
+
+export type SettingsToolApprovalMode = 'allow' | 'ask' | 'deny';
 
 export type SettingsUpsertRequest = {
     acl_default_effect?: string;
@@ -2947,6 +2970,24 @@ export type UserinputUiQuestion = {
     options?: Array<UserinputUiOption>;
     placeholder?: string;
     text?: string;
+};
+
+export type UserruntimeCreateRuntimeRequest = {
+    name?: string;
+};
+
+export type UserruntimeRuntime = {
+    arch?: string;
+    capabilities?: Array<string>;
+    client_version?: string;
+    created_at?: string;
+    hostname?: string;
+    id?: string;
+    key?: string;
+    name?: string;
+    online?: boolean;
+    os?: string;
+    workspace_base?: string;
 };
 
 export type VideoConfigSchema = {
@@ -3027,6 +3068,44 @@ export type WebhooktunnelStatus = {
     mode?: string;
     public_base_url?: string;
     status?: string;
+};
+
+export type WorkspaceMountRemoteWorkspaceRequest = {
+    workspace_path?: string;
+};
+
+export type WorkspaceSetPrimaryWorkspaceTargetRequest = {
+    target_id: string;
+};
+
+export type WorkspaceUpdateWorkspaceTargetToolApprovalRequest = {
+    exec?: SettingsToolApprovalMode;
+    read?: SettingsToolApprovalMode;
+    tool_approval_config?: SettingsToolApprovalConfig;
+    write?: SettingsToolApprovalMode;
+};
+
+export type WorkspaceWorkspaceTarget = {
+    kind?: string;
+    name?: string;
+    online?: boolean;
+    primary?: boolean;
+    runtime_id?: string;
+    status?: string;
+    target_id?: string;
+    tool_approval?: WorkspaceWorkspaceTargetToolApproval;
+    tool_approval_config?: SettingsToolApprovalConfig;
+    workspace_path?: string;
+};
+
+export type WorkspaceWorkspaceTargetToolApproval = {
+    exec?: SettingsToolApprovalMode;
+    read?: SettingsToolApprovalMode;
+    write?: SettingsToolApprovalMode;
+};
+
+export type WorkspaceWorkspaceTargetsResponse = {
+    targets?: Array<WorkspaceWorkspaceTarget>;
 };
 
 export type GetAcpProfilesData = {
@@ -3167,6 +3246,10 @@ export type PostBotsErrors = {
      * Forbidden
      */
     403: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -4509,7 +4592,7 @@ export type GetBotsByBotIdContainerResponse = GetBotsByBotIdContainerResponses[k
 
 export type PostBotsByBotIdContainerData = {
     /**
-     * Create container payload
+     * Create workspace payload
      */
     body: HandlersCreateContainerRequest;
     path: {
@@ -4537,7 +4620,7 @@ export type PostBotsByBotIdContainerError = PostBotsByBotIdContainerErrors[keyof
 
 export type PostBotsByBotIdContainerResponses = {
     /**
-     * SSE stream of container creation events
+     * SSE stream of workspace creation events
      */
     200: HandlersCreateContainerResponse;
 };
@@ -4872,7 +4955,7 @@ export type GetBotsByBotIdContainerFsData = {
     };
     query: {
         /**
-         * Container path
+         * Workspace path
          */
         path: string;
     };
@@ -4896,6 +4979,10 @@ export type GetBotsByBotIdContainerFsErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type GetBotsByBotIdContainerFsError = GetBotsByBotIdContainerFsErrors[keyof GetBotsByBotIdContainerFsErrors];
@@ -4941,6 +5028,10 @@ export type PostBotsByBotIdContainerFsArchiveErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsArchiveError = PostBotsByBotIdContainerFsArchiveErrors[keyof PostBotsByBotIdContainerFsArchiveErrors];
@@ -4984,6 +5075,10 @@ export type PostBotsByBotIdContainerFsDeleteErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsDeleteError = PostBotsByBotIdContainerFsDeleteErrors[keyof PostBotsByBotIdContainerFsDeleteErrors];
@@ -5007,7 +5102,7 @@ export type GetBotsByBotIdContainerFsDownloadData = {
     };
     query: {
         /**
-         * Container file path
+         * Workspace file path
          */
         path: string;
     };
@@ -5027,6 +5122,10 @@ export type GetBotsByBotIdContainerFsDownloadErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type GetBotsByBotIdContainerFsDownloadError = GetBotsByBotIdContainerFsDownloadErrors[keyof GetBotsByBotIdContainerFsDownloadErrors];
@@ -5074,6 +5173,10 @@ export type PostBotsByBotIdContainerFsExtractErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsExtractError = PostBotsByBotIdContainerFsExtractErrors[keyof PostBotsByBotIdContainerFsExtractErrors];
@@ -5097,7 +5200,7 @@ export type GetBotsByBotIdContainerFsListData = {
     };
     query: {
         /**
-         * Container directory path
+         * Workspace directory path
          */
         path: string;
     };
@@ -5117,6 +5220,10 @@ export type GetBotsByBotIdContainerFsListErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type GetBotsByBotIdContainerFsListError = GetBotsByBotIdContainerFsListErrors[keyof GetBotsByBotIdContainerFsListErrors];
@@ -5158,6 +5265,10 @@ export type PostBotsByBotIdContainerFsMkdirErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsMkdirError = PostBotsByBotIdContainerFsMkdirErrors[keyof PostBotsByBotIdContainerFsMkdirErrors];
@@ -5181,7 +5292,7 @@ export type GetBotsByBotIdContainerFsReadData = {
     };
     query: {
         /**
-         * Container file path
+         * Workspace file path
          */
         path: string;
     };
@@ -5201,6 +5312,10 @@ export type GetBotsByBotIdContainerFsReadErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type GetBotsByBotIdContainerFsReadError = GetBotsByBotIdContainerFsReadErrors[keyof GetBotsByBotIdContainerFsReadErrors];
@@ -5246,6 +5361,10 @@ export type PostBotsByBotIdContainerFsRenameErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsRenameError = PostBotsByBotIdContainerFsRenameErrors[keyof PostBotsByBotIdContainerFsRenameErrors];
@@ -5262,7 +5381,7 @@ export type PostBotsByBotIdContainerFsRenameResponse = PostBotsByBotIdContainerF
 export type PostBotsByBotIdContainerFsUploadData = {
     body: {
         /**
-         * Destination container path
+         * Destination workspace path
          */
         path: string;
         /**
@@ -5293,6 +5412,10 @@ export type PostBotsByBotIdContainerFsUploadErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsUploadError = PostBotsByBotIdContainerFsUploadErrors[keyof PostBotsByBotIdContainerFsUploadErrors];
@@ -5334,6 +5457,10 @@ export type PostBotsByBotIdContainerFsWriteErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerFsWriteError = PostBotsByBotIdContainerFsWriteErrors[keyof PostBotsByBotIdContainerFsWriteErrors];
@@ -5442,6 +5569,10 @@ export type DeleteBotsByBotIdContainerSkillsErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type DeleteBotsByBotIdContainerSkillsError = DeleteBotsByBotIdContainerSkillsErrors[keyof DeleteBotsByBotIdContainerSkillsErrors];
@@ -5525,6 +5656,10 @@ export type PostBotsByBotIdContainerSkillsErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerSkillsError = PostBotsByBotIdContainerSkillsErrors[keyof PostBotsByBotIdContainerSkillsErrors];
@@ -5566,6 +5701,10 @@ export type PostBotsByBotIdContainerSkillsActionsErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByBotIdContainerSkillsActionsError = PostBotsByBotIdContainerSkillsActionsErrors[keyof PostBotsByBotIdContainerSkillsActionsErrors];
@@ -9689,6 +9828,207 @@ export type GetBotsByBotIdWebWsErrors = {
 
 export type GetBotsByBotIdWebWsError = GetBotsByBotIdWebWsErrors[keyof GetBotsByBotIdWebWsErrors];
 
+export type GetBotsByBotIdWorkspaceTargetsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workspace-targets';
+};
+
+export type GetBotsByBotIdWorkspaceTargetsErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdWorkspaceTargetsError = GetBotsByBotIdWorkspaceTargetsErrors[keyof GetBotsByBotIdWorkspaceTargetsErrors];
+
+export type GetBotsByBotIdWorkspaceTargetsResponses = {
+    /**
+     * OK
+     */
+    200: WorkspaceWorkspaceTargetsResponse;
+};
+
+export type GetBotsByBotIdWorkspaceTargetsResponse = GetBotsByBotIdWorkspaceTargetsResponses[keyof GetBotsByBotIdWorkspaceTargetsResponses];
+
+export type PutBotsByBotIdWorkspaceTargetsPrimaryData = {
+    /**
+     * Primary target
+     */
+    body: WorkspaceSetPrimaryWorkspaceTargetRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workspace-targets/primary';
+};
+
+export type PutBotsByBotIdWorkspaceTargetsPrimaryErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsPrimaryError = PutBotsByBotIdWorkspaceTargetsPrimaryErrors[keyof PutBotsByBotIdWorkspaceTargetsPrimaryErrors];
+
+export type PutBotsByBotIdWorkspaceTargetsPrimaryResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdData = {
+    /**
+     * Remote workspace mount
+     */
+    body: WorkspaceMountRemoteWorkspaceRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Runtime ID
+         */
+        runtime_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workspace-targets/remotes/{runtime_id}';
+};
+
+export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdError = PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors[keyof PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors];
+
+export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdResponses = {
+    /**
+     * OK
+     */
+    200: WorkspaceWorkspaceTarget;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdResponse = PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdResponses[keyof PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdResponses];
+
+export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workspace target ID
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workspace-targets/{target_id}';
+};
+
+export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdError = DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors[keyof DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors];
+
+export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalData = {
+    /**
+     * Target tool approval
+     */
+    body: WorkspaceUpdateWorkspaceTargetToolApprovalRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workspace target ID
+         */
+        target_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workspace-targets/{target_id}/tool-approval';
+};
+
+export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+};
+
+export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalError = PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors[keyof PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors];
+
+export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
 export type DeleteBotsByIdData = {
     body?: never;
     path: {
@@ -9803,6 +10143,10 @@ export type PutBotsByIdErrors = {
      * Not Found
      */
     404: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -13307,6 +13651,103 @@ export type PutUsersMePasswordErrors = {
 export type PutUsersMePasswordError = PutUsersMePasswordErrors[keyof PutUsersMePasswordErrors];
 
 export type PutUsersMePasswordResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetUsersMeRuntimesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/users/me/runtimes';
+};
+
+export type GetUsersMeRuntimesErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetUsersMeRuntimesError = GetUsersMeRuntimesErrors[keyof GetUsersMeRuntimesErrors];
+
+export type GetUsersMeRuntimesResponses = {
+    /**
+     * OK
+     */
+    200: Array<UserruntimeRuntime>;
+};
+
+export type GetUsersMeRuntimesResponse = GetUsersMeRuntimesResponses[keyof GetUsersMeRuntimesResponses];
+
+export type PostUsersMeRuntimesData = {
+    /**
+     * Runtime configuration
+     */
+    body: UserruntimeCreateRuntimeRequest;
+    path?: never;
+    query?: never;
+    url: '/users/me/runtimes';
+};
+
+export type PostUsersMeRuntimesErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type PostUsersMeRuntimesError = PostUsersMeRuntimesErrors[keyof PostUsersMeRuntimesErrors];
+
+export type PostUsersMeRuntimesResponses = {
+    /**
+     * Created
+     */
+    201: UserruntimeRuntime;
+};
+
+export type PostUsersMeRuntimesResponse = PostUsersMeRuntimesResponses[keyof PostUsersMeRuntimesResponses];
+
+export type DeleteUsersMeRuntimesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Runtime ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/users/me/runtimes/{id}';
+};
+
+export type DeleteUsersMeRuntimesByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type DeleteUsersMeRuntimesByIdError = DeleteUsersMeRuntimesByIdErrors[keyof DeleteUsersMeRuntimesByIdErrors];
+
+export type DeleteUsersMeRuntimesByIdResponses = {
     /**
      * No Content
      */

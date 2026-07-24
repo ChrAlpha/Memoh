@@ -4,6 +4,13 @@ import type {
   HandlersCreateContainerResponse,
   PostBotsByBotIdContainerData,
 } from '@memohai/sdk'
+import {
+  fetchSSEProblem,
+  isSSEErrorEvent,
+  localizeSSEErrorEvent,
+  normalizeSSEFailure,
+  type SSEErrorEvent,
+} from './sse-error'
 
 export type ContainerCreateLayerStatus = {
   ref: string
@@ -21,7 +28,7 @@ export type ContainerCreateStreamEvent =
   | { type: 'creating' }
   | { type: 'restoring' }
   | { type: 'complete'; container: HandlersCreateContainerResponse }
-  | { type: 'error'; message: string }
+  | SSEErrorEvent
 
 export type ContainerCreateStreamResult = {
   stream: AsyncGenerator<ContainerCreateStreamEvent, void, unknown>
@@ -54,16 +61,10 @@ function isContainerCreateStreamEvent(value: unknown): value is ContainerCreateS
     case 'complete':
       return !!event.container && typeof event.container === 'object'
     case 'error':
-      return typeof event.message === 'string'
+      return isSSEErrorEvent(event)
     default:
       return false
   }
-}
-
-function toError(error: unknown): Error {
-  if (error instanceof Error) return error
-  if (typeof error === 'string' && error.trim()) return new Error(error)
-  return new Error('Container create stream failed')
 }
 
 export async function postBotsByBotIdContainerStream(
@@ -80,12 +81,13 @@ export async function postBotsByBotIdContainerStream(
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
     },
+    fetch: fetchSSEProblem,
     onSseError: (error) => {
       streamError = error
     },
     responseValidator: async (data) => {
       if (!isContainerCreateStreamEvent(data)) {
-        throw new Error('Invalid container create stream event')
+        throw new Error('Invalid workspace creation stream event')
       }
     },
     sseMaxRetryAttempts: 1,
@@ -95,13 +97,15 @@ export async function postBotsByBotIdContainerStream(
     stream: (async function* () {
       for await (const event of result.stream as AsyncGenerator<unknown, void, unknown>) {
         if (!isContainerCreateStreamEvent(event)) {
-          throw new Error('Invalid container create stream event')
+          throw new Error('Invalid workspace creation stream event')
         }
-        yield event
+        yield event.type === 'error'
+          ? localizeSSEErrorEvent(event)
+          : event
       }
 
       if (streamError) {
-        throw toError(streamError)
+        throw normalizeSSEFailure(streamError, 'Workspace creation stream failed')
       }
     })(),
   }

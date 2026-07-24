@@ -3,35 +3,115 @@ package compaction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/hooks"
-	"github.com/memohai/memoh/internal/models"
 )
+
+// errEmptySummary marks a completed LLM call that produced no usable summary
+// text. The compacted rows must stay reclaimable, so this must never reach
+// MarkMessagesCompacted.
+var errEmptySummary = errors.New("compaction: model returned an empty summary")
+
+// compactionFailureCooldown bounds how often a session may retry compaction
+// after a failure, so a persistently failing model can't burn an LLM call on
+// every blocking sync backstop or async trigger.
+const compactionFailureCooldown = 5 * time.Minute
+
+// inflightRun is the completion signal for one session's running compaction.
+// done closes after res/err are set, so concurrent sync callers can wait for
+// the owner and reuse its outcome instead of skipping or double-running.
+type inflightRun struct {
+	done    chan struct{}
+	waiters atomic.Int32
+	res     Result
+	err     error
+}
 
 // Service manages context compaction for bot conversations.
 type Service struct {
 	queries     dbstore.Queries
 	hookService *hooks.Service
 	logger      *slog.Logger
+	nowFn       func() time.Time
+
+	inflightMu sync.Mutex
+	inflight   map[string]*inflightRun
+	failedAt   map[string]time.Time
 }
 
 // NewService creates a new compaction Service.
 func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 	return &Service{
-		queries: queries,
-		logger:  log,
+		queries:  queries,
+		logger:   log,
+		nowFn:    time.Now,
+		inflight: make(map[string]*inflightRun),
+		failedAt: make(map[string]time.Time),
 	}
+}
+
+// beginSessionCompaction marks a session as having a compaction in flight.
+// Overlapping runs would select overlapping candidate sets and race
+// MarkMessagesCompacted, so only one compaction may run per session at a time;
+// a busy session returns the owner's run for callers that want to wait on it.
+func (s *Service) beginSessionCompaction(sessionID string) (*inflightRun, bool) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if owner, busy := s.inflight[sessionID]; busy {
+		return owner, false
+	}
+	run := &inflightRun{done: make(chan struct{})}
+	s.inflight[sessionID] = run
+	return run, true
+}
+
+func (s *Service) endSessionCompaction(sessionID string, run *inflightRun, res Result, err error) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	run.res, run.err = res, err
+	close(run.done)
+	delete(s.inflight, sessionID)
+}
+
+// inFailureCooldown reports whether sessionID failed compaction recently
+// enough that a new attempt should be skipped. An entry found expired is
+// deleted so failedAt does not accumulate sessions that never run again.
+func (s *Service) inFailureCooldown(sessionID string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	failedAt, ok := s.failedAt[sessionID]
+	if !ok {
+		return false
+	}
+	if s.nowFn().Sub(failedAt) >= compactionFailureCooldown {
+		delete(s.failedAt, sessionID)
+		return false
+	}
+	return true
+}
+
+func (s *Service) recordCompactionFailure(sessionID string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	s.failedAt[sessionID] = s.nowFn()
+}
+
+func (s *Service) clearCompactionFailure(sessionID string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.failedAt, sessionID)
 }
 
 func (s *Service) SetHookService(h *hooks.Service) {
@@ -43,60 +123,160 @@ func ShouldCompact(inputTokens, threshold int) bool {
 	return threshold > 0 && inputTokens >= threshold
 }
 
-// TriggerCompaction runs compaction in the background.
-func (s *Service) TriggerCompaction(ctx context.Context, cfg TriggerConfig) {
-	go func() {
-		bgCtx := context.WithoutCancel(ctx)
-		if err := s.runCompaction(bgCtx, cfg); err != nil {
-			s.logger.Error("compaction failed", slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.String("error", err.Error()))
+// RunCompaction runs one automatic attempt without waiting for an existing
+// owner. The caller owns the goroutine lifetime so surrounding coordination
+// remains active until selection and persistence finish.
+func (s *Service) RunCompaction(ctx context.Context, cfg TriggerConfig) error {
+	_, _, err := s.runCompaction(context.WithoutCancel(ctx), cfg)
+	return err
+}
+
+// RunCompactionSync runs compaction synchronously and reports this session's
+// scoped Result, so callers act on their own outcome (a noop keeps their
+// current context) instead of reading an unscoped bot-wide log that may belong
+// to another session. When another run for the session is already in flight,
+// the sync path waits for the owner and reuses its outcome — the summary is
+// seconds away, and waiting removes a duplicate LLM call over the same span; a
+// canceled wait degrades to a noop.
+func (s *Service) RunCompactionSync(ctx context.Context, cfg TriggerConfig) (Result, error) {
+	for {
+		res, owner, err := s.runCompaction(ctx, cfg)
+		if owner == nil {
+			return res, err
 		}
-	}()
-}
-
-// RunCompactionSync runs compaction synchronously and returns any error.
-func (s *Service) RunCompactionSync(ctx context.Context, cfg TriggerConfig) error {
-	return s.runCompaction(ctx, cfg)
-}
-
-func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) error {
-	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg, nil); err != nil {
-		return err
+		res, retry, err := waitForOwner(ctx, cfg, owner)
+		if !retry {
+			return res, err
+		}
 	}
+}
+
+// waitForOwner blocks until the in-flight owner publishes its outcome or the
+// caller's context ends, reporting whether the caller should try again. Only
+// a manual request retries, and only through an owner that nooped without an
+// error — typically an automatic run skipped by the failure cooldown that the
+// manual request must still bypass. A canceled caller never retries: that
+// would start new side effects after cancellation.
+func waitForOwner(ctx context.Context, cfg TriggerConfig, owner *inflightRun) (Result, bool, error) {
+	owner.waiters.Add(1)
+	select {
+	case <-owner.done:
+		if cfg.Manual && owner.err == nil && owner.res.Status == StatusNoop {
+			if ctx.Err() != nil {
+				return Result{Status: StatusNoop}, false, nil
+			}
+			return Result{}, true, nil
+		}
+		return owner.res, false, owner.err
+	case <-ctx.Done():
+		return Result{Status: StatusNoop}, false, nil
+	}
+}
+
+func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result, *inflightRun, error) {
+	// Attaching to an existing owner wins over the cooldown check: the
+	// cooldown exists to stop new failing runs, not to hide a run already in
+	// flight (a manual retry may be the owner precisely because it bypassed
+	// the cooldown, and sync callers should reuse its result).
+	run, ok := s.beginSessionCompaction(cfg.SessionID)
+	if !ok {
+		s.logger.Info("compaction: already in flight for session",
+			slog.String("bot_id", cfg.BotID),
+			slog.String("session_id", cfg.SessionID),
+		)
+		return Result{Status: StatusNoop}, run, nil
+	}
+
+	var compactRes Result
 	var compactErr error
 	defer func() {
-		extra := map[string]any{}
-		if compactErr != nil {
-			extra["error"] = compactErr.Error()
-		}
-		if err := s.runCompactionHook(context.WithoutCancel(ctx), hooks.EventPostCompact, cfg, extra); err != nil && s.logger != nil {
-			s.logger.Warn("post compaction hook failed", slog.String("bot_id", cfg.BotID), slog.Any("error", err))
-		}
+		s.endSessionCompaction(cfg.SessionID, run, compactRes, compactErr)
 	}()
+
+	// Manual (user-initiated) compaction bypasses the cooldown: the user may
+	// have just fixed the failing model, and a silent skip would report success
+	// while nothing runs. Automatic per-request paths still honor the cooldown.
+	if !cfg.Manual && s.inFailureCooldown(cfg.SessionID) {
+		s.logger.Info("compaction: session in failure cooldown, skipping",
+			slog.String("bot_id", cfg.BotID),
+			slog.String("session_id", cfg.SessionID),
+		)
+		compactRes = Result{Status: StatusNoop}
+		return compactRes, nil, nil
+	}
+
+	preHookRan := false
+	defer func() {
+		if r := recover(); r != nil {
+			// A panicking run — the pre-hook included — must not publish a
+			// zero-value success to waiters or clear the cooldown as if it
+			// succeeded.
+			compactErr = fmt.Errorf("compaction panicked: %v", r)
+			compactRes = Result{}
+			s.recordCompactionFailure(cfg.SessionID)
+			panic(r)
+		}
+		switch {
+		case compactErr == nil:
+			s.clearCompactionFailure(cfg.SessionID)
+		case !preHookRan:
+			// A pre-hook error or deny is bot policy, not a model failure;
+			// it must not arm the cooldown (panics above still do).
+		case ctx.Err() != nil:
+			// The caller's request was canceled or hit its deadline — not a
+			// model failure. Arming the five-minute cooldown here would
+			// silence auto-compaction for a healthy session just because the
+			// user aborted one request. A timeout with the caller's context
+			// still live (e.g. the HTTP client's own timeout on a model too
+			// slow to summarize) is a real failure and still arms it.
+		default:
+			s.recordCompactionFailure(cfg.SessionID)
+		}
+		if !preHookRan {
+			return
+		}
+		s.runPostCompactHook(context.WithoutCancel(ctx), cfg, compactErr)
+	}()
+
+	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg, nil); err != nil {
+		compactErr = err
+		return Result{}, nil, err
+	}
+	preHookRan = true
 	botUUID, err := db.ParseUUID(cfg.BotID)
 	if err != nil {
 		compactErr = err
-		return compactErr
+		return Result{}, nil, compactErr
 	}
 	sessionUUID, err := db.ParseUUID(cfg.SessionID)
 	if err != nil {
 		compactErr = err
-		return compactErr
+		return Result{}, nil, compactErr
 	}
 
-	logRow, err := s.queries.CreateCompactionLog(ctx, sqlc.CreateCompactionLogParams{
-		BotID:     botUUID,
-		SessionID: sessionUUID,
-	})
-	if err != nil {
-		compactErr = err
-		return compactErr
-	}
+	compactRes, compactErr = s.doCompaction(ctx, botUUID, sessionUUID, cfg)
+	return compactRes, nil, compactErr
+}
 
-	compactErr = s.doCompaction(ctx, logRow.ID, sessionUUID, cfg)
+// runPostCompactHook dispatches PostCompact after the compaction outcome is
+// already decided and published state is settled. Post-hook failures are
+// advisory, so an error only logs a warning — and a panic is contained here:
+// letting it escape would blow past the recovery defer's already-spent
+// recover(), crash async triggers, and publish the pre-panic result to
+// waiters as if nothing happened.
+func (s *Service) runPostCompactHook(ctx context.Context, cfg TriggerConfig, compactErr error) {
+	defer func() {
+		if r := recover(); r != nil && s.logger != nil {
+			s.logger.Warn("post compaction hook panicked", slog.String("bot_id", cfg.BotID), slog.Any("panic", r))
+		}
+	}()
+	extra := map[string]any{}
 	if compactErr != nil {
-		s.completeLog(ctx, logRow.ID, "error", "", compactErr.Error(), 0, nil, pgtype.UUID{})
+		extra["error"] = compactErr.Error()
 	}
-	return compactErr
+	if err := s.runCompactionHook(ctx, hooks.EventPostCompact, cfg, extra); err != nil && s.logger != nil {
+		s.logger.Warn("post compaction hook failed", slog.String("bot_id", cfg.BotID), slog.Any("error", err))
+	}
 }
 
 func (s *Service) runCompactionHook(ctx context.Context, eventName string, cfg TriggerConfig, extra map[string]any) error {
@@ -130,126 +310,6 @@ func (s *Service) runCompactionHook(ctx context.Context, eventName string, cfg T
 		return hooks.ErrDenied
 	}
 	return nil
-}
-
-func (s *Service) doCompaction(ctx context.Context, logID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) error {
-	messages, err := s.queries.ListUncompactedMessagesBySession(ctx, sessionUUID)
-	if err != nil {
-		return err
-	}
-	if len(messages) == 0 {
-		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
-		return nil
-	}
-
-	candidates, skipped := recordCandidatesFromRows(messages)
-	if skipped > 0 {
-		s.logger.Warn("compaction: skipped unparseable history rows",
-			slog.Int("skipped", skipped),
-			slog.String("session_id", cfg.SessionID),
-		)
-	}
-	window, ok := compactionWindowFromConfig(cfg)
-	if !ok || len(candidates) == 0 {
-		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
-		return nil
-	}
-
-	priorLogs, err := s.queries.ListCompactionLogsBySession(ctx, sessionUUID)
-	if err != nil {
-		return err
-	}
-	var priorSummaries []string
-	for _, l := range priorLogs {
-		if l.Summary != "" {
-			priorSummaries = append(priorSummaries, l.Summary)
-		}
-	}
-
-	scope := contextfrag.Scope{BotID: cfg.BotID, SessionID: cfg.SessionID}
-	view, toCompact, err := compactionView(ctx, scope, candidates, window, priorSummaries)
-	if err != nil {
-		return err
-	}
-	s.logger.Info("compaction: candidates selected",
-		slog.Int("messages", len(toCompact)),
-		slog.Int("total_uncompacted", len(candidates)),
-		slog.Int("kept_in_history", view.Trace.SelectionSummary.TotalDropped),
-		slog.Int("max_compact_tokens", window.MaxPromptTokens),
-		slog.Int("manifest_items", len(view.Manifest.Items)),
-		slog.Any("keep_reasons", selectionReasonHistogram(view.Trace.SelectionSummary.DropReasons)),
-	)
-	if len(toCompact) == 0 {
-		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
-		return nil
-	}
-
-	payload, ok := view.Rendered[contextfrag.RenderCompactionPrompt].Data.(*contextview.CompactionRenderedPayload)
-	if !ok {
-		return fmt.Errorf("unexpected compaction payload type %T", view.Rendered[contextfrag.RenderCompactionPrompt].Data)
-	}
-	if payload.EntryCount == 0 {
-		// Every selected message rendered empty (e.g. reasoning-only): summarizing
-		// nothing would destroy them for a junk summary. Leave them in history.
-		s.completeLog(ctx, logID, "ok", "", "", 0, nil, pgtype.UUID{})
-		return nil
-	}
-	messageIDs, err := messageIDsFromRecordRefs(payload.CandidateRefs)
-	if err != nil {
-		return err
-	}
-	userPrompt := payload.UserPrompt
-
-	model := models.NewSDKChatModel(models.SDKModelConfig{
-		ClientType:     cfg.ClientType,
-		BaseURL:        cfg.BaseURL,
-		APIKey:         cfg.APIKey,
-		CodexAccountID: cfg.CodexAccountID,
-		ModelID:        cfg.ModelID,
-		HTTPClient:     cfg.HTTPClient,
-	})
-
-	systemPromptDecorated, sdkMessages, _ := models.ApplyPromptCache(
-		model, cfg.PromptCacheTTL,
-		payload.SystemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
-	)
-
-	result, err := sdk.GenerateTextResult(ctx,
-		sdk.WithModel(model),
-		sdk.WithSystem(systemPromptDecorated),
-		sdk.WithMessages(sdkMessages),
-	)
-	if err != nil {
-		return err
-	}
-
-	usageJSON, _ := json.Marshal(result.Usage)
-
-	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelID)
-
-	if err := s.queries.MarkMessagesCompacted(ctx, sqlc.MarkMessagesCompactedParams{
-		CompactID: logID,
-		Column2:   messageIDs,
-	}); err != nil {
-		return err
-	}
-
-	s.completeLog(ctx, logID, "ok", result.Text, "", len(messageIDs), usageJSON, modelUUID)
-	return nil
-}
-
-func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, summary, errMsg string, messageCount int, usage []byte, modelID pgtype.UUID) {
-	if _, err := s.queries.CompleteCompactionLog(ctx, sqlc.CompleteCompactionLogParams{
-		ID:           logID,
-		Status:       status,
-		Summary:      summary,
-		MessageCount: int32(messageCount), //nolint:gosec // count always small
-		ErrorMessage: errMsg,
-		Usage:        usage,
-		ModelID:      modelID,
-	}); err != nil {
-		s.logger.Error("failed to complete compaction log", slog.String("error", err.Error()))
-	}
 }
 
 // ListLogs returns paginated compaction logs for a bot.
@@ -326,33 +386,4 @@ func formatUUID(id pgtype.UUID) string {
 		return ""
 	}
 	return uuid.UUID(id.Bytes).String()
-}
-
-// compactionWindowFromConfig maps the trigger config onto the contextview
-// compaction window. The second return is false when the config asks for no
-// compaction at all (legacy split-by-ratio nil result).
-func compactionWindowFromConfig(cfg TriggerConfig) (*contextview.CompactionWindow, bool) {
-	maxPromptTokens := cfg.MaxCompactTokens
-	if maxPromptTokens <= 0 {
-		// Cap the compaction input to avoid exceeding the compaction model's
-		// context window; default conservatively when unset.
-		maxPromptTokens = 30000
-	}
-	window := &contextview.CompactionWindow{MaxPromptTokens: maxPromptTokens}
-	switch {
-	case cfg.TargetTokens > 0:
-		window.TargetTokens = cfg.TargetTokens
-	case cfg.Ratio <= 0 || cfg.TotalInputTokens <= 0:
-		return nil, false
-	case cfg.Ratio >= 100:
-		window.SweepAll = true
-	default:
-		keep := cfg.TotalInputTokens * (100 - cfg.Ratio) / 100
-		if keep <= 0 {
-			window.SweepAll = true
-		} else {
-			window.KeepRecentTokens = keep
-		}
-	}
-	return window, true
 }

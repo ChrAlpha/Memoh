@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/memohai/memoh/internal/conversation"
+	"github.com/memohai/memoh/internal/historyfrag"
 	messagepkg "github.com/memohai/memoh/internal/message"
 )
 
@@ -40,22 +42,13 @@ func TestEnsureRequiredHistoryMessageMergesVisibleWindowInOrder(t *testing.T) {
 		byID:    map[string]messagepkg.Message{"user-1": requiredUser},
 	}
 	resolver := &Resolver{messageService: service}
-	existing := []messageWithUsage{
-		{
-			ID: "prior",
-			Message: conversation.ModelMessage{
-				Role:    "assistant",
-				Content: conversation.NewTextContent("prior context"),
-			},
-		},
-		{
-			ID:      "assistant-tool-1",
-			Message: conversation.ModelMessage{Role: "assistant", Content: conversation.NewTextContent("calling tool")},
-		},
-		{
-			ID:      "tool-1",
-			Message: conversation.ModelMessage{Role: "tool", Content: conversation.NewTextContent("tool result")},
-		},
+	existing := []historyfrag.HistoryRecord{
+		historyRecord("prior", conversation.ModelMessage{
+			Role:    "assistant",
+			Content: conversation.NewTextContent("prior context"),
+		}, nil),
+		historyRecord("assistant-tool-1", conversation.ModelMessage{Role: "assistant", Content: conversation.NewTextContent("calling tool")}, nil),
+		historyRecord("tool-1", conversation.ModelMessage{Role: "tool", Content: conversation.NewTextContent("tool result")}, nil),
 	}
 
 	got, err := resolver.ensureRequiredHistoryMessage(context.Background(), existing, conversation.ChatRequest{
@@ -67,11 +60,37 @@ func TestEnsureRequiredHistoryMessageMergesVisibleWindowInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensureRequiredHistoryMessage() error = %v", err)
 	}
-	if gotIDs := messageWithUsageIDs(got); !equalStrings(gotIDs, []string{"prior", "user-1", "assistant-tool-1", "tool-1"}) {
+	if gotIDs := historyRecordIDs(got); !equalStrings(gotIDs, []string{"prior", "user-1", "assistant-tool-1", "tool-1"}) {
 		t.Fatalf("message ids = %v, want prior + ordered required window", gotIDs)
 	}
 	if !got[1].Required {
 		t.Fatalf("required message was not marked")
+	}
+}
+
+func TestFilterMessagesBeforeIDFailsClosedWhenCutoffIsMissing(t *testing.T) {
+	t.Parallel()
+
+	records := []historyfrag.HistoryRecord{
+		historyRecord("later-user", conversation.ModelMessage{Role: "user", Content: conversation.NewTextContent("later")}, nil),
+	}
+	if got := filterMessagesBeforeID(records, "missing-cutoff"); len(got) != 0 {
+		t.Fatalf("missing cutoff retained history: %#v", got)
+	}
+}
+
+func TestLoadCompactionArtifactBoundaryFetchesCutoffOutsideLoadedWindow(t *testing.T) {
+	t.Parallel()
+
+	cutoff := persistedHistoryMessage(t, "old-cutoff", "assistant", "old answer")
+	cutoff.CreatedAt = time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	resolver := &Resolver{messageService: &requiredHistoryMessageService{
+		byID: map[string]messagepkg.Message{cutoff.ID: cutoff},
+	}}
+
+	boundary := resolver.loadCompactionArtifactBoundary(context.Background(), nil, "session-1", cutoff.ID)
+	if !boundary.hasCutoff || boundary.cutoffMs != cutoff.CreatedAt.UnixMilli() {
+		t.Fatalf("boundary = %+v, want cutoff at %d", boundary, cutoff.CreatedAt.UnixMilli())
 	}
 }
 
@@ -91,10 +110,10 @@ func persistedHistoryMessage(t *testing.T, id string, role string, text string) 
 	}
 }
 
-func messageWithUsageIDs(messages []messageWithUsage) []string {
+func historyRecordIDs(messages []historyfrag.HistoryRecord) []string {
 	out := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		out = append(out, msg.ID)
+		out = append(out, msg.DBMessageID)
 	}
 	return out
 }

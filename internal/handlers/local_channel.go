@@ -249,17 +249,27 @@ func (h *LocalChannelHandler) executeWebQuickAction(ctx context.Context, botID, 
 	case "help":
 		items := []CommandActionListItem{
 			{ID: "help", Title: "/help", Description: "Show available quick actions", Kind: "quick_action"},
+			{ID: "new", Title: "/new", Description: "Start a new session", Kind: "quick_action"},
+			{ID: "compact", Title: "/compact", Description: "Compact the current session history", Kind: "quick_action"},
 		}
-		text := "Available Web quick actions: /help."
+		labels := []string{"/help", "/new", "/compact"}
+		text := "Available Web quick actions: %s."
+		// skillActivationAllowed already reflects a plain (non-ACP) chat
+		// session, which is also the only context where the model picker
+		// applies, so it doubles as the /model gate.
 		if skillActivationAllowed {
-			items = append(items, CommandActionListItem{ID: "skill.list", Title: "/skill list", Description: "Show runtime-usable skills", Kind: "quick_action"})
-			text = "Available Web quick actions: /help, /skill list. To activate a skill, send /<skill-name> or /<skill-name> <prompt>."
+			items = append(items,
+				CommandActionListItem{ID: "skill.list", Title: "/skill list", Description: "Show runtime-usable skills", Kind: "quick_action"},
+				CommandActionListItem{ID: "model", Title: "/model", Description: "Switch the chat model", Kind: "quick_action"},
+			)
+			labels = append(labels, "/skill list", "/model")
+			text = "Available Web quick actions: %s. To activate a skill, send /<skill-name> or /<skill-name> <prompt>."
 		}
 		return &CommandActionResult{
 			Kind:  "list",
 			Title: "Quick actions",
 			Items: items,
-			Text:  text,
+			Text:  fmt.Sprintf(text, strings.Join(labels, ", ")),
 		}, nil
 	case "skill.list":
 		if !skillActivationAllowed {
@@ -377,7 +387,7 @@ func (h *LocalChannelHandler) classifyWebSlash(text string, hasAttachments bool,
 			if resource == "help" || resource == "skill" {
 				return true
 			}
-			return h.commandHandler != nil && h.commandHandler.IsCommand("/"+resource)
+			return h.commandHandler != nil && h.commandHandler.HasCommandResource(resource)
 		},
 		WebActionSupported: func(resource, action string) bool {
 			return webActionID(resource, action) != ""
@@ -982,7 +992,7 @@ func (h *LocalChannelHandler) forwardWSStreamEvents(ctx, assetCtx context.Contex
 				})
 				continue
 			case agentpkg.EventAgentEnd, agentpkg.EventAgentAbort:
-				for _, uiMessage := range conversation.ConvertRawModelMessagesToUIAssistantMessages(streamEvent.Messages) {
+				for _, uiMessage := range converter.ConvertTerminalMessages(streamEvent.Messages) {
 					writer.SendJSON(wsOutboundEvent{
 						Type:      "message",
 						StreamID:  streamID,
@@ -1041,6 +1051,7 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, ac
 	}
 
 	eventCh := make(chan flow.WSStreamEvent, 64)
+	releaseCompaction := h.resolver.DeferSessionCompaction(botID, sessionID, streamID)
 	go func() {
 		defer streamCancel()
 		err := func() error {
@@ -1057,7 +1068,10 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, ac
 		}
 	}()
 
-	go h.forwardWSStreamEvents(streamCtx, baseCtx, writer, botID, sessionID, streamID, eventCh)
+	go func() {
+		defer releaseCompaction()
+		h.forwardWSStreamEvents(streamCtx, baseCtx, writer, botID, sessionID, streamID, eventCh)
+	}()
 }
 
 // HandleWebSocket godoc
@@ -1979,11 +1993,13 @@ func (h *LocalChannelHandler) buildTtsAttachment(ctx context.Context, botID, con
 func extractAssetRefsFromProcessedEvent(event json.RawMessage) []messagepkg.AssetRef {
 	var envelope struct {
 		Type        string           `json:"type"`
+		ToolCallID  string           `json:"toolCallId"`
 		Attachments []map[string]any `json:"attachments"`
 	}
 	if err := json.Unmarshal(event, &envelope); err != nil || envelope.Type != "attachment_delta" {
 		return nil
 	}
+	toolCallID := strings.TrimSpace(envelope.ToolCallID)
 	var refs []messagepkg.AssetRef
 	for i, att := range envelope.Attachments {
 		bundle := attachmentpkg.BundleFromMap(att)
@@ -1995,6 +2011,14 @@ func extractAssetRefsFromProcessedEvent(event json.RawMessage) []messagepkg.Asse
 		if name == "" && bundle.Metadata != nil {
 			name, _ = bundle.Metadata["name"].(string)
 		}
+		metadata := bundle.Metadata
+		if toolCallID != "" {
+			metadata = maps.Clone(metadata)
+			if metadata == nil {
+				metadata = map[string]any{}
+			}
+			metadata["tool_call_id"] = toolCallID
+		}
 		ref := messagepkg.AssetRef{
 			ContentHash: ch,
 			Role:        "attachment",
@@ -2002,7 +2026,7 @@ func extractAssetRefsFromProcessedEvent(event json.RawMessage) []messagepkg.Asse
 			Name:        name,
 			Mime:        strings.TrimSpace(bundle.Mime),
 			SizeBytes:   bundle.Size,
-			Metadata:    bundle.Metadata,
+			Metadata:    metadata,
 		}
 		ref.StorageKey = attachmentpkg.MetadataString(bundle.Metadata, attachmentpkg.MetadataKeyStorageKey)
 		refs = append(refs, ref)
