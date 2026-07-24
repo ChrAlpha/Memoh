@@ -17,12 +17,12 @@ RETURNING id;
 -- name: ListSessionEventsBySession :many
 SELECT * FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND session_id = $1
-ORDER BY received_at_ms ASC;
+ORDER BY received_at_ms ASC, created_at ASC, id ASC;
 
 -- name: ListSessionEventsBySessionAfter :many
 SELECT * FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND session_id = $1 AND received_at_ms >= $2
-ORDER BY received_at_ms ASC;
+ORDER BY received_at_ms ASC, created_at ASC, id ASC;
 
 -- name: ListSessionEventsByBot :many
 SELECT * FROM bot_session_events
