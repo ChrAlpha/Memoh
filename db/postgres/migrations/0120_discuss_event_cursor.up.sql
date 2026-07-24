@@ -29,9 +29,12 @@ BEGIN
 
     SELECT COALESCE(MAX(
       CASE
-        WHEN event_data->>'event_cursor' ~ '^[1-9][0-9]{0,15}$'
-          AND (event_data->>'event_cursor')::numeric <= 4503599627370495
-          THEN (event_data->>'event_cursor')::bigint
+        WHEN event_data->>'event_cursor' ~ '^[1-9][0-9]{0,15}$' THEN
+          CASE
+            WHEN (event_data->>'event_cursor')::numeric <= 4503599627370495
+              THEN (event_data->>'event_cursor')::bigint
+            ELSE LEAST(GREATEST(received_at_ms, 1), 4503599627370495)
+          END
         ELSE LEAST(GREATEST(received_at_ms, 1), 4503599627370495)
       END
     ), 1)
