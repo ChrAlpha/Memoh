@@ -65,6 +65,20 @@ func (d *DiscussDriver) handleReply(ctx context.Context, sess *discussSession, r
 	d.handleReplyWithTurn(ctx, sess, rc, log, d.turnServiceSnapshot())
 }
 
+// loadArtifacts projects the session's active compaction frontier. Failures
+// degrade to uncompacted composition.
+func (d *DiscussDriver) loadArtifacts(ctx context.Context, cfg DiscussSessionConfig, log *slog.Logger) []timeline.CompactionArtifact {
+	if d.artifacts == nil {
+		return nil
+	}
+	artifacts, err := d.artifacts.ActiveCompactionArtifacts(ctx, cfg.BotID, cfg.ThreadID)
+	if err != nil {
+		log.Warn("load compaction artifacts failed", slog.Any("error", err))
+		return nil
+	}
+	return artifacts
+}
+
 // handleReplyWithTurn remains as a narrow seam for parity tests. Production
 // workers obtain the current service through turnServiceSnapshot.
 func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger, turnSvc turn.Service) {
@@ -80,7 +94,7 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 		return
 	}
 
-	plan, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessedMs)
+	plan, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessedMs, d.loadArtifacts(ctx, cfg, log))
 	if !ok {
 		return
 	}

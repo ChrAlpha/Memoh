@@ -16,6 +16,12 @@ type DiscussCursorStore interface {
 	UpsertDiscussConsumedCursor(ctx context.Context, sessionID, scopeKey, routeID, source string, cursor int64) error
 }
 
+// DiscussArtifactProvider projects the session's active compaction artifacts
+// for timeline composition. Implemented agent-side and injected at assembly.
+type DiscussArtifactProvider interface {
+	ActiveCompactionArtifacts(ctx context.Context, botID, sessionID string) ([]timeline.CompactionArtifact, error)
+}
+
 // DiscussStreamBroadcaster publishes stream events to local UI subscribers.
 // Implemented by local.RouteHub.
 type DiscussStreamBroadcaster interface {
@@ -27,6 +33,7 @@ type DiscussDriverDeps struct {
 	Turn           turn.Service
 	MessageService messagepkg.Service
 	CursorStore    DiscussCursorStore
+	Artifacts      DiscussArtifactProvider
 	Broadcaster    DiscussStreamBroadcaster
 	Logger         *slog.Logger
 }
@@ -51,14 +58,15 @@ type DiscussSessionConfig struct {
 // cursor persistence, turn execution, and stream projection live in dedicated
 // collaborators.
 type DiscussDriver struct {
-	mu       sync.Mutex
-	turn     turn.Service
-	sessions map[string]*discussSession
-	history  discussHistoryReader
-	cursor   discussCursorTracker
-	trigger  discussTriggerBuilder
-	runner   discussTurnRunner
-	logger   *slog.Logger
+	mu        sync.Mutex
+	turn      turn.Service
+	sessions  map[string]*discussSession
+	history   discussHistoryReader
+	cursor    discussCursorTracker
+	trigger   discussTriggerBuilder
+	runner    discussTurnRunner
+	artifacts DiscussArtifactProvider
+	logger    *slog.Logger
 }
 
 type discussSession struct {
@@ -78,12 +86,13 @@ func NewDiscussDriver(deps DiscussDriverDeps) *DiscussDriver {
 	logger = logger.With(slog.String("service", "channel/discuss"))
 	projector := newDiscussEventProjector(deps.Broadcaster)
 	return &DiscussDriver{
-		turn:     deps.Turn,
-		sessions: make(map[string]*discussSession),
-		history:  discussHistoryReader{messages: deps.MessageService, logger: logger},
-		cursor:   discussCursorTracker{store: deps.CursorStore},
-		runner:   discussTurnRunner{projector: projector},
-		logger:   logger,
+		turn:      deps.Turn,
+		sessions:  make(map[string]*discussSession),
+		history:   discussHistoryReader{messages: deps.MessageService, logger: logger},
+		cursor:    discussCursorTracker{store: deps.CursorStore},
+		runner:    discussTurnRunner{projector: projector},
+		artifacts: deps.Artifacts,
+		logger:    logger,
 	}
 }
 

@@ -46,11 +46,11 @@ type CompactionSource struct {
 // artifact. Callers preserve frontier order; composition keeps each artifact
 // separate so later restacks can supersede only the ranges they actually cover.
 type CompactionArtifact struct {
-	ID            string             `json:"id"`
-	Summary       string             `json:"summary"`
-	AnchorStartMs int64              `json:"anchor_start_ms,omitempty"`
-	CompletedAtMs int64              `json:"completed_at_ms,omitempty"`
-	Sources       []CompactionSource `json:"sources,omitempty"`
+	ID             string             `json:"id"`
+	Summary        string             `json:"summary"`
+	AnchorStartMs  int64              `json:"anchor_start_ms,omitempty"`
+	CoverageAsOfMs int64              `json:"coverage_as_of_ms,omitempty"`
+	Sources        []CompactionSource `json:"sources,omitempty"`
 }
 
 // LatestExternalEventMs returns the receivedAtMs of the latest non-self segment
@@ -308,7 +308,7 @@ func filterCoveredTurnResponses(trs []TurnResponseEntry, artifacts []CompactionA
 }
 
 type externalMessageCoverage struct {
-	completedAtMs int64
+	coverageAsOfMs int64
 }
 
 func coveredExternalMessages(artifacts []CompactionArtifact) map[string]externalMessageCoverage {
@@ -323,8 +323,8 @@ func coveredExternalMessages(artifacts []CompactionArtifact) map[string]external
 				continue
 			}
 			coverage := covered[id]
-			if artifact.CompletedAtMs > coverage.completedAtMs {
-				coverage.completedAtMs = artifact.CompletedAtMs
+			if artifact.CoverageAsOfMs > coverage.coverageAsOfMs {
+				coverage.coverageAsOfMs = artifact.CoverageAsOfMs
 			}
 			covered[id] = coverage
 		}
@@ -339,7 +339,7 @@ func renderedSegmentCovered(segment RenderedSegment, coverage externalMessageCov
 	if segment.EditedAtMs <= 0 {
 		return true
 	}
-	return coverage.completedAtMs > 0 && segment.EditedAtMs <= coverage.completedAtMs
+	return coverage.coverageAsOfMs > 0 && segment.EditedAtMs <= coverage.coverageAsOfMs
 }
 
 func (artifact CompactionArtifact) usable() bool {

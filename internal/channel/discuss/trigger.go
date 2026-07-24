@@ -18,8 +18,8 @@ type discussTurnPlan struct {
 
 // Build composes the durable timeline and persisted turn responses into the
 // pure StartTurn command consumed by Agent.
-func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.RenderedContext, trs []timeline.TurnResponseEntry, afterMs int64) (discussTurnPlan, bool) {
-	composed := timeline.ComposeContext(rc, trs)
+func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.RenderedContext, trs []timeline.TurnResponseEntry, afterMs int64, artifacts []timeline.CompactionArtifact) (discussTurnPlan, bool) {
+	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
 		return discussTurnPlan{}, false
 	}

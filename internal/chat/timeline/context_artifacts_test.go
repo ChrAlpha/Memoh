@@ -142,11 +142,11 @@ func TestComposeContextWithArtifactsKeepsSegmentsEditedAfterCompletion(t *testin
 	edited.EditedAtMs = 5000
 	rc := RenderedContext{edited, textSegment("m2", 2000, "tail")}
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "stale coverage",
-		AnchorStartMs: 1000,
-		CompletedAtMs: 4000,
-		Sources:       []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+		ID:             "a1",
+		Summary:        "stale coverage",
+		AnchorStartMs:  1000,
+		CoverageAsOfMs: 4000,
+		Sources:        []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
 
 	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
@@ -166,11 +166,11 @@ func TestComposeContextWithArtifactsDropsSegmentsEditedBeforeCompletion(t *testi
 	edited.EditedAtMs = 3500
 	rc := RenderedContext{edited, textSegment("m2", 2000, "tail")}
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "covers the edit",
-		AnchorStartMs: 1000,
-		CompletedAtMs: 4000,
-		Sources:       []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+		ID:             "a1",
+		Summary:        "covers the edit",
+		AnchorStartMs:  1000,
+		CoverageAsOfMs: 4000,
+		Sources:        []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
 
 	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
