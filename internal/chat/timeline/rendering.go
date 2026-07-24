@@ -23,7 +23,9 @@ type ImageAttachmentRef struct {
 
 // RenderedSegment is a single segment of rendered context, one per IC node.
 type RenderedSegment struct {
+	MessageID    string                 `json:"message_id,omitempty"`
 	ReceivedAtMs int64                  `json:"received_at_ms"`
+	EditedAtMs   int64                  `json:"edited_at_ms,omitempty"`
 	Content      []RenderedContentPiece `json:"content"`
 	IsMyself     bool                   `json:"is_myself,omitempty"`
 	IsSelfSent   bool                   `json:"is_self_sent,omitempty"`
@@ -115,7 +117,9 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 	if msg.Deleted {
 		text := fmt.Sprintf("<message %s/>", strings.Join(attrs, " "))
 		return RenderedSegment{
+			MessageID:    msg.MessageID,
 			ReceivedAtMs: msg.ReceivedAtMs,
+			EditedAtMs:   msg.EditedAtSec * 1000,
 			Content:      []RenderedContentPiece{{Type: "text", Text: text}},
 			IsMyself:     isMyself,
 			IsSelfSent:   msg.IsSelfSent,
@@ -162,7 +166,9 @@ func renderMessage(msg *ICMessage, params RenderParams) RenderedSegment {
 	}
 
 	return RenderedSegment{
+		MessageID:    msg.MessageID,
 		ReceivedAtMs: msg.ReceivedAtMs,
+		EditedAtMs:   msg.EditedAtSec * 1000,
 		Content:      pieces,
 		IsMyself:     isMyself,
 		IsSelfSent:   msg.IsSelfSent,

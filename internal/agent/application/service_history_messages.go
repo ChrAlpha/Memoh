@@ -29,7 +29,7 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 
 	trs := s.loadTurnResponses(ctx, sessionID)
 
-	composed := timeline.ComposeContext(rc, trs, "")
+	composed := timeline.ComposeContext(rc, trs)
 	if composed == nil {
 		return nil
 	}

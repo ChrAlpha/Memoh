@@ -19,7 +19,7 @@ type discussTurnPlan struct {
 // Build composes the durable timeline and persisted turn responses into the
 // pure StartTurn command consumed by Agent.
 func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.RenderedContext, trs []timeline.TurnResponseEntry, afterMs int64) (discussTurnPlan, bool) {
-	composed := timeline.ComposeContext(rc, trs, "")
+	composed := timeline.ComposeContext(rc, trs)
 	if composed == nil {
 		return discussTurnPlan{}, false
 	}
