@@ -339,3 +339,37 @@ func TestComposeContextWithArtifactsKeepsTurnResponseSlotOrderWithinSameMs(t *te
 		t.Fatalf("summary must take the covered response slot, got %v", messageTexts(composed.Messages))
 	}
 }
+
+// Two covered responses ahead of a survivor pin the response-side index space:
+// keying summaries by filtered position would land them after the survivor.
+func TestComposeContextWithArtifactsKeepsTurnResponseSlotAcrossMultipleCovered(t *testing.T) {
+	first := assistantTR(1000, "covered first reply")
+	first.SourceMessageID = "h1"
+	second := assistantTR(1000, "covered second reply")
+	second.SourceMessageID = "h2"
+	survivor := assistantTR(1000, "surviving reply")
+	survivor.SourceMessageID = "h3"
+	artifacts := []CompactionArtifact{
+		{
+			ID:      "a1",
+			Summary: "covers the first reply",
+			Sources: []CompactionSource{{HistoryMessageID: "h1", CreatedAtMs: 1000}},
+		},
+		{
+			ID:      "a2",
+			Summary: "covers the second reply",
+			Sources: []CompactionSource{{HistoryMessageID: "h2", CreatedAtMs: 1000}},
+		},
+	}
+
+	composed := ComposeContextWithArtifacts(nil, []TurnResponseEntry{first, second, survivor}, artifacts)
+	if composed == nil || len(composed.Messages) != 3 {
+		t.Fatalf("expected two summaries + survivor, got %+v", composed)
+	}
+	if composed.Messages[0].CompactionArtifactID != "a1" || composed.Messages[1].CompactionArtifactID != "a2" {
+		t.Fatalf("summaries must keep their covered slots in order, got %v", messageTexts(composed.Messages))
+	}
+	if !strings.Contains(composed.Messages[2].Content, "surviving reply") {
+		t.Fatalf("survivor must follow both summaries, got %v", messageTexts(composed.Messages))
+	}
+}

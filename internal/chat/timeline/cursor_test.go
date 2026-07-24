@@ -146,6 +146,42 @@ func TestConsumedDiscussCursorTakesLatestGate(t *testing.T) {
 	}
 }
 
+func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
+	poisoned := MaxTrustedEventCursor + 1
+	pipeline := NewPipeline(RenderParams{})
+	pipeline.PushEvent("s1", MessageEvent{
+		SessionID: "s1", MessageID: "m1", EventCursor: 7001,
+		ReceivedAtMs: 1000, TimestampSec: 1,
+		Content: []ContentNode{{Type: "text", Text: "hello"}},
+	})
+
+	rc := pipeline.PushEvent("s1", EditEvent{
+		SessionID: "s1", MessageID: "m1", EventCursor: poisoned,
+		ReceivedAtMs: 2000, TimestampSec: 2,
+		Content: []ContentNode{{Type: "text", Text: "edited"}},
+	})
+	if len(rc) != 1 || rc[0].LastEventCursor != 7001 {
+		t.Fatalf("poisoned edit cursor must not bump the segment, got %+v", rc)
+	}
+
+	rc = pipeline.PushEvent("s1", DeleteEvent{
+		SessionID: "s1", MessageIDs: []string{"m1"}, EventCursor: poisoned,
+		ReceivedAtMs: 3000, TimestampSec: 3,
+	})
+	if len(rc) != 1 || rc[0].LastEventCursor != 7001 {
+		t.Fatalf("poisoned delete cursor must not bump the segment, got %+v", rc)
+	}
+
+	rc = pipeline.PushEvent("s1", ServiceEvent{
+		SessionID: "s1", Action: ServiceMemberLeft, EventCursor: poisoned,
+		ReceivedAtMs: 4000, TimestampSec: 4,
+		Member: &CanonicalUser{ID: "u1", DisplayName: "Someone"},
+	})
+	if len(rc) != 2 || rc[1].LastEventCursor != 0 {
+		t.Fatalf("poisoned service cursor must be dropped, got %+v", rc)
+	}
+}
+
 func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
 	for _, poisoned := range []int64{MaxJSONSafeEventCursor + 1, MaxJSONSafeEventCursor, MaxTrustedEventCursor + 1} {
 		pipeline := NewPipeline(RenderParams{})
