@@ -14,10 +14,12 @@ func TestDiscussEventCursorMigrationRoundTrip(t *testing.T) {
 	pool := freshMigratedDB(t)
 	dsn := teamMigrationDSN(t)
 
+	steps := countMigrationsFrom(t, "0120_discuss_event_cursor.up.sql")
+
 	assertDiscussEventCursorSchema(t, ctx, pool, true, true)
-	stepDown(t, dsn, 1)
+	stepDown(t, dsn, steps)
 	assertDiscussEventCursorSchema(t, ctx, pool, false, false)
-	stepUp(t, dsn, 1)
+	stepUp(t, dsn, steps)
 	assertDiscussEventCursorSchema(t, ctx, pool, true, true)
 }
 
