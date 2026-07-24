@@ -187,7 +187,7 @@ func reduceMessage(ic *IntermediateContext, event MessageEvent) {
 				Type:            "system_event",
 				Kind:            "user_renamed",
 				ReceivedAtMs:    event.ReceivedAtMs,
-				LastEventCursor: event.EventCursor,
+				LastEventCursor: sanitizedEventCursor(event.EventCursor),
 				TimestampSec:    event.TimestampSec,
 				UTCOffsetMin:    event.UTCOffsetMin,
 				UserID:          event.Sender.ID,
@@ -203,7 +203,7 @@ func reduceMessage(ic *IntermediateContext, event MessageEvent) {
 		MessageID:       event.MessageID,
 		Sender:          event.Sender,
 		ReceivedAtMs:    event.ReceivedAtMs,
-		LastEventCursor: event.EventCursor,
+		LastEventCursor: sanitizedEventCursor(event.EventCursor),
 		TimestampSec:    event.TimestampSec,
 		UTCOffsetMin:    event.UTCOffsetMin,
 		Content:         event.Content,
@@ -271,8 +271,8 @@ func reduceEdit(ic *IntermediateContext, event EditEvent) {
 	msg.Attachments = event.Attachments
 	msg.EditedAtSec = event.TimestampSec
 	msg.EditUTCOffsetMin = event.UTCOffsetMin
-	if event.EventCursor > msg.LastEventCursor {
-		msg.LastEventCursor = event.EventCursor
+	if cursor := sanitizedEventCursor(event.EventCursor); cursor > msg.LastEventCursor {
+		msg.LastEventCursor = cursor
 	}
 }
 
@@ -284,8 +284,8 @@ func reduceDelete(ic *IntermediateContext, event DeleteEvent) {
 		}
 		if msg := ic.Nodes[idx].Message; msg != nil {
 			msg.Deleted = true
-			if event.EventCursor > msg.LastEventCursor {
-				msg.LastEventCursor = event.EventCursor
+			if cursor := sanitizedEventCursor(event.EventCursor); cursor > msg.LastEventCursor {
+				msg.LastEventCursor = cursor
 			}
 		}
 	}
@@ -295,7 +295,7 @@ func reduceService(ic *IntermediateContext, event ServiceEvent) {
 	base := ICSystemEvent{
 		Type:            "system_event",
 		ReceivedAtMs:    event.ReceivedAtMs,
-		LastEventCursor: event.EventCursor,
+		LastEventCursor: sanitizedEventCursor(event.EventCursor),
 		TimestampSec:    event.TimestampSec,
 		UTCOffsetMin:    event.UTCOffsetMin,
 		Actor:           event.Actor,

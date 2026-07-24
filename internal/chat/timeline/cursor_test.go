@@ -44,7 +44,7 @@ func TestAssignEventCursorRejectsInvalid(t *testing.T) {
 	if _, err := assignEventCursor(MessageEvent{}, 0); err == nil {
 		t.Fatal("expected error for non-positive cursor")
 	}
-	if _, err := assignEventCursor(MessageEvent{}, maxJSONSafeEventCursor+1); err == nil {
+	if _, err := assignEventCursor(MessageEvent{}, MaxJSONSafeEventCursor+1); err == nil {
 		t.Fatal("expected error for cursor above the JSON-safe range")
 	}
 }
@@ -143,5 +143,20 @@ func TestConsumedDiscussCursorTakesLatestGate(t *testing.T) {
 	position := ConsumedDiscussCursor(rc)
 	if position.EventCursor != 7001 || position.SourceCursor != 1000 {
 		t.Fatalf("position = %+v, want cursor 7001 source 1000", position)
+	}
+}
+
+func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
+	pipeline := NewPipeline(RenderParams{})
+	rc := pipeline.PushEvent("s1", MessageEvent{
+		SessionID:    "s1",
+		MessageID:    "m1",
+		EventCursor:  MaxJSONSafeEventCursor + 1,
+		ReceivedAtMs: 1000,
+		TimestampSec: 1,
+		Content:      []ContentNode{{Type: "text", Text: "poisoned"}},
+	})
+	if len(rc) != 1 || rc[0].LastEventCursor != 0 {
+		t.Fatalf("out-of-range payload cursor must be dropped, got %+v", rc)
 	}
 }

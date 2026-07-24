@@ -25,6 +25,7 @@ import (
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
+	"github.com/memohai/memoh/internal/chat/timeline"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -2165,6 +2166,9 @@ func restoredEventCursor(eventData []byte) int64 {
 		EventCursor int64 `json:"event_cursor"`
 	}
 	if err := json.Unmarshal(eventData, &payload); err != nil {
+		return 0
+	}
+	if payload.EventCursor <= 0 || payload.EventCursor >= timeline.MaxJSONSafeEventCursor {
 		return 0
 	}
 	return payload.EventCursor

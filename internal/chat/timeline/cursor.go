@@ -5,7 +5,9 @@ import (
 	"fmt"
 )
 
-const maxJSONSafeEventCursor int64 = 1<<53 - 1
+// MaxJSONSafeEventCursor bounds legitimate event cursors; the allocation
+// sequence never exceeds it, so larger payload values are corrupt data.
+const MaxJSONSafeEventCursor int64 = 1<<53 - 1
 
 // DiscussCursorPosition tracks consumed discuss progress in both the durable
 // event-cursor domain and the legacy source-timestamp domain. Segments are
@@ -39,7 +41,7 @@ func assignEventCursor(event CanonicalEvent, cursor int64) (CanonicalEvent, erro
 	if event == nil {
 		return nil, errors.New("canonical event is nil")
 	}
-	if cursor <= 0 || cursor > maxJSONSafeEventCursor {
+	if cursor <= 0 || cursor > MaxJSONSafeEventCursor {
 		return nil, fmt.Errorf("event cursor %d is outside the JSON-safe range", cursor)
 	}
 	switch typed := event.(type) {
@@ -58,6 +60,13 @@ func assignEventCursor(event CanonicalEvent, cursor int64) (CanonicalEvent, erro
 	default:
 		return nil, fmt.Errorf("unsupported canonical event type %T", event)
 	}
+}
+
+func sanitizedEventCursor(cursor int64) int64 {
+	if cursor <= 0 || cursor > MaxJSONSafeEventCursor {
+		return 0
+	}
+	return cursor
 }
 
 // HasUncoveredExternalEvent reports whether any non-self segment lies past the
