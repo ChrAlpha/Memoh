@@ -285,3 +285,33 @@ func TestComposeContextWithArtifactsKeepsSlotOrderWithinSameMs(t *testing.T) {
 		t.Fatalf("uncovered same-ms message must follow the summary, got %v", messageTexts(composed.Messages))
 	}
 }
+
+func TestComposeContextWithArtifactsKeepsBeforeSlotOrderWithinSameMs(t *testing.T) {
+	edited := textSegment("m2", 1000, "edited survivor")
+	edited.EditedAtMs = 5000
+	rc := RenderedContext{
+		textSegment("m1", 1000, "uncovered first"),
+		edited,
+	}
+	artifacts := []CompactionArtifact{{
+		ID:             "a1",
+		Summary:        "covers the edited slot",
+		AnchorStartMs:  1000,
+		CoverageAsOfMs: 4000,
+		Sources:        []CompactionSource{{ExternalMessageID: "m2", CreatedAtMs: 1000}},
+	}}
+
+	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
+	if composed == nil || len(composed.Messages) != 3 {
+		t.Fatalf("expected first + summary + edited, got %+v", composed)
+	}
+	if !strings.Contains(composed.Messages[0].Content, "uncovered first") {
+		t.Fatalf("uncovered earlier slot must stay first, got %v", messageTexts(composed.Messages))
+	}
+	if composed.Messages[1].CompactionArtifactID != "a1" {
+		t.Fatalf("summary must sit immediately before its kept slot, got %v", messageTexts(composed.Messages))
+	}
+	if !strings.Contains(composed.Messages[2].Content, "edited survivor") {
+		t.Fatalf("kept slot must follow its summary, got %v", messageTexts(composed.Messages))
+	}
+}

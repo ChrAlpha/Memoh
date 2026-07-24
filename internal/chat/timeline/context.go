@@ -91,7 +91,7 @@ func appendRenderedContextEntries(entries []mergeEntry, rc RenderedContext) []me
 		entries = append(entries, mergeEntry{
 			kind:      "rc",
 			time:      seg.ReceivedAtMs,
-			step:      i,
+			step:      2 * i,
 			rcContent: seg.Content,
 		})
 	}
@@ -114,7 +114,7 @@ func appendActiveRenderedContextEntries(
 		entries = append(entries, mergeEntry{
 			kind:      "rc",
 			time:      segment.ReceivedAtMs,
-			step:      i,
+			step:      2 * i,
 			rcContent: segment.Content,
 		})
 	}
@@ -151,9 +151,7 @@ func mergeEntries(entries []mergeEntry) []ContextMessage {
 
 func mergeKindOrder(kind string) int {
 	switch kind {
-	case "summary_before_rc":
-		return 0
-	case "rc", "summary_slot":
+	case "rc", "summary_slot", "summary_before_rc":
 		return 1
 	case "summary":
 		return 2
@@ -265,9 +263,9 @@ func artifactSummaryPlacement(
 		for i, segment := range rc {
 			if strings.TrimSpace(segment.MessageID) == id {
 				if renderedSegmentCovered(segment, coverage) {
-					return segment.ReceivedAtMs, "summary_slot", i
+					return segment.ReceivedAtMs, "summary_slot", 2 * i
 				}
-				return segment.ReceivedAtMs, "summary_before_rc", i
+				return segment.ReceivedAtMs, "summary_before_rc", 2*i - 1
 			}
 		}
 		break
