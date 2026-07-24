@@ -118,15 +118,15 @@ func TestWasRecentlyMentionedSkipsSelfSent(t *testing.T) {
 	}
 }
 
-func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
-	coveredMention := timeline.RenderedSegment{
+func TestBuildMentionGatesOnWatermarkNotCoverage(t *testing.T) {
+	mention := timeline.RenderedSegment{
 		MessageID:    "m1",
 		ReceivedAtMs: 100,
 		MentionsMe:   true,
-		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "old @bot ping"}},
+		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "@bot ping"}},
 	}
 	rc := timeline.RenderedContext{
-		coveredMention,
+		mention,
 		{
 			MessageID:    "m2",
 			ReceivedAtMs: 200,
@@ -135,25 +135,24 @@ func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
 	}
 	artifacts := []timeline.CompactionArtifact{{
 		ID:      "a1",
-		Summary: "covers the old mention",
+		Summary: "covers the pending mention",
 		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
 	}}
 
-	plan, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts)
+	pending, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts)
 	if !ok {
 		t.Fatal("expected a composed plan")
 	}
-	if plan.command.DiscussMentioned {
-		t.Fatal("compacted mention must not mark the session as mentioned")
+	if !pending.command.DiscussMentioned {
+		t.Fatal("a mention the watermark has not consumed must wake the session even when compaction covers it")
 	}
 
-	uncovered := discussTriggerBuilder{}
-	planLive, ok := uncovered.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, nil)
+	consumed, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{SourceCursor: 150}, artifacts)
 	if !ok {
-		t.Fatal("expected a composed plan without artifacts")
+		t.Fatal("expected a composed plan past the mention")
 	}
-	if !planLive.command.DiscussMentioned {
-		t.Fatal("uncovered mention must mark the session as mentioned")
+	if consumed.command.DiscussMentioned {
+		t.Fatal("a consumed mention must not re-mark the session as mentioned")
 	}
 }
 
