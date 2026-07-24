@@ -47,6 +47,7 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 		return "", event, fmt.Errorf("invalid session id: %w", err)
 	}
 
+	original := event
 	if cursor, cursorErr := s.queries.NextSessionEventCursor(ctx); cursorErr != nil {
 		s.logger.Warn("allocate session event cursor failed", slog.Any("error", cursorErr))
 	} else if stamped, stampErr := assignEventCursor(event, cursor); stampErr != nil {
@@ -86,7 +87,7 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", event, nil
+			return "", original, nil
 		}
 		return "", event, fmt.Errorf("persist session event: %w", err)
 	}
@@ -94,7 +95,7 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 	if pgID.Valid {
 		return pgID.String(), event, nil
 	}
-	return "", event, nil
+	return "", original, nil
 }
 
 // LoadEvents loads all events for a session, ordered by received_at_ms.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	dbpkg "github.com/memohai/memoh/internal/db"
@@ -93,5 +94,31 @@ func TestPersistEventReturnsStampedEventOnInsertFailure(t *testing.T) {
 	message, ok := stamped.(MessageEvent)
 	if !ok || message.EventCursor != 515151 {
 		t.Fatalf("stamped event must survive insert failure, got %+v", stamped)
+	}
+}
+
+type conflictingEventQueries struct {
+	fakeEventQueries
+}
+
+func (*conflictingEventQueries) CreateSessionEvent(context.Context, sqlc.CreateSessionEventParams) (pgtype.UUID, error) {
+	return pgtype.UUID{}, pgx.ErrNoRows
+}
+
+func TestPersistEventReturnsOriginalEventOnDedup(t *testing.T) {
+	queries := &conflictingEventQueries{fakeEventQueries{nextCursor: 616161}}
+	store := NewEventStore(slog.New(slog.DiscardHandler), queries)
+
+	id, projected, err := store.PersistEvent(context.Background(),
+		"77777777-7777-7777-7777-777777777777",
+		"66666666-6666-6666-6666-666666666666",
+		EditEvent{SessionID: "66666666-6666-6666-6666-666666666666", MessageID: "m1", ReceivedAtMs: 1000},
+	)
+	if err != nil || id != "" {
+		t.Fatalf("dedup must return no id and no error, got id=%q err=%v", id, err)
+	}
+	edit, ok := projected.(EditEvent)
+	if !ok || edit.EventCursor != 0 {
+		t.Fatalf("deduplicated delivery must project the original unstamped event, got %+v", projected)
 	}
 }
