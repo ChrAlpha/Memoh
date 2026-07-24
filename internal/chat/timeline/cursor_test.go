@@ -77,44 +77,60 @@ func TestPushEventThreadsCursorIntoSegments(t *testing.T) {
 	}
 }
 
-func TestLatestExternalEventCursorGates(t *testing.T) {
-	withCursor := textSegment("m1", 1000, "external")
+func TestDiscussCursorPositionCovers(t *testing.T) {
+	position := DiscussCursorPosition{EventCursor: 7001, SourceCursor: 1500}
+
+	withCursor := textSegment("m1", 9000, "cursor domain")
 	withCursor.LastEventCursor = 7001
+	if !position.Covers(withCursor) {
+		t.Fatal("segment at the consumed event cursor must be covered regardless of timestamps")
+	}
+	fresh := textSegment("m2", 100, "newer cursor")
+	fresh.LastEventCursor = 7002
+	if position.Covers(fresh) {
+		t.Fatal("segment past the consumed event cursor must not be covered")
+	}
+	legacy := textSegment("m0", 1400, "legacy")
+	if !position.Covers(legacy) {
+		t.Fatal("cursor-less segment inside the source window must be covered")
+	}
+	degraded := textSegment("m3", 1600, "degraded ingest")
+	if position.Covers(degraded) {
+		t.Fatal("cursor-less segment past the source window must not be covered")
+	}
+}
+
+func TestHasUncoveredExternalEvent(t *testing.T) {
+	position := DiscussCursorPosition{EventCursor: 7001, SourceCursor: 1500}
+	covered := textSegment("m1", 1000, "covered")
+	covered.LastEventCursor = 7001
 	selfSent := textSegment("m2", 2000, "bot echo")
 	selfSent.LastEventCursor = 7002
 	selfSent.IsSelfSent = true
 	myself := textSegment("m3", 3000, "bot own")
 	myself.LastEventCursor = 7003
 	myself.IsMyself = true
-	legacy := textSegment("m0", 500, "pre-migration")
-	rc := RenderedContext{legacy, withCursor, selfSent, myself}
+	rc := RenderedContext{covered, selfSent, myself}
 
-	if got := LatestExternalEventCursor(rc, 0); got != 7001 {
-		t.Fatalf("LatestExternalEventCursor = %d, want 7001", got)
+	if HasUncoveredExternalEvent(rc, position) {
+		t.Fatal("covered and self segments must not report new external activity")
 	}
-	if got := LatestExternalEventCursor(rc, 7001); got != 0 {
-		t.Fatalf("expected no external events past 7001, got %d", got)
+	fresh := textSegment("m4", 4000, "new")
+	fresh.LastEventCursor = 7004
+	if !HasUncoveredExternalEvent(append(rc, fresh), position) {
+		t.Fatal("uncovered external segment must report new activity")
 	}
-	if got := LatestExternalEventCursor(RenderedContext{legacy}, 400); got != 500 {
-		t.Fatalf("legacy segment must gate by receivedAtMs, got %d", got)
+	degraded := textSegment("m5", 1600, "no cursor")
+	if !HasUncoveredExternalEvent(append(rc, degraded), position) {
+		t.Fatal("cursor-less segment past the source window must report new activity")
 	}
 }
 
-func TestHistoryDiscussCursorMapsSourceBoundary(t *testing.T) {
-	consumed := textSegment("m1", 1000, "consumed")
-	consumed.LastEventCursor = 7001
-	alsoConsumed := textSegment("m2", 1500, "consumed too")
-	alsoConsumed.LastEventCursor = 7002
-	pending := textSegment("m3", 3000, "pending")
-	pending.LastEventCursor = 7003
-	rc := RenderedContext{consumed, alsoConsumed, pending}
-
-	position := HistoryDiscussCursor(rc, 2000)
-	if position.EventCursor != 7002 || position.SourceCursor != 1500 {
-		t.Fatalf("position = %+v, want cursor 7002 source 1500", position)
-	}
-	if got := HistoryDiscussCursor(rc, 0); got != (DiscussCursorPosition{}) {
-		t.Fatalf("zero boundary must map to zero position, got %+v", got)
+func TestDiscussCursorPositionMerge(t *testing.T) {
+	merged := DiscussCursorPosition{EventCursor: 7001, SourceCursor: 900}.Merge(
+		DiscussCursorPosition{EventCursor: 6000, SourceCursor: 1500})
+	if merged.EventCursor != 7001 || merged.SourceCursor != 1500 {
+		t.Fatalf("merged = %+v, want component-wise max", merged)
 	}
 }
 

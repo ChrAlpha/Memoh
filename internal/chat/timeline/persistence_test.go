@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -66,5 +67,31 @@ func TestPersistEventStampsCursorIntoPayload(t *testing.T) {
 	}
 	if persisted.EventCursor != 424242 {
 		t.Fatalf("persisted payload cursor = %d, want 424242", persisted.EventCursor)
+	}
+}
+
+type failingInsertEventQueries struct {
+	fakeEventQueries
+}
+
+func (*failingInsertEventQueries) CreateSessionEvent(context.Context, sqlc.CreateSessionEventParams) (pgtype.UUID, error) {
+	return pgtype.UUID{}, errors.New("insert unavailable")
+}
+
+func TestPersistEventReturnsStampedEventOnInsertFailure(t *testing.T) {
+	queries := &failingInsertEventQueries{fakeEventQueries{nextCursor: 515151}}
+	store := NewEventStore(slog.New(slog.DiscardHandler), queries)
+
+	_, stamped, err := store.PersistEvent(context.Background(),
+		"77777777-7777-7777-7777-777777777777",
+		"66666666-6666-6666-6666-666666666666",
+		MessageEvent{SessionID: "66666666-6666-6666-6666-666666666666", MessageID: "m1", ReceivedAtMs: 1000},
+	)
+	if err == nil {
+		t.Fatal("expected insert failure")
+	}
+	message, ok := stamped.(MessageEvent)
+	if !ok || message.EventCursor != 515151 {
+		t.Fatalf("stamped event must survive insert failure, got %+v", stamped)
 	}
 }

@@ -1,6 +1,12 @@
 -- name: NextSessionEventCursor :one
 SELECT nextval('bot_session_event_cursor_seq')::bigint;
 
+-- name: EnsureSessionEventCursorFloor :one
+SELECT setval('bot_session_event_cursor_seq', GREATEST(
+  nextval('bot_session_event_cursor_seq'),
+  sqlc.arg(min_cursor)::bigint
+), true)::bigint;
+
 -- name: CreateSessionEvent :one
 INSERT INTO bot_session_events (
   bot_id,

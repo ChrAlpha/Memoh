@@ -108,12 +108,12 @@ func TestWasRecentlyMentionedSkipsSelfSent(t *testing.T) {
 	ownMention := timeline.RenderedSegment{ReceivedAtMs: 300, RepliesToMe: true, IsMyself: true}
 	rc := timeline.RenderedContext{selfMention, ownMention}
 
-	if wasRecentlyMentioned(rc, 0) {
+	if wasRecentlyMentioned(rc, timeline.DiscussCursorPosition{}) {
 		t.Fatal("self-sent mentions must not wake the bot")
 	}
 
 	external := timeline.RenderedSegment{ReceivedAtMs: 400, MentionsMe: true}
-	if !wasRecentlyMentioned(append(rc, external), 0) {
+	if !wasRecentlyMentioned(append(rc, external), timeline.DiscussCursorPosition{}) {
 		t.Fatal("external mention must wake the bot")
 	}
 }
@@ -139,7 +139,7 @@ func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
 		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
 	}}
 
-	plan, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, 0, artifacts)
+	plan, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts)
 	if !ok {
 		t.Fatal("expected a composed plan")
 	}
@@ -148,7 +148,7 @@ func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
 	}
 
 	uncovered := discussTriggerBuilder{}
-	planLive, ok := uncovered.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, 0, nil)
+	planLive, ok := uncovered.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, nil)
 	if !ok {
 		t.Fatal("expected a composed plan without artifacts")
 	}

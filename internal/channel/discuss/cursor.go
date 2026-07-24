@@ -25,14 +25,11 @@ func (t discussCursorTracker) Load(ctx context.Context, cfg DiscussSessionConfig
 }
 
 func (t discussCursorTracker) Advance(ctx context.Context, sess *discussSession, cfg DiscussSessionConfig, position timeline.DiscussCursorPosition, log *slog.Logger) {
-	gate := position.EventCursor
-	if gate == 0 {
-		gate = position.SourceCursor
-	}
-	if gate <= sess.lastProcessedCursor {
+	merged := sess.lastProcessed.Merge(position)
+	if merged == sess.lastProcessed {
 		return
 	}
-	sess.lastProcessedCursor = gate
+	sess.lastProcessed = merged
 	if t.store == nil {
 		return
 	}
@@ -42,9 +39,9 @@ func (t discussCursorTracker) Advance(ctx context.Context, sess *discussSession,
 		discussCursorScope(cfg),
 		strings.TrimSpace(cfg.RouteID),
 		strings.TrimSpace(cfg.CurrentPlatform),
-		position,
+		merged,
 	); err != nil {
-		log.Warn("discuss cursor persist failed", slog.Any("error", err), slog.Int64("cursor", gate))
+		log.Warn("discuss cursor persist failed", slog.Any("error", err), slog.Int64("cursor", merged.EventCursor), slog.Int64("source_cursor", merged.SourceCursor))
 	}
 }
 
@@ -62,13 +59,6 @@ func discussCursorScope(cfg DiscussSessionConfig) string {
 	default:
 		return "default"
 	}
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // anchorFromTRs returns the latest persisted turn request timestamp used to

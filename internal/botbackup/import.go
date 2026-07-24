@@ -1268,11 +1268,12 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				continue
 			}
 			if _, err := q.UpsertSessionDiscussCursor(ctx, sqlc.UpsertSessionDiscussCursorParams{
-				SessionID:      sessionID,
-				ScopeKey:       cursor.ScopeKey,
-				RouteID:        pgtype.UUID{},
-				Source:         cursor.Source,
-				ConsumedCursor: cursor.ConsumedCursor,
+				SessionID:           sessionID,
+				ScopeKey:            cursor.ScopeKey,
+				RouteID:             pgtype.UUID{},
+				Source:              cursor.Source,
+				ConsumedCursor:      cursor.ConsumedCursor,
+				ConsumedEventCursor: cursor.ConsumedEventCursor,
 			}); err != nil {
 				return fmt.Errorf("discuss cursor: %w", err)
 			}
@@ -1285,6 +1286,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		if err != nil {
 			return err
 		}
+		maxEventCursor := int64(0)
 		for _, item := range events {
 			sessionID := pgtype.UUID{}
 			if item.SessionID.Valid {
@@ -1306,6 +1308,14 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				return fmt.Errorf("session event: %w", err)
 			}
 			eventMap[item.ID.String()] = created
+			if cursor := restoredEventCursor(item.EventData); cursor > maxEventCursor {
+				maxEventCursor = cursor
+			}
+		}
+		if maxEventCursor > 0 {
+			if _, err := q.EnsureSessionEventCursorFloor(ctx, maxEventCursor); err != nil {
+				return fmt.Errorf("session event cursor floor: %w", err)
+			}
 		}
 	}
 
@@ -2146,4 +2156,16 @@ func stringMapFromAny(value any) map[string]string {
 	default:
 		return nil
 	}
+}
+
+// restoredEventCursor extracts the source deployment's event cursor from a
+// restored payload so the local sequence can be raised above it.
+func restoredEventCursor(eventData []byte) int64 {
+	var payload struct {
+		EventCursor int64 `json:"event_cursor"`
+	}
+	if err := json.Unmarshal(eventData, &payload); err != nil {
+		return 0
+	}
+	return payload.EventCursor
 }

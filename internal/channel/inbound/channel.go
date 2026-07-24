@@ -862,13 +862,13 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		event := AdaptInbound(pipelineMsg, sessionID, identity.ChannelIdentityID, identity.DisplayName)
 		if p.eventStore != nil {
 			eid, persistedEvent, persistErr := p.eventStore.PersistEvent(ctx, identity.BotID, sessionID, event)
+			event = persistedEvent
 			if persistErr != nil {
 				if p.logger != nil {
 					p.logger.Warn("persist pipeline event failed", slog.Any("error", persistErr))
 				}
 			} else {
 				eventID = eid
-				event = persistedEvent
 			}
 		}
 		latestRC = p.pipeline.PushEvent(sessionID, event)

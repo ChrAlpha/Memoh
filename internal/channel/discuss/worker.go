@@ -54,7 +54,7 @@ func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 		if len(latestRC) == 0 {
 			continue
 		}
-		if timeline.LatestExternalEventCursor(latestRC, sess.lastProcessedCursor) == 0 {
+		if !timeline.HasUncoveredExternalEvent(latestRC, sess.lastProcessed) {
 			continue
 		}
 		d.handleReply(ctx, sess, latestRC, log)
@@ -85,22 +85,18 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 	cfg := d.sessionConfigSnapshot(sess)
 	trs := d.history.Load(ctx, cfg.ThreadID)
 
-	// Cold-start / post-idle initialisation trusts the durable event cursor;
-	// legacy source-time state is mapped onto the replayed timeline so the
-	// seeded gate lives in the cursor domain.
-	if sess.lastProcessedCursor == 0 {
+	// Cold-start / post-idle initialisation combines the durable position with
+	// the persisted-reply anchor; each segment is then gated inside its own
+	// cursor or source-time domain.
+	if sess.lastProcessed == (timeline.DiscussCursorPosition{}) {
 		persisted := d.cursor.Load(ctx, cfg, log)
-		if persisted.EventCursor > 0 {
-			sess.lastProcessedCursor = persisted.EventCursor
-		} else if boundary := maxInt64(anchorFromTRs(trs), persisted.SourceCursor); boundary > 0 {
-			d.cursor.Advance(ctx, sess, cfg, timeline.HistoryDiscussCursor(rc, boundary), log)
-		}
+		sess.lastProcessed = persisted.Merge(timeline.DiscussCursorPosition{SourceCursor: anchorFromTRs(trs)})
 	}
-	if timeline.LatestExternalEventCursor(rc, sess.lastProcessedCursor) == 0 {
+	if !timeline.HasUncoveredExternalEvent(rc, sess.lastProcessed) {
 		return
 	}
 
-	plan, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessedCursor, d.loadArtifacts(ctx, cfg, log))
+	plan, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessed, d.loadArtifacts(ctx, cfg, log))
 	if !ok {
 		return
 	}

@@ -70,11 +70,11 @@ type DiscussDriver struct {
 }
 
 type discussSession struct {
-	config              DiscussSessionConfig
-	rcCh                chan timeline.RenderedContext
-	stopCh              chan struct{}
-	cancel              context.CancelFunc
-	lastProcessedCursor int64
+	config        DiscussSessionConfig
+	rcCh          chan timeline.RenderedContext
+	stopCh        chan struct{}
+	cancel        context.CancelFunc
+	lastProcessed timeline.DiscussCursorPosition
 }
 
 // NewDiscussDriver creates a new DiscussDriver.

@@ -18,13 +18,13 @@ type discussTurnPlan struct {
 
 // Build composes the durable timeline and persisted turn responses into the
 // pure StartTurn command consumed by Agent.
-func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.RenderedContext, trs []timeline.TurnResponseEntry, afterCursor int64, artifacts []timeline.CompactionArtifact) (discussTurnPlan, bool) {
+func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.RenderedContext, trs []timeline.TurnResponseEntry, after timeline.DiscussCursorPosition, artifacts []timeline.CompactionArtifact) (discussTurnPlan, bool) {
 	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
 		return discussTurnPlan{}, false
 	}
 
-	isMentioned := wasRecentlyMentioned(timeline.ActiveRenderedContext(rc, artifacts), afterCursor)
+	isMentioned := wasRecentlyMentioned(timeline.ActiveRenderedContext(rc, artifacts), after)
 	addressed := isMentioned || turn.IsPrivateConversationType(cfg.ConversationType)
 	msgs := make([]turn.DiscussMessage, 0, len(composed.Messages))
 	for _, message := range composed.Messages {
@@ -35,7 +35,7 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 		})
 	}
 	imageRefs := make([]turn.DiscussImageRef, 0)
-	for _, ref := range extractNewImageRefs(rc, afterCursor) {
+	for _, ref := range extractNewImageRefs(rc, after) {
 		imageRefs = append(imageRefs, turn.DiscussImageRef{
 			ContentHash: ref.ContentHash,
 			Mime:        ref.Mime,
@@ -71,22 +71,22 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 
 // extractNewImageRefs collects image references from external RC segments
 // that arrived after the last consumed cursor.
-func extractNewImageRefs(rc timeline.RenderedContext, afterCursor int64) []timeline.ImageAttachmentRef {
+func extractNewImageRefs(rc timeline.RenderedContext, after timeline.DiscussCursorPosition) []timeline.ImageAttachmentRef {
 	var refs []timeline.ImageAttachmentRef
 	for _, segment := range rc {
-		if segment.GateCursor() > afterCursor && !segment.IsMyself && !segment.IsSelfSent {
+		if !after.Covers(segment) && !segment.IsMyself && !segment.IsSelfSent {
 			refs = append(refs, segment.ImageRefs...)
 		}
 	}
 	return refs
 }
 
-func wasRecentlyMentioned(rc timeline.RenderedContext, afterCursor int64) bool {
+func wasRecentlyMentioned(rc timeline.RenderedContext, after timeline.DiscussCursorPosition) bool {
 	for _, segment := range rc {
 		if segment.IsMyself || segment.IsSelfSent {
 			continue
 		}
-		if segment.GateCursor() > afterCursor && (segment.MentionsMe || segment.RepliesToMe) {
+		if !after.Covers(segment) && (segment.MentionsMe || segment.RepliesToMe) {
 			return true
 		}
 	}
