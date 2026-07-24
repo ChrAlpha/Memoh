@@ -241,3 +241,49 @@ func TestCoversStillTriggersOnEditedSegments(t *testing.T) {
 		t.Fatal("a segment whose latest event postdates the watermark must not be covered")
 	}
 }
+
+// TestConsumedPositionCoversEverythingItConsumed pins the anti-loop invariant:
+// whatever a turn consumed must read as covered next round, or the driver would
+// re-trigger forever on its own context.
+func TestConsumedPositionCoversEverythingItConsumed(t *testing.T) {
+	cases := map[string]RenderedContext{
+		"cursor stamped": {
+			withCursor(textSegment("m1", 1000, "a"), 7001),
+			withCursor(textSegment("m2", 2000, "b"), 7002),
+		},
+		"cursor-less legacy": {
+			textSegment("m1", 1000, "a"),
+			textSegment("m2", 2000, "b"),
+		},
+		"mixed ingest": {
+			withCursor(textSegment("m1", 1000, "a"), 7001),
+			textSegment("m2", 2000, "b"),
+			withCursor(textSegment("m3", 3000, "c"), 7003),
+		},
+		"cursor order inverted against source order": {
+			withCursor(textSegment("m1", 2000, "late source, early cursor"), 7001),
+			withCursor(textSegment("m2", 1000, "early source, late cursor"), 7002),
+		},
+		"same millisecond": {
+			withCursor(textSegment("m1", 1000, "a"), 7001),
+			withCursor(textSegment("m2", 1000, "b"), 7002),
+		},
+	}
+
+	for name, rc := range cases {
+		position := ConsumedDiscussCursor(rc)
+		for i, seg := range rc {
+			if !position.Covers(seg) {
+				t.Fatalf("%s: segment %d (%+v) not covered by its own consumed position %+v", name, i, seg, position)
+			}
+		}
+		if HasUncoveredExternalEvent(rc, position) {
+			t.Fatalf("%s: consumed context must not report new external activity", name)
+		}
+	}
+}
+
+func withCursor(seg RenderedSegment, cursor int64) RenderedSegment {
+	seg.LastEventCursor = cursor
+	return seg
+}
