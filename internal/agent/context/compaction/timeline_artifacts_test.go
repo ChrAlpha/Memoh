@@ -44,9 +44,10 @@ func TestTimelineArtifactsProjectsFrontier(t *testing.T) {
 
 func TestTimelineArtifactsSkipsUnusableArtifacts(t *testing.T) {
 	artifacts := []Artifact{
-		{ID: "blank", Summary: "   "},
-		{ID: "malformed", Summary: "usable text", CoverageMalformed: true},
-		{ID: "ok", Summary: "kept"},
+		{ID: "blank", Summary: "   ", Coverage: []CoveredSource{{ExternalMessageID: "m0", CreatedAtMs: 1}}},
+		{ID: "malformed", Summary: "usable text", CoverageMalformed: true, Coverage: []CoveredSource{{ExternalMessageID: "m0", CreatedAtMs: 1}}},
+		{ID: "legacy-empty-coverage", Summary: "cannot replace anything"},
+		{ID: "ok", Summary: "kept", Coverage: []CoveredSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}}},
 	}
 
 	projected := TimelineArtifacts(artifacts)

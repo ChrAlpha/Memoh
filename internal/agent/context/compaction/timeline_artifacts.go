@@ -31,11 +31,13 @@ func (s TimelineArtifactSource) ActiveCompactionArtifacts(ctx context.Context, b
 
 // TimelineArtifacts projects active artifacts onto the timeline contract.
 // Artifacts without a trustworthy summary or coverage must not swallow their
-// original sources, so they are omitted entirely.
+// original sources, and legacy artifacts without any coverage cannot replace
+// anything — injecting them would duplicate the history they summarize — so
+// both are omitted entirely.
 func TimelineArtifacts(artifacts []Artifact) []timeline.CompactionArtifact {
 	projected := make([]timeline.CompactionArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		if artifact.CoverageMalformed || strings.TrimSpace(artifact.Summary) == "" {
+		if artifact.CoverageMalformed || len(artifact.Coverage) == 0 || strings.TrimSpace(artifact.Summary) == "" {
 			continue
 		}
 		sources := make([]timeline.CompactionSource, 0, len(artifact.Coverage))
