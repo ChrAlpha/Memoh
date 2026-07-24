@@ -7,8 +7,8 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
 func TestDiscussCollector_MergesRCAndTR(t *testing.T) {

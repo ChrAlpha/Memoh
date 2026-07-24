@@ -9,9 +9,8 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/conversation"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
 const (
@@ -260,7 +259,7 @@ func discussSegmentAttention(seg pipeline.RenderedSegment, turnConversationType 
 		ConversationType: conversationType,
 		MentionsBot:      seg.MentionsMe,
 		RepliesToBot:     seg.RepliesToMe,
-		UnknownTypeKind:  conversation.KindGroup,
+		UnknownTypeKind:  "group",
 	})
 }
 

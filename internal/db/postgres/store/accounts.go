@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/memohai/memoh/internal/db"
@@ -63,7 +65,7 @@ func (s *Store) CreateUser(ctx context.Context, input dbstore.CreateUserInput) (
 	if err != nil {
 		return dbstore.AccountRecord{}, err
 	}
-	return accountRecord(row), nil
+	return accountRecord(dbsqlc.TeamAccount(row)), nil
 }
 
 func (s *Store) CreateAccount(ctx context.Context, input dbstore.CreateAccountInput) (dbstore.AccountRecord, error) {
@@ -85,7 +87,7 @@ func (s *Store) CreateAccount(ctx context.Context, input dbstore.CreateAccountIn
 	if err != nil {
 		return dbstore.AccountRecord{}, err
 	}
-	return accountRecord(row), nil
+	return accountRecord(dbsqlc.TeamAccount(row)), nil
 }
 
 func (s *Store) UpdateLastLogin(ctx context.Context, accountID string) error {
@@ -103,16 +105,14 @@ func (s *Store) UpdateAdmin(ctx context.Context, input dbstore.UpdateAccountAdmi
 		return dbstore.AccountRecord{}, err
 	}
 	row, err := s.queries.UpdateAccountAdmin(ctx, dbsqlc.UpdateAccountAdminParams{
-		UserID:      userID,
-		Role:        input.Role,
-		DisplayName: optionalText(input.DisplayName),
-		AvatarUrl:   optionalText(input.AvatarURL),
-		IsActive:    input.IsActive,
+		UserID:   userID,
+		Role:     input.Role,
+		IsActive: optionalBool(input.IsActive),
 	})
 	if err != nil {
 		return dbstore.AccountRecord{}, mapQueryErr(err)
 	}
-	return accountRecord(row), nil
+	return accountRecord(dbsqlc.TeamAccount(row)), nil
 }
 
 func (s *Store) UpdateProfile(ctx context.Context, input dbstore.UpdateAccountProfileInput) (dbstore.AccountRecord, error) {
@@ -121,17 +121,32 @@ func (s *Store) UpdateProfile(ctx context.Context, input dbstore.UpdateAccountPr
 		return dbstore.AccountRecord{}, err
 	}
 	row, err := s.queries.UpdateAccountProfile(ctx, dbsqlc.UpdateAccountProfileParams{
-		ID:          userID,
-		DisplayName: optionalText(input.DisplayName),
-		AvatarUrl:   optionalText(input.AvatarURL),
-		Timezone:    input.Timezone,
-		IsActive:    input.IsActive,
-		Metadata:    []byte(input.Metadata),
+		UserID:       userID,
+		DisplayName:  optionalText(input.DisplayName),
+		AvatarUrl:    optionalText(input.AvatarURL),
+		Timezone:     input.Timezone,
+		Metadata:     []byte(input.Metadata),
+		TitleModelID: optionalUUID(input.TitleModelID),
 	})
 	if err != nil {
 		return dbstore.AccountRecord{}, mapQueryErr(err)
 	}
-	return accountRecord(row), nil
+	return accountRecord(dbsqlc.TeamAccount(row)), nil
+}
+
+func (s *Store) IsValidTitleModel(ctx context.Context, modelID string) (bool, error) {
+	id, err := db.ParseUUID(modelID)
+	if err != nil {
+		return false, nil
+	}
+	model, err := s.queries.GetModelByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return model.Type == "chat", nil
 }
 
 func (s *Store) UpdatePassword(ctx context.Context, input dbstore.UpdateAccountPasswordInput) error {
@@ -140,8 +155,8 @@ func (s *Store) UpdatePassword(ctx context.Context, input dbstore.UpdateAccountP
 		return err
 	}
 	_, err = s.queries.UpdateAccountPassword(ctx, dbsqlc.UpdateAccountPasswordParams{
-		ID:           userID,
 		PasswordHash: text(input.PasswordHash),
+		UserID:       userID,
 	})
 	return mapQueryErr(err)
 }
@@ -159,6 +174,10 @@ func mapQueryErr(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return db.ErrNotFound
 	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == "team_members_last_active_admin" {
+		return db.ErrLastActiveAdmin
+	}
 	return err
 }
 
@@ -170,7 +189,14 @@ func optionalText(value string) pgtype.Text {
 	return pgtype.Text{String: value, Valid: value != ""}
 }
 
-func accountRecords(rows []dbsqlc.User) []dbstore.AccountRecord {
+func optionalBool(value *bool) pgtype.Bool {
+	if value == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *value, Valid: true}
+}
+
+func accountRecords(rows []dbsqlc.TeamAccount) []dbstore.AccountRecord {
 	items := make([]dbstore.AccountRecord, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, accountRecord(row))
@@ -178,19 +204,21 @@ func accountRecords(rows []dbsqlc.User) []dbstore.AccountRecord {
 	return items
 }
 
-func accountRecord(row dbsqlc.User) dbstore.AccountRecord {
+func accountRecord(row dbsqlc.TeamAccount) dbstore.AccountRecord {
 	rec := dbstore.AccountRecord{
-		ID:              row.ID.String(),
-		Username:        row.Username.String,
-		Email:           row.Email.String,
-		Role:            row.Role,
-		DisplayName:     row.DisplayName.String,
-		AvatarURL:       row.AvatarUrl.String,
-		Timezone:        row.Timezone,
-		PasswordHash:    row.PasswordHash.String,
-		HasPasswordHash: row.PasswordHash.Valid,
-		IsActive:        row.IsActive,
-		Metadata:        string(row.Metadata),
+		ID:               row.ID.String(),
+		Username:         row.Username.String,
+		Email:            row.Email.String,
+		Role:             row.Role,
+		DisplayName:      row.DisplayName.String,
+		AvatarURL:        row.AvatarUrl.String,
+		Timezone:         row.Timezone,
+		PasswordHash:     row.PasswordHash.String,
+		HasPasswordHash:  row.PasswordHash.Valid,
+		IsActive:         row.IsActive.Bool,
+		PrincipalActive:  row.PrincipalIsActive,
+		MembershipActive: row.MembershipIsActive,
+		Metadata:         string(row.Metadata),
 	}
 	if row.CreatedAt.Valid {
 		rec.CreatedAt = row.CreatedAt.Time
@@ -198,8 +226,25 @@ func accountRecord(row dbsqlc.User) dbstore.AccountRecord {
 	if row.UpdatedAt.Valid {
 		rec.UpdatedAt = row.UpdatedAt.Time
 	}
+	if row.JoinedAt.Valid {
+		rec.JoinedAt = row.JoinedAt.Time
+	}
+	if row.MembershipUpdatedAt.Valid {
+		rec.MembershipUpdatedAt = row.MembershipUpdatedAt.Time
+	}
 	if row.LastLoginAt.Valid {
 		rec.LastLoginAt = row.LastLoginAt.Time
 	}
+	if row.TitleModelID.Valid {
+		rec.TitleModelID = uuid.UUID(row.TitleModelID.Bytes).String()
+	}
 	return rec
+}
+
+func optionalUUID(value string) pgtype.UUID {
+	parsed, err := db.ParseUUID(value)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return parsed
 }

@@ -72,8 +72,8 @@ func (p *Provider) Delete(ctx context.Context, key string) error {
 	return client.DeleteFile(ctx, containerPath, false)
 }
 
-// AccessPath returns the container-internal path for a storage key.
-func (*Provider) AccessPath(key string) string {
+// AccessPath returns the stable path in the workspace filesystem namespace.
+func (*Provider) AccessPath(_ context.Context, key string) string {
 	_, sub := splitRoutingKey(key)
 	return attachmentpkg.MediaAccessPath(sub)
 }
@@ -83,7 +83,7 @@ func (p *Provider) OpenContainerFile(ctx context.Context, botID, containerPath s
 	subPath, ok := attachmentpkg.DataSubpath(containerPath)
 	if !ok {
 		if !filepath.IsAbs(strings.TrimSpace(containerPath)) {
-			return nil, fmt.Errorf("path must start with %s/ or be an absolute local workspace path", attachmentpkg.DataMountPath(""))
+			return nil, fmt.Errorf("path must start with %s/ or be an absolute workspace path", attachmentpkg.DataMountPath(""))
 		}
 		client, err := p.clients.MCPClient(ctx, botID)
 		if err != nil {

@@ -44,7 +44,6 @@ type BotRemoteRuntimeBindingRecord struct {
 	ID             string
 	BotID          string
 	RuntimeID      string
-	WorkspacePath  string
 	IsPrimary      bool
 	ToolApproval   JSON
 	RuntimeName    string
@@ -56,7 +55,7 @@ type BotRemoteRuntimeBindingRecord struct {
 }
 
 type BotRemoteRuntimeBindingStore interface {
-	CreateOrUpdateMount(ctx context.Context, botID, runtimeID, workspacePath string) (BotRemoteRuntimeBindingRecord, error)
+	CreateOrUpdateMount(ctx context.Context, botID, runtimeID string) (BotRemoteRuntimeBindingRecord, error)
 	ListMounts(ctx context.Context, botID string) ([]BotRemoteRuntimeBindingRecord, error)
 	GetMount(ctx context.Context, botID, targetID string) (BotRemoteRuntimeBindingRecord, error)
 	GetPrimaryMount(ctx context.Context, botID string) (BotRemoteRuntimeBindingRecord, error)
@@ -66,20 +65,25 @@ type BotRemoteRuntimeBindingStore interface {
 }
 
 type AccountRecord struct {
-	ID              string
-	Username        string
-	Email           string
-	Role            string
-	DisplayName     string
-	AvatarURL       string
-	Timezone        string
-	PasswordHash    string
-	HasPasswordHash bool
-	IsActive        bool
-	Metadata        string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	LastLoginAt     time.Time
+	ID                  string
+	Username            string
+	Email               string
+	Role                string
+	DisplayName         string
+	AvatarURL           string
+	Timezone            string
+	PasswordHash        string
+	HasPasswordHash     bool
+	IsActive            bool
+	PrincipalActive     bool
+	MembershipActive    bool
+	Metadata            string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	JoinedAt            time.Time
+	MembershipUpdatedAt time.Time
+	LastLoginAt         time.Time
+	TitleModelID        string
 }
 
 type CreateUserInput struct {
@@ -100,20 +104,18 @@ type CreateAccountInput struct {
 }
 
 type UpdateAccountAdminInput struct {
-	UserID      string
-	Role        string
-	DisplayName string
-	AvatarURL   string
-	IsActive    bool
+	UserID   string
+	Role     string
+	IsActive *bool
 }
 
 type UpdateAccountProfileInput struct {
-	UserID      string
-	DisplayName string
-	AvatarURL   string
-	Timezone    string
-	IsActive    bool
-	Metadata    string
+	UserID       string
+	DisplayName  string
+	AvatarURL    string
+	Timezone     string
+	Metadata     string
+	TitleModelID string
 }
 
 type UpdateAccountPasswordInput struct {
@@ -132,6 +134,7 @@ type AccountStore interface {
 	UpdateLastLogin(ctx context.Context, accountID string) error
 	UpdateAdmin(ctx context.Context, input UpdateAccountAdminInput) (AccountRecord, error)
 	UpdateProfile(ctx context.Context, input UpdateAccountProfileInput) (AccountRecord, error)
+	IsValidTitleModel(ctx context.Context, modelID string) (bool, error)
 	UpdatePassword(ctx context.Context, input UpdateAccountPasswordInput) error
 	RemoveMember(ctx context.Context, userID string) error
 }
@@ -143,6 +146,7 @@ type BotStore interface {
 	UpdateProfile(ctx context.Context, botID ID, input Patch) (Record, error)
 	UpdateOwner(ctx context.Context, botID ID, ownerUserID ID) (Record, error)
 	UpdateStatus(ctx context.Context, botID ID, status string) (Record, error)
+	TouchActivity(ctx context.Context, botID ID) error
 	Delete(ctx context.Context, botID ID) error
 }
 
@@ -233,23 +237,10 @@ type SessionRepository interface {
 	GetByID(ctx context.Context, sessionID ID) (Record, error)
 	ListByBot(ctx context.Context, botID ID) ([]Record, error)
 	ListByRoute(ctx context.Context, routeID ID) ([]Record, error)
-	GetActiveForRoute(ctx context.Context, routeID ID) (Record, error)
-	SetRouteActiveSession(ctx context.Context, routeID ID, sessionID ID) error
 	UpdateTitle(ctx context.Context, sessionID ID, title string) (Record, error)
 	UpdateMetadata(ctx context.Context, sessionID ID, metadata JSON) (Record, error)
 	Touch(ctx context.Context, sessionID ID) error
 	SoftDelete(ctx context.Context, sessionID ID) error
-}
-
-type ChatRepository interface {
-	Create(ctx context.Context, input Input) (Record, error)
-	GetByID(ctx context.Context, chatID ID) (Record, error)
-	GetReadAccess(ctx context.Context, chatID ID, userID ID) (Record, error)
-	ListVisibleByBotAndUser(ctx context.Context, botID ID, userID ID) ([]Record, error)
-	ListThreadsByParent(ctx context.Context, parentID ID) ([]Record, error)
-	Delete(ctx context.Context, chatID ID) error
-	GetSettings(ctx context.Context, chatID ID) (Record, error)
-	UpsertSettings(ctx context.Context, chatID ID, input Input) (Record, error)
 }
 
 type PipelineSessionEventRepository interface {
@@ -297,7 +288,6 @@ type ChannelRouteRepository interface {
 	Delete(ctx context.Context, routeID ID) error
 	UpdateReplyTarget(ctx context.Context, routeID ID, target string) (Record, error)
 	UpdateMetadata(ctx context.Context, routeID ID, metadata JSON) (Record, error)
-	TouchChat(ctx context.Context, routeID ID) error
 }
 
 type BotACLStore interface {

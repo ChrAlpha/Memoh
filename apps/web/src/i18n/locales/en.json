@@ -96,9 +96,42 @@
     "bot": {
       "name_taken": "This name is already taken."
     },
+    "channel": {
+      "runtime_unavailable": "The channel service could not be reached. Please try again shortly."
+    },
+    "profile": {
+      "request_invalid": "The profile update request is invalid.",
+      "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
+      "update_failed": "The profile could not be updated."
+    },
+    "provider": {
+      "name_taken": "A provider with this name already exists."
+    },
+    "provider_template": {
+      "not_found": "This provider template is no longer available.",
+      "domain_invalid": "This provider template type is invalid.",
+      "domain_mismatch": "This provider template cannot be used here.",
+      "operation_failed": "The provider template operation failed.",
+      "request_invalid": "The provider configuration is invalid."
+    },
+    "search_provider": {
+      "type_conflict": "This web search provider has already been configured."
+    },
     "workspace": {
       "unreachable": "The workspace could not be reached.",
+      "image_incompatible": "This workspace image is incompatible. Rebuild it from the current Memoh workspace image and try again.",
+      "template_bootstrap_failed": "The workspace files could not be initialized. Please try rebuilding the workspace.",
       "display_prepare_failed": "Display preparation failed."
+    },
+    "acp": {
+      "runtime_not_found": "That Agent runtime is no longer available. It will be started again.",
+      "model_selection_unsupported": "This external agent does not support model selection.",
+      "model_id_required": "Choose a model and try again.",
+      "model_unavailable": "The selected model is no longer available for this external agent.",
+      "reasoning_selection_unsupported": "This external agent does not support reasoning effort selection.",
+      "reasoning_effort_required": "Choose a reasoning effort and try again.",
+      "reasoning_effort_unavailable": "The selected reasoning effort is no longer available for this external agent.",
+      "config_update_failed": "The external agent could not apply the selected settings. Please retry."
     }
   },
   "auth": {
@@ -272,6 +305,9 @@
     "avatarUrl": "Avatar URL",
     "timezone": "Timezone",
     "timezonePlaceholder": "e.g. America/New_York",
+    "titleModel": "Title Model",
+    "titleModelDescription": "Use this model to generate titles for sessions owned by your Bots.",
+    "titleModelPlaceholder": "Disabled (use the first message)",
     "saveProfile": "Save Changes",
     "profileUpdated": "Profile Updated",
     "profileUpdateFailed": "Failed to update profile",
@@ -424,14 +460,9 @@
     "lastLogin": "Last login",
     "never": "Never",
     "toggleStatus": "Toggle status for {name}",
-    "resetPassword": "Reset password",
-    "resetPasswordFor": "Reset password for {name}",
-    "resetPasswordDescription": "Set a new password for {name}.",
-    "resetPasswordSuccess": "Password reset",
-    "resetPasswordFailed": "Failed to reset password",
     "removeMember": "Remove member",
     "removeMemberFor": "Remove {name}",
-    "removeConfirm": "Remove {name}? This removes their workspace login.",
+    "removeConfirm": "Remove {name} from this workspace? Their credentials will be kept so access can be restored later.",
     "removeSuccess": "Member removed",
     "removeFailed": "Failed to remove member",
     "createSuccess": "Member created",
@@ -528,11 +559,18 @@
     "inputPlaceholder": "Ask anything…",
     "readonlyHint": "This chat is read-only",
     "readonlyPlaceholder": "This chat is read-only. Sending messages is disabled.",
-    "composerActions": "Add files or switch agent",
+    "composerActions": "Add files, switch Agent, or select Computer",
     "attachmentLines": "{count} lines",
     "pastedBadge": "Pasted",
     "pastedViewerTitle": "Pasted content",
     "agent": "Agent",
+    "computers": "Computers",
+    "computerDefault": "Default",
+    "computerDefaultStatus": "Default · {status}",
+    "computerLoading": "Loading computers...",
+    "computerLoadFailed": "Couldn’t load computers",
+    "computerNone": "No computers available",
+    "computerUnavailable": "Unavailable computer",
     "attachFiles": "Attach files",
     "send": "Send",
     "sendFailed": "Message failed to send",
@@ -573,6 +611,22 @@
     "forwardedFrom": "Forwarded from {sender}",
     "replyPhoto": "Photo",
     "unknownMessage": "message",
+    "approval": {
+      "region": "Approval request",
+      "moreInQueue": "+{count} more",
+      "action": {
+        "exec": "Run a command",
+        "write": "Write a file",
+        "edit": "Edit a file",
+        "applyPatch": "Apply a patch",
+        "read": "Read a file",
+        "list": "List directory contents",
+        "fallback": "Run {tool}"
+      }
+    },
+    "panel": {
+      "regionLabel": "Pending items"
+    },
     "tools": {
       "read": "Read",
       "write": "Write",
@@ -690,6 +744,7 @@
       "userInputExpired": "expired",
       "userInputPlaceholder": "Answer",
       "userInputCustomOption": "Other…",
+      "userInputTellMore": "Tell the bot more…",
       "submitUserInput": "Submit",
       "cancelUserInput": "Cancel",
       "userInputConnectionLost": "Connection lost. Reconnect and try again.",
@@ -778,12 +833,12 @@
     "agentCodex": "Codex",
     "agentSwitchFailed": "Failed to switch agent",
     "modelSwitchFailed": "Failed to switch model",
+    "reasoningSwitchFailed": "Failed to switch reasoning effort",
     "agentSwitchTimeout": "Switching is taking too long. Try again.",
     "modelOptions": "Options",
     "modelEffort": "Effort",
     "noProject": "Not in a project",
     "noModels": "No models available",
-    "acpAttachmentsUnsupported": "Attachments are not supported in ACP sessions yet.",
     "defaultACPLoading": "Default Agent is still loading. Try again in a moment.",
     "defaultACPNoWorkspaceExec": "Default Agent is enabled, but you do not have permission to run workspace commands.",
     "defaultACPAgentMissing": "Default Agent is enabled, but no agent is selected.",
@@ -806,6 +861,9 @@
       "displayArgsInvalid": "The external agent display arguments are invalid.",
       "runtimeStartFailed": "External agent runtime failed to start.",
       "runtimeBusy": "External agent runtime is already processing a turn for this session.",
+      "attachmentInvalid": "The attachment is invalid. Please attach it again.",
+      "attachmentUnavailable": "The attachment could not be made available to the external agent. Please attach it again.",
+      "imageInputUnsupported": "This external agent cannot read the attached image.",
       "invalidChatRuntime": "The selected chat runtime is invalid."
     },
     "sessionFilterAll": "All",
@@ -1072,6 +1130,8 @@
     "customProvider": "Custom Provider",
     "apiKey": "API Key",
     "apiKeyPlaceholder": "Enter API key",
+    "templateNotConfigured": "Not configured",
+    "requiredField": "{field} is required",
     "nameRequired": "Name is required",
     "clientTypeRequired": "Client type is required",
     "apiKeyRequired": "API key is required",
@@ -1182,6 +1242,7 @@
       "yandex": "Yandex"
     },
     "fetchProviderNames": {
+      "native": "Native",
       "jina": "Jina Reader",
       "cloudflare_markdown": "Cloudflare Markdown"
     }
@@ -1191,6 +1252,8 @@
     "add": "Add Memory Provider",
     "empty": "No memory providers",
     "provider": "Provider Type",
+    "providerRequired": "Provider type is required",
+    "nameRequired": "Name is required",
     "searchPlaceholder": "Search providers...",
     "emptyTitle": "No Memory Providers",
     "emptyDescription": "Add a memory provider to enable long-term memory for your bots",
@@ -1543,6 +1606,11 @@
       "loadFailed": "Couldn’t load tool approval",
       "loadFailedDescription": "Check the server connection and try again.",
       "saveFailed": "Couldn’t save tool approval",
+      "saveSuccess": "Tool approval changes saved",
+      "partialSaveFailed": "Some changes were saved, but {count} location failed. Its draft was kept.",
+      "enabled": "Tool approval",
+      "enabledDescription": "Allow, Ask, and Deny rules are enforced for this location.",
+      "disabledDescription": "File and command tools run directly. Saved modes and rules are retained.",
       "target": {
         "title": "Location",
         "label": "Workspace or computer",
@@ -1589,6 +1657,8 @@
       "bypassHint": "Calls matching any of these patterns are auto-approved without prompting.",
       "mustReview": "Must review (deny list)",
       "mustReviewHint": "Calls matching any of these patterns always trigger approval, even when this tool is otherwise auto-approved.",
+      "pathSyntaxHint": "Separate entries with a new line or comma. Path rules support the existing glob, basename, and /** matching.",
+      "commandSyntaxHint": "Separate entries with a new line or comma. Use an executable name, exact command, or * and ? wildcards.",
       "placeholders": {
         "filePaths": "/data/**\n/tmp/**",
         "fileReview": "/etc/**\n.env*",
@@ -1646,7 +1716,7 @@
       "basicInfo": "Basic Info",
       "basicInfoDesc": "Name and avatar",
       "workspace": "Workspace",
-      "workspaceDesc": "Isolated or local",
+      "workspaceDesc": "Isolated workspace",
       "security": "Security Policy",
       "securityDesc": "Access control",
       "model": "Model",
@@ -1674,15 +1744,6 @@
         "applyingSettings": "Applying model & memory settings"
       }
     },
-    "workspaceBackend": "Workspace",
-    "workspaceBackendHint": "Isolated workspaces keep bot files and commands separate. Local workspaces run directly on this computer.",
-    "workspaceBackends": {
-      "container": "Isolated",
-      "local": "Local folder"
-    },
-    "localWorkspacePath": "Local workspace folder",
-    "localWorkspacePathPlaceholder": "Choose a folder on this computer",
-    "localWorkspaceWarning": "Local workspaces run with host user permissions and have full access to host files and commands",
     "editBot": "Edit Bot",
     "deleteConfirm": "Are you sure you want to delete this bot?",
     "renameSuccess": "Bot name updated",
@@ -1922,7 +1983,6 @@
       "defaultBadge": "Default",
       "nativeWorkspace": "Server Workspace",
       "serverDescription": "This Bot’s existing Workspace on the Server.",
-      "folderSummary": "Starting folder: {path}",
       "thisComputerOff": "Use this computer",
       "thisComputerOffDescription": "Turn on access under Computers first, then add this computer here.",
       "openComputerSettings": "Open computer settings",
@@ -1930,14 +1990,10 @@
       "computerDescription": "Choose a computer already made available under Computers.",
       "selectComputer": "Select a computer",
       "noAvailableComputers": "No additional computers are available. Make one available under Computers first.",
-      "path": "Starting folder",
-      "pathDescription": "Relative to the folder shared with Memoh. Leave blank to use {path}; use . for the shared folder itself.",
       "unknownComputer": "Unavailable computer",
       "addTitle": "Add a computer to this Bot",
-      "editTitle": "Edit this computer",
-      "mountDescription": "Choose a computer and the folder where this Bot starts file and command work.",
+      "mountDescription": "Choose a computer this Bot may use for files and commands.",
       "addSuccess": "Computer added to Bot",
-      "updateSuccess": "Computer settings updated",
       "saveFailed": "Couldn’t save the computer",
       "removeFromBot": "Remove from Bot",
       "deleteTitle": "Remove this computer from the Bot?",
@@ -2277,17 +2333,12 @@
       "chatLanguage": "Language",
       "chatLanguagePlaceholder": "e.g., English, zh-CN",
       "chatModel": "Chat Model",
-      "externalAgentRuntime": "Default external Agent",
-      "externalAgentRuntimeDescription": "Start new local chats with the selected ACP Agent instead of the built-in chat model.",
-      "externalAgentRuntimeUnavailable": "Enable and configure an ACP Agent before using it as the default chat runtime.",
-      "externalAgentChatModelRequired": "Choose a Chat Model before using an external Agent as the default chat runtime.",
-      "externalAgent": "External Agent",
-      "externalAgentDescription": "Used for new local chats. Existing conversations keep their current runtime.",
-      "externalAgentUnavailableSaved": "The saved default Agent is unavailable. Turn off Default external Agent or choose an available Agent before saving.",
-      "externalAgentPlaceholder": "Select Agent",
-      "titleModel": "Title Model",
-      "titleModelDescription": "Pick a lightweight model to automatically title conversations. Leave empty to disable.",
-      "titleModelPlaceholder": "Disabled (no auto title)",
+      "chatModelDescription": "Used by the Memoh Agent.",
+      "chatModelPlaceholder": "Select model",
+      "defaultAgent": "Default Agent",
+      "defaultAgentDescription": "Used for new local chats. Existing conversations keep their current Agent.",
+      "defaultAgentUnavailable": "Unavailable Agent",
+      "defaultAgentUnavailableDescription": "The current default Agent is unavailable. Choose Memoh or an available Agent before saving.",
       "searchProvider": "Web Search",
       "searchProviderPlaceholder": "Select web search",
       "fetchProvider": "Web Fetch",
@@ -2383,7 +2434,7 @@
       "acpClaudeOAuthExchange": "Save Token",
       "acpClaudeOAuthExchangeFailed": "Failed to save Claude token",
       "acpSelfModeHint": "Uses the ACP agent you've already configured inside the workspace runtime (e.g. an existing login).",
-      "acpHermesSelfModeHint": "Uses the Hermes profile already configured in this workspace. In local mode this can share the host ~/.hermes credentials; use API Key setup for bot-scoped credentials.",
+      "acpHermesSelfModeHint": "Uses the Hermes profile already configured in this workspace. Use API Key setup for Memoh-managed bot credentials.",
       "acpHermesSelfModeConfirm": "Use self-managed Hermes",
       "acpHermesProviderPlaceholder": "Select a provider",
       "acpHermesProviderGemini": "Gemini (Google AI Studio)",
@@ -2667,7 +2718,7 @@
       "deleteFailed": "Failed to remove platform",
       "webhookCallback": "WebHook Callback URL",
       "webhookCallbackHint": "Use this URL as the webhook callback URL in the platform console.",
-      "lineWebhookCallbackHint": "Use this URL in the LINE Developers Messaging API webhook settings. The base URL must be a public HTTPS origin that routes /channels/... to the Memoh server.",
+      "lineWebhookCallbackHint": "Use this URL in the LINE Developers Messaging API webhook settings. The base URL must be a public HTTPS origin that routes /channels/... to the Memoh Channel service.",
       "wechatOAWebhookCallbackHint": "Use this URL as the callback URL in the WeChat Official Account platform.",
       "webhookCallbackPending": "Save this platform configuration to generate the callback URL.",
       "webhookCallbackPublicBasePending": "The platform configuration is saved. Configure a public HTTPS webhook base or wait for the tunnel to become ready.",
@@ -3250,8 +3301,7 @@
         "oauthExchange": "Submit",
         "oauthSkip": "Skip for now",
         "oauthSuccess": "Authorization successful",
-        "oauthExchangeFailed": "Authorization failed, please try again",
-        "selfRequiresLocalWorkspace": "{agent} self-managed setup requires a local workspace. Switch the workspace backend to Local, or go back and choose API Key setup."
+        "oauthExchangeFailed": "Authorization failed, please try again"
       }
     },
     "im": {

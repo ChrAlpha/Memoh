@@ -15,6 +15,7 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/memohai/memoh/internal/db/postgres/store"
+	"github.com/memohai/memoh/internal/workspace"
 )
 
 // fakeRow implements pgx.Row with a custom scan function.
@@ -182,7 +183,7 @@ func TestCreateRejectsUnknownACLPreset(t *testing.T) {
 	db := &fakeDBTX{
 		queryRowFunc: func(_ context.Context, sql string, _ ...any) pgx.Row {
 			switch {
-			case strings.Contains(sql, "FROM users") && strings.Contains(sql, "WHERE id = $1"):
+			case strings.Contains(sql, "FROM users") && strings.Contains(sql, "id = $1"):
 				return &fakeRow{scanFunc: func(_ ...any) error { return nil }}
 			case strings.Contains(sql, "INSERT INTO bots"):
 				createCalled = true
@@ -213,7 +214,7 @@ func TestCreateTreatsStoreNotFoundAsMissingOwner(t *testing.T) {
 	dbtx := &fakeDBTX{
 		queryRowFunc: func(_ context.Context, sql string, _ ...any) pgx.Row {
 			switch {
-			case strings.Contains(sql, "FROM users") && strings.Contains(sql, "WHERE id = $1"):
+			case strings.Contains(sql, "FROM users") && strings.Contains(sql, "id = $1"):
 				return &fakeRow{scanFunc: func(_ ...any) error { return db.ErrNotFound }}
 			case strings.Contains(sql, "INSERT INTO bots"):
 				createCalled = true
@@ -339,6 +340,38 @@ func TestRunCreateLifecycleRecordsSetupFailureAndLeavesBotReady(t *testing.T) {
 	}
 	if strings.Contains(message, "user:pass") || strings.Contains(message, "abc123") {
 		t.Fatalf("message should redact credentials and tokens, got %q", message)
+	}
+}
+
+func TestRunCreateLifecycleReturnsContractErrorAfterLeavingBotReady(t *testing.T) {
+	botUUID := mustParseUUID("00000000-0000-0000-0000-000000000002")
+	botID := botUUID.String()
+	status := ""
+
+	db := &fakeDBTX{
+		queryRowFunc: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
+		},
+		execFunc: func(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(query, "UPDATE bots") && strings.Contains(query, "SET status = $2") {
+				status = args[1].(string)
+			}
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	setupErr := errors.Join(
+		workspace.ErrWorkspaceImageIncompatible,
+		errors.New("missing /opt/memoh/toolkit/bin/node"),
+	)
+	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
+	svc.SetContainerLifecycle(&fakeContainerLifecycle{setupErr: setupErr})
+
+	err := svc.runCreateLifecycle(context.Background(), botID)
+	if !errors.Is(err, workspace.ErrWorkspaceImageIncompatible) {
+		t.Fatalf("run create lifecycle error = %v, want image incompatibility", err)
+	}
+	if status != BotStatusReady {
+		t.Fatalf("bot status = %q, want %q", status, BotStatusReady)
 	}
 }
 

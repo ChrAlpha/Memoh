@@ -11,9 +11,30 @@ import (
 type Code string
 
 const (
-	CodeBotNameTaken                  Code = "bot.name_taken"
-	CodeWorkspaceUnreachable          Code = "workspace.unreachable"
-	CodeWorkspaceDisplayPrepareFailed Code = "workspace.display_prepare_failed"
+	CodeBotNameTaken                     Code = "bot.name_taken"
+	CodeChannelRuntimeUnavailable        Code = "channel.runtime_unavailable"
+	CodeWorkspaceUnreachable             Code = "workspace.unreachable"
+	CodeWorkspaceImageIncompatible       Code = "workspace.image_incompatible"
+	CodeWorkspaceTemplateBootstrapFailed Code = "workspace.template_bootstrap_failed"
+	CodeWorkspaceDisplayPrepareFailed    Code = "workspace.display_prepare_failed"
+	CodeProviderTemplateNotFound         Code = "provider_template.not_found"
+	CodeProviderTemplateDomainInvalid    Code = "provider_template.domain_invalid"
+	CodeProviderTemplateDomainMismatch   Code = "provider_template.domain_mismatch"
+	CodeProviderTemplateOperationFailed  Code = "provider_template.operation_failed"
+	CodeProviderNameTaken                Code = "provider.name_taken"
+	CodeProviderTemplateRequestInvalid   Code = "provider_template.request_invalid"
+	CodeSearchProviderTypeConflict       Code = "search_provider.type_conflict"
+	CodeProfileRequestInvalid            Code = "profile.request_invalid"
+	CodeProfileTitleModelInvalid         Code = "profile.title_model_invalid"
+	CodeProfileUpdateFailed              Code = "profile.update_failed"
+	CodeACPRuntimeNotFound               Code = "acp.runtime_not_found"
+	CodeACPModelSelectionUnsupported     Code = "acp.model_selection_unsupported"
+	CodeACPModelIDRequired               Code = "acp.model_id_required"
+	CodeACPModelUnavailable              Code = "acp.model_unavailable"
+	CodeACPReasoningUnsupported          Code = "acp.reasoning_selection_unsupported"
+	CodeACPReasoningEffortRequired       Code = "acp.reasoning_effort_required"
+	CodeACPReasoningUnavailable          Code = "acp.reasoning_effort_unavailable"
+	CodeACPConfigUpdateFailed            Code = "acp.config_update_failed"
 )
 
 // Definition is the single catalog entry for a public error contract.
@@ -33,15 +54,99 @@ var catalog = map[Code]Definition{
 		Detail:      "This name is already taken.",
 		AllowedArgs: []string{"field"},
 	},
+	CodeChannelRuntimeUnavailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "The channel service could not be reached.",
+	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The workspace could not be reached.",
+	},
+	CodeWorkspaceImageIncompatible: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "The workspace image is incompatible with this version of Memoh.",
+	},
+	CodeWorkspaceTemplateBootstrapFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The workspace files could not be initialized.",
 	},
 	// Distinct from workspace.unreachable: preparation started but broke
 	// mid-flight, so "could not be reached" would mislead the user.
 	CodeWorkspaceDisplayPrepareFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
+	},
+	CodeProviderTemplateNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Detail:     "The provider template was not found.",
+	},
+	CodeProviderTemplateDomainInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The provider template domain is invalid.",
+	},
+	CodeProviderTemplateDomainMismatch: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The provider template cannot be used for this provider type.",
+	},
+	CodeProviderTemplateOperationFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The provider template operation failed.",
+	},
+	CodeProviderNameTaken: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This provider name is already taken.",
+	},
+	CodeProviderTemplateRequestInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The provider template request is invalid.",
+	},
+	CodeSearchProviderTypeConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This web search provider is already configured.",
+	},
+	CodeProfileTitleModelInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The selected title model is unavailable or is not a chat model.",
+	},
+	CodeProfileRequestInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The profile update request is invalid.",
+	},
+	CodeProfileUpdateFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The profile could not be updated.",
+	},
+	CodeACPRuntimeNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Detail:     "The ACP runtime is no longer available.",
+	},
+	CodeACPModelSelectionUnsupported: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "This external agent does not support model selection.",
+	},
+	CodeACPModelIDRequired: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "Choose a model and try again.",
+	},
+	CodeACPModelUnavailable: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The selected model is no longer available for this external agent.",
+	},
+	CodeACPReasoningUnsupported: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "This external agent does not support reasoning effort selection.",
+	},
+	CodeACPReasoningEffortRequired: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "Choose a reasoning effort and try again.",
+	},
+	CodeACPReasoningUnavailable: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The selected reasoning effort is no longer available for this external agent.",
+	},
+	CodeACPConfigUpdateFailed: {
+		HTTPStatus: http.StatusBadGateway,
+		Detail:     "The external agent could not apply the selected settings. Please retry.",
 	},
 }
 

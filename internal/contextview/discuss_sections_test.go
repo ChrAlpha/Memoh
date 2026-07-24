@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	agentpkg "github.com/memohai/memoh/internal/agent"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
-func discussSectionsInputFixture() pipeline.DiscussContextInput {
-	return pipeline.DiscussContextInput{
+func discussSectionsInputFixture() DiscussContextInput {
+	return DiscussContextInput{
 		RC: pipeline.RenderedContext{
 			renderedTextSegment(100, "first rc"),
 			renderedTextSegment(300, "second rc"),

@@ -93,9 +93,42 @@
     "bot": {
       "name_taken": "この名前はすでに使用されています。"
     },
+    "channel": {
+      "runtime_unavailable": "Channel サービスに接続できません。しばらくしてからもう一度お試しください。"
+    },
+    "profile": {
+      "request_invalid": "プロフィール更新リクエストが無効です。",
+      "title_model_invalid": "選択したタイトルModelは利用できないか、チャットModelではありません。",
+      "update_failed": "プロフィールを更新できませんでした。"
+    },
+    "provider": {
+      "name_taken": "同じ名前のプロバイダーがすでに存在します。"
+    },
+    "provider_template": {
+      "not_found": "このプロバイダーテンプレートは利用できなくなりました。",
+      "domain_invalid": "プロバイダーテンプレートの種類が無効です。",
+      "domain_mismatch": "このプロバイダーテンプレートはここでは使用できません。",
+      "operation_failed": "プロバイダーテンプレートの操作に失敗しました。",
+      "request_invalid": "プロバイダー設定が無効です。"
+    },
+    "search_provider": {
+      "type_conflict": "このWeb検索プロバイダーはすでに設定されています。"
+    },
     "workspace": {
       "unreachable": "Workspace に接続できません。しばらくしてからもう一度お試しください。",
+      "image_incompatible": "Workspace イメージに互換性がありません。最新の Memoh Workspace イメージを基に再構築してください。",
+      "template_bootstrap_failed": "Workspace ファイルを初期化できませんでした。Workspace を再構築してからもう一度お試しください。",
       "display_prepare_failed": "ディスプレイの準備に失敗しました。しばらくしてからもう一度お試しください。"
+    },
+    "acp": {
+      "runtime_not_found": "この Agent ランタイムは利用できなくなりました。再起動します。",
+      "model_selection_unsupported": "この外部Agentはモデルの切り替えに対応していません。",
+      "model_id_required": "モデルを選択して、もう一度お試しください。",
+      "model_unavailable": "選択したモデルはこの外部Agentで利用できなくなりました。",
+      "reasoning_selection_unsupported": "この外部Agentは推論強度の選択に対応していません。",
+      "reasoning_effort_required": "推論強度を選択して、もう一度お試しください。",
+      "reasoning_effort_unavailable": "選択した推論強度はこの外部Agentで利用できなくなりました。",
+      "config_update_failed": "外部Agentに選択した設定を適用できませんでした。もう一度お試しください。"
     }
   },
   "auth": {
@@ -269,6 +302,9 @@
     "avatarUrl": "アバターURL",
     "timezone": "タイムゾーン",
     "timezonePlaceholder": "例: America/New_York",
+    "titleModel": "タイトルModel",
+    "titleModelDescription": "所有するすべてのBotのセッションタイトルをこのModelで生成します。",
+    "titleModelPlaceholder": "無効（最初のメッセージを使用）",
     "saveProfile": "変更を保存",
     "profileUpdated": "プロフィールが更新されました",
     "profileUpdateFailed": "プロフィールの更新に失敗しました",
@@ -421,15 +457,10 @@
     "lastLogin": "最終ログイン",
     "never": "一度もない",
     "toggleStatus": "{name} のステータスを切り替えます",
-    "resetPassword": "パスワードをリセットする",
-    "resetPasswordFor": "{name}のパスワードをリセットする",
-    "resetPasswordDescription": "{name} に新しいパスワードを設定します。",
-    "resetPasswordSuccess": "パスワードのリセット",
-    "resetPasswordFailed": "パスワードのリセットに失敗しました",
-    "removeMember": "メンバーの削除",
-    "removeMemberFor": "{name} を削除します",
-    "removeConfirm": "{name}を削除しますか？このユーザーはワークスペースにログインできなくなります。",
-    "removeSuccess": "メンバーが削除されました",
+    "removeMember": "メンバーを削除",
+    "removeMemberFor": "{name} を削除",
+    "removeConfirm": "{name} をこのワークスペースから削除しますか？認証情報は保持されるため、後でアクセスを復元できます。",
+    "removeSuccess": "メンバーを削除しました",
     "removeFailed": "メンバーの削除に失敗しました",
     "createSuccess": "メンバーが作成されました",
     "createFailed": "メンバーの作成に失敗しました",
@@ -500,8 +531,15 @@
     "inputPlaceholder": "質問を入力してください…",
     "readonlyHint": "このチャットは読み取り専用です",
     "readonlyPlaceholder": "このチャットは読み取り専用です。メッセージの送信は無効になっています。",
-    "composerActions": "ファイルの追加またはエージェントの切り替え",
+    "composerActions": "ファイルの追加、エージェントの切り替え、またはコンピューターの選択",
     "agent": "エージェント",
+    "computers": "コンピューター",
+    "computerDefault": "デフォルト",
+    "computerDefaultStatus": "デフォルト · {status}",
+    "computerLoading": "コンピューターを読み込み中...",
+    "computerLoadFailed": "コンピューターを読み込めませんでした",
+    "computerNone": "利用できるコンピューターがありません",
+    "computerUnavailable": "利用できないコンピューター",
     "attachFiles": "ファイルを添付する",
     "send": "送信",
     "sendFailed": "メッセージの送信に失敗しました",
@@ -542,6 +580,22 @@
     "forwardedFrom": "{sender} から転送されました",
     "replyPhoto": "写真",
     "unknownMessage": "メッセージ",
+    "approval": {
+      "region": "承認リクエスト",
+      "moreInQueue": "あと {count} 件",
+      "action": {
+        "exec": "コマンドを実行",
+        "write": "ファイルを書き込み",
+        "edit": "ファイルを編集",
+        "applyPatch": "パッチを適用",
+        "read": "ファイルを読み込み",
+        "list": "ディレクトリの内容を一覧",
+        "fallback": "{tool} を実行"
+      }
+    },
+    "panel": {
+      "regionLabel": "保留中の項目"
+    },
     "tools": {
       "read": "読む",
       "write": "書く",
@@ -659,6 +713,7 @@
       "userInputExpired": "期限切れ",
       "userInputPlaceholder": "答え",
       "userInputCustomOption": "他の…",
+      "userInputTellMore": "Bot にもっと伝える…",
       "submitUserInput": "送信",
       "cancelUserInput": "キャンセル",
       "userInputConnectionLost": "接続が失われました。再接続してもう一度お試しください。",
@@ -747,9 +802,9 @@
     "agentCodex": "コーデックス",
     "agentSwitchFailed": "エージェントの切り替えに失敗しました",
     "modelSwitchFailed": "モデルの切り替えに失敗しました",
+    "reasoningSwitchFailed": "推論強度の切り替えに失敗しました",
     "noProject": "プロジェクトに含まれていません",
     "noModels": "利用可能なモデルはありません",
-    "acpAttachmentsUnsupported": "ACPセッションでは、添付ファイルはまだサポートされていません。",
     "defaultACPLoading": "デフォルトAgentはまだ読み込み中です。少し待ってからもう一度お試しください。",
     "defaultACPNoWorkspaceExec": "デフォルトAgentは有効ですが、Workspaceコマンドを実行する権限がありません。",
     "defaultACPAgentMissing": "デフォルトAgentは有効ですが、Agentが選択されていません。",
@@ -772,6 +827,9 @@
       "displayArgsInvalid": "外部Agentの表示引数が無効です。",
       "runtimeStartFailed": "外部Agent runtimeの起動に失敗しました。",
       "runtimeBusy": "外部Agent runtimeはこのSessionの前のターンを処理中です。",
+      "attachmentInvalid": "添付ファイルは無効です。もう一度添付してください。",
+      "attachmentUnavailable": "外部Agentが添付ファイルにアクセスできません。もう一度添付してください。",
+      "imageInputUnsupported": "この外部Agentは添付画像を読み取れません。",
       "invalidChatRuntime": "選択されたチャットruntimeが無効です。"
     },
     "sessionFilterAll": "全て",
@@ -1024,6 +1082,8 @@
     "customProvider": "カスタムプロバイダー",
     "apiKey": "APIキー",
     "apiKeyPlaceholder": "APIキーを入力",
+    "templateNotConfigured": "未設定",
+    "requiredField": "{field}は必須です",
     "nameRequired": "名前を入力してください",
     "clientTypeRequired": "クライアントの種類を選択してください",
     "apiKeyRequired": "APIキーを入力してください",
@@ -1134,6 +1194,7 @@
       "yandex": "ヤンデックス"
     },
     "fetchProviderNames": {
+      "native": "ネイティブ取得",
       "jina": "Jina Reader",
       "cloudflare_markdown": "Cloudflare Markdown"
     }
@@ -1143,6 +1204,8 @@
     "add": "メモリプロバイダーを追加",
     "empty": "メモリプロバイダーがありません",
     "provider": "プロバイダーの種類",
+    "providerRequired": "プロバイダーの種類を選択してください",
+    "nameRequired": "名前を入力してください",
     "searchPlaceholder": "プロバイダーを検索...",
     "emptyTitle": "メモリプロバイダーがありません",
     "emptyDescription": "メモリプロバイダーを追加して、Bot の長期メモリを有効にします",
@@ -1525,6 +1588,11 @@
       "loadFailed": "Tool の承認設定を読み込めませんでした",
       "loadFailedDescription": "Server への接続を確認して、もう一度お試しください。",
       "saveFailed": "Tool の承認設定を保存できませんでした",
+      "saveSuccess": "Tool の承認設定を保存しました",
+      "partialSaveFailed": "一部の変更は保存されましたが、{count} 件の場所で失敗しました。失敗した下書きは保持されています。",
+      "enabled": "Tool の承認",
+      "enabledDescription": "この場所では許可、確認、拒否のルールが適用されます。",
+      "disabledDescription": "ファイルとコマンドの Tool は直接実行されます。保存済みのモードとルールは保持されます。",
       "target": {
         "title": "承認対象",
         "label": "Workspace またはコンピューター",
@@ -1567,6 +1635,8 @@
       "bypassHint": "これらのパターンのいずれかに一致する呼び出しは、確認なしで自動承認されます。",
       "mustReview": "レビュー必須 (拒否リスト)",
       "mustReviewHint": "これらのパターンのいずれかに一致する呼び出しは、このツールが自動承認されている場合でも常に承認を要求します。",
+      "pathSyntaxHint": "改行またはカンマで区切ります。既存の glob、basename、/** マッチングを使用できます。",
+      "commandSyntaxHint": "改行またはカンマで区切ります。実行ファイル名、完全なコマンド、* と ? のワイルドカードを使用できます。",
       "placeholders": {
         "filePaths": "/data/**\n/tmp/**",
         "fileReview": "/etc/**\n.env*",
@@ -1625,7 +1695,7 @@
       "basicInfo": "基本情報",
       "basicInfoDesc": "名前とアバター",
       "workspace": "Workspace",
-      "workspaceDesc": "分離環境またはローカル",
+      "workspaceDesc": "分離 Workspace",
       "security": "セキュリティポリシー",
       "securityDesc": "アクセス制御",
       "model": "Model",
@@ -1653,15 +1723,6 @@
         "applyingSettings": "ModelとMemory設定の適用"
       }
     },
-    "workspaceBackend": "Workspace",
-    "workspaceBackendHint": "分離 Workspace では Bot のファイルとコマンドがローカル環境から分離されます。ローカル Workspace はこのコンピューター上で直接動作します。",
-    "workspaceBackends": {
-      "container": "分離 Workspace",
-      "local": "ローカルフォルダー"
-    },
-    "localWorkspacePath": "ローカルWorkspaceフォルダー",
-    "localWorkspacePathPlaceholder": "このコンピュータ上のフォルダを選択してください",
-    "localWorkspaceWarning": "ローカル Workspaceはホスト ユーザー権限で実行され、ホスト ファイルとコマンドへの完全なアクセス権を持ちます。",
     "editBot": "Botの編集",
     "deleteConfirm": "このBotを削除してもよろしいですか?",
     "renameSuccess": "Bot名が更新されました",
@@ -1901,7 +1962,6 @@
       "defaultBadge": "既定",
       "nativeWorkspace": "Server Workspace",
       "serverDescription": "Server 上にあるこの Bot の既存 Workspace です。",
-      "folderSummary": "開始フォルダー: {path}",
       "thisComputerOff": "このコンピューターを使う",
       "thisComputerOffDescription": "先に「コンピューター」で使用を許可し、その後ここで追加します。",
       "openComputerSettings": "コンピューター設定を開く",
@@ -1909,14 +1969,10 @@
       "computerDescription": "「コンピューター」で使用可能にしたコンピューターから選びます。",
       "selectComputer": "コンピューターを選択",
       "noAvailableComputers": "追加できるコンピューターがありません。先に「コンピューター」で接続または使用を許可してください。",
-      "path": "開始フォルダー",
-      "pathDescription": "Memoh と共有するフォルダーからの相対位置です。空欄の場合は {path}、. を入力すると共有フォルダー自体を使用します。",
       "unknownComputer": "利用できないコンピューター",
       "addTitle": "この Bot にコンピューターを追加",
-      "editTitle": "このコンピューターを編集",
-      "mountDescription": "コンピューターと、この Bot がファイル操作やコマンド実行を開始するフォルダーを選びます。",
+      "mountDescription": "この Bot がファイル操作とコマンド実行に使用できるコンピューターを選びます。",
       "addSuccess": "Bot にコンピューターを追加しました",
-      "updateSuccess": "コンピューターの設定を更新しました",
       "saveFailed": "コンピューターを保存できませんでした",
       "removeFromBot": "Bot から削除",
       "deleteTitle": "この Bot からコンピューターを削除しますか?",
@@ -2265,17 +2321,12 @@
       "chatLanguage": "言語",
       "chatLanguagePlaceholder": "例: 英語、zh-CN",
       "chatModel": "チャットModel",
-      "externalAgentRuntime": "デフォルト外部Agent",
-      "externalAgentRuntimeDescription": "新しいローカルチャットでは、内蔵チャットModelではなく選択したACP Agentを使用します。",
-      "externalAgentRuntimeUnavailable": "デフォルトのチャット実行環境にするには、先にACP Agentを有効化して構成してください。",
-      "externalAgentChatModelRequired": "外部Agentをデフォルトのチャット実行環境にする前に、チャットModelを選択してください。",
-      "externalAgent": "外部Agent",
-      "externalAgentDescription": "新しいローカルチャットにのみ適用されます。既存の会話は現在の実行環境を保持します。",
-      "externalAgentUnavailableSaved": "保存済みのデフォルトAgentは現在利用できません。保存する前にデフォルト外部Agentをオフにするか、利用可能なAgentを選択してください。",
-      "externalAgentPlaceholder": "Agentを選択",
-      "titleModel": "タイトルModel",
-      "titleModelDescription": "会話に自動的にタイトルを付けるには、軽量のModelを選択してください。無効にするには空のままにします。",
-      "titleModelPlaceholder": "無効 (自動タイトルなし)",
+      "chatModelDescription": "Memoh Agentが使用するModelです。",
+      "chatModelPlaceholder": "Modelを選択",
+      "defaultAgent": "デフォルトAgent",
+      "defaultAgentDescription": "新しいローカルチャットにのみ適用されます。既存の会話では現在のAgentが引き続き使用されます。",
+      "defaultAgentUnavailable": "利用できないAgent",
+      "defaultAgentUnavailableDescription": "現在のデフォルトAgentは利用できません。保存する前にMemohまたは利用可能なAgentを選択してください。",
       "searchProvider": "ウェブ検索",
       "searchProviderPlaceholder": "ウェブ検索を選択",
       "fetchProvider": "ウェブフェッチ",
@@ -2371,7 +2422,7 @@
       "acpClaudeOAuthExchange": "Tokenの保存",
       "acpClaudeOAuthExchangeFailed": "クロードTokenの保存に失敗しました",
       "acpSelfModeHint": "を使用します。ACPWorkspace ランタイム内ですでに構成されているエージェント (既存のログインなど)。",
-      "acpHermesSelfModeHint": "このWorkspaceで構成済みの Hermes Profile を使用します。ローカルモードではホストの ~/.hermes 認証情報を共有する場合があります。Botごとに認証情報を分離するには API Key 設定を使用してください。",
+      "acpHermesSelfModeHint": "この Workspace で構成済みの Hermes Profile を使用します。Memoh で Bot の認証情報を管理する場合は API Key 設定を使用してください。",
       "acpHermesSelfModeConfirm": "自己管理の Hermes を使用",
       "acpHermesProviderPlaceholder": "Providerを選択",
       "acpHermesProviderGemini": "Gemini（Google AI Studio）",
@@ -2653,7 +2704,7 @@
       "deleteFailed": "プラットフォームの削除に失敗しました",
       "webhookCallback": "WebフックコールバックURL",
       "webhookCallbackHint": "これを使用してくださいURLWebhook コールバックとしてURLプラットフォームコンソールで。",
-      "lineWebhookCallbackHint": "この URL を LINE Developers の Messaging API Webhook 設定に入力します。Base URL は公開 HTTPS で、/channels/... を Memoh server にルーティングする必要があります。",
+      "lineWebhookCallbackHint": "この URL を LINE Developers の Messaging API Webhook 設定に入力します。Base URL は公開 HTTPS で、/channels/... を Memoh Channel サービスにルーティングする必要があります。",
       "wechatOAWebhookCallbackHint": "この URL を WeChat Official Account のコールバック URL として設定します。",
       "webhookCallbackPending": "このプラットフォーム構成を保存すると、コールバック URL が生成されます。",
       "webhookCallbackPublicBasePending": "プラットフォーム構成は保存済みです。公開 HTTPS webhook base を設定するか、トンネルが準備完了になるまで待ってください。",
@@ -3215,8 +3266,7 @@
         "oauthExchange": "提出する",
         "oauthSkip": "今のところスキップしてください",
         "oauthSuccess": "認可成功",
-        "oauthExchangeFailed": "認証に失敗しました。もう一度お試しください。",
-        "selfRequiresLocalWorkspace": "{agent} のセルフ管理設定にはローカルワークスペースが必要です。ワークスペースのバックエンドをローカルに切り替えるか、前の手順に戻って API Key 設定を選択してください。"
+        "oauthExchangeFailed": "認証に失敗しました。もう一度お試しください。"
       }
     },
     "im": {

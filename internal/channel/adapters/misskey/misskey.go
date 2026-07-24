@@ -14,6 +14,7 @@ import (
 
 	"github.com/memohai/memoh/internal/channel"
 	"github.com/memohai/memoh/internal/channel/common"
+	"github.com/memohai/memoh/internal/redact"
 	"github.com/memohai/memoh/internal/textutil"
 )
 
@@ -175,7 +176,7 @@ func (a *MisskeyAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 	if err != nil {
 		return nil, err
 	}
-	channel.SetIMErrorSecrets("misskey:"+cfg.ID, mkCfg.AccessToken)
+	redact.SetSecrets("misskey:"+cfg.ID, mkCfg.AccessToken)
 
 	// Fetch self info for mention detection.
 	me, err := getMe(ctx, mkCfg)
@@ -439,6 +440,10 @@ func (*MisskeyAdapter) buildInboundMessage(me *meResponse, note misskeyNote) (ch
 			}
 		}
 	}
+	// Replying to the bot's own note is directed at the bot even without an
+	// explicit @-mention; without this flag, plain-text ask_user replies in
+	// non-private visibility are silently dropped by isDirectedAtBot.
+	isReplyToBot := me != nil && note.Reply != nil && strings.TrimSpace(note.Reply.UserID) == me.ID
 
 	return channel.InboundMessage{
 		Channel: Type,
@@ -462,9 +467,10 @@ func (*MisskeyAdapter) buildInboundMessage(me *meResponse, note misskeyNote) (ch
 		ReceivedAt: receivedAt,
 		Source:     "misskey",
 		Metadata: map[string]any{
-			"is_mentioned": isMentioned,
-			"visibility":   note.Visibility,
-			"note_id":      note.ID,
+			"is_mentioned":    isMentioned,
+			"is_reply_to_bot": isReplyToBot,
+			"visibility":      note.Visibility,
+			"note_id":         note.ID,
 		},
 	}, true
 }

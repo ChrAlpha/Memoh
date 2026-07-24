@@ -7,8 +7,8 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	agentpkg "github.com/memohai/memoh/internal/agent"
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 )
 
 func TestHookContextCollectorProducesBoundedWorkspaceFrag(t *testing.T) {

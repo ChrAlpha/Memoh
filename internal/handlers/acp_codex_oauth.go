@@ -15,7 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/memohai/memoh/internal/accounts"
-	"github.com/memohai/memoh/internal/acpclient"
+	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/providers"
 )
@@ -249,9 +249,8 @@ func (h *ACPCodexOAuthHandler) requireBotAccess(c echo.Context) (string, string,
 }
 
 func (h *ACPCodexOAuthHandler) ensureManagedWorkspace(ctx context.Context, botID string) error {
-	// Both container and local (desktop BYOK) workspaces can host managed Codex
-	// auth. For local, the credentials are written under the bot-scoped
-	// CODEX_HOME (workspace .codex dir) rather than the user's real ~/.codex.
+	// Managed Codex auth is stored in the bot-scoped CODEX_HOME inside the
+	// workspace rather than a server host account.
 	if _, err := h.acpWorkspace.WorkspaceInfo(ctx, botID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}

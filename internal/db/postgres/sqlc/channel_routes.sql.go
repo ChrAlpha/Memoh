@@ -27,7 +27,6 @@ VALUES (
 )
 RETURNING
   id,
-  $9::uuid AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -50,12 +49,10 @@ type CreateChatRouteParams struct {
 	ConversationType pgtype.Text `json:"conversation_type"`
 	ReplyTarget      pgtype.Text `json:"reply_target"`
 	Metadata         []byte      `json:"metadata"`
-	ChatID           pgtype.UUID `json:"chat_id"`
 }
 
 type CreateChatRouteRow struct {
 	ID               pgtype.UUID        `json:"id"`
-	ChatID           pgtype.UUID        `json:"chat_id"`
 	BotID            pgtype.UUID        `json:"bot_id"`
 	Platform         string             `json:"platform"`
 	ChannelConfigID  pgtype.UUID        `json:"channel_config_id"`
@@ -79,12 +76,10 @@ func (q *Queries) CreateChatRoute(ctx context.Context, arg CreateChatRouteParams
 		arg.ConversationType,
 		arg.ReplyTarget,
 		arg.Metadata,
-		arg.ChatID,
 	)
 	var i CreateChatRouteRow
 	err := row.Scan(
 		&i.ID,
-		&i.ChatID,
 		&i.BotID,
 		&i.Platform,
 		&i.ChannelConfigID,
@@ -104,12 +99,14 @@ const deleteChatRoute = `-- name: DeleteChatRoute :exec
 WITH route_sessions AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
-  WHERE session.route_id = $1
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.route_id = $1
   ORDER BY session.id
   FOR UPDATE
 )
 DELETE FROM bot_channel_routes route
-WHERE route.id = $1
+WHERE route.team_id = public.memoh_current_team_id()
+  AND route.id = $1
   AND (SELECT count(*) FROM route_sessions) >= 0
 `
 
@@ -121,7 +118,6 @@ func (q *Queries) DeleteChatRoute(ctx context.Context, id pgtype.UUID) error {
 const findChatRoute = `-- name: FindChatRoute :one
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -134,7 +130,8 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
   AND channel_type = $2
   AND external_conversation_id = $3
   AND COALESCE(external_thread_id, '') = COALESCE($4, '')
@@ -150,7 +147,6 @@ type FindChatRouteParams struct {
 
 type FindChatRouteRow struct {
 	ID               pgtype.UUID        `json:"id"`
-	ChatID           pgtype.UUID        `json:"chat_id"`
 	BotID            pgtype.UUID        `json:"bot_id"`
 	Platform         string             `json:"platform"`
 	ChannelConfigID  pgtype.UUID        `json:"channel_config_id"`
@@ -174,7 +170,6 @@ func (q *Queries) FindChatRoute(ctx context.Context, arg FindChatRouteParams) (F
 	var i FindChatRouteRow
 	err := row.Scan(
 		&i.ID,
-		&i.ChatID,
 		&i.BotID,
 		&i.Platform,
 		&i.ChannelConfigID,
@@ -193,7 +188,6 @@ func (q *Queries) FindChatRoute(ctx context.Context, arg FindChatRouteParams) (F
 const getChatRouteByID = `-- name: GetChatRouteByID :one
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -206,12 +200,11 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE id = $1
+WHERE team_id = public.memoh_current_team_id() AND id = $1
 `
 
 type GetChatRouteByIDRow struct {
 	ID               pgtype.UUID        `json:"id"`
-	ChatID           pgtype.UUID        `json:"chat_id"`
 	BotID            pgtype.UUID        `json:"bot_id"`
 	Platform         string             `json:"platform"`
 	ChannelConfigID  pgtype.UUID        `json:"channel_config_id"`
@@ -230,7 +223,6 @@ func (q *Queries) GetChatRouteByID(ctx context.Context, id pgtype.UUID) (GetChat
 	var i GetChatRouteByIDRow
 	err := row.Scan(
 		&i.ID,
-		&i.ChatID,
 		&i.BotID,
 		&i.Platform,
 		&i.ChannelConfigID,
@@ -246,10 +238,51 @@ func (q *Queries) GetChatRouteByID(ctx context.Context, id pgtype.UUID) (GetChat
 	return i, err
 }
 
+const listChatRouteThreadProjectionsByIDs = `-- name: ListChatRouteThreadProjectionsByIDs :many
+SELECT
+  id,
+  conversation_type,
+  metadata
+FROM bot_channel_routes
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
+  AND id = ANY($2::uuid[])
+`
+
+type ListChatRouteThreadProjectionsByIDsParams struct {
+	BotID    pgtype.UUID   `json:"bot_id"`
+	RouteIds []pgtype.UUID `json:"route_ids"`
+}
+
+type ListChatRouteThreadProjectionsByIDsRow struct {
+	ID               pgtype.UUID `json:"id"`
+	ConversationType pgtype.Text `json:"conversation_type"`
+	Metadata         []byte      `json:"metadata"`
+}
+
+func (q *Queries) ListChatRouteThreadProjectionsByIDs(ctx context.Context, arg ListChatRouteThreadProjectionsByIDsParams) ([]ListChatRouteThreadProjectionsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listChatRouteThreadProjectionsByIDs, arg.BotID, arg.RouteIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChatRouteThreadProjectionsByIDsRow
+	for rows.Next() {
+		var i ListChatRouteThreadProjectionsByIDsRow
+		if err := rows.Scan(&i.ID, &i.ConversationType, &i.Metadata); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChatRoutes = `-- name: ListChatRoutes :many
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -262,13 +295,12 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
 ORDER BY created_at ASC
 `
 
 type ListChatRoutesRow struct {
 	ID               pgtype.UUID        `json:"id"`
-	ChatID           pgtype.UUID        `json:"chat_id"`
 	BotID            pgtype.UUID        `json:"bot_id"`
 	Platform         string             `json:"platform"`
 	ChannelConfigID  pgtype.UUID        `json:"channel_config_id"`
@@ -282,8 +314,8 @@ type ListChatRoutesRow struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
-func (q *Queries) ListChatRoutes(ctx context.Context, chatID pgtype.UUID) ([]ListChatRoutesRow, error) {
-	rows, err := q.db.Query(ctx, listChatRoutes, chatID)
+func (q *Queries) ListChatRoutes(ctx context.Context, botID pgtype.UUID) ([]ListChatRoutesRow, error) {
+	rows, err := q.db.Query(ctx, listChatRoutes, botID)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +325,6 @@ func (q *Queries) ListChatRoutes(ctx context.Context, chatID pgtype.UUID) ([]Lis
 		var i ListChatRoutesRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.ChatID,
 			&i.BotID,
 			&i.Platform,
 			&i.ChannelConfigID,
@@ -320,7 +351,8 @@ const setRouteActiveSession = `-- name: SetRouteActiveSession :exec
 WITH destination_session AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
-  WHERE session.id = $1::uuid
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.id = $1::uuid
   FOR KEY SHARE
 )
 UPDATE bot_channel_routes route
@@ -329,7 +361,8 @@ SET active_session_id = COALESCE(
       $1::uuid
     ),
     updated_at = now()
-WHERE route.id = $2
+WHERE route.team_id = public.memoh_current_team_id()
+  AND route.id = $2
 `
 
 type SetRouteActiveSessionParams struct {
@@ -345,7 +378,7 @@ func (q *Queries) SetRouteActiveSession(ctx context.Context, arg SetRouteActiveS
 const updateChatRouteMetadata = `-- name: UpdateChatRouteMetadata :exec
 UPDATE bot_channel_routes
 SET metadata = $1, updated_at = now()
-WHERE id = $2
+WHERE team_id = public.memoh_current_team_id() AND id = $2
 `
 
 type UpdateChatRouteMetadataParams struct {
@@ -361,7 +394,7 @@ func (q *Queries) UpdateChatRouteMetadata(ctx context.Context, arg UpdateChatRou
 const updateChatRouteReplyTarget = `-- name: UpdateChatRouteReplyTarget :exec
 UPDATE bot_channel_routes
 SET default_reply_target = $1, updated_at = now()
-WHERE id = $2
+WHERE team_id = public.memoh_current_team_id() AND id = $2
 `
 
 type UpdateChatRouteReplyTargetParams struct {

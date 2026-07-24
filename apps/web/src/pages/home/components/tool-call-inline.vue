@@ -167,38 +167,14 @@
         />
       </Capsule>
     </CollapseSection>
-
-    <div
-      v-if="canRespondApproval"
-      class="mt-1.5 ml-5 flex items-center gap-2"
-    >
-      <Button
-        size="sm"
-        class="bg-success hover:bg-success/90 text-success-foreground"
-        @click="handleApproval('approve')"
-      >
-        {{ t('chat.tools.approve', 'Allow') }}
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        class="hover:bg-destructive hover:text-destructive-foreground hover:border-destructive"
-        @click="handleApproval('reject')"
-      >
-        {{ t('chat.tools.reject', 'Reject') }}
-      </Button>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
-import { Button } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import type { ToolCallBlock } from '@/store/chat-list'
-import { useChatStore } from '@/store/chat-list'
 import { openInFileManagerKey } from '../composables/useFileManagerProvider'
-import { useChatViewTarget } from '../composables/useChatViewContext'
 import {
   getToolDisplay,
   isDirPathTool,
@@ -213,8 +189,6 @@ import Capsule from './tool-detail/capsule.vue'
 
 const props = defineProps<{ block: ToolCallBlock, inGroup?: boolean }>()
 const { t } = useI18n()
-const chatStore = useChatStore()
-const chatViewTarget = useChatViewTarget()
 
 const openInFileManager = inject(openInFileManagerKey, undefined)
 
@@ -328,6 +302,11 @@ const actionClass = computed(() => {
   return ''
 })
 
+// Pending approvals are answered from the composer-dock panel (see
+// composer-panel.vue), never here — this row keeps only the read-only status
+// label so history still shows which call needed one and how it ended. The
+// old inline Allow/Reject also carried raw color classes that bypassed the
+// Button variants, so nothing of it is worth keeping.
 const approvalLabel = computed(() => {
   const approval = props.block.approval
   if (!approval?.approval_id) return ''
@@ -359,11 +338,6 @@ function userInputStatusLabel(status: string) {
   }
 }
 
-const canRespondApproval = computed(() => {
-  const approval = props.block.approval
-  return Boolean(approval?.approval_id && approval.status === 'pending' && approval.can_approve !== false)
-})
-
 const filePath = computed(() => {
   if (!isFilePathTool(props.block.toolName)) return ''
   const input = props.block.input as Record<string, unknown> | undefined
@@ -382,11 +356,5 @@ function toggleOpen() {
 function handleOpenInFiles() {
   if (!filePath.value || !openInFileManager) return
   openInFileManager(filePath.value, isDirPathTool(props.block.toolName))
-}
-
-function handleApproval(decision: 'approve' | 'reject') {
-  const approval = props.block.approval
-  if (!approval) return
-  void chatStore.respondToolApproval(approval, decision, chatViewTarget.value)
 }
 </script>

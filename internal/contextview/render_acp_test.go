@@ -9,7 +9,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 func TestACPRenderer_ChatModePassThroughMarkdown(t *testing.T) {

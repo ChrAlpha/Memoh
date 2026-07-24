@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 type StablePrefixPlacer struct{}

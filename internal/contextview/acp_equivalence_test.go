@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
 // The discuss-ACP prompt renders from selected fragments. For streams where
@@ -35,7 +35,7 @@ func TestDiscussACPPromptMatchesLegacyForAlternatingStreams(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			builder := &DiscussSDKContextBuilder{}
-			got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{
+			got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{
 				RC:             rc,
 				TRs:            trs,
 				CompactSummary: tc.summary,
@@ -67,7 +67,7 @@ func TestDiscussACPPromptKeepsAdjacentSegmentsAtomized(t *testing.T) {
 		{ReceivedAtMs: 150, Content: []pipeline.RenderedContentPiece{{Type: "text", Text: "second burst"}}},
 	}
 	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{RC: rc})
+	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{RC: rc})
 	if err != nil {
 		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestDiscussACPPromptEmptyInput(t *testing.T) {
 	t.Parallel()
 
 	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{})
+	got, err := builder.BuildDiscussACPPrompt(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{})
 	if err != nil {
 		t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
 	}

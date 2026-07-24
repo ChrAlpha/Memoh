@@ -12,7 +12,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 const compactionSystemPrompt = `You are a conversation summarizer. Given a conversation history, produce a concise summary that preserves:

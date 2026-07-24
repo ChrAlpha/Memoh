@@ -15,7 +15,8 @@ const clearBotRemoteRuntimePrimary = `-- name: ClearBotRemoteRuntimePrimary :exe
 UPDATE bot_remote_runtime_bindings
 SET is_primary = FALSE,
     updated_at = CASE WHEN is_primary THEN now() ELSE updated_at END
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
 `
 
 func (q *Queries) ClearBotRemoteRuntimePrimary(ctx context.Context, botID pgtype.UUID) error {
@@ -24,31 +25,33 @@ func (q *Queries) ClearBotRemoteRuntimePrimary(ctx context.Context, botID pgtype
 }
 
 const createOrUpdateBotRemoteRuntimeMount = `-- name: CreateOrUpdateBotRemoteRuntimeMount :one
-INSERT INTO bot_remote_runtime_bindings (bot_id, runtime_id, workspace_path)
-SELECT b.id, r.id, $1
+INSERT INTO bot_remote_runtime_bindings (bot_id, runtime_id)
+SELECT b.id, r.id
 FROM bots b
 JOIN user_runtimes r
-  ON r.id = $2
+  ON r.id = $1
+ AND r.team_id = public.memoh_current_team_id()
  AND r.user_id = b.owner_user_id
  AND r.revoked_at IS NULL
-JOIN users owner
-  ON owner.id = b.owner_user_id
- AND owner.is_active = TRUE
-WHERE b.id = $3
-ON CONFLICT (bot_id, runtime_id) DO UPDATE SET
-  workspace_path = EXCLUDED.workspace_path,
+JOIN team_members owner_membership
+  ON owner_membership.team_id = public.memoh_current_team_id()
+ AND owner_membership.user_id = b.owner_user_id
+ AND owner_membership.is_active = TRUE
+JOIN users owner ON owner.id = owner_membership.user_id AND owner.is_active = TRUE
+WHERE b.team_id = public.memoh_current_team_id()
+  AND b.id = $2
+ON CONFLICT (team_id, bot_id, runtime_id) DO UPDATE SET
   updated_at = now()
 RETURNING id
 `
 
 type CreateOrUpdateBotRemoteRuntimeMountParams struct {
-	WorkspacePath string      `json:"workspace_path"`
-	RuntimeID     pgtype.UUID `json:"runtime_id"`
-	BotID         pgtype.UUID `json:"bot_id"`
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
 }
 
 func (q *Queries) CreateOrUpdateBotRemoteRuntimeMount(ctx context.Context, arg CreateOrUpdateBotRemoteRuntimeMountParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, createOrUpdateBotRemoteRuntimeMount, arg.WorkspacePath, arg.RuntimeID, arg.BotID)
+	row := q.db.QueryRow(ctx, createOrUpdateBotRemoteRuntimeMount, arg.RuntimeID, arg.BotID)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
@@ -57,7 +60,7 @@ func (q *Queries) CreateOrUpdateBotRemoteRuntimeMount(ctx context.Context, arg C
 const createUserRuntime = `-- name: CreateUserRuntime :one
 INSERT INTO user_runtimes (user_id, name, api_token)
 VALUES ($1, $2, $3)
-RETURNING id, user_id, name, api_token, revoked_at, created_at, updated_at
+RETURNING id, user_id, name, api_token, revoked_at, created_at, updated_at, team_id
 `
 
 type CreateUserRuntimeParams struct {
@@ -77,13 +80,15 @@ func (q *Queries) CreateUserRuntime(ctx context.Context, arg CreateUserRuntimePa
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const deleteBotRemoteRuntimeMount = `-- name: DeleteBotRemoteRuntimeMount :one
 DELETE FROM bot_remote_runtime_bindings
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
   AND id = $2
 RETURNING id
 `
@@ -105,20 +110,23 @@ SELECT
   binding.id,
   binding.bot_id,
   binding.runtime_id,
-  binding.workspace_path,
   binding.is_primary,
   binding.tool_approval_config,
   binding.created_at,
   binding.updated_at,
   runtime.name AS runtime_name,
   runtime.user_id AS runtime_user_id,
-  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active) AS runtime_unavailable,
+  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active OR NOT owner_membership.is_active) AS runtime_unavailable,
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_remote_runtime_bindings binding
-JOIN user_runtimes runtime ON runtime.id = binding.runtime_id
-JOIN bots bot ON bot.id = binding.bot_id
-JOIN users owner ON owner.id = bot.owner_user_id
-WHERE binding.bot_id = $1
+JOIN user_runtimes runtime ON runtime.id = binding.runtime_id AND runtime.team_id = public.memoh_current_team_id()
+JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
+JOIN team_members owner_membership
+  ON owner_membership.team_id = public.memoh_current_team_id()
+ AND owner_membership.user_id = bot.owner_user_id
+JOIN users owner ON owner.id = owner_membership.user_id
+WHERE binding.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = $1
   AND binding.id = $2
 `
 
@@ -131,7 +139,6 @@ type GetBotRemoteRuntimeMountRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	BotID              pgtype.UUID        `json:"bot_id"`
 	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	WorkspacePath      string             `json:"workspace_path"`
 	IsPrimary          bool               `json:"is_primary"`
 	ToolApprovalConfig []byte             `json:"tool_approval_config"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
@@ -149,7 +156,6 @@ func (q *Queries) GetBotRemoteRuntimeMount(ctx context.Context, arg GetBotRemote
 		&i.ID,
 		&i.BotID,
 		&i.RuntimeID,
-		&i.WorkspacePath,
 		&i.IsPrimary,
 		&i.ToolApprovalConfig,
 		&i.CreatedAt,
@@ -167,20 +173,23 @@ SELECT
   binding.id,
   binding.bot_id,
   binding.runtime_id,
-  binding.workspace_path,
   binding.is_primary,
   binding.tool_approval_config,
   binding.created_at,
   binding.updated_at,
   runtime.name AS runtime_name,
   runtime.user_id AS runtime_user_id,
-  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active) AS runtime_unavailable,
+  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active OR NOT owner_membership.is_active) AS runtime_unavailable,
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_remote_runtime_bindings binding
-JOIN user_runtimes runtime ON runtime.id = binding.runtime_id
-JOIN bots bot ON bot.id = binding.bot_id
-JOIN users owner ON owner.id = bot.owner_user_id
-WHERE binding.bot_id = $1
+JOIN user_runtimes runtime ON runtime.id = binding.runtime_id AND runtime.team_id = public.memoh_current_team_id()
+JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
+JOIN team_members owner_membership
+  ON owner_membership.team_id = public.memoh_current_team_id()
+ AND owner_membership.user_id = bot.owner_user_id
+JOIN users owner ON owner.id = owner_membership.user_id
+WHERE binding.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = $1
   AND binding.is_primary = TRUE
 `
 
@@ -188,7 +197,6 @@ type GetPrimaryBotRemoteRuntimeMountRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	BotID              pgtype.UUID        `json:"bot_id"`
 	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	WorkspacePath      string             `json:"workspace_path"`
 	IsPrimary          bool               `json:"is_primary"`
 	ToolApprovalConfig []byte             `json:"tool_approval_config"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
@@ -206,7 +214,6 @@ func (q *Queries) GetPrimaryBotRemoteRuntimeMount(ctx context.Context, botID pgt
 		&i.ID,
 		&i.BotID,
 		&i.RuntimeID,
-		&i.WorkspacePath,
 		&i.IsPrimary,
 		&i.ToolApprovalConfig,
 		&i.CreatedAt,
@@ -220,12 +227,15 @@ func (q *Queries) GetPrimaryBotRemoteRuntimeMount(ctx context.Context, botID pgt
 }
 
 const getUserRuntimeByAPIToken = `-- name: GetUserRuntimeByAPIToken :one
-SELECT runtime.id, runtime.user_id, runtime.name, runtime.api_token, runtime.revoked_at, runtime.created_at, runtime.updated_at
+SELECT runtime.id, runtime.user_id, runtime.name, runtime.api_token, runtime.revoked_at, runtime.created_at, runtime.updated_at, runtime.team_id
 FROM user_runtimes runtime
-JOIN users owner
-  ON owner.id = runtime.user_id
- AND owner.is_active = TRUE
-WHERE runtime.api_token = $1
+JOIN team_members owner_membership
+  ON owner_membership.team_id = public.memoh_current_team_id()
+ AND owner_membership.user_id = runtime.user_id
+ AND owner_membership.is_active = TRUE
+JOIN users owner ON owner.id = owner_membership.user_id AND owner.is_active = TRUE
+WHERE runtime.team_id = public.memoh_current_team_id()
+  AND runtime.api_token = $1
   AND runtime.revoked_at IS NULL
 `
 
@@ -240,6 +250,7 @@ func (q *Queries) GetUserRuntimeByAPIToken(ctx context.Context, apiToken string)
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -249,20 +260,23 @@ SELECT
   binding.id,
   binding.bot_id,
   binding.runtime_id,
-  binding.workspace_path,
   binding.is_primary,
   binding.tool_approval_config,
   binding.created_at,
   binding.updated_at,
   runtime.name AS runtime_name,
   runtime.user_id AS runtime_user_id,
-  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active) AS runtime_unavailable,
+  (runtime.revoked_at IS NOT NULL OR NOT owner.is_active OR NOT owner_membership.is_active) AS runtime_unavailable,
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_remote_runtime_bindings binding
-JOIN user_runtimes runtime ON runtime.id = binding.runtime_id
-JOIN bots bot ON bot.id = binding.bot_id
-JOIN users owner ON owner.id = bot.owner_user_id
-WHERE binding.bot_id = $1
+JOIN user_runtimes runtime ON runtime.id = binding.runtime_id AND runtime.team_id = public.memoh_current_team_id()
+JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
+JOIN team_members owner_membership
+  ON owner_membership.team_id = public.memoh_current_team_id()
+ AND owner_membership.user_id = bot.owner_user_id
+JOIN users owner ON owner.id = owner_membership.user_id
+WHERE binding.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = $1
 ORDER BY binding.created_at ASC, binding.id ASC
 `
 
@@ -270,7 +284,6 @@ type ListBotRemoteRuntimeMountsRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	BotID              pgtype.UUID        `json:"bot_id"`
 	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	WorkspacePath      string             `json:"workspace_path"`
 	IsPrimary          bool               `json:"is_primary"`
 	ToolApprovalConfig []byte             `json:"tool_approval_config"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
@@ -294,7 +307,6 @@ func (q *Queries) ListBotRemoteRuntimeMounts(ctx context.Context, botID pgtype.U
 			&i.ID,
 			&i.BotID,
 			&i.RuntimeID,
-			&i.WorkspacePath,
 			&i.IsPrimary,
 			&i.ToolApprovalConfig,
 			&i.CreatedAt,
@@ -315,8 +327,9 @@ func (q *Queries) ListBotRemoteRuntimeMounts(ctx context.Context, botID pgtype.U
 }
 
 const listUserRuntimes = `-- name: ListUserRuntimes :many
-SELECT id, user_id, name, api_token, revoked_at, created_at, updated_at FROM user_runtimes
-WHERE user_id = $1 AND revoked_at IS NULL
+SELECT id, user_id, name, api_token, revoked_at, created_at, updated_at, team_id FROM user_runtimes
+WHERE team_id = public.memoh_current_team_id()
+  AND user_id = $1 AND revoked_at IS NULL
 ORDER BY created_at ASC, id ASC
 `
 
@@ -337,6 +350,7 @@ func (q *Queries) ListUserRuntimes(ctx context.Context, userID pgtype.UUID) ([]U
 			&i.RevokedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -351,8 +365,9 @@ func (q *Queries) ListUserRuntimes(ctx context.Context, userID pgtype.UUID) ([]U
 const revokeUserRuntime = `-- name: RevokeUserRuntime :one
 UPDATE user_runtimes
 SET revoked_at = now(), updated_at = now()
-WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-RETURNING id, user_id, name, api_token, revoked_at, created_at, updated_at
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1 AND user_id = $2 AND revoked_at IS NULL
+RETURNING id, user_id, name, api_token, revoked_at, created_at, updated_at, team_id
 `
 
 type RevokeUserRuntimeParams struct {
@@ -371,6 +386,7 @@ func (q *Queries) RevokeUserRuntime(ctx context.Context, arg RevokeUserRuntimePa
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -379,7 +395,8 @@ const setBotRemoteRuntimePrimary = `-- name: SetBotRemoteRuntimePrimary :execrow
 UPDATE bot_remote_runtime_bindings
 SET is_primary = TRUE,
     updated_at = CASE WHEN is_primary THEN updated_at ELSE now() END
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
   AND id = $2
 `
 
@@ -400,7 +417,8 @@ const updateBotRemoteRuntimeMountToolApproval = `-- name: UpdateBotRemoteRuntime
 UPDATE bot_remote_runtime_bindings
 SET tool_approval_config = $1,
     updated_at = now()
-WHERE bot_id = $2
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $2
   AND id = $3
 RETURNING id
 `

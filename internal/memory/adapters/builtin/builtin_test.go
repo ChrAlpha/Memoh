@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memohai/memoh/internal/config"
 	adapters "github.com/memohai/memoh/internal/memory/adapters"
 )
 
 func TestBuiltinProviderNilService(t *testing.T) {
 	t.Parallel()
-	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), nil)
 	if p.Type() != BuiltinType {
 		t.Fatalf("expected type %q, got %q", BuiltinType, p.Type())
 	}
@@ -33,7 +32,7 @@ func TestBuiltinProviderFileRuntimeDoesNotAdvertiseSemanticCompact(t *testing.T)
 	t.Parallel()
 	store := newFakeStore()
 	runtime := newFileRuntime(store)
-	p := NewBuiltinProvider(slog.Default(), runtime, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), runtime)
 
 	withoutLLM := p.SemanticCompactCapability()
 	if withoutLLM.Semantic {
@@ -55,7 +54,7 @@ func TestBuiltinProviderFileRuntimeDoesNotAdvertiseSemanticCompact(t *testing.T)
 
 func TestBuiltinProviderSemanticCompactCapabilityWithGraphRuntime(t *testing.T) {
 	t.Parallel()
-	provider := NewBuiltinProvider(slog.Default(), NewGraphRuntime(nil, newFakeWikiStore(), newFakeStore()), nil, nil)
+	provider := NewBuiltinProvider(slog.Default(), NewGraphRuntime(nil, newFakeWikiStore(), newFakeStore()))
 	provider.SetLLM(&fakeLLM{})
 
 	capability := provider.SemanticCompactCapability()
@@ -74,7 +73,7 @@ func TestBuiltinProviderOnBeforeChatEmptyQuery(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	runtime := newFileRuntime(store)
-	p := NewBuiltinProvider(slog.Default(), runtime, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), runtime)
 
 	result, err := p.OnBeforeChat(context.Background(), adapters.BeforeChatRequest{
 		BotID: "bot-1",
@@ -92,7 +91,7 @@ func TestBuiltinProviderContextPackingLeavesFramingToCollector(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
 	runtime := newFileRuntime(store)
-	p := NewBuiltinProvider(slog.Default(), runtime, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), runtime)
 
 	_ = p.OnAfterChat(context.Background(), adapters.AfterChatRequest{
 		BotID:    "bot-1",
@@ -127,7 +126,7 @@ func TestBuiltinProviderContextPackingLeavesFramingToCollector(t *testing.T) {
 
 func TestBuiltinProviderApplyProviderConfig(t *testing.T) {
 	t.Parallel()
-	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), nil)
 
 	p.ApplyProviderConfig(map[string]any{
 		"context_target_items":    float64(10),
@@ -148,7 +147,7 @@ func TestBuiltinProviderApplyProviderConfig(t *testing.T) {
 func TestBuiltinProviderApplyProviderConfigClampsContextBudget(t *testing.T) {
 	t.Parallel()
 
-	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), nil)
 	p.ApplyProviderConfig(map[string]any{
 		"context_target_items":    float64(maxMemoryToolLimit + 1),
 		"context_max_total_chars": float64(maxContextTotalChars + 1),
@@ -164,7 +163,7 @@ func TestBuiltinProviderApplyProviderConfigClampsContextBudget(t *testing.T) {
 
 func TestBuiltinProviderApplyProviderConfigNil(t *testing.T) {
 	t.Parallel()
-	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), nil)
 	p.ApplyProviderConfig(nil)
 	if p.packer.TargetItems != defaultPackerConfig.TargetItems {
 		t.Fatalf("expected default TargetItems, got %d", p.packer.TargetItems)
@@ -178,7 +177,7 @@ func TestBuiltinProviderCompactUsesLLMResults(t *testing.T) {
 	llm := &fakeLLM{
 		compactFacts: []string{"Ran likes tea, especially black tea and oolong."},
 	}
-	provider := NewBuiltinProvider(slog.Default(), runtime, nil, nil)
+	provider := NewBuiltinProvider(slog.Default(), runtime)
 	provider.SetLLM(llm)
 	ctx := context.Background()
 	for _, memory := range []string{"Ran likes black tea", "Ran likes oolong tea"} {
@@ -226,7 +225,7 @@ func TestBuiltinProviderCompactUsesLLMResults(t *testing.T) {
 func TestBuiltinProviderCompactRequiresSemanticCompactCapability(t *testing.T) {
 	t.Parallel()
 	runtime := newFileRuntime(newFakeStore())
-	provider := NewBuiltinProvider(slog.Default(), runtime, nil, nil)
+	provider := NewBuiltinProvider(slog.Default(), runtime)
 
 	if _, err := provider.Compact(context.Background(), map[string]any{"bot_id": "bot-1"}, 0.5, 0); err == nil {
 		t.Fatal("expected file runtime compact to fail instead of truncating memories")
@@ -260,7 +259,7 @@ func TestIntFromConfig(t *testing.T) {
 
 func TestBuiltinProviderCRUDErrorsWithNilService(t *testing.T) {
 	t.Parallel()
-	p := NewBuiltinProvider(slog.Default(), nil, nil, nil)
+	p := NewBuiltinProvider(slog.Default(), nil)
 	if _, err := p.Add(context.Background(), adapters.AddRequest{}); err == nil {
 		t.Fatal("expected Add error")
 	}
@@ -296,7 +295,7 @@ func TestBuiltinProviderCRUDErrorsWithNilService(t *testing.T) {
 func TestNewBuiltinRuntimeFromConfig_DefaultIsGraphRequiringWikiStore(t *testing.T) {
 	t.Parallel()
 	// Default mode is now graph, so without a wiki store it must error.
-	if _, err := NewBuiltinRuntimeFromConfig(nil, nil, nil, nil, defaultTestConfig(), nil); err == nil {
+	if _, err := NewBuiltinRuntimeFromConfig(nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected error for default (graph) mode without wiki store")
 	}
 }
@@ -304,7 +303,7 @@ func TestNewBuiltinRuntimeFromConfig_DefaultIsGraphRequiringWikiStore(t *testing
 func TestNewBuiltinRuntimeFromConfig_LegacyDenseConfigUsesGraphWithoutAuxIndex(t *testing.T) {
 	t.Parallel()
 	cfg := map[string]any{"memory_mode": "dense"}
-	rt, err := NewBuiltinRuntimeFromConfig(nil, cfg, nil, nil, defaultTestConfig(), newFakeWikiStore())
+	rt, err := NewBuiltinRuntimeFromConfig(nil, cfg, nil, nil, nil, newFakeWikiStore())
 	if err != nil {
 		t.Fatalf("legacy dense config should fall back to graph without auxiliary index: %v", err)
 	}
@@ -317,11 +316,7 @@ func TestNewBuiltinRuntimeFromConfig_GraphRequiresWikiStore(t *testing.T) {
 	t.Parallel()
 	cfg := map[string]any{"memory_mode": "graph"}
 	// No wiki store -> error.
-	if _, err := NewBuiltinRuntimeFromConfig(nil, cfg, nil, nil, defaultTestConfig(), nil); err == nil {
+	if _, err := NewBuiltinRuntimeFromConfig(nil, cfg, nil, nil, nil, nil); err == nil {
 		t.Fatal("expected error for graph mode without wiki store")
 	}
-}
-
-func defaultTestConfig() config.Config {
-	return config.Config{}
 }

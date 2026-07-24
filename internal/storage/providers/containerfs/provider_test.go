@@ -1,6 +1,9 @@
 package containerfs
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestParseRoutingKey(t *testing.T) {
 	t.Parallel()
@@ -38,7 +41,7 @@ func TestProvider_AccessPath(t *testing.T) {
 		{key: "bot-1/file/xx/doc.pdf", want: "/data/media/file/xx/doc.pdf"},
 	}
 	for _, tt := range tests {
-		got := p.AccessPath(tt.key)
+		got := p.AccessPath(context.Background(), tt.key)
 		if got != tt.want {
 			t.Errorf("AccessPath(%q) = %q, want %q", tt.key, got, tt.want)
 		}

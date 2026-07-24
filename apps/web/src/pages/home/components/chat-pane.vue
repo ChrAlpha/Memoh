@@ -22,9 +22,13 @@
           >
             <!-- Same horizontal rhythm as the composer below (px-4 sm:px-6
                  lg:px-10) so the input box and the message column share one
-                 width at every pane size — they must never diverge. -->
+                 width at every pane size — they must never diverge. The
+                 bottom padding tracks the dock's measured height (composer,
+                 ask_user capsule, approval panel) instead of a fixed rung, so
+                 the last message can always scroll clear of it. -->
             <div
-              class="w-full max-w-[840px] mx-auto px-4 pt-6 pb-28 space-y-6 sm:px-6 lg:px-10"
+              class="w-full max-w-[840px] mx-auto px-4 pt-6 space-y-6 sm:px-6 lg:px-10"
+              :style="{ paddingBottom: messagesBottomPad }"
             >
               <div
                 ref="loadMoreSentinel"
@@ -189,7 +193,7 @@
           v-if="!isWelcome"
           aria-hidden="true"
           class="absolute inset-x-0 bottom-0 bg-surface-editor"
-          :style="{ height: composerMaskHeight }"
+          :style="{ height: dockMaskHeight }"
         />
         <!-- welcome: top-anchored column — the greeting and the composer's top
              edge stay pinned at pt-[38dvh], so a growing composer (multiline
@@ -323,101 +327,21 @@
                 </CommandKeyBridge>
               </Command>
             </Transition>
-            <section>
-              <Transition
-                enter-active-class="transition-all duration-150 ease-out"
-                enter-from-class="opacity-0 translate-y-1"
-                enter-to-class="opacity-100 translate-y-0"
-                leave-active-class="transition-all duration-100 ease-in"
-                leave-from-class="opacity-100 translate-y-0"
-                leave-to-class="opacity-0 translate-y-1"
-              >
-                <ChatUserInputForm
-                  v-if="pendingUserInput"
-                  class="mb-2"
-                  :user-input="pendingUserInput"
-                />
-              </Transition>
-              <div
-                v-if="commandPanelEvent"
-                class="mb-2 overflow-hidden rounded-lg border bg-card"
-                :class="commandPanelIsError ? 'border-destructive/30' : 'border-border'"
-              >
-                <div class="flex items-start gap-2 px-3 py-2">
-                  <CircleAlert
-                    v-if="commandPanelIsError"
-                    class="mt-0.5 size-4 shrink-0 text-destructive"
-                  />
-                  <div class="min-w-0 flex-1">
-                    <p
-                      class="truncate text-label font-medium"
-                      :class="commandPanelIsError ? 'text-destructive' : 'text-foreground'"
-                    >
-                      {{ commandPanelTitle }}
-                    </p>
-                    <p
-                      v-if="commandPanelText"
-                      class="mt-0.5 whitespace-pre-wrap break-words text-body text-muted-foreground"
-                    >
-                      {{ commandPanelText }}
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    :aria-label="$t('chat.slash.dismiss')"
-                    @click="clearCurrentCommandEvent"
-                  >
-                    <X class="size-3.5" />
-                  </Button>
-                </div>
-                <Command
-                  v-if="commandResultItems.length"
-                  class="h-auto w-auto rounded-none border-0 border-t border-border bg-transparent shadow-none"
-                >
-                  <CommandKeyBridge ref="commandPanelBridge">
-                    <CommandList class="max-h-[min(20rem,45dvh)] p-1 overscroll-contain [scrollbar-gutter:stable]">
-                      <CommandGroup>
-                        <CommandItem
-                          v-for="item in commandResultItems"
-                          :key="`${item.kind || 'item'}:${item.id || item.title}`"
-                          :value="`${item.kind || 'item'}:${item.id || item.title}`"
-                          @select="selectCommandResultItem(item)"
-                        >
-                          <Sparkles
-                            v-if="item.kind === 'skill'"
-                            class="size-3.5 shrink-0 text-muted-foreground"
-                          />
-                          <List
-                            v-else
-                            class="size-3.5 shrink-0 text-muted-foreground"
-                          />
-                          <span class="min-w-0 flex-1">
-                            <span class="block truncate text-body text-foreground">{{ item.title }}</span>
-                            <span
-                              v-if="item.description"
-                              class="block truncate text-caption text-muted-foreground"
-                            >{{ item.description }}</span>
-                          </span>
-                        </CommandItem>
-                      </CommandGroup>
-                    </CommandList>
-                  </CommandKeyBridge>
-                </Command>
-              </div>
-              <div
-                v-if="composerError"
-                class="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
-                <span class="min-w-0 break-words">{{ composerError }}</span>
-              </div>
+            <ComposerDock
+              ref="dockEl"
+              :approvals="pendingApprovals"
+              :command-panel="composerCommandPanel"
+              :error-message="composerError"
+              :pending-user-input="pendingUserInput"
+              @select-command-item="selectCommandResultItem"
+              @dismiss-command="clearCurrentCommandEvent"
+              @reveal-composer="handleDockRevealComposer"
+            >
               <!--
-              Compact uses a CONCRETE 28px radius (= half the compact height:
-              button 36px + py-2.5 ×2 = 56px), so a short composer still reads as
+              Compact uses a concrete 1.75rem radius (= half the compact height:
+              button 2.25rem + py-2.5 ×2 = 3.5rem), so a short composer still reads as
               a perfect pill — but, unlike rounded-full (9999px), the value can be
-              animated. Multiline shrinks the corners to 20px; transitioning
+              animated. Multiline shrinks the corners to 1.25rem; transitioning
               between two concrete radii interpolates smoothly, whereas animating
               out of 9999px snapped mid-way (the value stayed clamped-round until
               it crossed half-height, then jumped the corner in one step).
@@ -427,7 +351,7 @@
                 data-slot="input-group"
                 role="group"
                 class="chat-composer-edge relative flex w-full flex-wrap items-center gap-1 bg-surface-composer px-2.5 py-2.5 transition-[border-radius] motion-reduce:transition-none"
-                :class="(isMultiline || showAttachmentGrid) ? 'rounded-[20px]' : 'rounded-[28px]'"
+                :class="(isMultiline || showAttachmentGrid) ? 'chat-composer-radius-multiline' : 'chat-composer-radius-compact'"
                 :style="{ transitionDuration: `${composerRadiusMs}ms`, transitionTimingFunction: composerRadiusEase }"
                 @click.self="focusTextarea"
               >
@@ -522,15 +446,12 @@
                   @input="syncMultiline"
                 />
 
-                <DropdownMenu
-                  v-if="composerMenuHasItems"
-                  v-model:open="agentPopoverOpen"
-                >
+                <DropdownMenu v-model:open="agentPopoverOpen">
                   <DropdownMenuTrigger as-child>
                     <Button
                       type="button"
                       variant="ghost"
-                      :disabled="!currentBotId || activeChatReadOnly || agentChanging"
+                      :disabled="!currentBotId || activeChatReadOnly || composerConfigPending"
                       :title="$t('chat.composerActions')"
                       class="order-1 size-9 rounded-full text-foreground/85"
                       :class="isMultiline ? 'self-end' : 'self-center'"
@@ -583,16 +504,71 @@
                         />
                       </DropdownMenuItem>
                     </template>
-                    <template v-if="!activeIsACP">
+                    <template v-if="showComputersMenu">
                       <DropdownMenuSeparator v-if="canChangeAgent && enabledACPProfiles.length" />
+                      <DropdownMenuLabel>{{ $t('chat.computers') }}</DropdownMenuLabel>
                       <DropdownMenuItem
-                        :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages"
-                        @select="fileInput?.click()"
+                        v-if="workspaceTargetsInitialLoading"
+                        disabled
                       >
-                        <Paperclip />
-                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.attachFiles') }}</span>
+                        <Spinner />
+                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.computerLoading') }}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-else-if="workspaceTargetsLoadFailed"
+                        disabled
+                      >
+                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.computerLoadFailed') }}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-else-if="!workspaceTargets.length"
+                        disabled
+                      >
+                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.computerNone') }}</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-if="selectedWorkspaceTargetMissing"
+                        disabled
+                      >
+                        <Monitor class="size-4 shrink-0" />
+                        <span class="min-w-0 flex-1 truncate">
+                          {{ workspaceTargetSelection.snapshot?.name || $t('chat.computerUnavailable') }}
+                        </span>
+                        <span class="shrink-0 text-caption text-muted-foreground">{{ $t('chat.computerUnavailable') }}</span>
+                        <Check class="ml-auto" />
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-for="target in workspaceTargets"
+                        :key="target.target_id"
+                        :disabled="computerSwitchLocked || !workspaceTargetAvailable(target)"
+                        @select="selectWorkspaceTarget(target)"
+                      >
+                        <component
+                          :is="target.kind === 'native' ? Server : Monitor"
+                          class="size-4 shrink-0"
+                        />
+                        <span class="min-w-0 flex-1 truncate">{{ workspaceTargetName(target) }}</span>
+                        <span class="shrink-0 text-caption text-muted-foreground">
+                          {{ target.primary
+                            ? (workspaceTargetAvailable(target)
+                              ? $t('chat.computerDefault')
+                              : $t('chat.computerDefaultStatus', { status: workspaceTargetStatusLabel(target) }))
+                            : workspaceTargetStatusLabel(target) }}
+                        </span>
+                        <Check
+                          v-if="selectedWorkspaceTargetId === target.target_id"
+                          class="ml-auto"
+                        />
                       </DropdownMenuItem>
                     </template>
+                    <DropdownMenuSeparator v-if="(canChangeAgent && enabledACPProfiles.length) || showComputersMenu" />
+                    <DropdownMenuItem
+                      :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages"
+                      @select="fileInput?.click()"
+                    >
+                      <Paperclip />
+                      <span class="min-w-0 flex-1 truncate">{{ $t('chat.attachFiles') }}</span>
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -609,12 +585,12 @@
                       <Button
                         type="button"
                         variant="ghost"
-                        :disabled="!currentBotId || activeChatReadOnly || acpModelChanging"
+                        :disabled="!currentBotId || activeChatReadOnly || composerConfigPending"
                         class="composer-pill-press h-9 min-w-0 gap-1 rounded-full px-3 text-muted-foreground"
                         :style="{ maxWidth: `${modelTriggerMaxWidth}px` }"
                       >
                         <Spinner
-                          v-if="acpModelChanging || acpModelsLoading"
+                          v-if="composerConfigPending || acpModelsLoading"
                           class="size-3.5 shrink-0"
                         />
                         <span
@@ -630,112 +606,25 @@
                       side="top"
                       :side-offset="4"
                     >
-                      <div
-                        v-if="activeIsPendingACP"
-                        class="max-h-80 overflow-y-auto p-1"
+                      <InlineLoadingRow
+                        v-if="composerModelsLoading"
+                        class="px-2 py-3"
                       >
-                        <button
-                          type="button"
-                          class="flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
-                          @click="onPendingACPDefaultModelSelected"
-                        >
-                          <span class="min-w-0 flex-1 truncate">{{ $t('chat.modelDefault') }}</span>
-                          <Check
-                            v-if="!pendingACPModelId"
-                            class="mt-0.5 size-3 shrink-0 text-muted-foreground"
-                          />
-                        </button>
-                        <InlineLoadingRow
-                          v-if="acpModelsLoading"
-                          class="px-2 py-3"
-                        >
-                          {{ $t('common.loading') }}
-                        </InlineLoadingRow>
-                        <div
-                          v-else-if="!pendingACPModelOptions.length"
-                          class="px-2 py-3 text-xs text-muted-foreground"
-                        >
-                          {{ $t('chat.noModels') }}
-                        </div>
-                        <template v-else>
-                          <button
-                            v-for="model in pendingACPModelOptions"
-                            :key="model.id || model.name"
-                            type="button"
-                            class="flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
-                            @click="onACPModelSelected(model)"
-                          >
-                            <span class="min-w-0 flex-1">
-                              <span class="block truncate">
-                                {{ model.name || model.id }}
-                              </span>
-                              <span
-                                v-if="model.description"
-                                class="mt-0.5 block line-clamp-2 text-[11px] leading-snug text-muted-foreground"
-                              >
-                                {{ model.description }}
-                              </span>
-                            </span>
-                            <Check
-                              v-if="model.id === pendingACPModelId"
-                              class="mt-0.5 size-3 shrink-0 text-muted-foreground"
-                            />
-                          </button>
-                        </template>
-                      </div>
-                      <div
-                        v-else-if="activeIsACP"
-                        class="max-h-80 overflow-y-auto p-1"
-                      >
-                        <InlineLoadingRow
-                          v-if="acpModelsLoading"
-                          class="px-2 py-3"
-                        >
-                          {{ $t('common.loading') }}
-                        </InlineLoadingRow>
-                        <div
-                          v-else-if="!acpModels.length"
-                          class="px-2 py-3 text-xs text-muted-foreground"
-                        >
-                          {{ $t('chat.noModels') }}
-                        </div>
-                        <button
-                          v-for="model in acpModels"
-                          v-else
-                          :key="model.id || model.name"
-                          type="button"
-                          class="flex min-h-8 w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
-                          @click="onACPModelSelected(model)"
-                        >
-                          <span class="min-w-0 flex-1">
-                            <span class="block truncate">
-                              {{ model.name || model.id }}
-                            </span>
-                            <span
-                              v-if="model.description"
-                              class="mt-0.5 block line-clamp-2 text-[11px] leading-snug text-muted-foreground"
-                            >
-                              {{ model.description }}
-                            </span>
-                          </span>
-                          <Check
-                            v-if="model.id === currentACPModelId"
-                            class="mt-0.5 size-3 shrink-0 text-muted-foreground"
-                          />
-                        </button>
-                      </div>
-                      <div v-else>
-                        <ChatModelPicker
-                          v-model="overrideModelId"
-                          v-model:reasoning-effort="overrideReasoningEffort"
-                          :models="models"
-                          :providers="providers"
-                          model-type="chat"
-                          :open="modelPopoverOpen"
-                          @update:model-value="onModelSelected"
-                          @close="modelPopoverOpen = false"
-                        />
-                      </div>
+                        {{ $t('common.loading') }}
+                      </InlineLoadingRow>
+                      <ChatModelPicker
+                        v-else
+                        :model-value="overrideModelId"
+                        :reasoning-effort="overrideReasoningEffort"
+                        :reasoning-options="composerReasoningOptions"
+                        :models="composerModels"
+                        :providers="composerModelProviders"
+                        model-type="chat"
+                        :open="modelPopoverOpen"
+                        @update:model-value="onComposerModelValueSelected"
+                        @update:reasoning-effort="onComposerReasoningEffortSelected"
+                        @close="modelPopoverOpen = false"
+                      />
                     </PopoverContent>
                   </Popover>
 
@@ -768,7 +657,7 @@
                     <Button
                       type="button"
                       variant="brand"
-                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages)"
+                      :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending)"
                       :aria-label="streaming ? 'Stop generating response' : 'Send message'"
                       class="absolute inset-0 size-9 rounded-full transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:transition-none"
                       :class="(sendButtonVisible || streaming) ? 'scale-100 opacity-100' : 'pointer-events-none scale-0 opacity-0'"
@@ -810,7 +699,7 @@
                   </div>
                 </div>
               </div>
-            </section>
+            </ComposerDock>
           </div>
         </div>
       </div>
@@ -824,7 +713,6 @@ import {
   Paperclip,
   Plus,
   ChevronDown,
-  CircleAlert,
   ArrowDown,
   Check,
   FolderOpen,
@@ -835,15 +723,17 @@ import {
   Minimize2,
   Package,
   SquarePen,
+  Monitor,
+  Server,
 } from 'lucide-vue-next'
 import { ScrollArea, Button, Popover, PopoverContent, PopoverTrigger, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuItem, DropdownMenuSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Spinner, toast } from '@felinic/ui'
-import { useChatStore, type ACPAgentSessionInput, type ChatMessage } from '@/store/chat-list'
+import { useChatStore, type ACPAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { storeToRefs } from 'pinia'
-import { useIntersectionObserver } from '@vueuse/core'
+import { useElementSize, useIntersectionObserver } from '@vueuse/core'
 import { useQuery } from '@pinia/colada'
-import { getAcpProfiles, getModels, getProviders, getBotsByBotIdSettings } from '@memohai/sdk'
-import type { AcpclientModelInfo, AcpprofilePublicProfile, ModelsGetResponse, ProvidersGetResponse } from '@memohai/sdk'
+import { getAcpProfiles, getModels, getProviders, getBotsByBotIdSettings, getBotsByBotIdWorkspaceTargets } from '@memohai/sdk'
+import type { AcpprofilePublicProfile, ModelsGetResponse, ProvidersGetResponse, WorkspaceWorkspaceTarget } from '@memohai/sdk'
 import { useI18n } from 'vue-i18n'
 import MessageItem from './message-item.vue'
 import ChatAttachmentCard from './chat-attachment-card.vue'
@@ -853,7 +743,8 @@ import { useChatScroll } from '../composables/useChatScroll'
 import BgTaskPill from './bg-task-pill.vue'
 import ForkSourceDivider from './fork-source-divider.vue'
 import ChatForkDialog from './chat-fork-dialog.vue'
-import ChatUserInputForm from './chat-user-input-form.vue'
+import ComposerDock from './composer-dock.vue'
+import { usePendingApprovals } from '../composables/usePendingApprovals'
 import ChatScrollRail, { type ScrollRailSegment } from './chat-scroll-rail.vue'
 import { provideBgTaskBeacons } from '../composables/useBgTaskBeacons'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
@@ -864,16 +755,17 @@ import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, availableEffortsForMode, resol
 import { useMediaGallery } from '../composables/useMediaGallery'
 import { ATTACHMENT_ANIM_MS, attachmentToFile, fileToAttachment, useComposerAttachments } from '../composables/useComposerAttachments'
 import { useComposerDrafts } from '../composables/useComposerDrafts'
-import { useComposerLayout } from '../composables/useComposerLayout'
+import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useComposerLayout'
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
 import { commandResultQuickActionText, isCommandResultItemSelectable } from './slash-command-result'
-import { captureChatPaneSendContext, matchesChatPaneSendContext } from './chat-pane-send'
+import { captureChatPaneSendContext, matchesChatPaneSendContext, shouldRefreshACPComposerConfig } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, acpAgentIcon, findMissingRequiredManagedField, isACPAgentEnabled, isACPNoProject, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
+import { findLatestPendingChatDecision } from './chat-pending-decision'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -917,7 +809,7 @@ const pendingForkMessageId = ref('')
 const modelPopoverOpen = ref(false)
 const agentPopoverOpen = ref(false)
 const agentChanging = ref(false)
-const acpModelChanging = ref(false)
+const acpConfigChangeScope = ref('')
 
 const {
   currentBotId,
@@ -934,10 +826,6 @@ const paneTarget = computed(() => ({
   viewId: props.tabId.trim() || 'chat',
 }))
 provideChatViewTarget(paneTarget)
-const pendingACPState = computed(() => chatStore.pendingACPStateFor(paneTarget.value))
-const pendingACPModelId = computed(() => pendingACPState.value?.modelId ?? '')
-const pendingACPRuntimeStatus = computed(() => pendingACPState.value?.runtimeStatus)
-const pendingACPRuntimeEnsuring = computed(() => pendingACPState.value?.ensuring ?? false)
 const paneView = computed(() => chatStore.chatView(paneTarget.value))
 const messages = computed(() => paneView.value.transcript.messages)
 const loadingMessages = computed(() => paneView.value.transcript.loadingMessages.value)
@@ -993,24 +881,16 @@ watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
   if (welcome) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
 })
 
-const pendingUserInput = computed<UIUserInput | null>(() => {
-  for (let msgIndex = messages.value.length - 1; msgIndex >= 0; msgIndex--) {
-    const message = messages.value[msgIndex]
-    if (!message || message.role !== 'assistant') continue
-    for (let blockIndex = message.messages.length - 1; blockIndex >= 0; blockIndex--) {
-      const block = message.messages[blockIndex]
-      if (
-        block?.type === 'tool'
-        && block.userInput?.user_input_id
-        && block.userInput.status === 'pending'
-        && block.userInput.can_respond !== false
-      ) {
-        return block.userInput
-      }
-    }
-  }
-  return null
-})
+const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
+const pendingUserInput = computed<UIUserInput | null>(() => (
+  pendingDecision.value?.kind === 'user_input'
+    ? pendingDecision.value.userInput
+    : null
+))
+
+const { items: pendingApprovals } = usePendingApprovals(messages)
+
+const hasPendingToolApproval = computed(() => pendingApprovals.value.length > 0)
 
 const canForkAssistant = computed(() =>
   !streaming.value
@@ -1079,6 +959,51 @@ const { data: acpProfileData, isLoading: acpProfilesLoading } = useQuery({
 })
 
 const currentBot = computed(() => bots.value.find(bot => bot.id === currentBotId.value) ?? null)
+const canWorkspaceRead = computed(() => (
+  hasBotPermission(currentBot.value?.current_user_permissions, 'workspace_read')
+))
+
+type ValidWorkspaceTarget = WorkspaceWorkspaceTarget & {
+  target_id: string
+  kind: string
+}
+
+const {
+  data: workspaceTargetsResponse,
+  error: workspaceTargetsError,
+  isLoading: workspaceTargetsLoading,
+} = useQuery({
+  key: () => ['bot-workspace-targets', currentBotId.value ?? ''],
+  query: async () => {
+    const { data } = await getBotsByBotIdWorkspaceTargets({
+      path: { bot_id: currentBotId.value! },
+      throwOnError: true,
+    })
+    return data
+  },
+  enabled: () => !!currentBotId.value && canWorkspaceRead.value,
+  refetchOnWindowFocus: true,
+})
+
+const workspaceTargets = computed<ValidWorkspaceTarget[]>(() => (
+  (workspaceTargetsResponse.value?.targets ?? []).filter((target): target is ValidWorkspaceTarget => (
+    typeof target.target_id === 'string'
+    && target.target_id.length > 0
+    && typeof target.kind === 'string'
+    && target.kind.length > 0
+  ))
+))
+const primaryWorkspaceTarget = computed(() => (
+  workspaceTargets.value.find(target => target.primary)
+  ?? workspaceTargets.value.find(target => target.target_id === 'native')
+  ?? null
+))
+const workspaceTargetsInitialLoading = computed(() => (
+  workspaceTargetsLoading.value && !workspaceTargetsResponse.value
+))
+const workspaceTargetsLoadFailed = computed(() => (
+  !!workspaceTargetsError.value && !workspaceTargetsResponse.value
+))
 
 // A third-party synced thread (Telegram/Discord/...) is a multi-participant
 // group conversation rather than the local 1:1 chat. The message list switches
@@ -1129,16 +1054,140 @@ const forkSourceDividerAfterIndex = computed<number | null>(() => {
 })
 const activeIsPendingACP = computed(() => activeChatTarget.value.isPendingACP)
 const activeIsACP = computed(() => activeChatTarget.value.isACP)
+const activeUsesACPComposer = computed(() => activeIsPendingACP.value || activeIsACP.value)
+const showComputersMenu = computed(() => (
+  !activeIsACP.value
+  && !activeIsPendingACP.value
+  && canWorkspaceRead.value
+))
+const computerSwitchLocked = computed(() => (
+  streaming.value
+  || creatingSession.value
+  || loadingMessages.value
+  || agentChanging.value
+  || hasPendingToolApproval.value
+  || !!pendingUserInput.value
+))
+const workspaceTargetSelection = computed(() => (
+  chatStore.workspaceTargetSelectionFor(paneTarget.value)
+))
+const selectedWorkspaceTargetId = computed(() => workspaceTargetSelection.value.targetId)
+const selectedWorkspaceTarget = computed(() => (
+  workspaceTargets.value.find(target => target.target_id === selectedWorkspaceTargetId.value) ?? null
+))
+const selectedWorkspaceTargetMissing = computed(() => (
+  !!selectedWorkspaceTargetId.value
+  && !selectedWorkspaceTarget.value
+  && !workspaceTargetsInitialLoading.value
+))
+
+function snapshotForWorkspaceTarget(target: ValidWorkspaceTarget): ChatWorkspaceTargetSnapshot {
+  return {
+    target_id: target.target_id,
+    kind: target.kind,
+    name: target.name,
+  }
+}
+
+function workspaceTargetFromSessionMetadata(metadata: Record<string, unknown>): ChatWorkspaceTargetSnapshot | null {
+  const rawSnapshot = metadata.workspace_target
+  const snapshot = rawSnapshot && typeof rawSnapshot === 'object'
+    ? rawSnapshot as Record<string, unknown>
+    : {}
+  const targetId = String(metadata.workspace_target_id ?? snapshot.target_id ?? '').trim()
+  if (!targetId) return null
+  const value = (key: string) => {
+    const raw = snapshot[key]
+    return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+  }
+  return {
+    target_id: targetId,
+    kind: value('kind'),
+    name: value('name'),
+  }
+}
+
+function workspaceTargetName(target: Pick<WorkspaceWorkspaceTarget, 'kind' | 'name'>): string {
+  if (target.kind === 'native') return t('bots.remoteRuntime.nativeWorkspace')
+  return target.name || t('bots.remoteRuntime.unknownComputer')
+}
+
+function workspaceTargetStatus(target: WorkspaceWorkspaceTarget): string {
+  if (target.kind === 'native') return 'online'
+  return target.status || (target.online ? 'online' : 'offline')
+}
+
+function workspaceTargetStatusLabel(target: WorkspaceWorkspaceTarget): string {
+  const status = workspaceTargetStatus(target)
+  const key = `runtimes.status.${status}`
+  const label = t(key)
+  return label === key ? status : label
+}
+
+function workspaceTargetAvailable(target: WorkspaceWorkspaceTarget): boolean {
+  return target.kind === 'native'
+    || (workspaceTargetStatus(target) === 'online' && target.online !== false)
+}
+
+function selectWorkspaceTarget(target: ValidWorkspaceTarget) {
+  if (computerSwitchLocked.value || !workspaceTargetAvailable(target)) return
+  chatStore.setWorkspaceTargetSelection(
+    paneTarget.value,
+    target.target_id,
+    snapshotForWorkspaceTarget(target),
+  )
+}
+
+watch([
+  activeIsACP,
+  activeIsPendingACP,
+  activeSessionMetadata,
+  workspaceTargets,
+  paneTarget,
+], () => {
+  if (activeIsACP.value || activeIsPendingACP.value) {
+    chatStore.resetWorkspaceTargetSelection(paneTarget.value)
+    return
+  }
+  const sessionTarget = paneTarget.value.sessionId
+    ? workspaceTargetFromSessionMetadata(activeSessionMetadata.value)
+    : null
+  if (sessionTarget) {
+    chatStore.initializeWorkspaceTargetSelection(
+      paneTarget.value,
+      sessionTarget.target_id,
+      sessionTarget,
+      'session',
+    )
+    return
+  }
+  const primary = primaryWorkspaceTarget.value
+  if (!primary) return
+  chatStore.initializeWorkspaceTargetSelection(
+    paneTarget.value,
+    primary.target_id,
+    snapshotForWorkspaceTarget(primary),
+    'default',
+  )
+}, { immediate: true })
 const activeACPAgentId = computed(() => normalizeACPAgentID(activeSessionMetadata.value.acp_agent_id))
+const activeACPProjectPath = computed(() => String(activeSessionMetadata.value.project_path ?? '').trim())
+const activeACPProjectMode = computed(() => String(activeSessionMetadata.value.acp_project_mode ?? '').trim())
+const acpOperationScope = computed(() => JSON.stringify([
+  paneTarget.value.botId,
+  paneTarget.value.sessionId,
+  paneTarget.value.viewId,
+  activeACPAgentId.value,
+  activeACPProjectPath.value,
+  activeACPProjectMode.value,
+]))
+const acpConfigChanging = computed(() => acpConfigChangeScope.value === acpOperationScope.value)
 const activeACPProjectLabel = computed(() => {
   if (isACPNoProject(activeSessionMetadata.value)) return t('chat.noProject')
-  const path = String(activeSessionMetadata.value.project_path ?? '').trim()
+  const path = activeACPProjectPath.value
   const parts = path.split('/').filter(Boolean)
   return path ? parts[parts.length - 1] ?? path : t('chat.noProject')
 })
-const canChangeAgent = computed(() => !streaming.value && !creatingSession.value && messages.value.length === 0)
-
-
 function messageMatchesForkSource(message: ChatMessage): boolean {
   const forkMessageId = forkSource.value?.forkMessageId?.trim()
   if (!forkMessageId) return false
@@ -1162,13 +1211,6 @@ function showForkSourceDividerBefore(index: number): boolean {
     && index === 0
 }
 
-// The composer's "+" menu is worth showing only when it can do something:
-// switch the agent (empty session with ACP profiles) or attach files (Memoh
-// mode). An in-progress ACP chat has neither, so the trigger is hidden rather
-// than opening an empty sheet.
-const composerMenuHasItems = computed(() =>
-  (canChangeAgent.value && enabledACPProfiles.value.length > 0) || !activeIsACP.value,
-)
 const activeSessionId = computed(() => paneTarget.value.sessionId ?? activeSession.value?.id ?? '')
 const requestedSkills = ref<RequestedSkillSelection[]>([])
 const skillSlashEnabled = computed(() => !activeIsACP.value && !activeIsPendingACP.value)
@@ -1402,6 +1444,19 @@ const commandResultItems = computed(() =>
   (commandResult.value?.items ?? []).filter(item => isCommandResultItemSelectable(item, commandPanelActionID.value)),
 )
 
+// Pre-digested view model for the panel's command section; the raw event and
+// the filtered items stay local because the composer keyboard arbitration
+// (Escape / arrows / Enter) reads them too.
+const composerCommandPanel = computed(() => {
+  if (!commandPanelEvent.value) return null
+  return {
+    isError: commandPanelIsError.value,
+    title: commandPanelTitle.value,
+    text: commandPanelText.value,
+    items: commandResultItems.value,
+  }
+})
+
 function selectCommandResultItem(item: CommandActionListItem) {
   const kind = item.kind?.trim().toLowerCase()
   if (kind === 'quick_action') {
@@ -1423,34 +1478,82 @@ function selectCommandResultItem(item: CommandActionListItem) {
   })
 }
 const {
-  runtime: acpRuntime,
+  runtime: acpCapabilityRuntime,
   models: acpModels,
   currentModelId: currentACPModelId,
+  reasoningEfforts: acpReasoningEfforts,
+  currentReasoningEffort: currentACPReasoningEffort,
   isEnsuring: acpRuntimeEnsuring,
-  ensure: ensureActiveACPRuntime,
-  setModel: setActiveACPModel,
+  isPreparing: acpConfigPreparing,
+  ensure: ensureACPRuntime,
+  setModel: setACPModel,
+  setReasoning: setACPReasoning,
 } = useACPRuntime({
-  botId: currentBotId,
-  sessionId: activeSessionId,
-  enabled: computed(() => activeIsACP.value && !!currentBotId.value && !!activeSessionId.value),
-  onError: (error) => {
-    if (activeIsACP.value) {
-      composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
-    }
-  },
+  target: paneTarget,
+  pending: activeIsPendingACP,
+  enabled: computed(() => activeUsesACPComposer.value && !!currentBotId.value),
+  agentId: activeACPAgentId,
+  projectPath: activeACPProjectPath,
 })
 
 const models = computed<ModelsGetResponse[]>(() => modelData.value ?? [])
 const providers = computed<ProvidersGetResponse[]>(() => providerData.value ?? [])
 const acpModelsLoading = computed(() =>
-  activeIsPendingACP.value
-    ? !pendingACPRuntimeStatus.value?.models && (agentChanging.value || pendingACPRuntimeEnsuring.value)
-    : activeIsACP.value && !acpRuntime.value?.models && (agentChanging.value || acpRuntimeEnsuring.value),
+  activeUsesACPComposer.value
+  && !acpCapabilityRuntime.value?.models
+  && (agentChanging.value || acpRuntimeEnsuring.value),
 )
+const composerConfigPending = computed(() => activeUsesACPComposer.value && (
+  agentChanging.value || acpConfigChanging.value
+))
+const canChangeAgent = computed(() => !streaming.value
+  && !creatingSession.value
+  && !composerConfigPending.value
+  && messages.value.length === 0)
 
-const pendingACPModelOptions = computed<AcpclientModelInfo[]>(() => {
-  return activeIsPendingACP.value ? pendingACPRuntimeStatus.value?.models?.available_models ?? [] : []
+const acpModelPickerModels = computed<ModelsGetResponse[]>(() => {
+  const adapted: ModelsGetResponse[] = []
+  for (const model of acpModels.value) {
+    const value = model.id?.trim() ?? ''
+    if (!value) continue
+    adapted.push({
+      id: value,
+      model_id: value,
+      name: model.name?.trim() || value,
+      provider_id: '',
+      type: 'chat',
+      config: {
+        description: model.description?.trim() || undefined,
+      },
+    })
+  }
+  return adapted
 })
+
+// Normalize runtime-specific model metadata into the one contract consumed by
+// Memoh's existing picker. The template stays runtime-agnostic; only this
+// adapter knows whether the values came from a native model or an ACP session.
+const composerModels = computed(() =>
+  activeUsesACPComposer.value ? acpModelPickerModels.value : models.value,
+)
+const composerModelProviders = computed(() =>
+  activeUsesACPComposer.value ? [] : providers.value,
+)
+const composerReasoningOptions = computed(() => {
+  if (!activeUsesACPComposer.value) return undefined
+  return acpReasoningEfforts.value.flatMap((effort) => {
+    const value = effort.id?.trim() ?? ''
+    if (!value) return []
+    return [{
+      value,
+      label: effort.name?.trim() || value,
+      description: effort.description?.trim() || undefined,
+    }]
+  })
+})
+const composerModelsLoading = computed(() =>
+  activeUsesACPComposer.value && (acpModelsLoading.value || acpConfigPreparing.value),
+)
 
 const activeModel = computed(() => {
   const id = overrideModelId.value || botSettings.value?.chat_model_id || ''
@@ -1534,33 +1637,28 @@ const availableReasoningEfforts = computed(() =>
 )
 
 const selectedModelLabel = computed(() => {
-  if (activeIsPendingACP.value) {
-    const pending = pendingACPModelId.value
-    if (pending) {
-      const current = pendingACPModelOptions.value.find(model => model.id === pending)
-      return current?.name || current?.id || pending
-    }
-    return t('chat.modelDefault')
-  }
-  if (activeIsACP.value) {
-    const current = acpModels.value.find(model => model.id === currentACPModelId.value)
-    return current?.name || current?.id || currentACPModelId.value || t('chat.modelDefault')
-  }
-  const m = models.value.find((m) => m.id === overrideModelId.value)
-  return m?.name || m?.model_id || t('chat.modelDefault')
+  const current = composerModels.value.find(model => model.id === overrideModelId.value)
+  return current?.name || current?.model_id || overrideModelId.value || t('chat.modelDefault')
 })
 
 const selectedReasoningLabel = computed(() => {
+  if (activeUsesACPComposer.value) {
+    const current = overrideReasoningEffort.value
+    return composerReasoningOptions.value?.find(option => option.value === current)?.label || current
+  }
   const v = overrideReasoningEffort.value
   return t(EFFORT_LABELS[v] ?? 'chat.modelDefault')
 })
 
 const reasoningActive = computed(() =>
-  !activeIsACP.value
-  && !activeIsPendingACP.value
-  && activeModelSupportsReasoning.value
-  && Boolean(overrideReasoningEffort.value)
-  && overrideReasoningEffort.value !== REASONING_EFFORT_DISABLE,
+  activeUsesACPComposer.value
+    ? Boolean(
+        overrideReasoningEffort.value
+        && composerReasoningOptions.value?.some(option => option.value === overrideReasoningEffort.value),
+      )
+    : activeModelSupportsReasoning.value
+      && Boolean(overrideReasoningEffort.value)
+      && overrideReasoningEffort.value !== REASONING_EFFORT_DISABLE,
 )
 
 const modelTriggerLabel = computed(() =>
@@ -1570,7 +1668,7 @@ const modelTriggerLabel = computed(() =>
 )
 
 function initFromBotSettings() {
-  if (!botSettings.value) return
+  if (activeUsesACPComposer.value || !botSettings.value) return
   if (!overrideModelId.value) {
     overrideModelId.value = botSettings.value.chat_model_id ?? ''
   }
@@ -1583,9 +1681,10 @@ function initFromBotSettings() {
   }
 }
 
-watch(botSettings, () => initFromBotSettings(), { immediate: true })
+watch([botSettings, activeUsesACPComposer], () => initFromBotSettings(), { immediate: true })
 
 watch(availableReasoningEfforts, (efforts) => {
+  if (activeUsesACPComposer.value) return
   const current = overrideReasoningEffort.value
   if (!current || current === REASONING_EFFORT_DISABLE || efforts.includes(current)) return
   overrideReasoningEffort.value = efforts.includes('medium') ? 'medium' : efforts[0] ?? REASONING_EFFORT_DISABLE
@@ -1596,12 +1695,104 @@ watch(currentBotId, () => {
   overrideReasoningEffort.value = ''
 })
 
-watch(activeIsACP, (isACP) => {
-  if (isACP) {
-    pendingFiles.value = []
-    requestedSkills.value = []
-  }
+watch(activeUsesACPComposer, (usesACP, previouslyUsedACP) => {
+  if (usesACP === previouslyUsedACP) return
+  overrideModelId.value = ''
+  overrideReasoningEffort.value = ''
+  if (!usesACP) initFromBotSettings()
 })
+
+watch(activeACPAgentId, (agentID, previousAgentID) => {
+  if (!activeUsesACPComposer.value || !previousAgentID || agentID === previousAgentID) return
+  overrideModelId.value = ''
+  overrideReasoningEffort.value = ''
+})
+
+// ACP overrides describe one runtime. An ephemeral pane is repointed to a
+// different session without remounting, so without this reset the previous
+// session's selection would be pushed onto the next session's runtime by the
+// scope watcher below (registration order guarantees this reset runs first)
+// and by per-turn sends. Reconcile re-seeds the cleared values from the new
+// runtime's own current state.
+const acpSessionIdentity = computed(() => JSON.stringify([
+  paneTarget.value.botId,
+  paneTarget.value.sessionId,
+  activeACPAgentId.value,
+  activeACPProjectPath.value,
+  activeACPProjectMode.value,
+]))
+watch(acpSessionIdentity, (identity, previousIdentity) => {
+  if (!activeUsesACPComposer.value || identity === previousIdentity) return
+  overrideModelId.value = ''
+  overrideReasoningEffort.value = ''
+})
+
+function reconcileACPComposerConfig() {
+  const runtime = acpCapabilityRuntime.value
+  if (!activeUsesACPComposer.value || !runtime) return
+
+  if (runtime.models !== undefined) {
+    const availableModels = new Set(
+      acpModels.value.map(model => model.id?.trim() ?? '').filter(Boolean),
+    )
+    const selectedModel = overrideModelId.value.trim()
+    if (!selectedModel || !availableModels.has(selectedModel)) {
+      const currentModel = currentACPModelId.value.trim()
+      overrideModelId.value = availableModels.has(currentModel) ? currentModel : ''
+    }
+  }
+
+  if (runtime.reasoning !== undefined) {
+    const availableEfforts = new Set(
+      acpReasoningEfforts.value.map(effort => effort.id?.trim() ?? '').filter(Boolean),
+    )
+    const selectedEffort = overrideReasoningEffort.value.trim()
+    if (!selectedEffort || !availableEfforts.has(selectedEffort)) {
+      const currentEffort = currentACPReasoningEffort.value.trim()
+      overrideReasoningEffort.value = availableEfforts.has(currentEffort) ? currentEffort : ''
+    }
+  } else {
+    overrideReasoningEffort.value = ''
+  }
+}
+
+watch(acpCapabilityRuntime, () => {
+  if (!acpConfigPreparing.value) reconcileACPComposerConfig()
+}, { immediate: true })
+
+watch(
+  () => activeUsesACPComposer.value && isVisible.value ? acpOperationScope.value : '',
+  (scope) => {
+    if (!scope || !activeACPAgentId.value) return
+    void refreshACPComposerConfig().catch((error) => {
+      composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
+    })
+  },
+  { immediate: true },
+)
+
+async function refreshACPComposerConfig(): Promise<void> {
+  if (!activeUsesACPComposer.value) return
+  const desiredModelId = overrideModelId.value.trim()
+  const runtime = await ensureACPRuntime(true, desiredModelId)
+  if (!runtime || !activeUsesACPComposer.value) return
+  reconcileACPComposerConfig()
+}
+
+async function refreshACPComposerConfigAfterSelectionError(result: SendMessageResult): Promise<void> {
+  if (!shouldRefreshACPComposerConfig(result, activeUsesACPComposer.value)) return
+
+  const operationScope = acpOperationScope.value
+  acpConfigChangeScope.value = operationScope
+  try {
+    await refreshACPComposerConfig()
+  } catch {
+    // Preserve the original selection error. This refresh is best-effort
+    // recovery so a secondary failure must not replace the actionable cause.
+  } finally {
+    if (acpConfigChangeScope.value === operationScope) acpConfigChangeScope.value = ''
+  }
+}
 
 function pendingMatchesDefaultACP(input: ACPAgentSessionInput): boolean {
   const metadata = activeChatTarget.value.metadata
@@ -1642,17 +1833,9 @@ watch([defaultACPSessionInput, defaultACPLoading, currentBotId, hasExplicitSessi
   chatStore.stageDefaultACPSession(input, paneTarget.value)
 }, { immediate: true })
 
-watch([modelPopoverOpen, activeIsPendingACP, activeIsACP, activeSessionId], ([open, isPending, isACP, sessionID]) => {
-  if (!open) return
-  if (isPending) {
-    if (pendingACPRuntimeStatus.value || pendingACPRuntimeEnsuring.value) return
-    void chatStore.ensurePendingACPRuntime(paneTarget.value).catch((error) => {
-      composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
-    })
-    return
-  }
-  if (!isACP || !sessionID || acpRuntime.value || acpRuntimeEnsuring.value) return
-  void ensureActiveACPRuntime().catch((error) => {
+watch([modelPopoverOpen, activeUsesACPComposer, acpOperationScope], ([open, usesACP]) => {
+  if (!open || !usesACP) return
+  void refreshACPComposerConfig().catch((error) => {
     composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
   })
 })
@@ -1692,6 +1875,7 @@ async function selectACPAgent(profile: AcpprofilePublicProfile) {
   const agentId = normalizeACPAgentID(profile.id)
   if (!agentId || agentChanging.value || !canChangeAgent.value) return
   agentPopoverOpen.value = false
+  if (activeUsesACPComposer.value && agentId === activeACPAgentId.value) return
   agentChanging.value = true
   composerError.value = ''
   try {
@@ -1705,7 +1889,6 @@ async function selectACPAgent(profile: AcpprofilePublicProfile) {
       }, {}, paneTarget.value)
       await withAgentSwitchTimeout(chatStore.ensurePendingACPRuntime(paneTarget.value))
     }
-    pendingFiles.value = []
   } catch (error) {
     composerError.value = agentSwitchErrorMessage(error)
   } finally {
@@ -1744,45 +1927,70 @@ function onModelSelected() {
   }
 }
 
-async function onACPModelSelected(model: AcpclientModelInfo) {
-  const modelId = (model.id ?? '').trim()
-  if (!modelId || acpModelChanging.value) return
-  modelPopoverOpen.value = false
-  if (activeIsPendingACP.value) {
-    acpModelChanging.value = true
-    composerError.value = ''
-    try {
-      await chatStore.setPendingACPModel(modelId, paneTarget.value)
-    } catch (error) {
-      composerError.value = resolveApiErrorMessage(error, t('chat.modelSwitchFailed'))
-    } finally {
-      acpModelChanging.value = false
-    }
+async function onComposerModelValueSelected(value: string) {
+  if (activeUsesACPComposer.value && acpConfigChanging.value) return
+  const previousModel = overrideModelId.value
+  const previousReasoningEffort = overrideReasoningEffort.value
+  overrideModelId.value = value
+  if (!activeUsesACPComposer.value) {
+    onModelSelected()
     return
   }
-  acpModelChanging.value = true
+
+  const modelId = value.trim()
+  if (!modelId) {
+    overrideModelId.value = previousModel
+    return
+  }
+  const operationScope = acpOperationScope.value
+  acpConfigChangeScope.value = operationScope
   composerError.value = ''
   try {
-    await setActiveACPModel(modelId)
+    const runtime = await setACPModel(modelId)
+    if (runtime && acpOperationScope.value === operationScope) reconcileACPComposerConfig()
   } catch (error) {
-    composerError.value = resolveApiErrorMessage(error, t('chat.modelSwitchFailed'))
+    if (
+      activeUsesACPComposer.value
+      && acpOperationScope.value === operationScope
+      && overrideModelId.value === value
+    ) {
+      overrideModelId.value = previousModel
+      overrideReasoningEffort.value = previousReasoningEffort
+      composerError.value = resolveApiErrorMessage(error, t('chat.modelSwitchFailed'))
+    }
   } finally {
-    acpModelChanging.value = false
+    if (acpConfigChangeScope.value === operationScope) acpConfigChangeScope.value = ''
   }
 }
 
-async function onPendingACPDefaultModelSelected() {
-  if (acpModelChanging.value) return
-  modelPopoverOpen.value = false
-  acpModelChanging.value = true
+async function onComposerReasoningEffortSelected(value: string) {
+  if (activeUsesACPComposer.value && acpConfigChanging.value) return
+  const previousEffort = overrideReasoningEffort.value
+  overrideReasoningEffort.value = value
+  if (!activeUsesACPComposer.value) return
+
+  const effort = value.trim()
+  if (!effort) {
+    overrideReasoningEffort.value = previousEffort
+    return
+  }
+  const operationScope = acpOperationScope.value
+  acpConfigChangeScope.value = operationScope
   composerError.value = ''
   try {
-    // May reset the warm runtime back to the agent default model.
-    await chatStore.setPendingACPModel('', paneTarget.value)
+    const runtime = await setACPReasoning(effort)
+    if (runtime && acpOperationScope.value === operationScope) reconcileACPComposerConfig()
   } catch (error) {
-    composerError.value = resolveApiErrorMessage(error, t('chat.modelSwitchFailed'))
+    if (
+      activeUsesACPComposer.value
+      && acpOperationScope.value === operationScope
+      && overrideReasoningEffort.value === value
+    ) {
+      overrideReasoningEffort.value = previousEffort
+      composerError.value = resolveApiErrorMessage(error, t('chat.reasoningSwitchFailed'))
+    }
   } finally {
-    acpModelChanging.value = false
+    if (acpConfigChangeScope.value === operationScope) acpConfigChangeScope.value = ''
   }
 }
 
@@ -1804,7 +2012,6 @@ const {
   composerRadiusEase,
   focusTextarea,
   modelTriggerMaxWidth,
-  composerMaskHeight,
   snapComposerNext,
 } = useComposerLayout({
   inputText,
@@ -1836,6 +2043,23 @@ const { inputDraftKey, saveInputDraft, clearAllDrafts } = useComposerDrafts({
   inputText,
   onDraftKeySwap: snapComposerNext,
 })
+
+// The dock owns ALL geometry/visibility orchestration (box-slot mutex,
+// backdrop-mask height) — the pane only needs two readings back from it: the
+// mask height for the full-width backdrop strip, and the dock's own height
+// for the message column's bottom padding (so the last message can always
+// scroll clear of whatever the dock currently shows — the static pb-28 this
+// replaces only ever fit the bare composer).
+const dockEl = useTemplateRef<InstanceType<typeof ComposerDock>>('dockEl')
+const { height: dockHeight } = useElementSize(() => dockEl.value?.$el ?? null)
+const dockMaskHeight = computed(() => dockEl.value?.maskHeight ?? `${COMPOSER_MASK_BELOW_PX}px`)
+const messagesBottomPad = computed(() => `${dockHeight.value + COMPOSER_MASK_BELOW_PX + 24}px`)
+
+// The textarea belongs to the pane, so when the dock hands the input slot
+// back after ask_user is resolved or canceled, it emits and we focus here.
+function handleDockRevealComposer(opts: { focus?: boolean }) {
+  if (opts.focus) void nextTick(focusTextarea)
+}
 
 watch([
   startupSendFailure,
@@ -2042,11 +2266,10 @@ function handleForkMessage(messageId: string) {
 // reka's ListboxFilter, the bridge runs the listbox in virtual-highlight mode
 // and the textarea forwards navigation keys to whichever surface is showing.
 const slashPickerBridge = ref<InstanceType<typeof CommandKeyBridge> | null>(null)
-const commandPanelBridge = ref<InstanceType<typeof CommandKeyBridge> | null>(null)
 
 function activeComposerListBridge() {
   if (slashPanelOpen.value && slashPanelHasResults.value) return slashPickerBridge.value
-  if (commandPanelEvent.value && commandResultItems.value.length) return commandPanelBridge.value
+  if (commandPanelEvent.value && commandResultItems.value.length) return dockEl.value?.commandBridge ?? null
   return null
 }
 
@@ -2078,25 +2301,34 @@ function handleComposerKeydown(e: KeyboardEvent) {
 }
 
 async function handleRetryMessage(messageId: string) {
+  if (composerConfigPending.value) return
   composerError.value = ''
   const result = await chatStore.retryLatestAssistant(messageId, {
     target: paneTarget.value,
     modelId: overrideModelId.value,
     reasoningEffort: overrideReasoningEffort.value,
+    workspaceTargetId: selectedWorkspaceTargetId.value,
   })
+  await refreshACPComposerConfigAfterSelectionError(result)
   if (!result.ok && result.error) {
     composerError.value = result.error
   }
 }
 
 async function handleEditMessage(messageId: string, text: string, done?: (started: boolean) => void) {
+  if (composerConfigPending.value) {
+    done?.(false)
+    return
+  }
   composerError.value = ''
   try {
     const result = await chatStore.editLatestUser(messageId, text, {
       target: paneTarget.value,
       modelId: overrideModelId.value,
       reasoningEffort: overrideReasoningEffort.value,
+      workspaceTargetId: selectedWorkspaceTargetId.value,
     })
+    await refreshACPComposerConfigAfterSelectionError(result)
     if (!result.ok && result.error) {
       composerError.value = result.error
     }
@@ -2114,7 +2346,13 @@ async function handleSend() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   const skills = [...requestedSkills.value]
-  if ((!text && !files.length && !skills.length) || streaming.value || loadingMessages.value || activeChatReadOnly.value) return
+  if (
+    (!text && !files.length && !skills.length)
+    || streaming.value
+    || loadingMessages.value
+    || activeChatReadOnly.value
+    || composerConfigPending.value
+  ) return
   if (text.startsWith('/') && files.length) {
     composerError.value = ''
     chatStore.showCommandError('slash_attachments_unsupported', t('chat.slash.attachmentsUnsupported'), {
@@ -2135,11 +2373,6 @@ async function handleSend() {
     composerError.value = defaultACPComposerError.value
     return
   }
-  if (activeIsACP.value && files.length) {
-    composerError.value = t('chat.acpAttachmentsUnsupported')
-    return
-  }
-
   const sentDraftKey = inputDraftKey.value
   const sentContext = captureChatPaneSendContext(
     paneTarget.value,
@@ -2147,6 +2380,7 @@ async function handleSend() {
   )
   const sentModelId = overrideModelId.value
   const sentReasoningEffort = overrideReasoningEffort.value
+  const sentWorkspaceTargetId = selectedWorkspaceTargetId.value
   composerError.value = ''
   inputText.value = ''
   saveInputDraft(sentDraftKey, '')
@@ -2179,6 +2413,7 @@ async function handleSend() {
     target: sentContext.target,
     modelId: sentModelId,
     reasoningEffort: sentReasoningEffort,
+    workspaceTargetId: sentWorkspaceTargetId,
     requestedSkills: skills,
     composerScope: sentContext.composerScope,
     onBeforeTurnAppend: () => {
@@ -2195,6 +2430,7 @@ async function handleSend() {
     },
   })
   rollbackPin = null
+  await refreshACPComposerConfigAfterSelectionError(result)
   if (!result.ok && result.stage === 'startup') {
     const restoreInput = result.restoreInput ?? text
     if (!matchesChatPaneSendContext(

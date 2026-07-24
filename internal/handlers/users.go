@@ -16,8 +16,8 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/acl"
-	"github.com/memohai/memoh/internal/acpclient"
-	"github.com/memohai/memoh/internal/acpprofile"
+	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
+	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/auth"
 	"github.com/memohai/memoh/internal/bots"
@@ -26,6 +26,7 @@ import (
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/httpx"
 	"github.com/memohai/memoh/internal/identity"
+	runtimeRpc "github.com/memohai/memoh/internal/rpc/runtime"
 	"github.com/memohai/memoh/internal/workspace"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
@@ -51,33 +52,31 @@ type createBotStreamBotEvent struct {
 
 // UsersHandler manages user/account CRUD and bot operations via REST API.
 type UsersHandler struct {
-	service          *accounts.Service
-	botService       *bots.Service
-	routeService     route.Service
-	channelStore     *channel.Store
-	channelLifecycle *channel.Lifecycle
-	channelManager   *channel.Manager
-	registry         *channel.Registry
-	acpWorkspace     botCreateWorkspace
-	acpRuntimes      acpRuntimeCloser
-	logger           *slog.Logger
+	service        *accounts.Service
+	botService     *bots.Service
+	routeService   route.Service
+	channelStore   *channel.Store
+	channelRuntime channel.Runtime
+	registry       *channel.Registry
+	acpWorkspace   botCreateWorkspace
+	acpRuntimes    acpRuntimeCloser
+	logger         *slog.Logger
 }
 
 // NewUsersHandler creates a UsersHandler with channel identity support.
-func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bots.Service, routeService route.Service, channelStore *channel.Store, channelLifecycle *channel.Lifecycle, channelManager *channel.Manager, registry *channel.Registry, acpWorkspace botCreateWorkspace) *UsersHandler {
+func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bots.Service, routeService route.Service, channelStore *channel.Store, channelRuntime channel.Runtime, registry *channel.Registry, acpWorkspace botCreateWorkspace) *UsersHandler {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &UsersHandler{
-		service:          service,
-		botService:       botService,
-		routeService:     routeService,
-		channelStore:     channelStore,
-		channelLifecycle: channelLifecycle,
-		channelManager:   channelManager,
-		registry:         registry,
-		acpWorkspace:     acpWorkspace,
-		logger:           log.With(slog.String("handler", "users")),
+		service:        service,
+		botService:     botService,
+		routeService:   routeService,
+		channelStore:   channelStore,
+		channelRuntime: channelRuntime,
+		registry:       registry,
+		acpWorkspace:   acpWorkspace,
+		logger:         log.With(slog.String("handler", "users")),
 	}
 }
 
@@ -93,7 +92,6 @@ func (h *UsersHandler) Register(e *echo.Echo) {
 	userGroup.GET("", h.ListUsers)
 	userGroup.GET("/:id", h.GetUser)
 	userGroup.PUT("/:id", h.UpdateUser)
-	userGroup.PUT("/:id/password", h.ResetUserPassword)
 	userGroup.POST("", h.CreateUser)
 	userGroup.DELETE("/:id", h.RemoveMember)
 
@@ -141,12 +139,12 @@ func (h *UsersHandler) GetMe(c echo.Context) error {
 
 // UpdateMe godoc
 // @Summary Update current user profile
-// @Description Update current user display name or avatar
+// @Description Update current user profile and preferences
 // @Tags users
 // @Param payload body accounts.UpdateProfileRequest true "Profile payload"
 // @Success 200 {object} accounts.Account
-// @Failure 400 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
+// @Failure 400 {object} apperror.Problem
+// @Failure 500 {object} apperror.Problem
 // @Router /users/me [put].
 func (h *UsersHandler) UpdateMe(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -155,11 +153,14 @@ func (h *UsersHandler) UpdateMe(c echo.Context) error {
 	}
 	var req accounts.UpdateProfileRequest
 	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return apperror.Wrap(apperror.CodeProfileRequestInvalid, err, nil)
 	}
 	resp, err := h.service.UpdateProfile(c.Request().Context(), channelIdentityID, req)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		if errors.Is(err, accounts.ErrInvalidTitleModel) {
+			return apperror.Wrap(apperror.CodeProfileTitleModelInvalid, err, nil)
+		}
+		return apperror.Wrap(apperror.CodeProfileUpdateFailed, err, nil)
 	}
 	return c.JSON(http.StatusOK, resp)
 }
@@ -263,7 +264,7 @@ func (h *UsersHandler) GetUser(c echo.Context) error {
 
 // UpdateUser godoc
 // @Summary Update user (admin only)
-// @Description Update user profile and status
+// @Description Update the user's role or membership status in the current workspace
 // @Tags users
 // @Param id path string true "User ID"
 // @Param payload body accounts.UpdateAccountRequest true "User update payload"
@@ -271,6 +272,7 @@ func (h *UsersHandler) GetUser(c echo.Context) error {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /users/{id} [put].
 func (h *UsersHandler) UpdateUser(c echo.Context) error {
@@ -302,53 +304,12 @@ func (h *UsersHandler) UpdateUser(c echo.Context) error {
 	}
 	resp, err := h.service.UpdateAdmin(c.Request().Context(), targetID, req)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
-	return c.JSON(http.StatusOK, resp)
-}
-
-// ResetUserPassword godoc
-// @Summary Reset user password (admin only)
-// @Description Reset a user password
-// @Tags users
-// @Param id path string true "User ID"
-// @Param payload body accounts.ResetPasswordRequest true "Password payload"
-// @Success 204 "No Content"
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
-// @Router /users/{id}/password [put].
-func (h *UsersHandler) ResetUserPassword(c echo.Context) error {
-	channelIdentityID, err := h.requireChannelIdentityID(c)
-	if err != nil {
-		return err
-	}
-	isAdmin, err := h.service.IsAdmin(c.Request().Context(), channelIdentityID)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
-	if !isAdmin {
-		return echo.NewHTTPError(http.StatusForbidden, "admin role required")
-	}
-	targetID := strings.TrimSpace(c.Param("id"))
-	if targetID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "user id is required")
-	}
-	if _, err := h.service.Get(c.Request().Context(), targetID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "user not found")
+		if errors.Is(err, db.ErrLastActiveAdmin) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
-	var req accounts.ResetPasswordRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-	}
-	if err := h.service.ResetPassword(c.Request().Context(), targetID, req.NewPassword); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-	}
-	return c.NoContent(http.StatusNoContent)
+	return c.JSON(http.StatusOK, resp)
 }
 
 // CreateUser godoc
@@ -386,14 +347,15 @@ func (h *UsersHandler) CreateUser(c echo.Context) error {
 }
 
 // RemoveMember godoc
-// @Summary Remove member (admin only)
-// @Description Remove a workspace member by removing login credentials and disabling the account
+// @Summary Deactivate member (admin only)
+// @Description Deactivate the member in the current workspace without changing global credentials
 // @Tags users
 // @Param id path string true "User ID"
 // @Success 204 "No Content"
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
+// @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /users/{id} [delete].
 func (h *UsersHandler) RemoveMember(c echo.Context) error {
@@ -422,6 +384,9 @@ func (h *UsersHandler) RemoveMember(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	if err := h.service.RemoveMember(c.Request().Context(), targetID); err != nil {
+		if errors.Is(err, db.ErrLastActiveAdmin) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, db.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "member not found")
 		}
@@ -518,6 +483,12 @@ func accountNotFound(err error) bool {
 }
 
 func createBotHTTPError(err error, ownerFromToken bool) error {
+	if errors.Is(err, workspace.ErrWorkspaceImageIncompatible) {
+		return apperror.Wrap(apperror.CodeWorkspaceImageIncompatible, err, nil)
+	}
+	if errors.Is(err, workspace.ErrWorkspaceTemplateBootstrapFailed) {
+		return apperror.Wrap(apperror.CodeWorkspaceTemplateBootstrapFailed, err, nil)
+	}
 	if errors.Is(err, bots.ErrOwnerUserNotFound) {
 		if ownerFromToken {
 			return echo.NewHTTPError(http.StatusUnauthorized, "owner user not found, please login again")
@@ -552,9 +523,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 		return createBotHTTPError(err, ownerFromToken)
 	}
 
-	c.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
-	c.Response().Header().Set(echo.HeaderCacheControl, "no-cache")
-	c.Response().Header().Set(echo.HeaderConnection, "keep-alive")
+	setSSEHeaders(c)
 	c.Response().WriteHeader(http.StatusOK)
 	writer := c.Response().Writer
 
@@ -633,6 +602,10 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 				slog.Any("error", readyErr),
 			)
 			sendError("workspace_setup_failed", "bots.create.failedSubtitle", "workspace setup failed; ready status update failed")
+			return nil
+		}
+		if event, ok := newWorkspaceSetupAppError(err, httpx.RequestID(c)); ok {
+			_ = send(event)
 			return nil
 		}
 		sendError("workspace_setup_failed", "bots.create.failedSubtitle", "workspace setup failed")
@@ -1044,12 +1017,9 @@ func (h *UsersHandler) prepareACPWorkspaceConfig(ctx context.Context, bot bots.B
 		if target.profile.ID == acpprofile.AgentHermesID {
 			var err error
 			resolved, err = acpclient.ResolveSessionContext(acpclient.SessionContextInput{
-				AgentID:       target.profile.ID,
-				SetupMode:     target.mode,
-				BotID:         bot.ID,
-				Backend:       workspaceInfo.Backend,
-				WorkspaceRoot: workspaceInfo.DefaultWorkDir,
-				LocalDataRoot: workspaceInfo.LocalDataRoot,
+				AgentID:   target.profile.ID,
+				SetupMode: target.mode,
+				Backend:   workspaceInfo.Backend,
 			})
 			if err != nil {
 				return err
@@ -1200,6 +1170,7 @@ func (h *UsersHandler) GetBotChannelConfig(c echo.Context) error {
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 502 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{id}/channel/{platform} [put].
 func (h *UsersHandler) UpsertBotChannelConfig(c echo.Context) error {
@@ -1225,11 +1196,14 @@ func (h *UsersHandler) UpsertBotChannelConfig(c echo.Context) error {
 	if req.Credentials == nil {
 		req.Credentials = map[string]any{}
 	}
-	if h.channelLifecycle == nil {
+	if h.channelRuntime == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "channel lifecycle not configured")
 	}
-	resp, err := h.channelLifecycle.UpsertBotChannelConfig(c.Request().Context(), botID, channelType, req)
+	resp, err := h.channelRuntime.UpsertBotChannelConfig(c.Request().Context(), botID, channelType, req)
 	if err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		status := http.StatusInternalServerError
 		if errors.Is(err, channel.ErrChannelDiscoveryFailed) {
 			status = http.StatusBadGateway
@@ -1253,6 +1227,7 @@ func (h *UsersHandler) UpsertBotChannelConfig(c echo.Context) error {
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 502 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{id}/channel/{platform}/status [patch].
 func (h *UsersHandler) UpdateBotChannelStatus(c echo.Context) error {
@@ -1275,11 +1250,14 @@ func (h *UsersHandler) UpdateBotChannelStatus(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if h.channelLifecycle == nil {
+	if h.channelRuntime == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "channel lifecycle not configured")
 	}
-	resp, err := h.channelLifecycle.SetBotChannelStatus(c.Request().Context(), botID, channelType, req.Disabled)
+	resp, err := h.channelRuntime.SetBotChannelStatus(c.Request().Context(), botID, channelType, req.Disabled)
 	if err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		if errors.Is(err, channel.ErrChannelConfigNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		}
@@ -1306,6 +1284,7 @@ func (h *UsersHandler) UpdateBotChannelStatus(c echo.Context) error {
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 502 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Router /bots/{id}/channel/{platform}/webhook-endpoint [post].
 func (h *UsersHandler) SetBotChannelWebhookEndpoint(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -1327,11 +1306,14 @@ func (h *UsersHandler) SetBotChannelWebhookEndpoint(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if h.channelStore == nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "channel store not configured")
+	if h.channelRuntime == nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "channel runtime not configured")
 	}
-	resp, err := h.channelStore.SetWebhookEndpoint(c.Request().Context(), botID, channelType, req)
+	resp, err := h.channelRuntime.SetWebhookEndpoint(c.Request().Context(), botID, channelType, req)
 	if err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		switch {
 		case errors.Is(err, channel.ErrChannelConfigNotFound):
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -1354,6 +1336,7 @@ func (h *UsersHandler) SetBotChannelWebhookEndpoint(c echo.Context) error {
 // @Failure 400 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Router /bots/{id}/channel/{platform} [delete].
 func (h *UsersHandler) DeleteBotChannelConfig(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -1371,10 +1354,13 @@ func (h *UsersHandler) DeleteBotChannelConfig(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if h.channelLifecycle == nil {
+	if h.channelRuntime == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "channel lifecycle not configured")
 	}
-	if err := h.channelLifecycle.DeleteBotChannelConfig(c.Request().Context(), botID, channelType); err != nil {
+	if err := h.channelRuntime.DeleteBotChannelConfig(c.Request().Context(), botID, channelType); err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -1392,6 +1378,7 @@ func (h *UsersHandler) DeleteBotChannelConfig(c echo.Context) error {
 // @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Router /bots/{id}/channel/{platform}/send [post].
 func (h *UsersHandler) SendBotMessage(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -1405,7 +1392,7 @@ func (h *UsersHandler) SendBotMessage(c echo.Context) error {
 	if _, err := h.authorizeBotAccess(c.Request().Context(), channelIdentityID, botID); err != nil {
 		return err
 	}
-	if h.channelManager == nil {
+	if h.channelRuntime == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "channel manager not configured")
 	}
 	channelType, err := h.registry.ParseChannelType(c.Param("platform"))
@@ -1419,7 +1406,10 @@ func (h *UsersHandler) SendBotMessage(c echo.Context) error {
 	if req.Message.IsEmpty() {
 		return echo.NewHTTPError(http.StatusBadRequest, "message is required")
 	}
-	if err := h.channelManager.Send(c.Request().Context(), botID, channelType, req); err != nil {
+	if err := h.channelRuntime.Send(c.Request().Context(), botID, channelType, req); err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -1437,6 +1427,7 @@ func (h *UsersHandler) SendBotMessage(c echo.Context) error {
 // @Failure 401 {object} ErrorResponse
 // @Failure 403 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
+// @Failure 503 {object} apperror.Problem
 // @Router /bots/{id}/channel/{platform}/send_chat [post].
 func (h *UsersHandler) SendBotMessageSession(c echo.Context) error {
 	chatToken, err := auth.ChatTokenFromContext(c)
@@ -1450,7 +1441,7 @@ func (h *UsersHandler) SendBotMessageSession(c echo.Context) error {
 	if chatToken.BotID != botID {
 		return echo.NewHTTPError(http.StatusForbidden, "token bot mismatch")
 	}
-	if h.channelManager == nil || h.routeService == nil {
+	if h.channelRuntime == nil || h.routeService == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "services not configured")
 	}
 	route, err := h.routeService.GetByID(c.Request().Context(), chatToken.RouteID)
@@ -1472,13 +1463,23 @@ func (h *UsersHandler) SendBotMessageSession(c echo.Context) error {
 	if req.Message.IsEmpty() {
 		return echo.NewHTTPError(http.StatusBadRequest, "message is required")
 	}
-	if err := h.channelManager.Send(c.Request().Context(), botID, channelType, channel.SendRequest{
+	if err := h.channelRuntime.Send(c.Request().Context(), botID, channelType, channel.SendRequest{
 		Target:  route.ReplyTarget,
 		Message: req.Message,
 	}); err != nil {
+		if mapped := mapChannelRuntimeError(err); mapped != nil {
+			return mapped
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func mapChannelRuntimeError(err error) error {
+	if errors.Is(err, runtimeRpc.ErrUnavailable) {
+		return apperror.Wrap(apperror.CodeChannelRuntimeUnavailable, err, nil)
+	}
+	return nil
 }
 
 func (h *UsersHandler) authorizeBotAccess(ctx context.Context, channelIdentityID, botID string) (bots.Bot, error) {

@@ -96,9 +96,42 @@
     "bot": {
       "name_taken": "该名称已被占用。"
     },
+    "channel": {
+      "runtime_unavailable": "暂时无法连接 Channel 服务，请稍后重试。"
+    },
+    "profile": {
+      "request_invalid": "个人资料更新请求无效。",
+      "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
+      "update_failed": "个人资料更新失败。"
+    },
+    "provider": {
+      "name_taken": "已存在同名提供方。"
+    },
+    "provider_template": {
+      "not_found": "该提供方模板已不可用。",
+      "domain_invalid": "提供方模板类型无效。",
+      "domain_mismatch": "该提供方模板不能用于此处。",
+      "operation_failed": "提供方模板操作失败。",
+      "request_invalid": "提供方配置无效。"
+    },
+    "search_provider": {
+      "type_conflict": "该搜索提供方已完成配置。"
+    },
     "workspace": {
       "unreachable": "暂时无法连接工作区，请稍后重试。",
+      "image_incompatible": "工作区镜像与当前版本不兼容，请基于最新 Memoh Workspace 镜像重建后重试。",
+      "template_bootstrap_failed": "工作区文件初始化失败，请尝试重建工作区。",
       "display_prepare_failed": "显示环境准备失败，请稍后重试。"
+    },
+    "acp": {
+      "runtime_not_found": "这个 Agent 运行实例已失效，将重新启动。",
+      "model_selection_unsupported": "这个外部 Agent 不支持切换模型。",
+      "model_id_required": "请选择模型后重试。",
+      "model_unavailable": "所选模型已不再可用于这个外部 Agent。",
+      "reasoning_selection_unsupported": "这个外部 Agent 不支持选择推理强度。",
+      "reasoning_effort_required": "请选择推理强度后重试。",
+      "reasoning_effort_unavailable": "所选推理强度已不再可用于这个外部 Agent。",
+      "config_update_failed": "外部 Agent 无法应用所选设置，请重试。"
     }
   },
   "auth": {
@@ -272,6 +305,9 @@
     "avatarUrl": "头像链接",
     "timezone": "时区",
     "timezonePlaceholder": "例如 Asia/Shanghai",
+    "titleModel": "标题模型",
+    "titleModelDescription": "使用此模型为你名下所有 Bot 的会话生成标题。",
+    "titleModelPlaceholder": "未启用（使用首条消息）",
     "saveProfile": "保存更改",
     "profileUpdated": "个人资料已更新",
     "profileUpdateFailed": "个人资料更新失败",
@@ -424,14 +460,9 @@
     "lastLogin": "上次登录",
     "never": "从未登录",
     "toggleStatus": "切换 {name} 的状态",
-    "resetPassword": "重置密码",
-    "resetPasswordFor": "重置 {name} 的密码",
-    "resetPasswordDescription": "为 {name} 设置新密码。",
-    "resetPasswordSuccess": "密码已重置",
-    "resetPasswordFailed": "密码重置失败",
     "removeMember": "移除成员",
     "removeMemberFor": "移除 {name}",
-    "removeConfirm": "确定移除 {name} 吗？这会移除其工作区登录账号。",
+    "removeConfirm": "确定从当前工作区移除 {name} 吗？账号凭据会保留，以后可以重新启用。",
     "removeSuccess": "成员已移除",
     "removeFailed": "成员移除失败",
     "createSuccess": "成员已创建",
@@ -528,11 +559,18 @@
     "inputPlaceholder": "问点什么…",
     "readonlyHint": "该聊天为只读",
     "readonlyPlaceholder": "该聊天为只读，无法发送消息",
-    "composerActions": "添加文件或切换 Agent",
+    "composerActions": "添加文件、切换 Agent 或选择电脑",
     "attachmentLines": "{count} 行",
     "pastedBadge": "粘贴",
     "pastedViewerTitle": "粘贴内容",
     "agent": "Agent",
+    "computers": "电脑",
+    "computerDefault": "默认",
+    "computerDefaultStatus": "默认 · {status}",
+    "computerLoading": "正在加载电脑...",
+    "computerLoadFailed": "无法加载电脑",
+    "computerNone": "没有可用的电脑",
+    "computerUnavailable": "不可用的电脑",
     "attachFiles": "上传文件",
     "send": "发送",
     "sendFailed": "消息发送失败",
@@ -573,6 +611,22 @@
     "forwardedFrom": "转发自 {sender}",
     "replyPhoto": "图片",
     "unknownMessage": "消息",
+    "approval": {
+      "region": "审批请求",
+      "moreInQueue": "还有 {count} 项",
+      "action": {
+        "exec": "运行命令",
+        "write": "写入文件",
+        "edit": "编辑文件",
+        "applyPatch": "应用补丁",
+        "read": "读取文件",
+        "list": "列出目录内容",
+        "fallback": "运行 {tool}"
+      }
+    },
+    "panel": {
+      "regionLabel": "待处理事项"
+    },
     "tools": {
       "read": "读取",
       "write": "写入",
@@ -690,6 +744,7 @@
       "userInputExpired": "已过期",
       "userInputPlaceholder": "输入回答",
       "userInputCustomOption": "其他…",
+      "userInputTellMore": "告诉 Bot 更多…",
       "submitUserInput": "提交",
       "cancelUserInput": "取消",
       "userInputConnectionLost": "连接已断开，请重连后重试。",
@@ -778,12 +833,12 @@
     "agentCodex": "Codex",
     "agentSwitchFailed": "切换 ACP Agent 失败",
     "modelSwitchFailed": "切换模型失败",
+    "reasoningSwitchFailed": "切换推理强度失败",
     "agentSwitchTimeout": "切换耗时过长，请重试。",
     "modelOptions": "选项",
     "modelEffort": "强度",
     "noProject": "不在项目中",
     "noModels": "暂无可用模型",
-    "acpAttachmentsUnsupported": "ACP 会话暂不支持附件。",
     "defaultACPLoading": "默认 Agent 仍在加载，请稍后重试。",
     "defaultACPNoWorkspaceExec": "已启用默认 Agent，但你没有执行工作区命令的权限。",
     "defaultACPAgentMissing": "已启用默认 Agent，但尚未选择 Agent。",
@@ -806,6 +861,9 @@
       "displayArgsInvalid": "外部 Agent 的显示参数无效。",
       "runtimeStartFailed": "外部 Agent 运行时启动失败。",
       "runtimeBusy": "外部 Agent 正在处理该会话的上一轮请求。",
+      "attachmentInvalid": "附件无效，请重新添加。",
+      "attachmentUnavailable": "无法让外部 Agent 访问该附件，请重新添加。",
+      "imageInputUnsupported": "这个外部 Agent 无法读取所附图片。",
       "invalidChatRuntime": "选择的对话运行时无效。"
     },
     "sessionFilterAll": "全部",
@@ -1072,6 +1130,8 @@
     "customProvider": "自定义服务商",
     "apiKey": "API 密钥",
     "apiKeyPlaceholder": "输入 API 密钥",
+    "templateNotConfigured": "未配置",
+    "requiredField": "{field} 为必填项",
     "nameRequired": "请填写名称",
     "clientTypeRequired": "请选择客户端类型",
     "apiKeyRequired": "请填写 API 密钥",
@@ -1182,6 +1242,7 @@
       "yandex": "Yandex"
     },
     "fetchProviderNames": {
+      "native": "原生抓取",
       "jina": "Jina Reader",
       "cloudflare_markdown": "Cloudflare Markdown"
     }
@@ -1191,6 +1252,8 @@
     "add": "添加记忆提供方",
     "empty": "暂无记忆提供方",
     "provider": "提供方类型",
+    "providerRequired": "请选择提供方类型",
+    "nameRequired": "请填写名称",
     "searchPlaceholder": "搜索提供方...",
     "emptyTitle": "暂无记忆提供方",
     "emptyDescription": "添加记忆提供方以启用 Bot 的长期记忆功能",
@@ -1543,6 +1606,11 @@
       "loadFailed": "无法加载工具审核",
       "loadFailedDescription": "请检查服务器连接后重试。",
       "saveFailed": "无法保存工具审核",
+      "saveSuccess": "已保存工具审核更改",
+      "partialSaveFailed": "部分更改已保存，但有 {count} 个位置保存失败；失败位置的草稿已保留。",
+      "enabled": "工具调用审核",
+      "enabledDescription": "这个位置会执行允许、询问和拒绝规则。",
+      "disabledDescription": "文件和命令工具将直接执行，已保存的模式和规则会保留。",
       "target": {
         "title": "审核位置",
         "label": "工作区或电脑",
@@ -1589,6 +1657,8 @@
       "bypassHint": "匹配以下模式的调用将直接放行，不弹审核。",
       "mustReview": "必须审核（黑名单）",
       "mustReviewHint": "匹配以下模式的调用强制弹审核，即使该工具未默认要求审核。",
+      "pathSyntaxHint": "每行或用逗号分隔一项；路径沿用现有 glob、文件名和 /** 匹配。",
+      "commandSyntaxHint": "每行或用逗号分隔一项；可填写可执行文件名、精确命令，或使用 * 和 ? 通配符。",
       "placeholders": {
         "filePaths": "/data/**\n/tmp/**",
         "fileReview": "/etc/**\n.env*",
@@ -1646,7 +1716,7 @@
       "basicInfo": "基本信息",
       "basicInfoDesc": "名称和头像",
       "workspace": "工作区",
-      "workspaceDesc": "隔离或本地",
+      "workspaceDesc": "隔离工作区",
       "security": "安全策略",
       "securityDesc": "访问控制",
       "model": "模型",
@@ -1674,15 +1744,6 @@
         "applyingSettings": "正在应用模型与记忆设置"
       }
     },
-    "workspaceBackend": "工作区",
-    "workspaceBackendHint": "隔离工作区会将 Bot 的文件和命令与本机环境隔开；本地工作区直接在这台电脑上执行。",
-    "workspaceBackends": {
-      "container": "隔离工作区",
-      "local": "本地文件夹"
-    },
-    "localWorkspacePath": "本地工作区文件夹",
-    "localWorkspacePathPlaceholder": "选择这台电脑上的文件夹",
-    "localWorkspaceWarning": "本地工作区将以宿主用户权限运行，具有操作宿主机文件与执行命令的完整权限",
     "editBot": "编辑 Bot",
     "deleteConfirm": "确定要删除这个 Bot 吗？",
     "renameSuccess": "Bot 名称已更新",
@@ -1922,7 +1983,6 @@
       "defaultBadge": "默认",
       "nativeWorkspace": "服务器工作区",
       "serverDescription": "这个 Bot 原有的服务器工作区。",
-      "folderSummary": "起始文件夹：{path}",
       "thisComputerOff": "使用这台电脑",
       "thisComputerOffDescription": "先到“电脑”中打开使用权限，再在这里添加这台电脑。",
       "openComputerSettings": "打开电脑设置",
@@ -1930,14 +1990,10 @@
       "computerDescription": "从“电脑”中已允许使用的电脑里选择一台。",
       "selectComputer": "选择电脑",
       "noAvailableComputers": "没有其他可用的电脑。请先到“电脑”中连接或打开一台电脑。",
-      "path": "起始文件夹",
-      "pathDescription": "相对于允许 Memoh 使用的文件夹。留空时使用 {path}；填写 . 表示直接使用该文件夹。",
       "unknownComputer": "不可用的电脑",
       "addTitle": "将电脑添加给这个 Bot",
-      "editTitle": "编辑这台电脑",
-      "mountDescription": "选择一台电脑，并设置这个 Bot 读写文件和执行命令的起始文件夹。",
+      "mountDescription": "选择一台允许这个 Bot 读写文件和执行命令的电脑。",
       "addSuccess": "已将电脑添加给 Bot",
-      "updateSuccess": "已更新电脑设置",
       "saveFailed": "无法保存电脑",
       "removeFromBot": "从 Bot 中移除",
       "deleteTitle": "从这个 Bot 中移除这台电脑？",
@@ -2277,17 +2333,12 @@
       "chatLanguage": "语言",
       "chatLanguagePlaceholder": "例如：English、zh-CN",
       "chatModel": "对话模型",
-      "externalAgentRuntime": "默认外部 Agent",
-      "externalAgentRuntimeDescription": "新建本地聊天时，默认使用所选 ACP Agent，而不是内置对话模型。",
-      "externalAgentRuntimeUnavailable": "请先启用并配置 ACP Agent，再把它设为默认聊天运行时。",
-      "externalAgentChatModelRequired": "请先选择对话模型，再把外部 Agent 设为默认对话运行时。",
-      "externalAgent": "外部 Agent",
-      "externalAgentDescription": "仅影响新建本地聊天；已有会话保持原来的运行时。",
-      "externalAgentUnavailableSaved": "已保存的默认 Agent 当前不可用。保存前请关闭默认外部 Agent，或选择一个可用 Agent。",
-      "externalAgentPlaceholder": "选择 Agent",
-      "titleModel": "标题模型",
-      "titleModelDescription": "选择用于自动生成会话标题的小模型。留空表示禁用该功能。",
-      "titleModelPlaceholder": "未启用（不自动生成标题）",
+      "chatModelDescription": "供 Memoh Agent 使用。",
+      "chatModelPlaceholder": "选择模型",
+      "defaultAgent": "默认 Agent",
+      "defaultAgentDescription": "仅用于新建本地聊天，已有会话继续使用原来的 Agent。",
+      "defaultAgentUnavailable": "Agent 不可用",
+      "defaultAgentUnavailableDescription": "当前默认 Agent 不可用。保存前请选择 Memoh 或其他可用的 Agent。",
       "searchProvider": "搜索提供方",
       "searchProviderPlaceholder": "选择搜索提供方",
       "fetchProvider": "网页抓取提供方",
@@ -2383,7 +2434,7 @@
       "acpClaudeOAuthExchange": "保存 Token",
       "acpClaudeOAuthExchangeFailed": "保存 Claude Token 失败",
       "acpSelfModeHint": "该模式直接使用工作区运行环境里你已配置好的对应 ACP Agent（例如已登录的凭据）。",
-      "acpHermesSelfModeHint": "该模式直接使用当前工作区里已配置好的 Hermes Profile。本地模式可能共享宿主机的 ~/.hermes 凭据；如果需要按 Bot 隔离凭据，请使用 API Key 配置。",
+      "acpHermesSelfModeHint": "该模式直接使用当前工作区里已配置好的 Hermes Profile。如需由 Memoh 管理 Bot 凭据，请使用 API Key 配置。",
       "acpHermesSelfModeConfirm": "使用自行配置的 Hermes",
       "acpHermesProviderPlaceholder": "选择提供商",
       "acpHermesProviderGemini": "Gemini（Google AI Studio）",
@@ -2667,7 +2718,7 @@
       "deleteFailed": "移除平台失败",
       "webhookCallback": "WebHook 回调地址",
       "webhookCallbackHint": "请将此地址填入对应平台控制台的 Webhook 配置中。",
-      "lineWebhookCallbackHint": "请将此地址填入 LINE Developers 的 Messaging API Webhook 设置。Base URL 必须是公网 HTTPS，并能把 /channels/... 路由到 Memoh server。",
+      "lineWebhookCallbackHint": "请将此地址填入 LINE Developers 的 Messaging API Webhook 设置。Base URL 必须是公网 HTTPS，并能把 /channels/... 路由到 Memoh Channel 服务。",
       "wechatOAWebhookCallbackHint": "请将此地址填入微信服务号平台的回调 URL 配置中。",
       "webhookCallbackPending": "保存当前配置后即可生成回调地址。",
       "webhookCallbackPublicBasePending": "平台配置已保存。请配置公网 HTTPS webhook base，或等待隧道就绪。",
@@ -3250,8 +3301,7 @@
         "oauthExchange": "提交",
         "oauthSkip": "稍后再说",
         "oauthSuccess": "授权成功",
-        "oauthExchangeFailed": "授权失败，请重试",
-        "selfRequiresLocalWorkspace": "{agent} 的自行配置模式需要使用本地工作区。请将工作区后端切换为本地，或返回上一步改用 API Key 配置。"
+        "oauthExchangeFailed": "授权失败，请重试"
       }
     },
     "im": {

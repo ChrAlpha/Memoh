@@ -199,7 +199,7 @@
           type="submit"
           size="sm"
           :loading="editLoading"
-          :disabled="!hasChanges || !form.meta.value.valid"
+          :disabled="(!isDraft && !hasChanges) || !form.meta.value.valid"
         >
           {{ $t('provider.saveChanges') }}
         </LoadingButton>
@@ -270,7 +270,7 @@
               variant="outline"
               size="sm"
               class="shrink-0"
-              :disabled="!props.provider?.id"
+              :disabled="authorizeLoading"
               :loading="authorizeLoading"
               loading-mode="manual"
               @click="devicePending ? cancelDeviceAuthorization() : handleAuthorize()"
@@ -397,8 +397,10 @@ function supportsPromptCache(clientType: string | undefined): boolean {
 const props = defineProps<{
   provider: ProviderWithAuth | undefined
   editLoading: boolean
+  ensureProvider: () => Promise<ProvidersGetResponse>
 }>()
 
+const isDraft = computed(() => !props.provider?.id && !!props.provider?.provider_template_id)
 const isManagedOAuthProvider = computed(() => isManagedOAuthClientType(props.provider?.client_type))
 
 const emit = defineEmits<{
@@ -413,6 +415,7 @@ const oauthStatusLoading = ref(false)
 const authorizeLoading = ref(false)
 const revokeLoading = ref(false)
 const devicePollTimer = ref<number | null>(null)
+let oauthStatusLoadGeneration = 0
 
 const testStatus = computed(() => {
   if (testResult.value?.status === 'ok') return 'ok'
@@ -532,6 +535,8 @@ watch(() => props.provider, (newVal) => {
 
 watch(() => form.values.client_type, (clientType) => {
   if (!isManagedOAuthClientType(clientType)) {
+    oauthStatusLoadGeneration += 1
+    oauthStatusLoading.value = false
     oauthStatus.value = null
   }
   if (clientType === 'openai-codex' && !form.values.base_url) {
@@ -544,6 +549,8 @@ watch(() => form.values.client_type, (clientType) => {
 
 watch(() => [props.provider?.id, form.values.client_type] as const, async ([id, clientType]) => {
   if (!id || !isManagedOAuthClientType(clientType)) {
+    oauthStatusLoadGeneration += 1
+    oauthStatusLoading.value = false
     oauthStatus.value = null
     return
   }
@@ -643,6 +650,7 @@ function clearDevicePollTimer() {
 
 async function fetchOAuthStatus(): Promise<ProvidersOAuthStatus | null> {
   if (!props.provider?.id) return null
+  const generation = ++oauthStatusLoadGeneration
   oauthStatusLoading.value = true
   try {
     const { data } = await getProvidersByIdOauthStatus({
@@ -650,14 +658,18 @@ async function fetchOAuthStatus(): Promise<ProvidersOAuthStatus | null> {
       throwOnError: true,
     })
     const nextStatus = data ?? null
+    if (generation !== oauthStatusLoadGeneration) return null
     oauthStatus.value = nextStatus
     return nextStatus
   } catch (error) {
+    if (generation !== oauthStatusLoadGeneration) return null
     oauthStatus.value = null
     console.error('failed to load provider oauth status', error)
     return null
   } finally {
-    oauthStatusLoading.value = false
+    if (generation === oauthStatusLoadGeneration) {
+      oauthStatusLoading.value = false
+    }
   }
 }
 
@@ -714,11 +726,19 @@ function cancelDeviceAuthorization() {
 }
 
 async function handleAuthorize() {
-  if (!props.provider?.id) return
   authorizeLoading.value = true
   try {
+    let providerId = props.provider?.id
+    if (!providerId) {
+      const provider = await props.ensureProvider()
+      providerId = provider.id
+    }
+    if (!providerId) throw new Error(t('provider.oauth.authorizeFailed'))
+
+    oauthStatusLoadGeneration += 1
+    oauthStatusLoading.value = false
     const { data } = await getProvidersByIdOauthAuthorize({
-      path: { id: props.provider.id },
+      path: { id: providerId },
       throwOnError: true,
     })
     if (!data) throw new Error(t('provider.oauth.authorizeFailed'))

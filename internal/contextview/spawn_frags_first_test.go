@@ -7,9 +7,9 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	agentpkg "github.com/memohai/memoh/internal/agent"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
-	"github.com/memohai/memoh/internal/contextfrag"
 )
 
 // TestSpawnRunConfigFragsFirstMatchesLegacyReverseParse is the byte-equivalence

@@ -1,6 +1,18 @@
 ALTER TABLE IF EXISTS bot_channel_routes DROP CONSTRAINT IF EXISTS fk_bot_channel_routes_active_session;
 ALTER TABLE IF EXISTS bot_history_messages DROP CONSTRAINT IF EXISTS fk_compact_id;
 
+DROP VIEW IF EXISTS public.team_accounts CASCADE;
+DO $drop_team_members_guard$
+BEGIN
+  IF to_regclass('public.team_members') IS NOT NULL THEN
+    DROP TRIGGER IF EXISTS team_members_last_active_admin_guard ON public.team_members;
+  END IF;
+END
+$drop_team_members_guard$;
+DROP FUNCTION IF EXISTS public.memoh_guard_last_active_team_admin();
+
+DROP TABLE IF EXISTS memory_edges CASCADE;
+DROP TABLE IF EXISTS memory_nodes CASCADE;
 DROP TABLE IF EXISTS bot_user_grants CASCADE;
 DROP TABLE IF EXISTS user_provider_oauth_tokens CASCADE;
 DROP TABLE IF EXISTS provider_oauth_tokens CASCADE;
@@ -28,6 +40,7 @@ DROP TABLE IF EXISTS bot_history_messages CASCADE;
 DROP TABLE IF EXISTS bot_session_events CASCADE;
 DROP TABLE IF EXISTS bot_session_discuss_cursors CASCADE;
 DROP TABLE IF EXISTS bot_sessions CASCADE;
+DROP SEQUENCE IF EXISTS session_runtime_fencing_token_seq;
 DROP TABLE IF EXISTS bot_channel_routes CASCADE;
 DROP TABLE IF EXISTS channel_identity_bind_codes CASCADE;
 DROP TABLE IF EXISTS bot_channel_configs CASCADE;
@@ -60,5 +73,12 @@ DROP TABLE IF EXISTS search_providers CASCADE;
 DROP TABLE IF EXISTS providers CASCADE;
 DROP TABLE IF EXISTS user_channel_bindings CASCADE;
 DROP TABLE IF EXISTS channel_identities CASCADE;
+DROP TABLE IF EXISTS team_members CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
+DROP TABLE IF EXISTS teams CASCADE;
+DROP FUNCTION IF EXISTS public.memoh_current_team_id() CASCADE;
 DROP TYPE IF EXISTS user_role;
+
+DROP TABLE IF EXISTS template.provider_template_models CASCADE;
+DROP TABLE IF EXISTS template.provider_templates CASCADE;
+DROP SCHEMA IF EXISTS template;

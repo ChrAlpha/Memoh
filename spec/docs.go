@@ -931,7 +931,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -1024,7 +1024,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "403": {
@@ -1036,13 +1036,90 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/acp-runtimes/{runtime_id}/reasoning": {
+            "patch": {
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Set an ACP runtime's reasoning effort",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Runtime ID",
+                        "name": "runtime_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reasoning effort selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpRuntimeReasoningRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -2068,7 +2145,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/container/display/prepare": {
             "post": {
-                "description": "Installs the workspace desktop/VNC/browser packages when needed, starts the display server, and launches the browser.",
+                "description": "Validates the image-provided desktop/VNC/browser runtime, starts the display server, and launches the browser.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -6851,7 +6928,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "403": {
@@ -6864,6 +6941,77 @@ const docTemplate = `{
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/acp-runtime/reasoning": {
+            "patch": {
+                "tags": [
+                    "acp"
+                ],
+                "summary": "Set ACP session runtime reasoning effort",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Reasoning effort selection",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.acpRuntimeReasoningRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/acpagent.RuntimeStatus"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -8376,9 +8524,6 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/workspace-targets/remotes/{runtime_id}": {
             "put": {
-                "consumes": [
-                    "application/json"
-                ],
                 "produces": [
                     "application/json"
                 ],
@@ -8400,15 +8545,6 @@ const docTemplate = `{
                         "name": "runtime_id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "description": "Remote workspace mount",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/workspace.MountRemoteWorkspaceRequest"
-                        }
                     }
                 ],
                 "responses": {
@@ -8834,6 +8970,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             },
@@ -8879,6 +9021,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -8949,6 +9097,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
@@ -9017,6 +9171,12 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -9090,6 +9250,12 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
                     }
                 }
             }
@@ -9155,6 +9321,12 @@ const docTemplate = `{
                         "description": "Bad Gateway",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -10756,6 +10928,90 @@ const docTemplate = `{
                 }
             }
         },
+        "/provider-templates": {
+            "get": {
+                "description": "List active global provider templates and whether the current tenant has configured each template",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "provider-templates"
+                ],
+                "summary": "List provider templates",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Template domain (llm, speech, transcription, video)",
+                        "name": "domain",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/providertemplates.GetResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/provider-templates/{id}": {
+            "get": {
+                "description": "Get an active global provider template and its model catalog",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "provider-templates"
+                ],
+                "summary": "Get a provider template",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider template ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providertemplates.GetResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/providers": {
             "get": {
                 "description": "Get a list of all configured LLM providers",
@@ -10856,6 +11112,64 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/providers/from-template": {
+            "post": {
+                "description": "Materialize a tenant-owned provider only when the user saves a template configuration",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Create a provider from a global template",
+                "parameters": [
+                    {
+                        "description": "Provider template configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/providers.CreateFromTemplateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/providers.GetResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -12715,7 +13029,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update current user display name or avatar",
+                "description": "Update current user profile and preferences",
                 "tags": [
                     "users"
                 ],
@@ -12741,13 +13055,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/apperror.Problem"
                         }
                     }
                 }
@@ -13144,7 +13458,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update user profile and status",
+                "description": "Update the user's role or membership status in the current workspace",
                 "tags": [
                     "users"
                 ],
@@ -13192,6 +13506,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -13201,11 +13521,11 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Remove a workspace member by removing login credentials and disabling the account",
+                "description": "Deactivate the member in the current workspace without changing global credentials",
                 "tags": [
                     "users"
                 ],
-                "summary": "Remove member (admin only)",
+                "summary": "Deactivate member (admin only)",
                 "parameters": [
                     {
                         "type": "string",
@@ -13237,58 +13557,8 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
                     },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/users/{id}/password": {
-            "put": {
-                "description": "Reset a user password",
-                "tags": [
-                    "users"
-                ],
-                "summary": "Reset user password (admin only)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "User ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Password payload",
-                        "name": "payload",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/accounts.ResetPasswordRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/handlers.ErrorResponse"
                         }
@@ -13640,17 +13910,32 @@ const docTemplate = `{
                 "is_active": {
                     "type": "boolean"
                 },
+                "joined_at": {
+                    "type": "string"
+                },
                 "last_login_at": {
+                    "type": "string"
+                },
+                "membership_is_active": {
+                    "type": "boolean"
+                },
+                "membership_updated_at": {
                     "type": "string"
                 },
                 "metadata": {
                     "type": "object",
                     "additionalProperties": {}
                 },
+                "principal_is_active": {
+                    "type": "boolean"
+                },
                 "role": {
                     "type": "string"
                 },
                 "timezone": {
+                    "type": "string"
+                },
+                "title_model_id": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -13698,23 +13983,9 @@ const docTemplate = `{
                 }
             }
         },
-        "accounts.ResetPasswordRequest": {
-            "type": "object",
-            "properties": {
-                "new_password": {
-                    "type": "string"
-                }
-            }
-        },
         "accounts.UpdateAccountRequest": {
             "type": "object",
             "properties": {
-                "avatar_url": {
-                    "type": "string"
-                },
-                "display_name": {
-                    "type": "string"
-                },
                 "is_active": {
                     "type": "boolean"
                 },
@@ -13755,6 +14026,9 @@ const docTemplate = `{
                     "$ref": "#/definitions/accounts.UpdateProfileMetadata"
                 },
                 "timezone": {
+                    "type": "string"
+                },
+                "title_model_id": {
                     "type": "string"
                 }
             }
@@ -13983,6 +14257,9 @@ const docTemplate = `{
                 "project_path": {
                     "type": "string"
                 },
+                "reasoning": {
+                    "$ref": "#/definitions/acpclient.ReasoningState"
+                },
                 "runtime_id": {
                     "type": "string"
                 },
@@ -14018,6 +14295,37 @@ const docTemplate = `{
                     }
                 },
                 "current_model_id": {
+                    "type": "string"
+                },
+                "supported": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "acpclient.ReasoningEffortInfo": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "acpclient.ReasoningState": {
+            "type": "object",
+            "properties": {
+                "available_efforts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/acpclient.ReasoningEffortInfo"
+                    }
+                },
+                "current_effort": {
                     "type": "string"
                 },
                 "supported": {
@@ -15493,6 +15801,9 @@ const docTemplate = `{
                 "native_commands": {
                     "type": "boolean"
                 },
+                "native_user_input": {
+                    "type": "boolean"
+                },
                 "polls": {
                     "type": "boolean"
                 },
@@ -15554,6 +15865,9 @@ const docTemplate = `{
                 "self_identity": {
                     "type": "object",
                     "additionalProperties": {}
+                },
+                "team_id": {
+                    "type": "string"
                 },
                 "updated_at": {
                     "type": "string"
@@ -16272,16 +16586,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
+                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt",
-                "run_config_pre_provider"
+                "acp_runtime_prompt"
             ],
             "x-enum-varnames": [
+                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt",
-                "ViewRunConfigPreProvider"
+                "ViewACPRuntimePrompt"
             ]
         },
         "contextfrag.MemoryRecallQueryTrace": {
@@ -17705,16 +18019,10 @@ const docTemplate = `{
                 "image": {
                     "type": "string"
                 },
-                "local_workspace_path": {
-                    "type": "string"
-                },
                 "restore_data": {
                     "type": "boolean"
                 },
                 "snapshotter": {
-                    "type": "string"
-                },
-                "workspace_backend": {
                     "type": "string"
                 }
             }
@@ -18222,6 +18530,9 @@ const docTemplate = `{
                 },
                 "reasoning_effort": {
                     "type": "string"
+                },
+                "workspace_target_id": {
+                    "type": "string"
                 }
             }
         },
@@ -18339,9 +18650,6 @@ const docTemplate = `{
                 },
                 "container_backend": {
                     "type": "string"
-                },
-                "local_workspace_enabled": {
-                    "type": "boolean"
                 },
                 "snapshot_supported": {
                     "type": "boolean"
@@ -18835,6 +19143,14 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "model_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.acpRuntimeReasoningRequest": {
+            "type": "object",
+            "properties": {
+                "reasoning_effort": {
                     "type": "string"
                 }
             }
@@ -20278,6 +20594,31 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.CreateFromTemplateRequest": {
+            "type": "object",
+            "required": [
+                "template_id"
+            ],
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "name": {
+                    "type": "string"
+                },
+                "template_id": {
+                    "type": "string"
+                }
+            }
+        },
         "providers.CreateRequest": {
             "type": "object",
             "required": [
@@ -20331,6 +20672,9 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "name": {
+                    "type": "string"
+                },
+                "provider_template_id": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -20495,6 +20839,93 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "providertemplates.GetResponse": {
+            "type": "object",
+            "properties": {
+                "config_schema": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "default_config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "description": {
+                    "type": "string"
+                },
+                "domain": {
+                    "type": "string"
+                },
+                "driver": {
+                    "type": "string"
+                },
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/providertemplates.ModelResponse"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "providertemplates.ModelResponse": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "id": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "sort_order": {
+                    "type": "integer"
+                },
+                "type": {
                     "type": "string"
                 }
             }
@@ -20939,9 +21370,6 @@ const docTemplate = `{
                 "timezone": {
                     "type": "string"
                 },
-                "title_model_id": {
-                    "type": "string"
-                },
                 "tool_approval_config": {
                     "$ref": "#/definitions/settings.ToolApprovalConfig"
                 },
@@ -21121,9 +21549,6 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "timezone": {
-                    "type": "string"
-                },
-                "title_model_id": {
                     "type": "string"
                 },
                 "tool_approval_config": {
@@ -21448,14 +21873,6 @@ const docTemplate = `{
                 }
             }
         },
-        "workspace.MountRemoteWorkspaceRequest": {
-            "type": "object",
-            "properties": {
-                "workspace_path": {
-                    "type": "string"
-                }
-            }
-        },
         "workspace.SetPrimaryWorkspaceTargetRequest": {
             "type": "object",
             "required": [
@@ -21470,6 +21887,9 @@ const docTemplate = `{
         "workspace.UpdateWorkspaceTargetToolApprovalRequest": {
             "type": "object",
             "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
                 "exec": {
                     "$ref": "#/definitions/settings.ToolApprovalMode"
                 },
@@ -21513,9 +21933,6 @@ const docTemplate = `{
                 },
                 "tool_approval_config": {
                     "$ref": "#/definitions/settings.ToolApprovalConfig"
-                },
-                "workspace_path": {
-                    "type": "string"
                 }
             }
         },

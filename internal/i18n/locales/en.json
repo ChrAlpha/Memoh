@@ -59,6 +59,9 @@
       "displayArgsInvalid": "The external agent display arguments are invalid.",
       "runtimeStartFailed": "External agent runtime failed to start.",
       "runtimeBusy": "External agent runtime is already processing a turn for this session.",
+      "attachmentInvalid": "The attachment is invalid. Please attach it again.",
+      "attachmentUnavailable": "The attachment could not be made available to the external agent. Please attach it again.",
+      "imageInputUnsupported": "This external agent cannot read the attached image.",
       "invalidChatRuntime": "The selected chat runtime is invalid."
     }
   },
@@ -465,7 +468,31 @@
     },
     "userInput": {
       "unavailable": "⚠️ User input responses aren't available here right now.",
-      "parseFailed": "Couldn't read that. Reply with /respond <request> <answer>."
+      "parseFailed": "Couldn't read that. Reply with /respond <request> <answer>.",
+      "inputRequested": "Input requested",
+      "invalid": "I couldn't match that answer. Try again.",
+      "selectHint": "Reply with an option number or its text.",
+      "multiHint": "Reply with multiple numbers separated by commas.",
+      "textHint": "Reply with your answer.",
+      "skipHint": "Send \"skip\" to skip this question.",
+      "backHint": "Send \"back\" to return to the previous question.",
+      "answerLabel": "Answer",
+      "skipped": "Skipped",
+      "otherOption": "Other...",
+      "fillAnswer": "Enter answer",
+      "refillAnswer": "Edit answer",
+      "submit": "Submit",
+      "skip": "Skip",
+      "next": "Next",
+      "skipAndSubmit": "Skip and submit",
+      "customAnswerLabel": "Other",
+      "replyTextPrompt": "Reply to this message with your answer.",
+      "replyCustomPrompt": "Reply to this message with a custom answer.",
+      "expired": "This question has expired.",
+      "invalidOperation": "That action is no longer valid.",
+      "unknownOperation": "Unknown action.",
+      "answerRequired": "The answer cannot be empty.",
+      "customNotAllowed": "This question does not accept a custom answer."
     },
     "fallback": {
       "switch": "Switch with {command}.",

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 type PassthroughSelector struct{}

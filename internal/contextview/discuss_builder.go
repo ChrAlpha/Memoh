@@ -7,15 +7,14 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
-// DiscussSDKContextBuilder implements pipeline.DiscussContextBuilder by
+// DiscussSDKContextBuilder implements DiscussContextBuilder by
 // running the discuss collector through the context view pipeline.
 type DiscussSDKContextBuilder struct{}
 
-func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) ([]sdk.Message, error) {
+func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) ([]sdk.Message, error) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(&DiscussContextCollector{}),
 		&FragmentSelector{},
@@ -52,7 +51,7 @@ func (*DiscussSDKContextBuilder) BuildDiscussSDKMessages(ctx context.Context, sc
 // carried on the run config for the fragments-first provider view. The typed
 // system fragments supplied on the input are authoritative; the flat system
 // string is only reverse-parsed when the caller provided none.
-func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input pipeline.DiscussContextInput) ([]contextfrag.ContextFrag, error) {
+func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input DiscussContextInput) ([]contextfrag.ContextFrag, error) {
 	systemFrags := input.SystemFrags
 	if len(systemFrags) == 0 {
 		collected, err := (&SystemPromptCollector{}).Collect(ctx, CollectRequest{
@@ -82,7 +81,7 @@ func (*DiscussSDKContextBuilder) CollectDiscussSourceFrags(ctx context.Context, 
 	return slices.Concat(systemFrags, discussFrags), nil
 }
 
-func (b *DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, error) {
+func (b *DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, error) {
 	prompt, _, err := b.buildDiscussACPPrompt(ctx, scope, input)
 	return prompt, err
 }
@@ -90,11 +89,11 @@ func (b *DiscussSDKContextBuilder) BuildDiscussACPPrompt(ctx context.Context, sc
 // BuildDiscussACPPromptWithLifecycle mirrors BuildDiscussACPPrompt but also
 // returns the context view manifest backing the prompt, letting callers
 // record a context lifecycle snapshot for the discuss-ACP build.
-func (b *DiscussSDKContextBuilder) BuildDiscussACPPromptWithLifecycle(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, *contextfrag.Manifest, error) {
+func (b *DiscussSDKContextBuilder) BuildDiscussACPPromptWithLifecycle(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, *contextfrag.Manifest, error) {
 	return b.buildDiscussACPPrompt(ctx, scope, input)
 }
 
-func (*DiscussSDKContextBuilder) buildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input pipeline.DiscussContextInput) (string, *contextfrag.Manifest, error) {
+func (*DiscussSDKContextBuilder) buildDiscussACPPrompt(ctx context.Context, scope contextfrag.Scope, input DiscussContextInput) (string, *contextfrag.Manifest, error) {
 	builder := NewBuilder(
 		NewMapCollectorRegistry(&DiscussContextCollector{}),
 		&FragmentSelector{},

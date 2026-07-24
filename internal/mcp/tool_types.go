@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	"github.com/memohai/memoh/internal/runtimefence"
 )
 
 // ToolSessionContext carries request-scoped identity for tool execution.
@@ -34,6 +36,63 @@ type ToolSessionContext struct {
 	SupportsImageInput        bool
 	ContextBudgetMaxTokens    int
 	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	RuntimeFence              runtimefence.Fence          `json:"-"`
+	RunContext                context.Context             `json:"-"`
+	RuntimeGuard              func(context.Context) error `json:"-"`
+}
+
+const runtimeGuardTimeout = 5 * time.Second
+
+// BindRuntimeContext makes a tool request stop when its owning run stops.
+// Runtime-only values remain process-local and are never serialized.
+func BindRuntimeContext(ctx context.Context, session ToolSessionContext) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = runtimefence.WithContext(ctx, session.RuntimeFence)
+	if session.RunContext == nil {
+		return ctx, func() {}
+	}
+	bound, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(session.RunContext, cancel)
+	if session.RunContext.Err() != nil {
+		cancel()
+	}
+	return bound, func() {
+		stop()
+		cancel()
+	}
+}
+
+// ValidateRuntimeGuard performs the last ownership check immediately before
+// a tool effect. The check remains bound to both the request and owning run.
+func ValidateRuntimeGuard(ctx context.Context, session ToolSessionContext) error {
+	if ctx == nil {
+		return errors.New("runtime guard context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if session.RunContext != nil {
+		if err := session.RunContext.Err(); err != nil {
+			return err
+		}
+	}
+	if session.RuntimeGuard == nil {
+		return nil
+	}
+	guardCtx, cancel := context.WithTimeout(ctx, runtimeGuardTimeout)
+	defer cancel()
+	guardCtx = runtimefence.WithContext(guardCtx, session.RuntimeFence)
+	if err := session.RuntimeGuard(guardCtx); err != nil {
+		return err
+	}
+	if session.RunContext != nil {
+		if err := session.RunContext.Err(); err != nil {
+			return err
+		}
+	}
+	return guardCtx.Err()
 }
 
 // ToolDescriptor is the MCP tools/list item shape used by the gateway.

@@ -13,14 +13,24 @@ definitions:
         type: string
       is_active:
         type: boolean
+      joined_at:
+        type: string
       last_login_at:
+        type: string
+      membership_is_active:
+        type: boolean
+      membership_updated_at:
         type: string
       metadata:
         additionalProperties: {}
         type: object
+      principal_is_active:
+        type: boolean
       role:
         type: string
       timezone:
+        type: string
+      title_model_id:
         type: string
       updated_at:
         type: string
@@ -51,17 +61,8 @@ definitions:
           $ref: '#/definitions/accounts.Account'
         type: array
     type: object
-  accounts.ResetPasswordRequest:
-    properties:
-      new_password:
-        type: string
-    type: object
   accounts.UpdateAccountRequest:
     properties:
-      avatar_url:
-        type: string
-      display_name:
-        type: string
       is_active:
         type: boolean
       role:
@@ -88,6 +89,8 @@ definitions:
       metadata:
         $ref: '#/definitions/accounts.UpdateProfileMetadata'
       timezone:
+        type: string
+      title_model_id:
         type: string
     type: object
   acl.ChannelIdentityCandidate:
@@ -236,6 +239,8 @@ definitions:
         $ref: '#/definitions/acpclient.ModelState'
       project_path:
         type: string
+      reasoning:
+        $ref: '#/definitions/acpclient.ReasoningState'
       runtime_id:
         type: string
       session_id:
@@ -259,6 +264,26 @@ definitions:
           $ref: '#/definitions/acpclient.ModelInfo'
         type: array
       current_model_id:
+        type: string
+      supported:
+        type: boolean
+    type: object
+  acpclient.ReasoningEffortInfo:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  acpclient.ReasoningState:
+    properties:
+      available_efforts:
+        items:
+          $ref: '#/definitions/acpclient.ReasoningEffortInfo'
+        type: array
+      current_effort:
         type: string
       supported:
         type: boolean
@@ -1263,6 +1288,8 @@ definitions:
         type: boolean
       native_commands:
         type: boolean
+      native_user_input:
+        type: boolean
       polls:
         type: boolean
       reactions:
@@ -1305,6 +1332,8 @@ definitions:
       self_identity:
         additionalProperties: {}
         type: object
+      team_id:
+        type: string
       updated_at:
         type: string
       verified_at:
@@ -1804,16 +1833,16 @@ definitions:
     type: object
   contextfrag.ManifestView:
     enum:
+    - run_config_pre_provider
     - compaction_candidates
     - discuss_reply
     - acp_runtime_prompt
-    - run_config_pre_provider
     type: string
     x-enum-varnames:
+    - ViewRunConfigPreProvider
     - ViewCompactionCandidates
     - ViewDiscussReply
     - ViewACPRuntimePrompt
-    - ViewRunConfigPreProvider
   contextfrag.MemoryRecallQueryTrace:
     properties:
       recent_messages:
@@ -2753,13 +2782,9 @@ definitions:
         $ref: '#/definitions/handlers.ContainerGPURequest'
       image:
         type: string
-      local_workspace_path:
-        type: string
       restore_data:
         type: boolean
       snapshotter:
-        type: string
-      workspace_backend:
         type: string
     type: object
   handlers.CreateContainerResponse:
@@ -3089,6 +3114,8 @@ definitions:
         type: string
       reasoning_effort:
         type: string
+      workspace_target_id:
+        type: string
     required:
     - message
     type: object
@@ -3167,8 +3194,6 @@ definitions:
         type: string
       container_backend:
         type: string
-      local_workspace_enabled:
-        type: boolean
       snapshot_supported:
         type: boolean
       status:
@@ -3489,6 +3514,11 @@ definitions:
   handlers.acpRuntimeModelRequest:
     properties:
       model_id:
+        type: string
+    type: object
+  handlers.acpRuntimeReasoningRequest:
+    properties:
+      reasoning_effort:
         type: string
     type: object
   handlers.browserSessionCreateRequest:
@@ -4444,6 +4474,23 @@ definitions:
       count:
         type: integer
     type: object
+  providers.CreateFromTemplateRequest:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      domain:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      name:
+        type: string
+      template_id:
+        type: string
+    required:
+    - template_id
+    type: object
   providers.CreateRequest:
     properties:
       client_type:
@@ -4481,6 +4528,8 @@ definitions:
         additionalProperties: {}
         type: object
       name:
+        type: string
+      provider_template_id:
         type: string
       updated_at:
         type: string
@@ -4590,6 +4639,65 @@ definitions:
         additionalProperties: {}
         type: object
       name:
+        type: string
+    type: object
+  providertemplates.GetResponse:
+    properties:
+      config_schema:
+        additionalProperties: {}
+        type: object
+      configured:
+        type: boolean
+      created_at:
+        type: string
+      default_config:
+        additionalProperties: {}
+        type: object
+      description:
+        type: string
+      domain:
+        type: string
+      driver:
+        type: string
+      icon:
+        type: string
+      id:
+        type: string
+      key:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      models:
+        items:
+          $ref: '#/definitions/providertemplates.ModelResponse'
+        type: array
+      name:
+        type: string
+      sort_order:
+        type: integer
+      source:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  providertemplates.ModelResponse:
+    properties:
+      config:
+        additionalProperties: {}
+        type: object
+      id:
+        type: string
+      metadata:
+        additionalProperties: {}
+        type: object
+      model_id:
+        type: string
+      name:
+        type: string
+      sort_order:
+        type: integer
+      type:
         type: string
     type: object
   schedule.CreateRequest:
@@ -4891,8 +4999,6 @@ definitions:
         type: boolean
       timezone:
         type: string
-      title_model_id:
-        type: string
       tool_approval_config:
         $ref: '#/definitions/settings.ToolApprovalConfig'
       transcription_model_id:
@@ -5013,8 +5119,6 @@ definitions:
       show_tool_calls_in_im:
         type: boolean
       timezone:
-        type: string
-      title_model_id:
         type: string
       tool_approval_config:
         $ref: '#/definitions/settings.ToolApprovalConfig'
@@ -5227,11 +5331,6 @@ definitions:
       status:
         type: string
     type: object
-  workspace.MountRemoteWorkspaceRequest:
-    properties:
-      workspace_path:
-        type: string
-    type: object
   workspace.SetPrimaryWorkspaceTargetRequest:
     properties:
       target_id:
@@ -5241,6 +5340,8 @@ definitions:
     type: object
   workspace.UpdateWorkspaceTargetToolApprovalRequest:
     properties:
+      enabled:
+        type: boolean
       exec:
         $ref: '#/definitions/settings.ToolApprovalMode'
       read:
@@ -5270,8 +5371,6 @@ definitions:
         $ref: '#/definitions/workspace.WorkspaceTargetToolApproval'
       tool_approval_config:
         $ref: '#/definitions/settings.ToolApprovalConfig'
-      workspace_path:
-        type: string
     type: object
   workspace.WorkspaceTargetToolApproval:
     properties:
@@ -5815,7 +5914,7 @@ paths:
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
       summary: Get ACP runtime state by runtime ID
       tags:
       - acp
@@ -5847,7 +5946,7 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
@@ -5855,12 +5954,63 @@ paths:
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "409":
           description: Conflict
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Set (or reset) an ACP runtime's model
+      tags:
+      - acp
+  /bots/{bot_id}/acp-runtimes/{runtime_id}/reasoning:
+    patch:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Runtime ID
+        in: path
+        name: runtime_id
+        required: true
+        type: string
+      - description: Reasoning effort selection
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.acpRuntimeReasoningRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Set an ACP runtime's reasoning effort
       tags:
       - acp
   /bots/{bot_id}/acp/claude-code/oauth/authorize:
@@ -6536,8 +6686,8 @@ paths:
       - containerd
   /bots/{bot_id}/container/display/prepare:
     post:
-      description: Installs the workspace desktop/VNC/browser packages when needed,
-        starts the display server, and launches the browser.
+      description: Validates the image-provided desktop/VNC/browser runtime, starts
+        the display server, and launches the browser.
       parameters:
       - description: Bot ID
         in: path
@@ -9694,7 +9844,7 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
@@ -9703,7 +9853,54 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Set ACP session runtime model
+      tags:
+      - acp
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime/reasoning:
+    patch:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Reasoning effort selection
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.acpRuntimeReasoningRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Set ACP session runtime reasoning effort
       tags:
       - acp
   /bots/{bot_id}/sessions/{session_id}/compact:
@@ -10830,8 +11027,6 @@ paths:
       - workspace-targets
   /bots/{bot_id}/workspace-targets/remotes/{runtime_id}:
     put:
-      consumes:
-      - application/json
       parameters:
       - description: Bot ID
         in: path
@@ -10843,12 +11038,6 @@ paths:
         name: runtime_id
         required: true
         type: string
-      - description: Remote workspace mount
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/workspace.MountRemoteWorkspaceRequest'
       produces:
       - application/json
       responses:
@@ -11009,6 +11198,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Delete bot channel config
       tags:
       - bots
@@ -11093,6 +11286,10 @@ paths:
           description: Bad Gateway
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Update bot channel config
       tags:
       - bots
@@ -11139,6 +11336,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Send message via bot channel
       tags:
       - bots
@@ -11185,6 +11386,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Send message via bot channel session token
       tags:
       - bots
@@ -11233,6 +11438,10 @@ paths:
           description: Bad Gateway
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Update bot channel status
       tags:
       - bots
@@ -11277,6 +11486,10 @@ paths:
           description: Bad Gateway
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Set bot channel webhook endpoint
       tags:
       - bots
@@ -12453,6 +12666,62 @@ paths:
       summary: Health check with server capabilities
       tags:
       - system
+  /provider-templates:
+    get:
+      description: List active global provider templates and whether the current tenant
+        has configured each template
+      parameters:
+      - description: Template domain (llm, speech, transcription, video)
+        in: query
+        name: domain
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/providertemplates.GetResponse'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: List provider templates
+      tags:
+      - provider-templates
+  /provider-templates/{id}:
+    get:
+      description: Get an active global provider template and its model catalog
+      parameters:
+      - description: Provider template ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/providertemplates.GetResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Get a provider template
+      tags:
+      - provider-templates
   /providers:
     get:
       consumes:
@@ -12817,6 +13086,45 @@ paths:
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Count providers
+      tags:
+      - providers
+  /providers/from-template:
+    post:
+      consumes:
+      - application/json
+      description: Materialize a tenant-owned provider only when the user saves a
+        template configuration
+      parameters:
+      - description: Provider template configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/providers.CreateFromTemplateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/providers.GetResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Create a provider from a global template
       tags:
       - providers
   /providers/name/{name}:
@@ -13728,8 +14036,8 @@ paths:
       - users
   /users/{id}:
     delete:
-      description: Remove a workspace member by removing login credentials and disabling
-        the account
+      description: Deactivate the member in the current workspace without changing
+        global credentials
       parameters:
       - description: User ID
         in: path
@@ -13751,11 +14059,15 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Remove member (admin only)
+      summary: Deactivate member (admin only)
       tags:
       - users
     get:
@@ -13791,7 +14103,7 @@ paths:
       tags:
       - users
     put:
-      description: Update user profile and status
+      description: Update the user's role or membership status in the current workspace
       parameters:
       - description: User ID
         in: path
@@ -13821,48 +14133,15 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/handlers.ErrorResponse'
       summary: Update user (admin only)
-      tags:
-      - users
-  /users/{id}/password:
-    put:
-      description: Reset a user password
-      parameters:
-      - description: User ID
-        in: path
-        name: id
-        required: true
-        type: string
-      - description: Password payload
-        in: body
-        name: payload
-        required: true
-        schema:
-          $ref: '#/definitions/accounts.ResetPasswordRequest'
-      responses:
-        "204":
-          description: No Content
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
-      summary: Reset user password (admin only)
       tags:
       - users
   /users/me:
@@ -13889,7 +14168,7 @@ paths:
       tags:
       - users
     put:
-      description: Update current user display name or avatar
+      description: Update current user profile and preferences
       parameters:
       - description: Profile payload
         in: body
@@ -13905,11 +14184,11 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
       summary: Update current user profile
       tags:
       - users

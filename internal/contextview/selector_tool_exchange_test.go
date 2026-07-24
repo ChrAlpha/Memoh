@@ -6,8 +6,8 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/userinput"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 )
 
 func historyMessageFrag(id string, msg sdk.Message) contextfrag.ContextFrag {

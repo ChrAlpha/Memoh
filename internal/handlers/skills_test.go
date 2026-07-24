@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/memohai/memoh/internal/accounts"
-	"github.com/memohai/memoh/internal/agent"
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/config"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -502,7 +502,7 @@ func (*skillsTestDB) Query(context.Context, string, ...interface{}) (pgx.Rows, e
 
 func (d *skillsTestDB) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
 	switch {
-	case strings.Contains(sql, "FROM users WHERE id = $1"):
+	case strings.Contains(sql, "FROM users") && strings.Contains(sql, "id = $1"):
 		return makeUserRow(mustParseUUID(d.userID), "user")
 	case strings.Contains(sql, "FROM bots"):
 		return makeBotRow(mustParseUUID(d.botID), mustParseUUID(d.userID), d.metadataJSON)
@@ -819,16 +819,16 @@ func mustFindLoadedSkillByName(t *testing.T, items []SkillItem, name string) Ski
 }
 
 func promptFromLoadedSkills(items []SkillItem) string {
-	skills := make([]agent.SkillEntry, 0, len(items))
+	skills := make([]native.SkillEntry, 0, len(items))
 	for _, item := range items {
-		skills = append(skills, agent.SkillEntry{
+		skills = append(skills, native.SkillEntry{
 			Name:        item.Name,
 			Description: item.Description,
 			Content:     item.Content,
 			Metadata:    item.Metadata,
 		})
 	}
-	return agent.GenerateSystemPrompt(agent.SystemPromptParams{
+	return native.GenerateSystemPrompt(native.SystemPromptParams{
 		SessionType: "chat",
 		Skills:      skills,
 		Timezone:    "UTC",

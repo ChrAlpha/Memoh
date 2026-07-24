@@ -5,9 +5,9 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	agentpkg "github.com/memohai/memoh/internal/agent"
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/contextlimit"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	contextlimit "github.com/memohai/memoh/internal/agent/context/limit"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 )
 
 // providerStepBudgetEnvelope resolves the step selection budget with the same

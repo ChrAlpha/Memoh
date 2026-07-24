@@ -11,12 +11,17 @@ export type AccountsAccount = {
     email?: string;
     id?: string;
     is_active?: boolean;
+    joined_at?: string;
     last_login_at?: string;
+    membership_is_active?: boolean;
+    membership_updated_at?: string;
     metadata?: {
         [key: string]: unknown;
     };
+    principal_is_active?: boolean;
     role?: string;
     timezone?: string;
+    title_model_id?: string;
     updated_at?: string;
     username?: string;
 };
@@ -35,13 +40,7 @@ export type AccountsListAccountsResponse = {
     items?: Array<AccountsAccount>;
 };
 
-export type AccountsResetPasswordRequest = {
-    new_password?: string;
-};
-
 export type AccountsUpdateAccountRequest = {
-    avatar_url?: string;
-    display_name?: string;
     is_active?: boolean;
     role?: string;
 };
@@ -60,6 +59,7 @@ export type AccountsUpdateProfileRequest = {
     display_name?: string;
     metadata?: AccountsUpdateProfileMetadata;
     timezone?: string;
+    title_model_id?: string;
 };
 
 export type AclChannelIdentityCandidate = {
@@ -147,6 +147,7 @@ export type AcpagentRuntimeStatus = {
     default_model_id?: string;
     models?: AcpclientModelState;
     project_path?: string;
+    reasoning?: AcpclientReasoningState;
     runtime_id?: string;
     session_id?: string;
     state?: string;
@@ -161,6 +162,18 @@ export type AcpclientModelInfo = {
 export type AcpclientModelState = {
     available_models?: Array<AcpclientModelInfo>;
     current_model_id?: string;
+    supported?: boolean;
+};
+
+export type AcpclientReasoningEffortInfo = {
+    description?: string;
+    id?: string;
+    name?: string;
+};
+
+export type AcpclientReasoningState = {
+    available_efforts?: Array<AcpclientReasoningEffortInfo>;
+    current_effort?: string;
     supported?: boolean;
 };
 
@@ -752,6 +765,7 @@ export type ChannelChannelCapabilities = {
     markdown?: boolean;
     media?: boolean;
     native_commands?: boolean;
+    native_user_input?: boolean;
     polls?: boolean;
     reactions?: boolean;
     reply?: boolean;
@@ -779,6 +793,7 @@ export type ChannelChannelConfig = {
     self_identity?: {
         [key: string]: unknown;
     };
+    team_id?: string;
     updated_at?: string;
     verified_at?: string;
 };
@@ -1613,10 +1628,8 @@ export type HandlersContextUsage = {
 export type HandlersCreateContainerRequest = {
     gpu?: HandlersContainerGpuRequest;
     image?: string;
-    local_workspace_path?: string;
     restore_data?: boolean;
     snapshotter?: string;
-    workspace_backend?: string;
 };
 
 export type HandlersCreateContainerResponse = {
@@ -1823,6 +1836,7 @@ export type HandlersLocalChannelMessageRequest = {
     message: ChannelMessage;
     model_id?: string;
     reasoning_effort?: string;
+    workspace_target_id?: string;
 };
 
 export type HandlersLoginRequest = {
@@ -1869,7 +1883,6 @@ export type HandlersModelTokenUsage = {
 export type HandlersPingResponse = {
     commit_hash?: string;
     container_backend?: string;
-    local_workspace_enabled?: boolean;
     snapshot_supported?: boolean;
     status?: string;
     version?: string;
@@ -2057,6 +2070,10 @@ export type HandlersAcpRuntimeCreateRequest = {
 
 export type HandlersAcpRuntimeModelRequest = {
     model_id?: string;
+};
+
+export type HandlersAcpRuntimeReasoningRequest = {
+    reasoning_effort?: string;
 };
 
 export type HandlersBrowserSessionCreateRequest = {
@@ -2621,6 +2638,18 @@ export type ProvidersCountResponse = {
     count?: number;
 };
 
+export type ProvidersCreateFromTemplateRequest = {
+    config?: {
+        [key: string]: unknown;
+    };
+    domain?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    name?: string;
+    template_id: string;
+};
+
 export type ProvidersCreateRequest = {
     client_type: string;
     config?: {
@@ -2646,6 +2675,7 @@ export type ProvidersGetResponse = {
         [key: string]: unknown;
     };
     name?: string;
+    provider_template_id?: string;
     updated_at?: string;
 };
 
@@ -2710,6 +2740,45 @@ export type ProvidersUpdateRequest = {
         [key: string]: unknown;
     };
     name?: string;
+};
+
+export type ProvidertemplatesGetResponse = {
+    config_schema?: {
+        [key: string]: unknown;
+    };
+    configured?: boolean;
+    created_at?: string;
+    default_config?: {
+        [key: string]: unknown;
+    };
+    description?: string;
+    domain?: string;
+    driver?: string;
+    icon?: string;
+    id?: string;
+    key?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    models?: Array<ProvidertemplatesModelResponse>;
+    name?: string;
+    sort_order?: number;
+    source?: string;
+    updated_at?: string;
+};
+
+export type ProvidertemplatesModelResponse = {
+    config?: {
+        [key: string]: unknown;
+    };
+    id?: string;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    model_id?: string;
+    name?: string;
+    sort_order?: number;
+    type?: string;
 };
 
 export type ScheduleCreateRequest = {
@@ -2880,7 +2949,6 @@ export type SettingsSettings = {
     search_provider_id?: string;
     show_tool_calls_in_im?: boolean;
     timezone?: string;
-    title_model_id?: string;
     tool_approval_config?: SettingsToolApprovalConfig;
     transcription_model_id?: string;
     tts_model_id?: string;
@@ -2942,7 +3010,6 @@ export type SettingsUpsertRequest = {
     search_provider_id?: string;
     show_tool_calls_in_im?: boolean;
     timezone?: string;
-    title_model_id?: string;
     tool_approval_config?: SettingsToolApprovalConfig;
     transcription_model_id?: string;
     tts_model_id?: string;
@@ -3070,15 +3137,12 @@ export type WebhooktunnelStatus = {
     status?: string;
 };
 
-export type WorkspaceMountRemoteWorkspaceRequest = {
-    workspace_path?: string;
-};
-
 export type WorkspaceSetPrimaryWorkspaceTargetRequest = {
     target_id: string;
 };
 
 export type WorkspaceUpdateWorkspaceTargetToolApprovalRequest = {
+    enabled?: boolean;
     exec?: SettingsToolApprovalMode;
     read?: SettingsToolApprovalMode;
     tool_approval_config?: SettingsToolApprovalConfig;
@@ -3095,7 +3159,6 @@ export type WorkspaceWorkspaceTarget = {
     target_id?: string;
     tool_approval?: WorkspaceWorkspaceTargetToolApproval;
     tool_approval_config?: SettingsToolApprovalConfig;
-    workspace_path?: string;
 };
 
 export type WorkspaceWorkspaceTargetToolApproval = {
@@ -3886,7 +3949,7 @@ export type GetBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
 };
 
 export type GetBotsByBotIdAcpRuntimesByRuntimeIdError = GetBotsByBotIdAcpRuntimesByRuntimeIdErrors[keyof GetBotsByBotIdAcpRuntimesByRuntimeIdErrors];
@@ -3923,7 +3986,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
@@ -3931,11 +3994,15 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
     /**
      * Conflict
      */
     409: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
 };
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelError = PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors];
@@ -3948,6 +4015,59 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelResponses = {
 };
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelResponse = PatchBotsByBotIdAcpRuntimesByRuntimeIdModelResponses[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModelResponses];
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningData = {
+    /**
+     * Reasoning effort selection
+     */
+    body: HandlersAcpRuntimeReasoningRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Runtime ID
+         */
+        runtime_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/acp-runtimes/{runtime_id}/reasoning';
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningError = PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors];
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningResponse = PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningResponses[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningResponses];
 
 export type GetBotsByBotIdAcpClaudeCodeOauthAuthorizeData = {
     body?: never;
@@ -8686,7 +8806,7 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
@@ -8695,6 +8815,10 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
      * Not Found
      */
     404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors];
@@ -8707,6 +8831,55 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses = {
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelResponses];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningData = {
+    /**
+     * Reasoning effort selection
+     */
+    body: HandlersAcpRuntimeReasoningRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime/reasoning';
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses];
 
 export type PostBotsByBotIdSessionsBySessionIdCompactData = {
     body?: never;
@@ -9902,10 +10075,7 @@ export type PutBotsByBotIdWorkspaceTargetsPrimaryResponses = {
 };
 
 export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdData = {
-    /**
-     * Remote workspace mount
-     */
-    body: WorkspaceMountRemoteWorkspaceRequest;
+    body?: never;
     path: {
         /**
          * Bot ID
@@ -10193,6 +10363,10 @@ export type DeleteBotsByIdChannelByPlatformErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type DeleteBotsByIdChannelByPlatformError = DeleteBotsByIdChannelByPlatformErrors[keyof DeleteBotsByIdChannelByPlatformErrors];
@@ -10290,6 +10464,10 @@ export type PutBotsByIdChannelByPlatformErrors = {
      * Bad Gateway
      */
     502: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PutBotsByIdChannelByPlatformError = PutBotsByIdChannelByPlatformErrors[keyof PutBotsByIdChannelByPlatformErrors];
@@ -10339,6 +10517,10 @@ export type PostBotsByIdChannelByPlatformSendErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByIdChannelByPlatformSendError = PostBotsByIdChannelByPlatformSendErrors[keyof PostBotsByIdChannelByPlatformSendErrors];
@@ -10390,6 +10572,10 @@ export type PostBotsByIdChannelByPlatformSendChatErrors = {
      * Internal Server Error
      */
     500: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByIdChannelByPlatformSendChatError = PostBotsByIdChannelByPlatformSendChatErrors[keyof PostBotsByIdChannelByPlatformSendChatErrors];
@@ -10445,6 +10631,10 @@ export type PatchBotsByIdChannelByPlatformStatusErrors = {
      * Bad Gateway
      */
     502: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PatchBotsByIdChannelByPlatformStatusError = PatchBotsByIdChannelByPlatformStatusErrors[keyof PatchBotsByIdChannelByPlatformStatusErrors];
@@ -10494,6 +10684,10 @@ export type PostBotsByIdChannelByPlatformWebhookEndpointErrors = {
      * Bad Gateway
      */
     502: HandlersErrorResponse;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
 };
 
 export type PostBotsByIdChannelByPlatformWebhookEndpointError = PostBotsByIdChannelByPlatformWebhookEndpointErrors[keyof PostBotsByIdChannelByPlatformWebhookEndpointErrors];
@@ -11833,6 +12027,74 @@ export type GetPingResponses = {
 
 export type GetPingResponse = GetPingResponses[keyof GetPingResponses];
 
+export type GetProviderTemplatesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Template domain (llm, speech, transcription, video)
+         */
+        domain?: string;
+    };
+    url: '/provider-templates';
+};
+
+export type GetProviderTemplatesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+};
+
+export type GetProviderTemplatesError = GetProviderTemplatesErrors[keyof GetProviderTemplatesErrors];
+
+export type GetProviderTemplatesResponses = {
+    /**
+     * OK
+     */
+    200: Array<ProvidertemplatesGetResponse>;
+};
+
+export type GetProviderTemplatesResponse = GetProviderTemplatesResponses[keyof GetProviderTemplatesResponses];
+
+export type GetProviderTemplatesByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Provider template ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/provider-templates/{id}';
+};
+
+export type GetProviderTemplatesByIdErrors = {
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+};
+
+export type GetProviderTemplatesByIdError = GetProviderTemplatesByIdErrors[keyof GetProviderTemplatesByIdErrors];
+
+export type GetProviderTemplatesByIdResponses = {
+    /**
+     * OK
+     */
+    200: ProvidertemplatesGetResponse;
+};
+
+export type GetProviderTemplatesByIdResponse = GetProviderTemplatesByIdResponses[keyof GetProviderTemplatesByIdResponses];
+
 export type GetProvidersData = {
     body?: never;
     path?: never;
@@ -11914,6 +12176,46 @@ export type GetProvidersCountResponses = {
 };
 
 export type GetProvidersCountResponse = GetProvidersCountResponses[keyof GetProvidersCountResponses];
+
+export type PostProvidersFromTemplateData = {
+    /**
+     * Provider template configuration
+     */
+    body: ProvidersCreateFromTemplateRequest;
+    path?: never;
+    query?: never;
+    url: '/providers/from-template';
+};
+
+export type PostProvidersFromTemplateErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+};
+
+export type PostProvidersFromTemplateError = PostProvidersFromTemplateErrors[keyof PostProvidersFromTemplateErrors];
+
+export type PostProvidersFromTemplateResponses = {
+    /**
+     * Created
+     */
+    201: ProvidersGetResponse;
+};
+
+export type PostProvidersFromTemplateResponse = PostProvidersFromTemplateResponses[keyof PostProvidersFromTemplateResponses];
 
 export type GetProvidersNameByNameData = {
     body?: never;
@@ -13445,11 +13747,11 @@ export type PutUsersMeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ApperrorProblem;
 };
 
 export type PutUsersMeError = PutUsersMeErrors[keyof PutUsersMeErrors];
@@ -13780,6 +14082,10 @@ export type DeleteUsersByIdErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
      * Internal Server Error
      */
     500: HandlersErrorResponse;
@@ -13865,6 +14171,10 @@ export type PutUsersByIdErrors = {
      */
     404: HandlersErrorResponse;
     /**
+     * Conflict
+     */
+    409: HandlersErrorResponse;
+    /**
      * Internal Server Error
      */
     500: HandlersErrorResponse;
@@ -13880,49 +14190,6 @@ export type PutUsersByIdResponses = {
 };
 
 export type PutUsersByIdResponse = PutUsersByIdResponses[keyof PutUsersByIdResponses];
-
-export type PutUsersByIdPasswordData = {
-    /**
-     * Password payload
-     */
-    body: AccountsResetPasswordRequest;
-    path: {
-        /**
-         * User ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/users/{id}/password';
-};
-
-export type PutUsersByIdPasswordErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutUsersByIdPasswordError = PutUsersByIdPasswordErrors[keyof PutUsersByIdPasswordErrors];
-
-export type PutUsersByIdPasswordResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
 
 export type GetVideoModelsData = {
     body?: never;

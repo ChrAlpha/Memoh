@@ -17,19 +17,15 @@ import (
 
 // Service provides account (credential) management for users.
 type Service struct {
-	store             dbstore.AccountStore
-	logger            *slog.Logger
-	emailBootstrapper EmailProviderBootstrapper
-}
-
-type EmailProviderBootstrapper interface {
-	EnsureDefaultGmailProvider(ctx context.Context, userID string) error
+	store  dbstore.AccountStore
+	logger *slog.Logger
 }
 
 var (
 	ErrInvalidPassword    = errors.New("invalid password")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInactiveAccount    = errors.New("account is inactive")
+	ErrInvalidTitleModel  = errors.New("invalid title model")
 )
 
 // NewService creates a new accounts service.
@@ -43,10 +39,6 @@ func NewService(log *slog.Logger, store dbstore.AccountStore) *Service {
 	}
 }
 
-func (s *Service) SetEmailProviderBootstrapper(bootstrapper EmailProviderBootstrapper) {
-	s.emailBootstrapper = bootstrapper
-}
-
 // Get returns an account by user id.
 func (s *Service) Get(ctx context.Context, userID string) (Account, error) {
 	if s.store == nil {
@@ -57,6 +49,25 @@ func (s *Service) Get(ctx context.Context, userID string) (Account, error) {
 		return Account{}, err
 	}
 	return toAccount(row), nil
+}
+
+// ValidateSession rejects JWTs whose backing account or current membership is
+// no longer active.
+func (s *Service) ValidateSession(ctx context.Context, userID string) error {
+	if s.store == nil {
+		return errors.New("account store not configured")
+	}
+	row, err := s.store.GetByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return ErrInactiveAccount
+		}
+		return err
+	}
+	if !row.IsActive {
+		return ErrInactiveAccount
+	}
+	return nil
 }
 
 // Login authenticates by identity (username or email) and password.
@@ -139,7 +150,7 @@ func (s *Service) IsAdmin(ctx context.Context, userID string) (bool, error) {
 		}
 		return false, err
 	}
-	return isAdminRole(row.Role), nil
+	return row.IsActive && isAdminRole(row.Role), nil
 }
 
 // Create creates a new account for an existing user.
@@ -190,9 +201,6 @@ func (s *Service) Create(ctx context.Context, userID string, req CreateAccountRe
 		return Account{}, err
 	}
 	account := toAccount(row)
-	if err := s.ensureDefaultEmailProvider(ctx, account.ID); err != nil {
-		return Account{}, err
-	}
 	return account, nil
 }
 
@@ -220,16 +228,6 @@ func (s *Service) CreateHuman(ctx context.Context, userID string, req CreateAcco
 	return s.Create(ctx, userID, req)
 }
 
-func (s *Service) ensureDefaultEmailProvider(ctx context.Context, userID string) error {
-	if s.emailBootstrapper == nil {
-		return nil
-	}
-	if err := s.emailBootstrapper.EnsureDefaultGmailProvider(ctx, userID); err != nil {
-		return fmt.Errorf("ensure default gmail provider: %w", err)
-	}
-	return nil
-}
-
 // UpdateAdmin updates account fields as admin.
 func (s *Service) UpdateAdmin(ctx context.Context, userID string, req UpdateAccountRequest) (Account, error) {
 	if s.store == nil {
@@ -246,28 +244,10 @@ func (s *Service) UpdateAdmin(ctx context.Context, userID string, req UpdateAcco
 			return Account{}, err
 		}
 	}
-	displayName := strings.TrimSpace(existing.DisplayName)
-	if req.DisplayName != nil {
-		displayName = strings.TrimSpace(*req.DisplayName)
-	}
-	if displayName == "" {
-		displayName = strings.TrimSpace(existing.Username)
-	}
-	avatarURL := strings.TrimSpace(existing.AvatarURL)
-	if req.AvatarURL != nil {
-		avatarURL = strings.TrimSpace(*req.AvatarURL)
-	}
-	isActive := existing.IsActive
-	if req.IsActive != nil {
-		isActive = *req.IsActive
-	}
-
 	row, err := s.store.UpdateAdmin(ctx, dbstore.UpdateAccountAdminInput{
-		UserID:      userID,
-		Role:        role,
-		DisplayName: displayName,
-		AvatarURL:   avatarURL,
-		IsActive:    isActive,
+		UserID:   userID,
+		Role:     role,
+		IsActive: req.IsActive,
 	})
 	if err != nil {
 		return Account{}, err
@@ -307,13 +287,26 @@ func (s *Service) UpdateProfile(ctx context.Context, userID string, req UpdatePr
 		tzName = "UTC"
 	}
 	metadata := s.mergeMetadata(existing.Metadata, req.Metadata)
+	titleModelID := strings.TrimSpace(existing.TitleModelID)
+	if req.TitleModelID != nil {
+		titleModelID = strings.TrimSpace(*req.TitleModelID)
+		if titleModelID != "" {
+			valid, err := s.store.IsValidTitleModel(ctx, titleModelID)
+			if err != nil {
+				return Account{}, err
+			}
+			if !valid {
+				return Account{}, ErrInvalidTitleModel
+			}
+		}
+	}
 	row, err := s.store.UpdateProfile(ctx, dbstore.UpdateAccountProfileInput{
-		UserID:      userID,
-		DisplayName: displayName,
-		AvatarURL:   avatarURL,
-		Timezone:    tzName,
-		IsActive:    existing.IsActive,
-		Metadata:    metadata,
+		UserID:       userID,
+		DisplayName:  displayName,
+		AvatarURL:    avatarURL,
+		Timezone:     tzName,
+		Metadata:     metadata,
+		TitleModelID: titleModelID,
 	})
 	if err != nil {
 		return Account{}, err
@@ -352,25 +345,8 @@ func (s *Service) UpdatePassword(ctx context.Context, userID, currentPassword, n
 	})
 }
 
-// ResetPassword sets a new password without requiring the current one.
-func (s *Service) ResetPassword(ctx context.Context, userID, newPassword string) error {
-	if s.store == nil {
-		return errors.New("account store not configured")
-	}
-	if strings.TrimSpace(newPassword) == "" {
-		return errors.New("new password is required")
-	}
-	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	return s.store.UpdatePassword(ctx, dbstore.UpdateAccountPasswordInput{
-		UserID:       userID,
-		PasswordHash: string(hashed),
-	})
-}
-
-// RemoveMember removes a workspace member's login identity and marks it inactive.
+// RemoveMember deactivates the current workspace membership without changing
+// the global principal or credentials.
 func (s *Service) RemoveMember(ctx context.Context, userID string) error {
 	if s.store == nil {
 		return errors.New("account store not configured")
@@ -421,18 +397,23 @@ func toAccount(row dbstore.AccountRecord) Account {
 		_ = json.Unmarshal([]byte(row.Metadata), &metadata)
 	}
 	return Account{
-		ID:          row.ID,
-		Username:    username,
-		Email:       email,
-		Role:        row.Role,
-		DisplayName: displayName,
-		AvatarURL:   avatarURL,
-		Timezone:    timezone,
-		IsActive:    row.IsActive,
-		Metadata:    metadata,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
-		LastLoginAt: row.LastLoginAt,
+		ID:                  row.ID,
+		Username:            username,
+		Email:               email,
+		Role:                row.Role,
+		DisplayName:         displayName,
+		AvatarURL:           avatarURL,
+		Timezone:            timezone,
+		IsActive:            row.IsActive,
+		PrincipalIsActive:   row.PrincipalActive,
+		MembershipIsActive:  row.MembershipActive,
+		Metadata:            metadata,
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
+		JoinedAt:            row.JoinedAt,
+		MembershipUpdatedAt: row.MembershipUpdatedAt,
+		LastLoginAt:         row.LastLoginAt,
+		TitleModelID:        strings.TrimSpace(row.TitleModelID),
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/memohai/memoh/internal/channel"
+	"github.com/memohai/memoh/internal/redact"
 )
 
 func mustPreparedTelegramEvent(t *testing.T, event channel.StreamEvent) channel.PreparedStreamEvent {
@@ -122,8 +123,8 @@ func TestTelegramOutboundStream_PushErrorEventEmptyNoOp(t *testing.T) {
 }
 
 func TestTelegramOutboundStream_PushErrorEventRedactsRegisteredTokenFragments(t *testing.T) {
-	channel.ResetIMErrorSecretsForTest()
-	t.Cleanup(channel.ResetIMErrorSecretsForTest)
+	redact.ResetForTest()
+	t.Cleanup(redact.ResetForTest)
 
 	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	var sentText string
@@ -595,6 +596,8 @@ func TestDraftMode_PhaseEndTextIsNoOp(t *testing.T) {
 		t.Fatalf("PhaseEnd in draft mode should be no-op: %v", err)
 	}
 }
+
+// Render stripping is covered in ask_user_test.go (TestRenderAskUserChoiceShowsOnlyQuestion).
 
 // TestToolCallFlow_ThreeMessagesPerCall verifies that a single tool call
 // combined with pre-existing streamed text produces three distinct messages:

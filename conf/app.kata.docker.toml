@@ -5,6 +5,19 @@ format = "text"
 
 [server]
 addr = "server:8080"
+rpc_listen_addr = ":9090"
+
+[channel]
+addr = ":8081"
+rpc_listen_addr = ":9091"
+
+[internal_rpc]
+# Docker compose runs the split deployment: the secret arrives via
+# MEMOH_INTERNAL_RPC_SHARED_SECRET (see docker-compose.yml). An empty value
+# here would fall back to the embedded all-in-one mode.
+server_target = "server:9090"
+channel_target = "channel:9091"
+shared_secret = ""
 
 [webhook_tunnel]
 mode = "disabled"
@@ -38,12 +51,12 @@ driver = "postgres"
 # runtime bind mounts and Docker socket access.
 backend = "containerd"
 # registry = "memoh.cn"  # Uncomment for China mainland mirror
-default_image = "debian:bookworm-slim"
+default_image = "memohai/workspace:debian"
 image_pull_policy = "if_not_present"
 # containerd snapshotter and CNI settings for bot workspace containers.
 snapshotter = "overlayfs"
 data_root = "/opt/memoh/data"
-runtime_dir = "/opt/memoh/runtime"
+bridge_path = "/opt/memoh/runtime/bridge"
 
 ## Workspace containerd configuration
 [containerd]
@@ -58,15 +71,6 @@ runtime_type = "io.containerd.kata.v2"
 # Used only when [container].backend = "docker"; the official Compose stack
 # uses containerd above.
 host = ""
-
-[local]
-# Local workspaces are intended for trusted desktop builds, not the default
-# Docker Compose deployment. Keep disabled here because local commands run as
-# the server process user without container isolation.
-enabled = false
-default_workspace_parent = "~/.memoh/workspaces"
-metadata_root = ""
-allow_absolute_paths = false
 
 ## Postgres configuration.
 [postgres]

@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activateSessionRuntimeFence = `-- name: ActivateSessionRuntimeFence :one
+UPDATE bot_sessions
+SET runtime_fencing_token = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $2
+  AND bot_id = $3
+  AND runtime_fencing_token <= $1
+  AND deleted_at IS NULL
+RETURNING runtime_fencing_token
+`
+
+type ActivateSessionRuntimeFenceParams struct {
+	RuntimeFencingToken int64       `json:"runtime_fencing_token"`
+	SessionID           pgtype.UUID `json:"session_id"`
+	BotID               pgtype.UUID `json:"bot_id"`
+}
+
+func (q *Queries) ActivateSessionRuntimeFence(ctx context.Context, arg ActivateSessionRuntimeFenceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, activateSessionRuntimeFence, arg.RuntimeFencingToken, arg.SessionID, arg.BotID)
+	var runtime_fencing_token int64
+	err := row.Scan(&runtime_fencing_token)
+	return runtime_fencing_token, err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO bot_sessions (
   bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, parent_session_id, created_by_user_id
@@ -28,7 +52,7 @@ VALUES (
   $10::uuid,
   $11::uuid
 )
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 `
 
 type CreateSessionParams struct {
@@ -73,21 +97,25 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const deleteSessionDiscussCursorsByBot = `-- name: DeleteSessionDiscussCursorsByBot :exec
 DELETE FROM bot_session_discuss_cursors
-WHERE session_id IN (
+WHERE team_id = public.memoh_current_team_id()
+  AND session_id IN (
   SELECT id
   FROM bot_sessions
-  WHERE bot_id = $1
+  WHERE team_id = public.memoh_current_team_id()
+    AND bot_id = $1
 )
 `
 
@@ -98,9 +126,10 @@ func (q *Queries) DeleteSessionDiscussCursorsByBot(ctx context.Context, botID pg
 
 const forkSessionFromAssistantMessage = `-- name: ForkSessionFromAssistantMessage :one
 WITH source_session AS (
-  SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
+  SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id
   FROM bot_sessions s
-  WHERE s.id = $1
+  WHERE s.team_id = public.memoh_current_team_id()
+    AND s.id = $1
     AND s.bot_id = $2
     AND s.type = 'chat'
     AND s.deleted_at IS NULL
@@ -111,7 +140,8 @@ target_turn AS (
     vm.turn_position AS position,
     vm.id AS message_id
   FROM source_session s
-  JOIN bot_visible_history_messages vm ON vm.session_id = s.id
+  JOIN bot_visible_history_messages vm ON vm.team_id = public.memoh_current_team_id()
+    AND vm.session_id = s.id
     AND vm.id = $3
     AND vm.role = 'assistant'
     AND vm.turn_id IS NOT NULL
@@ -143,7 +173,8 @@ copy_messages AS (
     vm.turn_position < tt.position
     OR vm.turn_position = tt.position
   )
-  WHERE vm.session_id = $1
+  WHERE vm.team_id = public.memoh_current_team_id()
+    AND vm.session_id = $1
   ORDER BY vm.turn_position ASC, vm.turn_message_seq ASC, vm.created_at ASC, vm.id ASC
 ),
 copy_turns AS (
@@ -173,7 +204,7 @@ prepared_metadata AS (
 ),
 fork_plan AS (
   SELECT
-    s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
+    s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id,
     fam.new_message_id AS fork_message_id,
     ntp.value AS next_turn_position_value
   FROM source_session s
@@ -212,7 +243,7 @@ created_session AS (
     $6::uuid
   FROM fork_plan fp
   CROSS JOIN prepared_metadata pm
-  RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+  RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 ),
 inserted_messages AS (
   INSERT INTO bot_history_messages (
@@ -282,9 +313,10 @@ copied_assets AS (
   FROM bot_history_message_assets a
   JOIN copy_messages cm ON cm.old_message_id = a.message_id
   JOIN inserted_messages im ON im.id = cm.new_message_id
+  WHERE a.team_id = public.memoh_current_team_id()
   RETURNING id
 )
-SELECT cs.id, cs.bot_id, cs.route_id, cs.channel_type, cs.type, cs.session_mode, cs.runtime_type, cs.runtime_metadata, cs.title, cs.metadata, cs.next_turn_position, cs.compaction_epoch, cs.parent_session_id, cs.created_by_user_id, cs.created_at, cs.updated_at, cs.deleted_at
+SELECT cs.id, cs.bot_id, cs.route_id, cs.channel_type, cs.type, cs.session_mode, cs.runtime_type, cs.runtime_metadata, cs.title, cs.metadata, cs.next_turn_position, cs.compaction_epoch, cs.runtime_fencing_token, cs.parent_session_id, cs.created_by_user_id, cs.created_at, cs.updated_at, cs.deleted_at, cs.team_id
 FROM created_session cs
 CROSS JOIN (SELECT count(*) AS copied_asset_count FROM copied_assets) copied_asset_counts
 `
@@ -299,23 +331,25 @@ type ForkSessionFromAssistantMessageParams struct {
 }
 
 type ForkSessionFromAssistantMessageRow struct {
-	ID               pgtype.UUID        `json:"id"`
-	BotID            pgtype.UUID        `json:"bot_id"`
-	RouteID          pgtype.UUID        `json:"route_id"`
-	ChannelType      pgtype.Text        `json:"channel_type"`
-	Type             string             `json:"type"`
-	SessionMode      string             `json:"session_mode"`
-	RuntimeType      string             `json:"runtime_type"`
-	RuntimeMetadata  []byte             `json:"runtime_metadata"`
-	Title            string             `json:"title"`
-	Metadata         []byte             `json:"metadata"`
-	NextTurnPosition int64              `json:"next_turn_position"`
-	CompactionEpoch  int64              `json:"compaction_epoch"`
-	ParentSessionID  pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID  pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
+	ID                  pgtype.UUID        `json:"id"`
+	BotID               pgtype.UUID        `json:"bot_id"`
+	RouteID             pgtype.UUID        `json:"route_id"`
+	ChannelType         pgtype.Text        `json:"channel_type"`
+	Type                string             `json:"type"`
+	SessionMode         string             `json:"session_mode"`
+	RuntimeType         string             `json:"runtime_type"`
+	RuntimeMetadata     []byte             `json:"runtime_metadata"`
+	Title               string             `json:"title"`
+	Metadata            []byte             `json:"metadata"`
+	NextTurnPosition    int64              `json:"next_turn_position"`
+	CompactionEpoch     int64              `json:"compaction_epoch"`
+	RuntimeFencingToken int64              `json:"runtime_fencing_token"`
+	ParentSessionID     pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID     pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt           pgtype.Timestamptz `json:"deleted_at"`
+	TeamID              pgtype.UUID        `json:"team_id"`
 }
 
 func (q *Queries) ForkSessionFromAssistantMessage(ctx context.Context, arg ForkSessionFromAssistantMessageParams) (ForkSessionFromAssistantMessageRow, error) {
@@ -341,52 +375,22 @@ func (q *Queries) ForkSessionFromAssistantMessage(ctx context.Context, arg ForkS
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
-	)
-	return i, err
-}
-
-const getActiveSessionForRoute = `-- name: GetActiveSessionForRoute :one
-SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
-FROM bot_sessions s
-JOIN bot_channel_routes r ON r.active_session_id = s.id
-WHERE r.id = $1
-  AND s.deleted_at IS NULL
-`
-
-func (q *Queries) GetActiveSessionForRoute(ctx context.Context, routeID pgtype.UUID) (BotSession, error) {
-	row := q.db.QueryRow(ctx, getActiveSessionForRoute, routeID)
-	var i BotSession
-	err := row.Scan(
-		&i.ID,
-		&i.BotID,
-		&i.RouteID,
-		&i.ChannelType,
-		&i.Type,
-		&i.SessionMode,
-		&i.RuntimeType,
-		&i.RuntimeMetadata,
-		&i.Title,
-		&i.Metadata,
-		&i.NextTurnPosition,
-		&i.CompactionEpoch,
-		&i.ParentSessionID,
-		&i.CreatedByUserID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 FROM bot_sessions
-WHERE id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1
   AND deleted_at IS NULL
 `
 
@@ -406,19 +410,22 @@ func (q *Queries) GetSessionByID(ctx context.Context, id pgtype.UUID) (BotSessio
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const getSessionDiscussCursor = `-- name: GetSessionDiscussCursor :one
-SELECT session_id, scope_key, route_id, source, consumed_cursor, updated_at
+SELECT session_id, scope_key, route_id, source, consumed_cursor, updated_at, team_id
 FROM bot_session_discuss_cursors
-WHERE session_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND session_id = $1
   AND scope_key = $2
 `
 
@@ -437,15 +444,18 @@ func (q *Queries) GetSessionDiscussCursor(ctx context.Context, arg GetSessionDis
 		&i.Source,
 		&i.ConsumedCursor,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
 
 const listSessionDiscussCursorsByBot = `-- name: ListSessionDiscussCursorsByBot :many
-SELECT c.session_id, c.scope_key, c.route_id, c.source, c.consumed_cursor, c.updated_at
+SELECT c.session_id, c.scope_key, c.route_id, c.source, c.consumed_cursor, c.updated_at, c.team_id
 FROM bot_session_discuss_cursors c
 JOIN bot_sessions s ON s.id = c.session_id
-WHERE s.bot_id = $1
+WHERE c.team_id = public.memoh_current_team_id()
+  AND s.team_id = public.memoh_current_team_id()
+  AND s.bot_id = $1
 ORDER BY c.updated_at ASC, c.session_id ASC, c.scope_key ASC
 `
 
@@ -465,6 +475,7 @@ func (q *Queries) ListSessionDiscussCursorsByBot(ctx context.Context, botID pgty
 			&i.Source,
 			&i.ConsumedCursor,
 			&i.UpdatedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -479,34 +490,30 @@ func (q *Queries) ListSessionDiscussCursorsByBot(ctx context.Context, botID pgty
 const listSessionsByBot = `-- name: ListSessionsByBot :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata,
-  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
-  r.metadata AS route_metadata,
-  r.conversation_type AS route_conversation_type
+  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s
-LEFT JOIN bot_channel_routes r ON r.id = s.route_id
-WHERE s.bot_id = $1
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.bot_id = $1
   AND s.deleted_at IS NULL
 ORDER BY s.updated_at DESC
 `
 
 type ListSessionsByBotRow struct {
-	ID                    pgtype.UUID        `json:"id"`
-	BotID                 pgtype.UUID        `json:"bot_id"`
-	RouteID               pgtype.UUID        `json:"route_id"`
-	ChannelType           pgtype.Text        `json:"channel_type"`
-	Type                  string             `json:"type"`
-	SessionMode           string             `json:"session_mode"`
-	RuntimeType           string             `json:"runtime_type"`
-	RuntimeMetadata       []byte             `json:"runtime_metadata"`
-	Title                 string             `json:"title"`
-	Metadata              []byte             `json:"metadata"`
-	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID       pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
-	RouteMetadata         []byte             `json:"route_metadata"`
-	RouteConversationType pgtype.Text        `json:"route_conversation_type"`
+	ID              pgtype.UUID        `json:"id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	RouteID         pgtype.UUID        `json:"route_id"`
+	ChannelType     pgtype.Text        `json:"channel_type"`
+	Type            string             `json:"type"`
+	SessionMode     string             `json:"session_mode"`
+	RuntimeType     string             `json:"runtime_type"`
+	RuntimeMetadata []byte             `json:"runtime_metadata"`
+	Title           string             `json:"title"`
+	Metadata        []byte             `json:"metadata"`
+	ParentSessionID pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt       pgtype.Timestamptz `json:"deleted_at"`
 }
 
 func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]ListSessionsByBotRow, error) {
@@ -534,8 +541,6 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.RouteMetadata,
-			&i.RouteConversationType,
 		); err != nil {
 			return nil, err
 		}
@@ -550,12 +555,10 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 const listSessionsByBotAndCreatedByUser = `-- name: ListSessionsByBotAndCreatedByUser :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata,
-  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
-  r.metadata AS route_metadata,
-  r.conversation_type AS route_conversation_type
+  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s
-LEFT JOIN bot_channel_routes r ON r.id = s.route_id
-WHERE s.bot_id = $1
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.bot_id = $1
   AND s.created_by_user_id = $2
   AND s.deleted_at IS NULL
 ORDER BY s.updated_at DESC
@@ -567,23 +570,21 @@ type ListSessionsByBotAndCreatedByUserParams struct {
 }
 
 type ListSessionsByBotAndCreatedByUserRow struct {
-	ID                    pgtype.UUID        `json:"id"`
-	BotID                 pgtype.UUID        `json:"bot_id"`
-	RouteID               pgtype.UUID        `json:"route_id"`
-	ChannelType           pgtype.Text        `json:"channel_type"`
-	Type                  string             `json:"type"`
-	SessionMode           string             `json:"session_mode"`
-	RuntimeType           string             `json:"runtime_type"`
-	RuntimeMetadata       []byte             `json:"runtime_metadata"`
-	Title                 string             `json:"title"`
-	Metadata              []byte             `json:"metadata"`
-	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID       pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
-	RouteMetadata         []byte             `json:"route_metadata"`
-	RouteConversationType pgtype.Text        `json:"route_conversation_type"`
+	ID              pgtype.UUID        `json:"id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	RouteID         pgtype.UUID        `json:"route_id"`
+	ChannelType     pgtype.Text        `json:"channel_type"`
+	Type            string             `json:"type"`
+	SessionMode     string             `json:"session_mode"`
+	RuntimeType     string             `json:"runtime_type"`
+	RuntimeMetadata []byte             `json:"runtime_metadata"`
+	Title           string             `json:"title"`
+	Metadata        []byte             `json:"metadata"`
+	ParentSessionID pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt       pgtype.Timestamptz `json:"deleted_at"`
 }
 
 func (q *Queries) ListSessionsByBotAndCreatedByUser(ctx context.Context, arg ListSessionsByBotAndCreatedByUserParams) ([]ListSessionsByBotAndCreatedByUserRow, error) {
@@ -611,8 +612,6 @@ func (q *Queries) ListSessionsByBotAndCreatedByUser(ctx context.Context, arg Lis
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.RouteMetadata,
-			&i.RouteConversationType,
 		); err != nil {
 			return nil, err
 		}
@@ -627,12 +626,10 @@ func (q *Queries) ListSessionsByBotAndCreatedByUser(ctx context.Context, arg Lis
 const listSessionsByBotAndCreatedByUserPaged = `-- name: ListSessionsByBotAndCreatedByUserPaged :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata,
-  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
-  r.metadata AS route_metadata,
-  r.conversation_type AS route_conversation_type
+  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s
-LEFT JOIN bot_channel_routes r ON r.id = s.route_id
-WHERE s.bot_id = $1
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.bot_id = $1
   AND s.created_by_user_id = $2
   AND s.deleted_at IS NULL
   AND s.type = ANY($3::text[])
@@ -661,23 +658,21 @@ type ListSessionsByBotAndCreatedByUserPagedParams struct {
 }
 
 type ListSessionsByBotAndCreatedByUserPagedRow struct {
-	ID                    pgtype.UUID        `json:"id"`
-	BotID                 pgtype.UUID        `json:"bot_id"`
-	RouteID               pgtype.UUID        `json:"route_id"`
-	ChannelType           pgtype.Text        `json:"channel_type"`
-	Type                  string             `json:"type"`
-	SessionMode           string             `json:"session_mode"`
-	RuntimeType           string             `json:"runtime_type"`
-	RuntimeMetadata       []byte             `json:"runtime_metadata"`
-	Title                 string             `json:"title"`
-	Metadata              []byte             `json:"metadata"`
-	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID       pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
-	RouteMetadata         []byte             `json:"route_metadata"`
-	RouteConversationType pgtype.Text        `json:"route_conversation_type"`
+	ID              pgtype.UUID        `json:"id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	RouteID         pgtype.UUID        `json:"route_id"`
+	ChannelType     pgtype.Text        `json:"channel_type"`
+	Type            string             `json:"type"`
+	SessionMode     string             `json:"session_mode"`
+	RuntimeType     string             `json:"runtime_type"`
+	RuntimeMetadata []byte             `json:"runtime_metadata"`
+	Title           string             `json:"title"`
+	Metadata        []byte             `json:"metadata"`
+	ParentSessionID pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt       pgtype.Timestamptz `json:"deleted_at"`
 }
 
 func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, arg ListSessionsByBotAndCreatedByUserPagedParams) ([]ListSessionsByBotAndCreatedByUserPagedRow, error) {
@@ -715,8 +710,6 @@ func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, ar
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.RouteMetadata,
-			&i.RouteConversationType,
 		); err != nil {
 			return nil, err
 		}
@@ -731,12 +724,10 @@ func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, ar
 const listSessionsByBotPaged = `-- name: ListSessionsByBotPaged :many
 SELECT
   s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.title, s.metadata,
-  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at,
-  r.metadata AS route_metadata,
-  r.conversation_type AS route_conversation_type
+  s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at
 FROM bot_sessions s
-LEFT JOIN bot_channel_routes r ON r.id = s.route_id
-WHERE s.bot_id = $1
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.bot_id = $1
   AND s.deleted_at IS NULL
   AND s.type = ANY($2::text[])
   AND (
@@ -763,23 +754,21 @@ type ListSessionsByBotPagedParams struct {
 }
 
 type ListSessionsByBotPagedRow struct {
-	ID                    pgtype.UUID        `json:"id"`
-	BotID                 pgtype.UUID        `json:"bot_id"`
-	RouteID               pgtype.UUID        `json:"route_id"`
-	ChannelType           pgtype.Text        `json:"channel_type"`
-	Type                  string             `json:"type"`
-	SessionMode           string             `json:"session_mode"`
-	RuntimeType           string             `json:"runtime_type"`
-	RuntimeMetadata       []byte             `json:"runtime_metadata"`
-	Title                 string             `json:"title"`
-	Metadata              []byte             `json:"metadata"`
-	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID       pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt             pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
-	RouteMetadata         []byte             `json:"route_metadata"`
-	RouteConversationType pgtype.Text        `json:"route_conversation_type"`
+	ID              pgtype.UUID        `json:"id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	RouteID         pgtype.UUID        `json:"route_id"`
+	ChannelType     pgtype.Text        `json:"channel_type"`
+	Type            string             `json:"type"`
+	SessionMode     string             `json:"session_mode"`
+	RuntimeType     string             `json:"runtime_type"`
+	RuntimeMetadata []byte             `json:"runtime_metadata"`
+	Title           string             `json:"title"`
+	Metadata        []byte             `json:"metadata"`
+	ParentSessionID pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt       pgtype.Timestamptz `json:"deleted_at"`
 }
 
 // Cursor uses (updated_at, id) so pages stay stable when many rows share an
@@ -819,8 +808,6 @@ func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsBy
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
-			&i.RouteMetadata,
-			&i.RouteConversationType,
 		); err != nil {
 			return nil, err
 		}
@@ -833,9 +820,10 @@ func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsBy
 }
 
 const listSessionsByRoute = `-- name: ListSessionsByRoute :many
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 FROM bot_sessions
-WHERE route_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND route_id = $1
   AND deleted_at IS NULL
 ORDER BY updated_at DESC
 `
@@ -862,11 +850,13 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 			&i.Metadata,
 			&i.NextTurnPosition,
 			&i.CompactionEpoch,
+			&i.RuntimeFencingToken,
 			&i.ParentSessionID,
 			&i.CreatedByUserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -879,10 +869,18 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 }
 
 const listSubagentSessionsByParent = `-- name: ListSubagentSessionsByParent :many
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 FROM bot_sessions
-WHERE parent_session_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND parent_session_id = $1
+  AND type = 'subagent'
   AND deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1
+    FROM subagent_configs config
+    WHERE config.team_id = public.memoh_current_team_id()
+      AND config.session_id = bot_sessions.id
+  )
 ORDER BY created_at DESC
 `
 
@@ -908,11 +906,13 @@ func (q *Queries) ListSubagentSessionsByParent(ctx context.Context, parentSessio
 			&i.Metadata,
 			&i.NextTurnPosition,
 			&i.CompactionEpoch,
+			&i.RuntimeFencingToken,
 			&i.ParentSessionID,
 			&i.CreatedByUserID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.TeamID,
 		); err != nil {
 			return nil, err
 		}
@@ -924,10 +924,89 @@ func (q *Queries) ListSubagentSessionsByParent(ctx context.Context, parentSessio
 	return items, nil
 }
 
+const lockSessionDecisionSequence = `-- name: LockSessionDecisionSequence :one
+SELECT id
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1
+  AND bot_id = $2
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type LockSessionDecisionSequenceParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+}
+
+func (q *Queries) LockSessionDecisionSequence(ctx context.Context, arg LockSessionDecisionSequenceParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, lockSessionDecisionSequence, arg.SessionID, arg.BotID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lockSessionRuntimeFence = `-- name: LockSessionRuntimeFence :one
+SELECT runtime_fencing_token
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1
+  AND bot_id = $2
+  AND runtime_fencing_token = $3
+  AND deleted_at IS NULL
+FOR NO KEY UPDATE
+`
+
+type LockSessionRuntimeFenceParams struct {
+	SessionID           pgtype.UUID `json:"session_id"`
+	BotID               pgtype.UUID `json:"bot_id"`
+	RuntimeFencingToken int64       `json:"runtime_fencing_token"`
+}
+
+func (q *Queries) LockSessionRuntimeFence(ctx context.Context, arg LockSessionRuntimeFenceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockSessionRuntimeFence, arg.SessionID, arg.BotID, arg.RuntimeFencingToken)
+	var runtime_fencing_token int64
+	err := row.Scan(&runtime_fencing_token)
+	return runtime_fencing_token, err
+}
+
+const lockSessionRuntimeFenceForActivation = `-- name: LockSessionRuntimeFenceForActivation :one
+SELECT runtime_fencing_token
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1
+  AND bot_id = $2
+  AND deleted_at IS NULL
+FOR UPDATE
+`
+
+type LockSessionRuntimeFenceForActivationParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+}
+
+func (q *Queries) LockSessionRuntimeFenceForActivation(ctx context.Context, arg LockSessionRuntimeFenceForActivationParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockSessionRuntimeFenceForActivation, arg.SessionID, arg.BotID)
+	var runtime_fencing_token int64
+	err := row.Scan(&runtime_fencing_token)
+	return runtime_fencing_token, err
+}
+
+const nextSessionRuntimeFenceToken = `-- name: NextSessionRuntimeFenceToken :one
+SELECT nextval('session_runtime_fencing_token_seq')::bigint
+`
+
+func (q *Queries) NextSessionRuntimeFenceToken(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, nextSessionRuntimeFenceToken)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const setSessionNextTurnPosition = `-- name: SetSessionNextTurnPosition :exec
 UPDATE bot_sessions
 SET next_turn_position = $1::bigint
-WHERE id = $2
+WHERE team_id = public.memoh_current_team_id() AND id = $2
 `
 
 type SetSessionNextTurnPositionParams struct {
@@ -943,7 +1022,7 @@ func (q *Queries) SetSessionNextTurnPosition(ctx context.Context, arg SetSession
 const softDeleteSession = `-- name: SoftDeleteSession :exec
 UPDATE bot_sessions
 SET deleted_at = now(), updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL
+WHERE team_id = public.memoh_current_team_id() AND id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) SoftDeleteSession(ctx context.Context, id pgtype.UUID) error {
@@ -954,7 +1033,7 @@ func (q *Queries) SoftDeleteSession(ctx context.Context, id pgtype.UUID) error {
 const softDeleteSessionsByBot = `-- name: SoftDeleteSessionsByBot :exec
 UPDATE bot_sessions
 SET deleted_at = now(), updated_at = now()
-WHERE bot_id = $1 AND deleted_at IS NULL
+WHERE team_id = public.memoh_current_team_id() AND bot_id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) SoftDeleteSessionsByBot(ctx context.Context, botID pgtype.UUID) error {
@@ -965,7 +1044,7 @@ func (q *Queries) SoftDeleteSessionsByBot(ctx context.Context, botID pgtype.UUID
 const touchSession = `-- name: TouchSession :exec
 UPDATE bot_sessions
 SET updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL
+WHERE team_id = public.memoh_current_team_id() AND id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) TouchSession(ctx context.Context, id pgtype.UUID) error {
@@ -976,8 +1055,8 @@ func (q *Queries) TouchSession(ctx context.Context, id pgtype.UUID) error {
 const updateSessionMetadata = `-- name: UpdateSessionMetadata :one
 UPDATE bot_sessions
 SET metadata = $1, updated_at = now()
-WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+WHERE team_id = public.memoh_current_team_id() AND id = $2 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 `
 
 type UpdateSessionMetadataParams struct {
@@ -1001,11 +1080,63 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg UpdateSessionMe
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
+	)
+	return i, err
+}
+
+const updateSessionMetadataWithRuntimeFence = `-- name: UpdateSessionMetadataWithRuntimeFence :one
+UPDATE bot_sessions
+SET metadata = $1, updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $2
+  AND bot_id = $3
+  AND runtime_fencing_token = $4
+  AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
+`
+
+type UpdateSessionMetadataWithRuntimeFenceParams struct {
+	Metadata            []byte      `json:"metadata"`
+	ID                  pgtype.UUID `json:"id"`
+	BotID               pgtype.UUID `json:"bot_id"`
+	RuntimeFencingToken int64       `json:"runtime_fencing_token"`
+}
+
+func (q *Queries) UpdateSessionMetadataWithRuntimeFence(ctx context.Context, arg UpdateSessionMetadataWithRuntimeFenceParams) (BotSession, error) {
+	row := q.db.QueryRow(ctx, updateSessionMetadataWithRuntimeFence,
+		arg.Metadata,
+		arg.ID,
+		arg.BotID,
+		arg.RuntimeFencingToken,
+	)
+	var i BotSession
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.RouteID,
+		&i.ChannelType,
+		&i.Type,
+		&i.SessionMode,
+		&i.RuntimeType,
+		&i.RuntimeMetadata,
+		&i.Title,
+		&i.Metadata,
+		&i.NextTurnPosition,
+		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
+		&i.ParentSessionID,
+		&i.CreatedByUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -1013,8 +1144,8 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg UpdateSessionMe
 const updateSessionTitle = `-- name: UpdateSessionTitle :one
 UPDATE bot_sessions
 SET title = $1, updated_at = now()
-WHERE id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+WHERE team_id = public.memoh_current_team_id() AND id = $2 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 `
 
 type UpdateSessionTitleParams struct {
@@ -1038,11 +1169,63 @@ func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitle
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
+	)
+	return i, err
+}
+
+const updateSessionTitleWithRuntimeFence = `-- name: UpdateSessionTitleWithRuntimeFence :one
+UPDATE bot_sessions
+SET title = $1, updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $2
+  AND bot_id = $3
+  AND runtime_fencing_token = $4
+  AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
+`
+
+type UpdateSessionTitleWithRuntimeFenceParams struct {
+	Title               string      `json:"title"`
+	ID                  pgtype.UUID `json:"id"`
+	BotID               pgtype.UUID `json:"bot_id"`
+	RuntimeFencingToken int64       `json:"runtime_fencing_token"`
+}
+
+func (q *Queries) UpdateSessionTitleWithRuntimeFence(ctx context.Context, arg UpdateSessionTitleWithRuntimeFenceParams) (BotSession, error) {
+	row := q.db.QueryRow(ctx, updateSessionTitleWithRuntimeFence,
+		arg.Title,
+		arg.ID,
+		arg.BotID,
+		arg.RuntimeFencingToken,
+	)
+	var i BotSession
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.RouteID,
+		&i.ChannelType,
+		&i.Type,
+		&i.SessionMode,
+		&i.RuntimeType,
+		&i.RuntimeMetadata,
+		&i.Title,
+		&i.Metadata,
+		&i.NextTurnPosition,
+		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
+		&i.ParentSessionID,
+		&i.CreatedByUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -1055,8 +1238,8 @@ SET type = $1,
     runtime_metadata = $4,
     metadata = $5,
     updated_at = now()
-WHERE id = $6 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at
+WHERE team_id = public.memoh_current_team_id() AND id = $6 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id
 `
 
 type UpdateSessionTypeAndMetadataParams struct {
@@ -1091,11 +1274,13 @@ func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg UpdateSe
 		&i.Metadata,
 		&i.NextTurnPosition,
 		&i.CompactionEpoch,
+		&i.RuntimeFencingToken,
 		&i.ParentSessionID,
 		&i.CreatedByUserID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.TeamID,
 	)
 	return i, err
 }
@@ -1111,12 +1296,12 @@ VALUES (
   $4,
   $5
 )
-ON CONFLICT (session_id, scope_key) DO UPDATE
+ON CONFLICT (team_id, session_id, scope_key) DO UPDATE
 SET route_id = COALESCE(EXCLUDED.route_id, bot_session_discuss_cursors.route_id),
     source = EXCLUDED.source,
     consumed_cursor = GREATEST(bot_session_discuss_cursors.consumed_cursor, EXCLUDED.consumed_cursor),
     updated_at = now()
-RETURNING session_id, scope_key, route_id, source, consumed_cursor, updated_at
+RETURNING session_id, scope_key, route_id, source, consumed_cursor, updated_at, team_id
 `
 
 type UpsertSessionDiscussCursorParams struct {
@@ -1143,6 +1328,7 @@ func (q *Queries) UpsertSessionDiscussCursor(ctx context.Context, arg UpsertSess
 		&i.Source,
 		&i.ConsumedCursor,
 		&i.UpdatedAt,
+		&i.TeamID,
 	)
 	return i, err
 }

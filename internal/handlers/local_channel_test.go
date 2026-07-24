@@ -22,16 +22,16 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/memohai/memoh/internal/accounts"
+	"github.com/memohai/memoh/internal/agent/application"
+	"github.com/memohai/memoh/internal/apperror"
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
+	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/command"
-	"github.com/memohai/memoh/internal/conversation"
-	"github.com/memohai/memoh/internal/conversation/flow"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/media"
-	sessionpkg "github.com/memohai/memoh/internal/session"
 	skillset "github.com/memohai/memoh/internal/skills"
 	"github.com/memohai/memoh/internal/slash"
 	"github.com/memohai/memoh/internal/storage"
@@ -41,6 +41,30 @@ type fakeSessionTurnActiveChecker map[string]bool
 
 func (f fakeSessionTurnActiveChecker) SessionTurnActive(botID, sessionID string) bool {
 	return f[strings.TrimSpace(botID)+":"+strings.TrimSpace(sessionID)]
+}
+
+func TestNewWSAppErrorEventUsesPublicCatalogOnly(t *testing.T) {
+	t.Parallel()
+
+	event, ok := newWSAppErrorEvent(
+		"stream-1",
+		"session-1",
+		apperror.Wrap(apperror.CodeACPConfigUpdateFailed, errors.New("SECRET transport path"), nil),
+	)
+	if !ok {
+		t.Fatal("newWSAppErrorEvent() did not recognize application error")
+	}
+	feedback, ok := event.Feedback.(apperror.Public)
+	if !ok || feedback.Code != apperror.CodeACPConfigUpdateFailed {
+		t.Fatalf("event feedback = %#v", event.Feedback)
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SECRET") || strings.Contains(string(data), "i18n_key") {
+		t.Fatalf("public WebSocket error leaked private or legacy data: %s", data)
+	}
 }
 
 func TestFormatLocalStreamEvent_UsesChannelEventShape(t *testing.T) {
@@ -373,7 +397,6 @@ func TestCanOpenLocalWebSocketAllowsWorkspaceOrManage(t *testing.T) {
 type localChannelSessionAuthQueries struct {
 	dbstore.Queries
 	bot              sqlc.GetBotByIDRow
-	chat             sqlc.GetChatByIDRow
 	session          sqlc.BotSession
 	grants           []sqlc.ListBotUserGrantsForUserRow
 	createSession    func(context.Context, sqlc.CreateSessionParams) (sqlc.BotSession, error)
@@ -404,10 +427,6 @@ func (q localChannelSessionAuthQueries) SetRouteActiveSession(ctx context.Contex
 		return nil
 	}
 	return q.setActiveSession(ctx, params)
-}
-
-func (q localChannelSessionAuthQueries) GetChatByID(_ context.Context, _ pgtype.UUID) (sqlc.GetChatByIDRow, error) {
-	return q.chat, nil
 }
 
 func (q localChannelSessionAuthQueries) ListBotUserGrantsForUser(_ context.Context, _ sqlc.ListBotUserGrantsForUserParams) ([]sqlc.ListBotUserGrantsForUserRow, error) {
@@ -640,7 +659,7 @@ func TestLocalChannelWSMessageAuthorizesSessionBeforeSlashCommand(t *testing.T) 
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		resolver:       &flow.Resolver{},
+		agentService:   &application.Service{},
 		commandHandler: command.NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		logger:         slog.Default(),
 	}
@@ -716,7 +735,7 @@ func TestLocalChannelWSQuickActionRequiresChatAccessWithoutSession(t *testing.T)
 		channelType:    channel.ChannelTypeLocal,
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
-		resolver:       &flow.Resolver{},
+		agentService:   &application.Service{},
 		logger:         slog.Default(),
 	}
 
@@ -798,7 +817,7 @@ func TestLocalChannelWSSkillActivationRequiresChatAccessWithSession(t *testing.T
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		resolver:       &flow.Resolver{},
+		agentService:   &application.Service{},
 		logger:         slog.Default(),
 	}
 
@@ -884,7 +903,7 @@ func TestLocalChannelWSQuickActionHelpOmitsSkillsForACPSession(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		resolver:       &flow.Resolver{},
+		agentService:   &application.Service{},
 		skillResolver: testRuntimeSkillResolver{catalog: []skillset.SafeCatalogItem{
 			{Name: "alpha", DisplayName: "alpha", Description: "Alpha", State: skillset.StateEffective},
 		}},
@@ -955,7 +974,7 @@ func TestLocalChannelWSQuickActionSkillListRejectsACPSession(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		resolver:       &flow.Resolver{},
+		agentService:   &application.Service{},
 		skillResolver: testRuntimeSkillResolver{catalog: []skillset.SafeCatalogItem{
 			{Name: "alpha", DisplayName: "alpha", Description: "Alpha", State: skillset.StateEffective},
 		}},
@@ -1133,22 +1152,11 @@ func TestPostMessageRejectsSlashOnLegacyRESTEndpoint(t *testing.T) {
 	)
 	queries := localChannelSessionAuthQueries{
 		bot: testBotRow(botID, map[string]any{}),
-		chat: sqlc.GetChatByIDRow{
-			ID:              testUUID(botID),
-			BotID:           testUUID(botID),
-			Kind:            conversation.KindDirect,
-			Title:           pgtype.Text{String: "bot", Valid: true},
-			CreatedByUserID: testUUID(currentUser),
-			Metadata:        []byte(`{}`),
-			CreatedAt:       pgtype.Timestamptz{Valid: true},
-			UpdatedAt:       pgtype.Timestamptz{Valid: true},
-		},
 	}
 	handler := &LocalChannelHandler{
 		channelType:    channel.ChannelTypeLocal,
 		channelManager: &channel.Manager{},
 		channelStore:   &channel.Store{},
-		chatService:    conversation.NewService(nil, queries),
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		logger:         slog.Default(),
@@ -1466,7 +1474,7 @@ func (p *localChannelMemoryProvider) Open(ctx context.Context, key string) (io.R
 
 func (*localChannelMemoryProvider) Delete(context.Context, string) error { return nil }
 
-func (*localChannelMemoryProvider) AccessPath(key string) string {
+func (*localChannelMemoryProvider) AccessPath(_ context.Context, key string) string {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 {
 		return "/data/media/" + key

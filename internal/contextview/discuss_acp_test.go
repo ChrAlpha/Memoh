@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
-func discussACPInputFixture() pipeline.DiscussContextInput {
-	return pipeline.DiscussContextInput{
+func discussACPInputFixture() DiscussContextInput {
+	return DiscussContextInput{
 		RC: pipeline.RenderedContext{
 			{
 				ReceivedAtMs: 100,

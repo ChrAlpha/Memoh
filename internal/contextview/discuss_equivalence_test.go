@@ -7,8 +7,8 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/pipeline"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
 func TestDiscussEquivalence_BasicRCAndTR(t *testing.T) {
@@ -257,7 +257,7 @@ func TestDiscussSDKContextBuilderMatchesLegacy(t *testing.T) {
 	}}
 
 	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, pipeline.DiscussContextInput{RC: rc, TRs: trs, CompactSummary: "older summary"})
+	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{RC: rc, TRs: trs, CompactSummary: "older summary"})
 	if err != nil {
 		t.Fatalf("BuildDiscussSDKMessages failed: %v", err)
 	}

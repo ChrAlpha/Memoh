@@ -20,10 +20,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/memohai/memoh/internal/acl"
-	"github.com/memohai/memoh/internal/acpprofile"
+	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
 	"github.com/memohai/memoh/internal/botbackup/secure"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
+	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -35,7 +36,6 @@ import (
 	providerpkg "github.com/memohai/memoh/internal/providers"
 	"github.com/memohai/memoh/internal/schedule"
 	searchpkg "github.com/memohai/memoh/internal/searchproviders"
-	sessionpkg "github.com/memohai/memoh/internal/session"
 	"github.com/memohai/memoh/internal/settings"
 )
 
@@ -880,7 +880,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.TtsModelID = current.TtsModelID
 				eff.TranscriptionModelID = current.TranscriptionModelID
 				eff.HeartbeatModelID = current.HeartbeatModelID
-				eff.TitleModelID = current.TitleModelID
 				eff.CompactionModelID = current.CompactionModelID
 				eff.DiscussProbeModelID = current.DiscussProbeModelID
 			}
@@ -954,7 +953,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 		HeartbeatEnabled:       &heartbeatEnabled,
 		HeartbeatInterval:      &heartbeatInterval,
 		HeartbeatModelID:       modelID(eff.HeartbeatModelID, deps.models),
-		TitleModelID:           modelID(eff.TitleModelID, deps.models),
 		CompactionEnabled:      &compactionEnabled,
 		CompactionThreshold:    &compactionThreshold,
 		CompactionRatio:        &compactionRatio,

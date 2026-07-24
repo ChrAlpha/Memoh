@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 type Builder struct {

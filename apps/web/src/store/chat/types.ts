@@ -147,6 +147,7 @@ export interface SendMessageResult {
   ok: boolean
   stage?: SendMessageStage
   error?: string
+  errorCode?: string
   restoreInput?: string
   restoreAttachments?: ChatAttachment[]
   restoreRequestedSkills?: RequestedSkillSelection[]
@@ -157,6 +158,7 @@ export interface SendMessageOptions {
   target?: ChatViewTarget
   modelId?: string
   reasoningEffort?: string
+  workspaceTargetId?: string
   requestedSkills?: RequestedSkillSelection[]
   composerScope?: string
   /** Called immediately before a real chat turn is appended or dispatched. */
@@ -165,14 +167,20 @@ export interface SendMessageOptions {
   onTurnAppendAborted?: () => void
 }
 
+export interface ChatWorkspaceTargetSnapshot {
+  target_id: string
+  kind?: string
+  name?: string
+}
+
+export type ChatWorkspaceTargetSelectionSource = 'unset' | 'default' | 'session' | 'user'
+
 export interface ACPAgentSessionInput {
   agentId: string
   sessionMode?: 'chat' | 'discuss'
   projectPath?: string
   projectMode?: string
-  modelId?: string
   title?: string
-  startRuntime?: boolean
   /** Warm pre-session runtime to bind to the created session. */
   runtimeId?: string
 }

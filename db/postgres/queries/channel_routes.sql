@@ -14,7 +14,6 @@ VALUES (
 )
 RETURNING
   id,
-  sqlc.arg(chat_id)::uuid AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -30,7 +29,6 @@ RETURNING
 -- name: FindChatRoute :one
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -43,7 +41,8 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE bot_id = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
   AND channel_type = sqlc.arg(platform)
   AND external_conversation_id = sqlc.arg(conversation_id)
   AND COALESCE(external_thread_id, '') = COALESCE(sqlc.narg(thread_id), '')
@@ -52,7 +51,6 @@ LIMIT 1;
 -- name: GetChatRouteByID :one
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -65,12 +63,11 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE id = $1;
+WHERE team_id = public.memoh_current_team_id() AND id = $1;
 
 -- name: ListChatRoutes :many
 SELECT
   id,
-  bot_id AS chat_id,
   bot_id,
   channel_type AS platform,
   channel_config_id,
@@ -83,24 +80,35 @@ SELECT
   created_at,
   updated_at
 FROM bot_channel_routes
-WHERE bot_id = sqlc.arg(chat_id)
+WHERE team_id = public.memoh_current_team_id() AND bot_id = sqlc.arg(bot_id)
 ORDER BY created_at ASC;
+
+-- name: ListChatRouteThreadProjectionsByIDs :many
+SELECT
+  id,
+  conversation_type,
+  metadata
+FROM bot_channel_routes
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND id = ANY(sqlc.arg(route_ids)::uuid[]);
 
 -- name: UpdateChatRouteReplyTarget :exec
 UPDATE bot_channel_routes
 SET default_reply_target = sqlc.arg(reply_target), updated_at = now()
-WHERE id = sqlc.arg(id);
+WHERE team_id = public.memoh_current_team_id() AND id = sqlc.arg(id);
 
 -- name: UpdateChatRouteMetadata :exec
 UPDATE bot_channel_routes
 SET metadata = sqlc.arg(metadata), updated_at = now()
-WHERE id = sqlc.arg(id);
+WHERE team_id = public.memoh_current_team_id() AND id = sqlc.arg(id);
 
 -- name: SetRouteActiveSession :exec
 WITH destination_session AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
-  WHERE session.id = sqlc.narg(active_session_id)::uuid
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.id = sqlc.narg(active_session_id)::uuid
   FOR KEY SHARE
 )
 UPDATE bot_channel_routes route
@@ -109,16 +117,19 @@ SET active_session_id = COALESCE(
       sqlc.narg(active_session_id)::uuid
     ),
     updated_at = now()
-WHERE route.id = sqlc.arg(id);
+WHERE route.team_id = public.memoh_current_team_id()
+  AND route.id = sqlc.arg(id);
 
 -- name: DeleteChatRoute :exec
 WITH route_sessions AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
-  WHERE session.route_id = sqlc.arg(id)
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.route_id = sqlc.arg(id)
   ORDER BY session.id
   FOR UPDATE
 )
 DELETE FROM bot_channel_routes route
-WHERE route.id = sqlc.arg(id)
+WHERE route.team_id = public.memoh_current_team_id()
+  AND route.id = sqlc.arg(id)
   AND (SELECT count(*) FROM route_sessions) >= 0;

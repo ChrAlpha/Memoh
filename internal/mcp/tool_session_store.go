@@ -282,5 +282,14 @@ func MergeToolSessionContext(base, latest ToolSessionContext) ToolSessionContext
 	if latest.ContextToolExchangePolicy != nil {
 		merged.ContextToolExchangePolicy = latest.ContextToolExchangePolicy
 	}
+	if latest.RuntimeFence.Valid() {
+		merged.RuntimeFence = latest.RuntimeFence
+	}
+	if latest.RunContext != nil {
+		merged.RunContext = latest.RunContext
+	}
+	if latest.RuntimeGuard != nil {
+		merged.RuntimeGuard = latest.RuntimeGuard
+	}
 	return merged
 }

@@ -1,9 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 
-	"github.com/memohai/memoh/internal/contextfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 func TestToolSessionContextStoreMergesLatestPromptContext(t *testing.T) {
@@ -71,6 +72,17 @@ func TestToolSessionContextMergeOverridesContextToolExchangePolicy(t *testing.T)
 	merged = MergeToolSessionContext(base, ToolSessionContext{})
 	if merged.ContextToolExchangePolicy != basePolicy {
 		t.Fatalf("ContextToolExchangePolicy = %#v, want base policy preserved %#v", merged.ContextToolExchangePolicy, basePolicy)
+	}
+}
+
+func TestToolSessionContextMergePreservesRuntimeLifecycle(t *testing.T) {
+	runCtx := context.Background()
+	guard := func(context.Context) error { return nil }
+	merged := MergeToolSessionContext(ToolSessionContext{BotID: "bot-1"}, ToolSessionContext{
+		RunContext: runCtx, RuntimeGuard: guard,
+	})
+	if merged.RunContext != runCtx || merged.RuntimeGuard == nil {
+		t.Fatalf("runtime lifecycle = context:%v guard:%v", merged.RunContext, merged.RuntimeGuard != nil)
 	}
 }
 

@@ -67,7 +67,7 @@ func TestLoadReadsWorkspaceFieldsFromContainerSection(t *testing.T) {
 backend = "docker"
 default_image = "alpine:3.22"
 image_pull_policy = "always"
-runtime_dir = "/opt/memoh/runtime"
+bridge_path = "/opt/memoh/runtime/bridge"
 `)
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -89,8 +89,8 @@ runtime_dir = "/opt/memoh/runtime"
 	if cfg.Workspace.ImagePullPolicy != "always" {
 		t.Fatalf("workspace image_pull_policy = %q", cfg.Workspace.ImagePullPolicy)
 	}
-	if cfg.Workspace.RuntimeDir != "/opt/memoh/runtime" {
-		t.Fatalf("workspace runtime_dir = %q", cfg.Workspace.RuntimeDir)
+	if cfg.Workspace.BridgePath != "/opt/memoh/runtime/bridge" {
+		t.Fatalf("workspace bridge_path = %q", cfg.Workspace.BridgePath)
 	}
 }
 
@@ -202,6 +202,31 @@ func TestLoadAppliesWebhookTunnelEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestRuntimeValidationRequiresInternalRPCSecret(t *testing.T) {
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if err := cfg.ValidateServerRuntime(); err == nil || !strings.Contains(err.Error(), "shared_secret") {
+		t.Fatalf("server validation error = %v", err)
+	}
+	if err := cfg.ValidateChannelRuntime(); err == nil || !strings.Contains(err.Error(), "shared_secret") {
+		t.Fatalf("channel validation error = %v", err)
+	}
+
+	t.Setenv("MEMOH_INTERNAL_RPC_SHARED_SECRET", "test-only-secret")
+	cfg, err = Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("load config with secret: %v", err)
+	}
+	if err := cfg.ValidateServerRuntime(); err != nil {
+		t.Fatalf("server validation: %v", err)
+	}
+	if err := cfg.ValidateChannelRuntime(); err != nil {
+		t.Fatalf("channel validation: %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidWebhookTunnelMode(t *testing.T) {
 	t.Parallel()
 
@@ -228,6 +253,163 @@ func TestLoadRejectsInvalidWebhookTunnelModeFromEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported webhook_tunnel mode") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadDefaultsSessionRuntimeToMemory(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.SessionRuntime.BackendOrDefault() != SessionRuntimeBackendMemory {
+		t.Fatalf("session runtime backend = %q, want memory", cfg.SessionRuntime.BackendOrDefault())
+	}
+	if cfg.SessionRuntime.StateTTLOrDefault() != DefaultSessionRuntimeStateTTL {
+		t.Fatalf("session runtime state ttl = %q, want %q", cfg.SessionRuntime.StateTTLOrDefault(), DefaultSessionRuntimeStateTTL)
+	}
+	if cfg.SessionRuntime.OwnerLeaseTTLOrDefault() != DefaultSessionRuntimeOwnerLeaseTTL {
+		t.Fatalf("session runtime owner lease ttl = %q, want %q", cfg.SessionRuntime.OwnerLeaseTTLOrDefault(), DefaultSessionRuntimeOwnerLeaseTTL)
+	}
+}
+
+func TestLoadReadsSessionRuntimeRedisConfig(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[session_runtime]
+backend = "redis"
+state_ttl = "12h"
+owner_lease_ttl = "45s"
+
+[session_runtime.redis]
+url = "redis://redis.example:6379/2"
+key_prefix = "test:runtime:"
+`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.SessionRuntime.BackendOrDefault() != SessionRuntimeBackendRedis {
+		t.Fatalf("session runtime backend = %q, want redis", cfg.SessionRuntime.BackendOrDefault())
+	}
+	if cfg.SessionRuntime.StateTTLOrDefault() != "12h" || cfg.SessionRuntime.OwnerLeaseTTLOrDefault() != "45s" {
+		t.Fatalf("session runtime ttl config = %#v", cfg.SessionRuntime)
+	}
+	if cfg.SessionRuntime.Redis.URLOrDefault() != "redis://redis.example:6379/2" {
+		t.Fatalf("redis url = %q", cfg.SessionRuntime.Redis.URLOrDefault())
+	}
+	if cfg.SessionRuntime.Redis.KeyPrefixOrDefault() != "test:runtime:" {
+		t.Fatalf("redis key prefix = %q", cfg.SessionRuntime.Redis.KeyPrefixOrDefault())
+	}
+}
+
+func TestLoadRejectsInvalidSessionRuntimeBackend(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[session_runtime]\nbackend = \"nats\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected invalid session runtime backend to fail")
+	}
+	if !strings.Contains(err.Error(), "unsupported session_runtime backend") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidSessionRuntimeDuration(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[session_runtime]\nstate_ttl = \"forever\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected invalid session runtime duration to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid session_runtime state_ttl") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsNonPositiveSessionRuntimeDuration(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[session_runtime]\nbackend = \"redis\"\nowner_lease_ttl = \"-1s\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected non-positive session runtime duration to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid session_runtime owner_lease_ttl") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsSessionRuntimeOwnerLeaseBelowMinimum(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[session_runtime]\nbackend = \"redis\"\nowner_lease_ttl = \"500ms\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected too-small session runtime owner lease to fail")
+	}
+	if !strings.Contains(err.Error(), "must be at least 1s") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsSessionRuntimeStateTTLShorterThanOwnerLease(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	data := []byte(`
+[session_runtime]
+backend = "redis"
+state_ttl = "10s"
+owner_lease_ttl = "30s"
+`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected session runtime state ttl shorter than owner lease to fail")
+	}
+	if !strings.Contains(err.Error(), "must be greater than or equal to owner_lease_ttl") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadMemorySessionRuntimeIgnoresOwnerLeaseTTL(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte("[session_runtime]\nbackend = \"memory\"\nowner_lease_ttl = \"not-used\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(configPath); err != nil {
+		t.Fatalf("memory runtime rejected unused owner lease config: %v", err)
 	}
 }
 
@@ -306,6 +488,9 @@ func TestLoadAppKataDevTemplate(t *testing.T) {
 	if !filepath.IsAbs(cfg.Workspace.RuntimeDir) {
 		t.Fatalf("workspace runtime_dir = %q, want absolute path", cfg.Workspace.RuntimeDir)
 	}
+	if !filepath.IsAbs(cfg.Workspace.BridgePath) {
+		t.Fatalf("workspace bridge_path = %q, want absolute path", cfg.Workspace.BridgePath)
+	}
 }
 
 func TestLoadAppKataDockerTemplate(t *testing.T) {
@@ -337,9 +522,12 @@ func TestLoadAppKataDockerTemplate(t *testing.T) {
 	if !filepath.IsAbs(cfg.Workspace.RuntimeDir) {
 		t.Fatalf("workspace runtime_dir = %q, want absolute path", cfg.Workspace.RuntimeDir)
 	}
+	if !filepath.IsAbs(cfg.Workspace.BridgePath) {
+		t.Fatalf("workspace bridge_path = %q, want absolute path", cfg.Workspace.BridgePath)
+	}
 }
 
-func TestLoadResolvesRelativeLocalPaths(t *testing.T) {
+func TestLoadResolvesRelativePaths(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
@@ -350,9 +538,7 @@ driver = "postgres"
 [container]
 data_root = "data/local"
 runtime_dir = "data/runtime"
-
-[local]
-metadata_root = "data/local/containers"
+bridge_path = "data/runtime/custom-bridge"
 
 [registry]
 providers_dir = "conf/providers"
@@ -368,7 +554,7 @@ providers_dir = "conf/providers"
 	for name, path := range map[string]string{
 		"data_root":     cfg.Workspace.DataRoot,
 		"runtime_dir":   cfg.Workspace.RuntimeDir,
-		"metadata_root": cfg.Local.MetadataRoot,
+		"bridge_path":   cfg.Workspace.BridgePath,
 		"providers_dir": cfg.Registry.ProvidersPath(),
 	} {
 		if !filepath.IsAbs(path) {

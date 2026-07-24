@@ -6,13 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 const (
-	DefaultConfigPath            = "config.toml"
-	DefaultHTTPAddr              = ":8080"
+	DefaultConfigPath      = "config.toml"
+	DefaultHTTPAddr        = ":8080"
+	DefaultChannelHTTPAddr = ":8081"
+	// The internal RPC is plaintext; default to loopback so bare-metal
+	// split deployments never expose it on all interfaces by accident.
+	// Container deployments override this in their config template.
+	DefaultServerRPCListenAddr   = "127.0.0.1:9090"
+	DefaultChannelRPCListenAddr  = "127.0.0.1:9091"
+	DefaultServerRPCTarget       = "127.0.0.1:9090"
+	DefaultChannelRPCTarget      = "127.0.0.1:9091"
 	DefaultNamespace             = "default"
 	DefaultSocketPath            = "/run/containerd/containerd.sock"
 	DefaultDataRoot              = "data"
@@ -32,6 +41,7 @@ const (
 	DefaultPGVectorDatabase      = "memoh_vector"
 	DefaultPGVectorSSLMode       = "disable"
 	DefaultRuntimeDir            = "/opt/memoh/runtime"
+	DefaultBridgePath            = DefaultRuntimeDir + "/bridge"
 	DefaultWorkspaceImage        = "memohai/workspace:debian"
 	DefaultBaseImage             = DefaultWorkspaceImage
 	DefaultWorkspaceMirrorImage  = "memoh.cn/memohai/workspace:debian"
@@ -47,27 +57,29 @@ const (
 )
 
 type Config struct {
-	Log           LogConfig           `toml:"log"`
-	Server        ServerConfig        `toml:"server"`
-	Admin         AdminConfig         `toml:"admin"`
-	Auth          AuthConfig          `toml:"auth"`
-	Agent         AgentConfig         `toml:"agent"`
-	Timezone      string              `toml:"timezone"`
-	Database      DatabaseConfig      `toml:"database"`
-	Container     ContainerConfig     `toml:"container"`
-	Containerd    ContainerdConfig    `toml:"containerd"`
-	Docker        DockerConfig        `toml:"docker"`
-	Apple         AppleConfig         `toml:"apple"`
-	Local         LocalConfig         `toml:"local"`
-	Workspace     WorkspaceConfig     `toml:"workspace"`
-	Postgres      PostgresConfig      `toml:"postgres"`
-	PGVector      PGVectorConfig      `toml:"pgvector"`
-	Registry      RegistryConfig      `toml:"registry"`
-	Supermarket   SupermarketConfig   `toml:"supermarket"`
-	OAuthClients  OAuthClientsConfig  `toml:"oauth_clients"`
-	InstanceID    string              `toml:"instance_id"`
-	BridgeTLS     BridgeTLSConfig     `toml:"bridge_tls"`
-	WebhookTunnel WebhookTunnelConfig `toml:"webhook_tunnel"`
+	Log            LogConfig            `toml:"log"`
+	Server         ServerConfig         `toml:"server"`
+	Channel        ChannelConfig        `toml:"channel"`
+	InternalRPC    InternalRPCConfig    `toml:"internal_rpc"`
+	Admin          AdminConfig          `toml:"admin"`
+	Auth           AuthConfig           `toml:"auth"`
+	Agent          AgentConfig          `toml:"agent"`
+	Timezone       string               `toml:"timezone"`
+	Database       DatabaseConfig       `toml:"database"`
+	Container      ContainerConfig      `toml:"container"`
+	Containerd     ContainerdConfig     `toml:"containerd"`
+	Docker         DockerConfig         `toml:"docker"`
+	Apple          AppleConfig          `toml:"apple"`
+	Workspace      WorkspaceConfig      `toml:"workspace"`
+	Postgres       PostgresConfig       `toml:"postgres"`
+	PGVector       PGVectorConfig       `toml:"pgvector"`
+	Registry       RegistryConfig       `toml:"registry"`
+	Supermarket    SupermarketConfig    `toml:"supermarket"`
+	OAuthClients   OAuthClientsConfig   `toml:"oauth_clients"`
+	SessionRuntime SessionRuntimeConfig `toml:"session_runtime"`
+	InstanceID     string               `toml:"instance_id"`
+	BridgeTLS      BridgeTLSConfig      `toml:"bridge_tls"`
+	WebhookTunnel  WebhookTunnelConfig  `toml:"webhook_tunnel"`
 }
 
 const (
@@ -114,7 +126,32 @@ type LogConfig struct {
 }
 
 type ServerConfig struct {
-	Addr string `toml:"addr"`
+	Addr          string `toml:"addr"`
+	RPCListenAddr string `toml:"rpc_listen_addr"`
+}
+
+type ChannelConfig struct {
+	Addr          string `toml:"addr"`
+	RPCListenAddr string `toml:"rpc_listen_addr"`
+}
+
+type InternalRPCConfig struct {
+	ServerTarget  string `toml:"server_target"`
+	ChannelTarget string `toml:"channel_target"`
+	SharedSecret  string `toml:"shared_secret" json:"-"`
+}
+
+func (c InternalRPCConfig) Validate() error {
+	if strings.TrimSpace(c.SharedSecret) == "" {
+		return errors.New("internal_rpc.shared_secret is required")
+	}
+	if strings.TrimSpace(c.ServerTarget) == "" {
+		return errors.New("internal_rpc.server_target is required")
+	}
+	if strings.TrimSpace(c.ChannelTarget) == "" {
+		return errors.New("internal_rpc.channel_target is required")
+	}
+	return nil
 }
 
 const (
@@ -191,6 +228,98 @@ func (c AgentConfig) EffectiveContextLoopReselectMode() (mode string, recognized
 	}
 }
 
+const (
+	SessionRuntimeBackendMemory = "memory"
+	SessionRuntimeBackendRedis  = "redis"
+
+	DefaultSessionRuntimeStateTTL       = "24h"
+	DefaultSessionRuntimeOwnerLeaseTTL  = "30s"
+	DefaultSessionRuntimeRedisURL       = "redis://127.0.0.1:6379/0"
+	DefaultSessionRuntimeRedisKeyPrefix = "memoh:session_runtime:"
+	MinSessionRuntimeOwnerLeaseTTL      = time.Second
+)
+
+type SessionRuntimeConfig struct {
+	Backend       string                    `toml:"backend"`
+	StateTTL      string                    `toml:"state_ttl"`
+	OwnerLeaseTTL string                    `toml:"owner_lease_ttl"`
+	Redis         SessionRuntimeRedisConfig `toml:"redis"`
+}
+
+type SessionRuntimeRedisConfig struct {
+	URL       string `toml:"url"`
+	KeyPrefix string `toml:"key_prefix"`
+}
+
+func (c SessionRuntimeConfig) BackendOrDefault() string {
+	backend := strings.TrimSpace(strings.ToLower(c.Backend))
+	if backend == "" {
+		return SessionRuntimeBackendMemory
+	}
+	return backend
+}
+
+func (c SessionRuntimeConfig) StateTTLOrDefault() string {
+	if strings.TrimSpace(c.StateTTL) != "" {
+		return strings.TrimSpace(c.StateTTL)
+	}
+	return DefaultSessionRuntimeStateTTL
+}
+
+func (c SessionRuntimeConfig) OwnerLeaseTTLOrDefault() string {
+	if strings.TrimSpace(c.OwnerLeaseTTL) != "" {
+		return strings.TrimSpace(c.OwnerLeaseTTL)
+	}
+	return DefaultSessionRuntimeOwnerLeaseTTL
+}
+
+func (c SessionRuntimeRedisConfig) URLOrDefault() string {
+	if strings.TrimSpace(c.URL) != "" {
+		return strings.TrimSpace(c.URL)
+	}
+	return DefaultSessionRuntimeRedisURL
+}
+
+func (c SessionRuntimeRedisConfig) KeyPrefixOrDefault() string {
+	if strings.TrimSpace(c.KeyPrefix) != "" {
+		return strings.TrimSpace(c.KeyPrefix)
+	}
+	return DefaultSessionRuntimeRedisKeyPrefix
+}
+
+func (c SessionRuntimeConfig) Validate() error {
+	backend := c.BackendOrDefault()
+	switch backend {
+	case SessionRuntimeBackendMemory, SessionRuntimeBackendRedis:
+	default:
+		return fmt.Errorf("unsupported session_runtime backend %q", c.Backend)
+	}
+	stateTTL, err := time.ParseDuration(c.StateTTLOrDefault())
+	if err != nil {
+		return fmt.Errorf("invalid session_runtime state_ttl %q: %w", c.StateTTL, err)
+	}
+	if stateTTL <= 0 {
+		return fmt.Errorf("invalid session_runtime state_ttl %q: must be positive", c.StateTTLOrDefault())
+	}
+	if backend == SessionRuntimeBackendMemory {
+		return nil
+	}
+	ownerLeaseTTL, err := time.ParseDuration(c.OwnerLeaseTTLOrDefault())
+	if err != nil {
+		return fmt.Errorf("invalid session_runtime owner_lease_ttl %q: %w", c.OwnerLeaseTTL, err)
+	}
+	if ownerLeaseTTL <= 0 {
+		return fmt.Errorf("invalid session_runtime owner_lease_ttl %q: must be positive", c.OwnerLeaseTTLOrDefault())
+	}
+	if ownerLeaseTTL < MinSessionRuntimeOwnerLeaseTTL {
+		return fmt.Errorf("invalid session_runtime owner_lease_ttl %q: must be at least %s", c.OwnerLeaseTTLOrDefault(), MinSessionRuntimeOwnerLeaseTTL)
+	}
+	if stateTTL < ownerLeaseTTL {
+		return fmt.Errorf("invalid session_runtime state_ttl %q: must be greater than or equal to owner_lease_ttl %q", c.StateTTLOrDefault(), c.OwnerLeaseTTLOrDefault())
+	}
+	return nil
+}
+
 type DatabaseConfig struct {
 	Driver string `toml:"driver"`
 }
@@ -231,31 +360,6 @@ type AppleConfig struct {
 	BinaryPath string `toml:"binary_path"`
 }
 
-type LocalConfig struct {
-	Enabled                bool   `toml:"enabled"`
-	DefaultWorkspaceParent string `toml:"default_workspace_parent"`
-	MetadataRoot           string `toml:"metadata_root"`
-	AllowAbsolutePaths     bool   `toml:"allow_absolute_paths"`
-}
-
-func (c LocalConfig) WorkspaceParent() string {
-	if strings.TrimSpace(c.DefaultWorkspaceParent) != "" {
-		return absPath(expandHome(strings.TrimSpace(c.DefaultWorkspaceParent)))
-	}
-	return absPath(filepath.Join(homeDirOrDot(), ".memoh", "workspaces"))
-}
-
-func (c LocalConfig) MetadataPath(dataRoot string) string {
-	if strings.TrimSpace(c.MetadataRoot) != "" {
-		return absPath(expandHome(strings.TrimSpace(c.MetadataRoot)))
-	}
-	root := strings.TrimSpace(dataRoot)
-	if root == "" {
-		root = DefaultDataRoot
-	}
-	return filepath.Join(absPath(root), "local", "containers")
-}
-
 type WorkspaceConfig struct {
 	Registry        string `toml:"registry"`
 	DefaultImage    string `toml:"default_image"`
@@ -264,7 +368,11 @@ type WorkspaceConfig struct {
 	DataRoot        string `toml:"data_root"`
 	CNIBinaryDir    string `toml:"cni_bin_dir"`
 	CNIConfigDir    string `toml:"cni_conf_dir"`
-	RuntimeDir      string `toml:"runtime_dir"`
+	BridgePath      string `toml:"bridge_path"`
+	// RuntimeDir is accepted for one compatibility release. New deployments
+	// should configure bridge_path because the Server no longer owns a toolkit
+	// or workspace templates directory.
+	RuntimeDir string `toml:"runtime_dir"`
 }
 
 // ImageRef returns the fully qualified image reference for the base image,
@@ -287,6 +395,18 @@ func (c WorkspaceConfig) RuntimePath() string {
 		return absPath(c.RuntimeDir)
 	}
 	return DefaultRuntimeDir
+}
+
+// BridgeBinaryPath returns the host path mounted read-only into native
+// workspace containers. runtime_dir remains a compatibility fallback.
+func (c WorkspaceConfig) BridgeBinaryPath() string {
+	if strings.TrimSpace(c.BridgePath) != "" {
+		return absPath(c.BridgePath)
+	}
+	if strings.TrimSpace(c.RuntimeDir) != "" {
+		return filepath.Join(c.RuntimePath(), "bridge")
+	}
+	return DefaultBridgePath
 }
 
 func (c WorkspaceConfig) DataRootPath() string {
@@ -470,7 +590,16 @@ func Load(path string) (Config, error) {
 			Format: "text",
 		},
 		Server: ServerConfig{
-			Addr: DefaultHTTPAddr,
+			Addr:          DefaultHTTPAddr,
+			RPCListenAddr: DefaultServerRPCListenAddr,
+		},
+		Channel: ChannelConfig{
+			Addr:          DefaultChannelHTTPAddr,
+			RPCListenAddr: DefaultChannelRPCListenAddr,
+		},
+		InternalRPC: InternalRPCConfig{
+			ServerTarget:  DefaultServerRPCTarget,
+			ChannelTarget: DefaultChannelRPCTarget,
 		},
 		Admin: AdminConfig{
 			Username: "admin",
@@ -505,6 +634,15 @@ func Load(path string) (Config, error) {
 			User:     DefaultPGUser,
 			Database: DefaultPGDatabase,
 			SSLMode:  DefaultPGSSLMode,
+		},
+		SessionRuntime: SessionRuntimeConfig{
+			Backend:       SessionRuntimeBackendMemory,
+			StateTTL:      DefaultSessionRuntimeStateTTL,
+			OwnerLeaseTTL: DefaultSessionRuntimeOwnerLeaseTTL,
+			Redis: SessionRuntimeRedisConfig{
+				URL:       DefaultSessionRuntimeRedisURL,
+				KeyPrefix: DefaultSessionRuntimeRedisKeyPrefix,
+			},
 		},
 	}
 
@@ -573,7 +711,43 @@ func (cfg Config) validate() error {
 	if err := cfg.WebhookTunnel.Validate(); err != nil {
 		return err
 	}
+	if err := cfg.SessionRuntime.Validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// SplitChannelRuntime reports whether the channel runtime runs as a
+// separate process reached over the internal RPC. Setting the shared
+// secret opts into split mode (docker compose does); without it the
+// server embeds the full channel runtime, preserving the pre-split
+// all-in-one deployment for existing configs.
+func (cfg Config) SplitChannelRuntime() bool {
+	return strings.TrimSpace(cfg.InternalRPC.SharedSecret) != ""
+}
+
+// ValidateServerRuntime validates the settings required by the Server process.
+// It is intentionally separate from Load so migration commands do not require
+// runtime-to-runtime credentials.
+func (cfg Config) ValidateServerRuntime() error {
+	if strings.TrimSpace(cfg.Server.Addr) == "" {
+		return errors.New("server.addr is required")
+	}
+	if strings.TrimSpace(cfg.Server.RPCListenAddr) == "" {
+		return errors.New("server.rpc_listen_addr is required")
+	}
+	return cfg.InternalRPC.Validate()
+}
+
+// ValidateChannelRuntime validates the settings required by the Channel process.
+func (cfg Config) ValidateChannelRuntime() error {
+	if strings.TrimSpace(cfg.Channel.Addr) == "" {
+		return errors.New("channel.addr is required")
+	}
+	if strings.TrimSpace(cfg.Channel.RPCListenAddr) == "" {
+		return errors.New("channel.rpc_listen_addr is required")
+	}
+	return cfg.InternalRPC.Validate()
 }
 
 func (cfg *Config) applyBridgeTLSEnvOverrides() {
@@ -613,15 +787,22 @@ func (cfg *Config) applyBridgeTLSEnvOverrides() {
 	if value := strings.TrimSpace(os.Getenv("MEMOH_WEBHOOK_TUNNEL_METRICS_URL")); value != "" {
 		cfg.WebhookTunnel.MetricsURL = value
 	}
+	if value := strings.TrimSpace(os.Getenv("MEMOH_INTERNAL_RPC_SHARED_SECRET")); value != "" {
+		cfg.InternalRPC.SharedSecret = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MEMOH_INTERNAL_RPC_SERVER_TARGET")); value != "" {
+		cfg.InternalRPC.ServerTarget = value
+	}
+	if value := strings.TrimSpace(os.Getenv("MEMOH_INTERNAL_RPC_CHANNEL_TARGET")); value != "" {
+		cfg.InternalRPC.ChannelTarget = value
+	}
 }
 
 func (cfg *Config) resolvePaths() {
 	cfg.Container.DataRoot = cfg.Container.DataRootPath()
 	cfg.Container.RuntimeDir = cfg.Container.RuntimePath()
+	cfg.Container.BridgePath = cfg.Container.BridgeBinaryPath()
 	cfg.Workspace = cfg.Container.WorkspaceConfig
-	if strings.TrimSpace(cfg.Local.MetadataRoot) != "" {
-		cfg.Local.MetadataRoot = cfg.Local.MetadataPath(cfg.Workspace.DataRoot)
-	}
 	if strings.TrimSpace(cfg.Registry.ProvidersDir) != "" {
 		cfg.Registry.ProvidersDir = cfg.Registry.ProvidersPath()
 	}
@@ -639,6 +820,7 @@ func containerHasWorkspaceFields(values map[string]any) bool {
 		"data_root",
 		"cni_bin_dir",
 		"cni_conf_dir",
+		"bridge_path",
 		"runtime_dir",
 	} {
 		if _, ok := values[key]; ok {

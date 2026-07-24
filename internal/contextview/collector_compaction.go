@@ -3,8 +3,8 @@ package contextview
 import (
 	"context"
 
-	"github.com/memohai/memoh/internal/contextfrag"
-	"github.com/memohai/memoh/internal/historyfrag"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
 )
 
 const compactionRecordsCollectorName = "compaction_records"
