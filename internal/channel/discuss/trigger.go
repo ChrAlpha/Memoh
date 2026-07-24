@@ -29,9 +29,10 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 	msgs := make([]turn.DiscussMessage, 0, len(composed.Messages))
 	for _, message := range composed.Messages {
 		msgs = append(msgs, turn.DiscussMessage{
-			Role:       message.Role,
-			Content:    message.Content,
-			RawContent: message.RawContent,
+			Role:                 message.Role,
+			Content:              message.Content,
+			RawContent:           message.RawContent,
+			CompactionArtifactID: message.CompactionArtifactID,
 		})
 	}
 	imageRefs := make([]turn.DiscussImageRef, 0)

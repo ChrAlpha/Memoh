@@ -221,7 +221,7 @@ func (s *Service) maybeCompactDiscuss(ctx context.Context, cmd turn.StartTurnCom
 func discussCompactableTokens(messages []turn.DiscussMessage) int {
 	total := 0
 	for _, message := range messages {
-		if strings.HasPrefix(strings.TrimSpace(message.Content), "<summary>") {
+		if message.CompactionArtifactID != "" {
 			continue
 		}
 		size := len(message.RawContent)
