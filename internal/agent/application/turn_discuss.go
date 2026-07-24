@@ -188,6 +188,49 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			}
 		}
 	}
+
+	go s.maybeCompactDiscuss(context.WithoutCancel(ctx), cmd, resolved.ModelID)
+}
+
+// maybeCompactDiscuss re-evaluates compaction pressure after a native discuss
+// turn with the same trigger policy as the chat path. ACP discuss turns run
+// through streamTurnChat and inherit its trigger directly.
+func (s *Service) maybeCompactDiscuss(ctx context.Context, cmd turn.StartTurnCommand, modelID string) {
+	if s.compactionService == nil || s.settingsService == nil {
+		return
+	}
+	compactable := discussCompactableTokens(cmd.DiscussMessages)
+	if compactable <= 0 {
+		return
+	}
+	budget := 0
+	if s.modelsService != nil && strings.TrimSpace(modelID) != "" {
+		if model, err := s.modelsService.GetByID(ctx, modelID); err == nil && model.Config.ContextWindow != nil {
+			budget = *model.Config.ContextWindow
+		}
+	}
+	s.maybeCompact(ctx, ChatRequest{BotID: cmd.BotID, ThreadID: cmd.ThreadID}, resolvedContext{
+		compactableTokens:      compactable,
+		compactableTokensKnown: true,
+		contextTokenBudget:     budget,
+	}, compactable)
+}
+
+// discussCompactableTokens estimates the raw history share of a discuss
+// context, excluding artifact summaries, in the chat trigger's token unit.
+func discussCompactableTokens(messages []turn.DiscussMessage) int {
+	total := 0
+	for _, message := range messages {
+		if strings.HasPrefix(strings.TrimSpace(message.Content), "<summary>") {
+			continue
+		}
+		size := len(message.RawContent)
+		if size == 0 {
+			size = len(message.Content)
+		}
+		total += size / 4
+	}
+	return total
 }
 
 func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
