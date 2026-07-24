@@ -187,3 +187,14 @@ func (q *Queries) ListSessionEventsBySessionAfter(ctx context.Context, arg ListS
 	}
 	return items, nil
 }
+
+const nextSessionEventCursor = `-- name: NextSessionEventCursor :one
+SELECT nextval('bot_session_event_cursor_seq')::bigint
+`
+
+func (q *Queries) NextSessionEventCursor(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, nextSessionEventCursor)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}

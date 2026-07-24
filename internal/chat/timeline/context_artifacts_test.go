@@ -248,21 +248,6 @@ func TestComposeContextWithArtifactsEmptyInputs(t *testing.T) {
 	}
 }
 
-func TestLatestExternalEventMsSkipsSelfSent(t *testing.T) {
-	selfSent := textSegment("m2", 2000, "bot echo")
-	selfSent.IsSelfSent = true
-	myself := textSegment("m3", 3000, "bot own")
-	myself.IsMyself = true
-	rc := RenderedContext{textSegment("m1", 1000, "external"), selfSent, myself}
-
-	if got := LatestExternalEventMs(rc, 0); got != 1000 {
-		t.Fatalf("LatestExternalEventMs = %d, want 1000", got)
-	}
-	if got := LatestExternalEventMs(rc, 1000); got != 0 {
-		t.Fatalf("expected no external events after 1000, got %d", got)
-	}
-}
-
 func TestActiveRenderedContextFiltersCoveredSegments(t *testing.T) {
 	rc := RenderedContext{textSegment("m1", 1000, "covered"), textSegment("m2", 2000, "live")}
 	artifacts := []CompactionArtifact{{

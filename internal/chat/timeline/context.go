@@ -53,20 +53,6 @@ type CompactionArtifact struct {
 	Sources        []CompactionSource `json:"sources,omitempty"`
 }
 
-// LatestExternalEventMs returns the receivedAtMs of the latest non-self segment
-// after afterMs, or 0 if none found.
-func LatestExternalEventMs(rc RenderedContext, afterMs int64) int64 {
-	var latest int64
-	for _, seg := range rc {
-		if seg.ReceivedAtMs > afterMs && !seg.IsMyself && !seg.IsSelfSent {
-			if seg.ReceivedAtMs > latest {
-				latest = seg.ReceivedAtMs
-			}
-		}
-	}
-	return latest
-}
-
 // ActiveRenderedContext removes only segments covered by usable artifacts.
 func ActiveRenderedContext(rc RenderedContext, artifacts []CompactionArtifact) RenderedContext {
 	return filterCoveredRenderedContext(rc, coveredExternalMessages(artifacts))

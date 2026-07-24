@@ -1,3 +1,6 @@
+-- name: NextSessionEventCursor :one
+SELECT nextval('bot_session_event_cursor_seq')::bigint;
+
 -- name: CreateSessionEvent :one
 INSERT INTO bot_session_events (
   bot_id,

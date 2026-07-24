@@ -12,8 +12,8 @@ import (
 )
 
 type DiscussCursorStore interface {
-	GetDiscussConsumedCursor(ctx context.Context, sessionID, scopeKey string) (int64, error)
-	UpsertDiscussConsumedCursor(ctx context.Context, sessionID, scopeKey, routeID, source string, cursor int64) error
+	GetDiscussCursor(ctx context.Context, sessionID, scopeKey string) (timeline.DiscussCursorPosition, error)
+	UpsertDiscussCursor(ctx context.Context, sessionID, scopeKey, routeID, source string, position timeline.DiscussCursorPosition) error
 }
 
 // DiscussArtifactProvider projects the session's active compaction artifacts
@@ -70,11 +70,11 @@ type DiscussDriver struct {
 }
 
 type discussSession struct {
-	config          DiscussSessionConfig
-	rcCh            chan timeline.RenderedContext
-	stopCh          chan struct{}
-	cancel          context.CancelFunc
-	lastProcessedMs int64
+	config              DiscussSessionConfig
+	rcCh                chan timeline.RenderedContext
+	stopCh              chan struct{}
+	cancel              context.CancelFunc
+	lastProcessedCursor int64
 }
 
 // NewDiscussDriver creates a new DiscussDriver.

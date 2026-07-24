@@ -12,35 +12,39 @@ type discussCursorTracker struct {
 	store DiscussCursorStore
 }
 
-func (t discussCursorTracker) Load(ctx context.Context, cfg DiscussSessionConfig, log *slog.Logger) int64 {
+func (t discussCursorTracker) Load(ctx context.Context, cfg DiscussSessionConfig, log *slog.Logger) timeline.DiscussCursorPosition {
 	if t.store == nil {
-		return 0
+		return timeline.DiscussCursorPosition{}
 	}
-	cursor, err := t.store.GetDiscussConsumedCursor(ctx, cfg.ThreadID, discussCursorScope(cfg))
+	position, err := t.store.GetDiscussCursor(ctx, cfg.ThreadID, discussCursorScope(cfg))
 	if err != nil {
 		log.Warn("discuss cursor load failed", slog.Any("error", err))
-		return 0
+		return timeline.DiscussCursorPosition{}
 	}
-	return cursor
+	return position
 }
 
-func (t discussCursorTracker) Advance(ctx context.Context, sess *discussSession, cfg DiscussSessionConfig, cursor int64, log *slog.Logger) {
-	if cursor <= sess.lastProcessedMs {
+func (t discussCursorTracker) Advance(ctx context.Context, sess *discussSession, cfg DiscussSessionConfig, position timeline.DiscussCursorPosition, log *slog.Logger) {
+	gate := position.EventCursor
+	if gate == 0 {
+		gate = position.SourceCursor
+	}
+	if gate <= sess.lastProcessedCursor {
 		return
 	}
-	sess.lastProcessedMs = cursor
+	sess.lastProcessedCursor = gate
 	if t.store == nil {
 		return
 	}
-	if err := t.store.UpsertDiscussConsumedCursor(
+	if err := t.store.UpsertDiscussCursor(
 		ctx,
 		cfg.ThreadID,
 		discussCursorScope(cfg),
 		strings.TrimSpace(cfg.RouteID),
 		strings.TrimSpace(cfg.CurrentPlatform),
-		cursor,
+		position,
 	); err != nil {
-		log.Warn("discuss cursor persist failed", slog.Any("error", err), slog.Int64("cursor", cursor))
+		log.Warn("discuss cursor persist failed", slog.Any("error", err), slog.Int64("cursor", gate))
 	}
 }
 

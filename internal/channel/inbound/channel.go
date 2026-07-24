@@ -861,13 +861,14 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		pipelineMsg.Message.Attachments = resolvedAttachments
 		event := AdaptInbound(pipelineMsg, sessionID, identity.ChannelIdentityID, identity.DisplayName)
 		if p.eventStore != nil {
-			eid, persistErr := p.eventStore.PersistEvent(ctx, identity.BotID, sessionID, event)
+			eid, persistedEvent, persistErr := p.eventStore.PersistEvent(ctx, identity.BotID, sessionID, event)
 			if persistErr != nil {
 				if p.logger != nil {
 					p.logger.Warn("persist pipeline event failed", slog.Any("error", persistErr))
 				}
 			} else {
 				eventID = eid
+				event = persistedEvent
 			}
 		}
 		latestRC = p.pipeline.PushEvent(sessionID, event)
