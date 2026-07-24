@@ -156,3 +156,41 @@ func TestBuildIgnoresMentionsCoveredByArtifacts(t *testing.T) {
 		t.Fatal("uncovered mention must mark the session as mentioned")
 	}
 }
+
+func TestBuildSkipsImageRefsCoveredByArtifacts(t *testing.T) {
+	imageMsg := timeline.RenderedSegment{
+		MessageID:    "m1",
+		ReceivedAtMs: 100,
+		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "photo drop"}},
+		ImageRefs:    []timeline.ImageAttachmentRef{{ContentHash: "img-1", Mime: "image/png"}},
+	}
+	rc := timeline.RenderedContext{
+		imageMsg,
+		{
+			MessageID:    "m2",
+			ReceivedAtMs: 200,
+			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "current"}},
+		},
+	}
+	artifacts := []timeline.CompactionArtifact{{
+		ID:      "a1",
+		Summary: "covers the image message",
+		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
+	}}
+
+	plan, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts)
+	if !ok {
+		t.Fatal("expected a composed plan")
+	}
+	if len(plan.command.DiscussImageRefs) != 0 {
+		t.Fatalf("covered image must not be re-attached, got %+v", plan.command.DiscussImageRefs)
+	}
+
+	planLive, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, nil)
+	if !ok {
+		t.Fatal("expected a composed plan without artifacts")
+	}
+	if len(planLive.command.DiscussImageRefs) != 1 {
+		t.Fatalf("uncovered image must be attached, got %+v", planLive.command.DiscussImageRefs)
+	}
+}

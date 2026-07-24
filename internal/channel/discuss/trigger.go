@@ -24,7 +24,8 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 		return discussTurnPlan{}, false
 	}
 
-	isMentioned := wasRecentlyMentioned(timeline.ActiveRenderedContext(rc, artifacts), after)
+	activeRC := timeline.ActiveRenderedContext(rc, artifacts)
+	isMentioned := wasRecentlyMentioned(activeRC, after)
 	addressed := isMentioned || turn.IsPrivateConversationType(cfg.ConversationType)
 	msgs := make([]turn.DiscussMessage, 0, len(composed.Messages))
 	for _, message := range composed.Messages {
@@ -35,7 +36,7 @@ func (discussTriggerBuilder) Build(cfg DiscussSessionConfig, rc timeline.Rendere
 		})
 	}
 	imageRefs := make([]turn.DiscussImageRef, 0)
-	for _, ref := range extractNewImageRefs(rc, after) {
+	for _, ref := range extractNewImageRefs(activeRC, after) {
 		imageRefs = append(imageRefs, turn.DiscussImageRef{
 			ContentHash: ref.ContentHash,
 			Mime:        ref.Mime,
