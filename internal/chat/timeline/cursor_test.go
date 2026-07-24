@@ -80,12 +80,12 @@ func TestPushEventThreadsCursorIntoSegments(t *testing.T) {
 func TestDiscussCursorPositionCovers(t *testing.T) {
 	position := DiscussCursorPosition{EventCursor: 7001, SourceCursor: 1500}
 
-	withCursor := textSegment("m1", 9000, "cursor domain")
+	withCursor := textSegment("m1", 1400, "cursor domain")
 	withCursor.LastEventCursor = 7001
 	if !position.Covers(withCursor) {
-		t.Fatal("segment at the consumed event cursor must be covered regardless of timestamps")
+		t.Fatal("segment consumed in both domains must be covered")
 	}
-	fresh := textSegment("m2", 100, "newer cursor")
+	fresh := textSegment("m2", 1400, "newer cursor")
 	fresh.LastEventCursor = 7002
 	if position.Covers(fresh) {
 		t.Fatal("segment past the consumed event cursor must not be covered")
@@ -160,5 +160,48 @@ func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
 		if len(rc) != 1 || rc[0].LastEventCursor != 0 {
 			t.Fatalf("untrusted payload cursor %d must be dropped, got %+v", poisoned, rc)
 		}
+	}
+}
+
+func TestCoversRequiresBothDomains(t *testing.T) {
+	// Cursor allocation order can invert against source order when concurrent
+	// inbound workers stamp events for one thread, so a lower cursor alone
+	// must not prove consumption.
+	position := DiscussCursorPosition{EventCursor: 101, SourceCursor: 1001}
+	inverted := textSegment("m2", 1002, "allocated first, delivered late")
+	inverted.LastEventCursor = 100
+
+	if position.Covers(inverted) {
+		t.Fatal("a segment newer in source time must not be covered by a higher cursor watermark")
+	}
+	if !HasUncoveredExternalEvent(RenderedContext{inverted}, position) {
+		t.Fatal("the inverted segment must still report new external activity")
+	}
+}
+
+func TestCoversFallsBackToSourceWhenWatermarkHasNoCursor(t *testing.T) {
+	// Cold start seeds the watermark from persisted replies, which only carry
+	// source timestamps; cursor-bearing segments must still be covered.
+	position := DiscussCursorPosition{SourceCursor: 3000}
+	answered := textSegment("m1", 1000, "already answered")
+	answered.LastEventCursor = 5
+
+	if !position.Covers(answered) {
+		t.Fatal("a cursor-bearing segment inside the answered source window must be covered")
+	}
+	if HasUncoveredExternalEvent(RenderedContext{answered}, position) {
+		t.Fatal("cold-start anchor must suppress already-answered context")
+	}
+}
+
+func TestCoversStillTriggersOnEditedSegments(t *testing.T) {
+	// The cursor domain exists so an edit to an old message re-triggers even
+	// though its source timestamp stays inside the consumed window.
+	position := DiscussCursorPosition{EventCursor: 102, SourceCursor: 1002}
+	edited := textSegment("m1", 1000, "edited after consumption")
+	edited.LastEventCursor = 104
+
+	if position.Covers(edited) {
+		t.Fatal("a segment whose latest event postdates the watermark must not be covered")
 	}
 }

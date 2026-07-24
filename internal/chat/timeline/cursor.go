@@ -24,12 +24,20 @@ type DiscussCursorPosition struct {
 	SourceCursor int64
 }
 
-// Covers reports whether the position already consumed the segment.
+// Covers reports whether the position already consumed the segment. Coverage
+// must hold in every domain that carries information: cursor allocation order
+// can invert against source order when concurrent workers stamp one thread, so
+// a covered cursor alone never proves consumption, and a watermark seeded from
+// persisted replies alone carries no cursor to compare against. Anything the
+// watermark cannot prove consumed is treated as new.
 func (p DiscussCursorPosition) Covers(seg RenderedSegment) bool {
-	if seg.LastEventCursor > 0 {
+	if seg.ReceivedAtMs > p.SourceCursor {
+		return false
+	}
+	if seg.LastEventCursor > 0 && p.EventCursor > 0 {
 		return seg.LastEventCursor <= p.EventCursor
 	}
-	return seg.ReceivedAtMs <= p.SourceCursor
+	return true
 }
 
 // Merge returns the component-wise maximum of both positions.

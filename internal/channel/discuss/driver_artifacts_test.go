@@ -193,3 +193,38 @@ func TestBuildSkipsImageRefsCoveredByArtifacts(t *testing.T) {
 		t.Fatalf("uncovered image must be attached, got %+v", planLive.command.DiscussImageRefs)
 	}
 }
+
+func TestHandleReplyWithTurn_ColdStartAnchorCoversCursorBearingSegments(t *testing.T) {
+	// Idle eviction makes cold start a hot path: the durable cursor row may be
+	// absent while persisted replies prove the context was already answered.
+	answered := timeline.RenderedSegment{
+		MessageID:       "m1",
+		ReceivedAtMs:    1000,
+		LastEventCursor: 5,
+		MentionsMe:      true,
+		Content:         []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m1">@bot old ping</message>`}},
+	}
+	svc := &fakeTurnService{}
+	driver := NewDiscussDriver(DiscussDriverDeps{CursorStore: &fakeDiscussCursorStore{}})
+	driver.history = discussHistoryReader{messages: nil, logger: driver.logger}
+	sess := &discussSession{config: DiscussSessionConfig{BotID: "b", ThreadID: "s"}}
+	sess.lastProcessed = timeline.DiscussCursorPosition{SourceCursor: 3000}
+
+	driver.handleReplyWithTurn(context.Background(), sess, timeline.RenderedContext{answered}, driver.logger, svc)
+
+	if svc.calls != 0 {
+		t.Fatal("a cursor-bearing segment inside the answered window must not re-fire a turn")
+	}
+
+	fresh := timeline.RenderedSegment{
+		MessageID:       "m2",
+		ReceivedAtMs:    4000,
+		LastEventCursor: 6,
+		Content:         []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m2">new</message>`}},
+	}
+	driver.handleReplyWithTurn(context.Background(), sess, timeline.RenderedContext{answered, fresh}, driver.logger, svc)
+
+	if svc.calls != 1 {
+		t.Fatalf("a segment past the anchor must fire a turn, got %d calls", svc.calls)
+	}
+}
