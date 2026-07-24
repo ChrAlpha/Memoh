@@ -315,3 +315,27 @@ func TestComposeContextWithArtifactsKeepsBeforeSlotOrderWithinSameMs(t *testing.
 		t.Fatalf("kept slot must follow its summary, got %v", messageTexts(composed.Messages))
 	}
 }
+
+func TestComposeContextWithArtifactsKeepsTurnResponseSlotOrderWithinSameMs(t *testing.T) {
+	early := assistantTR(1000, "uncovered early reply")
+	early.SourceMessageID = "h1"
+	covered := assistantTR(1000, "covered later reply")
+	covered.SourceMessageID = "h2"
+	artifacts := []CompactionArtifact{{
+		ID:            "a1",
+		Summary:       "covers the later reply",
+		AnchorStartMs: 1000,
+		Sources:       []CompactionSource{{HistoryMessageID: "h2", CreatedAtMs: 1000}},
+	}}
+
+	composed := ComposeContextWithArtifacts(nil, []TurnResponseEntry{early, covered}, artifacts)
+	if composed == nil || len(composed.Messages) != 2 {
+		t.Fatalf("expected early reply + summary, got %+v", composed)
+	}
+	if !strings.Contains(composed.Messages[0].Content, "uncovered early reply") {
+		t.Fatalf("uncovered earlier response must stay first, got %v", messageTexts(composed.Messages))
+	}
+	if composed.Messages[1].CompactionArtifactID != "a1" {
+		t.Fatalf("summary must take the covered response slot, got %v", messageTexts(composed.Messages))
+	}
+}
