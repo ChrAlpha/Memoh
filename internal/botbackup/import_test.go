@@ -1,36 +1,31 @@
 package botbackup
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
-func TestRestoredEventCursor(t *testing.T) {
-	if got := restoredEventCursor([]byte(`{"event_cursor":424242,"message_id":"m1"}`)); got != 424242 {
-		t.Fatalf("cursor = %d, want 424242", got)
+func TestSanitizeRestoredEventData(t *testing.T) {
+	stripped := sanitizeRestoredEventData([]byte(`{"event_cursor":424242,"message_id":"m1","received_at_ms":1000}`))
+	var payload map[string]any
+	if err := json.Unmarshal(stripped, &payload); err != nil {
+		t.Fatalf("decode sanitized payload: %v", err)
 	}
-	if got := restoredEventCursor([]byte(`{"message_id":"m1"}`)); got != 0 {
-		t.Fatalf("missing cursor = %d, want 0", got)
+	if _, ok := payload["event_cursor"]; ok {
+		t.Fatal("instance-local cursor must be stripped from restored payloads")
 	}
-	if got := restoredEventCursor([]byte(`not json`)); got != 0 {
-		t.Fatalf("malformed payload = %d, want 0", got)
-	}
-	if got := restoredEventCursor([]byte(`{"event_cursor":9007199254740991}`)); got != 0 {
-		t.Fatalf("cursor at sequence MAXVALUE must be rejected, got %d", got)
-	}
-	if got := restoredEventCursor([]byte(`{"event_cursor":9007199254740990}`)); got != 0 {
-		t.Fatalf("cursor near sequence MAXVALUE must be rejected, got %d", got)
-	}
-	if got := restoredEventCursor([]byte(`{"event_cursor":-5}`)); got != 0 {
-		t.Fatalf("negative cursor must be rejected, got %d", got)
+	if payload["message_id"] != "m1" || payload["received_at_ms"] != float64(1000) {
+		t.Fatalf("other fields must survive, got %v", payload)
 	}
 }
 
-func TestRestoredConsumedEventCursor(t *testing.T) {
-	if got := restoredConsumedEventCursor(424242); got != 424242 {
-		t.Fatalf("valid consumed cursor = %d, want 424242", got)
+func TestSanitizeRestoredEventDataPassthrough(t *testing.T) {
+	plain := []byte(`{"message_id":"m1"}`)
+	if got := string(sanitizeRestoredEventData(plain)); got != string(plain) {
+		t.Fatalf("payload without cursor must pass through, got %s", got)
 	}
-	if got := restoredConsumedEventCursor(9007199254740990); got != 0 {
-		t.Fatalf("poisoned consumed cursor must be dropped, got %d", got)
-	}
-	if got := restoredConsumedEventCursor(-1); got != 0 {
-		t.Fatalf("negative consumed cursor must be dropped, got %d", got)
+	malformed := []byte(`not json`)
+	if got := string(sanitizeRestoredEventData(malformed)); got != string(malformed) {
+		t.Fatalf("malformed payload must pass through, got %s", got)
 	}
 }

@@ -72,20 +72,6 @@ func (q *Queries) DeleteSessionEventsByBot(ctx context.Context, botID pgtype.UUI
 	return err
 }
 
-const ensureSessionEventCursorFloor = `-- name: EnsureSessionEventCursorFloor :one
-SELECT setval('bot_session_event_cursor_seq', GREATEST(
-  nextval('bot_session_event_cursor_seq'),
-  $1::bigint
-), true)::bigint
-`
-
-func (q *Queries) EnsureSessionEventCursorFloor(ctx context.Context, minCursor int64) (int64, error) {
-	row := q.db.QueryRow(ctx, ensureSessionEventCursorFloor, minCursor)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const listSessionEventsByBot = `-- name: ListSessionEventsByBot :many
 SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, created_at, team_id FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1

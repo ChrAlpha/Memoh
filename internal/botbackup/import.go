@@ -25,7 +25,6 @@ import (
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/channel"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/chat/timeline"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -1274,7 +1273,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				RouteID:             pgtype.UUID{},
 				Source:              cursor.Source,
 				ConsumedCursor:      cursor.ConsumedCursor,
-				ConsumedEventCursor: restoredConsumedEventCursor(cursor.ConsumedEventCursor),
+				ConsumedEventCursor: 0,
 			}); err != nil {
 				return fmt.Errorf("discuss cursor: %w", err)
 			}
@@ -1287,7 +1286,6 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		if err != nil {
 			return err
 		}
-		maxEventCursor := int64(0)
 		for _, item := range events {
 			sessionID := pgtype.UUID{}
 			if item.SessionID.Valid {
@@ -1300,7 +1298,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				BotID:                   pgBotID,
 				SessionID:               sessionID,
 				EventKind:               item.EventKind,
-				EventData:               defaultJSONMap(item.EventData),
+				EventData:               sanitizeRestoredEventData(defaultJSONMap(item.EventData)),
 				ExternalMessageID:       item.ExternalMessageID,
 				SenderChannelIdentityID: pgtype.UUID{},
 				ReceivedAtMs:            item.ReceivedAtMs,
@@ -1309,14 +1307,6 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				return fmt.Errorf("session event: %w", err)
 			}
 			eventMap[item.ID.String()] = created
-			if cursor := restoredEventCursor(item.EventData); cursor > maxEventCursor {
-				maxEventCursor = cursor
-			}
-		}
-		if maxEventCursor > 0 {
-			if _, err := q.EnsureSessionEventCursorFloor(ctx, maxEventCursor); err != nil {
-				return fmt.Errorf("session event cursor floor: %w", err)
-			}
 		}
 	}
 
@@ -2159,26 +2149,21 @@ func stringMapFromAny(value any) map[string]string {
 	}
 }
 
-// restoredEventCursor extracts the source deployment's event cursor from a
-// restored payload so the local sequence can be raised above it.
-func restoredEventCursor(eventData []byte) int64 {
-	var payload struct {
-		EventCursor int64 `json:"event_cursor"`
-	}
+// sanitizeRestoredEventData strips instance-local event cursors from restored
+// payloads: source-instance coordinates would race or poison the local
+// sequence, and cursor-less events gate correctly in the source-time domain.
+func sanitizeRestoredEventData(eventData []byte) []byte {
+	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(eventData, &payload); err != nil {
-		return 0
+		return eventData
 	}
-	if payload.EventCursor <= 0 || payload.EventCursor > timeline.MaxTrustedEventCursor {
-		return 0
+	if _, ok := payload["event_cursor"]; !ok {
+		return eventData
 	}
-	return payload.EventCursor
-}
-
-// restoredConsumedEventCursor bounds a restored discuss watermark so a
-// poisoned backup cannot suppress future local events.
-func restoredConsumedEventCursor(cursor int64) int64 {
-	if cursor <= 0 || cursor > timeline.MaxTrustedEventCursor {
-		return 0
+	delete(payload, "event_cursor")
+	sanitized, err := json.Marshal(payload)
+	if err != nil {
+		return eventData
 	}
-	return cursor
+	return sanitized
 }
