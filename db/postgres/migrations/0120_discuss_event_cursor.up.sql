@@ -30,8 +30,9 @@ BEGIN
     SELECT COALESCE(MAX(
       CASE
         WHEN event_data->>'event_cursor' ~ '^[1-9][0-9]{0,15}$'
-          THEN LEAST((event_data->>'event_cursor')::numeric, 9007199254740991)::bigint
-        ELSE GREATEST(received_at_ms, 1)
+          AND (event_data->>'event_cursor')::numeric <= 4503599627370495
+          THEN (event_data->>'event_cursor')::bigint
+        ELSE LEAST(GREATEST(received_at_ms, 1), 4503599627370495)
       END
     ), 1)
     INTO team_floor
@@ -47,12 +48,12 @@ BEGIN
           CASE
             WHEN e.event_data->>'event_cursor' ~ '^[1-9][0-9]{0,15}$' THEN
               CASE
-                WHEN (e.event_data->>'event_cursor')::numeric <= 9007199254740991
+                WHEN (e.event_data->>'event_cursor')::numeric <= 4503599627370495
                   THEN (e.event_data->>'event_cursor')::bigint
               END
           END
         ),
-        MAX(e.received_at_ms)
+        LEAST(MAX(e.received_at_ms), 4503599627370495)
       )
       FROM bot_session_events AS e
       WHERE e.team_id = migration_team_id
