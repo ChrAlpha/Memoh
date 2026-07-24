@@ -9,6 +9,12 @@ import (
 // sequence never exceeds it, so larger payload values are corrupt data.
 const MaxJSONSafeEventCursor int64 = 1<<53 - 1
 
+// MaxTrustedEventCursor bounds cursors read back from payloads or restores.
+// Clock-seeded allocation stays three orders of magnitude below it, while
+// accepting values near the sequence MAXVALUE would poison consumed
+// watermarks or exhaust the global sequence.
+const MaxTrustedEventCursor = MaxJSONSafeEventCursor / 2
+
 // DiscussCursorPosition tracks consumed discuss progress in both the durable
 // event-cursor domain and the legacy source-timestamp domain. Segments are
 // compared inside their own domain, so cursor magnitudes never race the wall
@@ -63,7 +69,7 @@ func assignEventCursor(event CanonicalEvent, cursor int64) (CanonicalEvent, erro
 }
 
 func sanitizedEventCursor(cursor int64) int64 {
-	if cursor <= 0 || cursor > MaxJSONSafeEventCursor {
+	if cursor <= 0 || cursor > MaxTrustedEventCursor {
 		return 0
 	}
 	return cursor

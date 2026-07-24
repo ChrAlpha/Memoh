@@ -1274,7 +1274,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 				RouteID:             pgtype.UUID{},
 				Source:              cursor.Source,
 				ConsumedCursor:      cursor.ConsumedCursor,
-				ConsumedEventCursor: cursor.ConsumedEventCursor,
+				ConsumedEventCursor: restoredConsumedEventCursor(cursor.ConsumedEventCursor),
 			}); err != nil {
 				return fmt.Errorf("discuss cursor: %w", err)
 			}
@@ -2168,8 +2168,17 @@ func restoredEventCursor(eventData []byte) int64 {
 	if err := json.Unmarshal(eventData, &payload); err != nil {
 		return 0
 	}
-	if payload.EventCursor <= 0 || payload.EventCursor >= timeline.MaxJSONSafeEventCursor {
+	if payload.EventCursor <= 0 || payload.EventCursor > timeline.MaxTrustedEventCursor {
 		return 0
 	}
 	return payload.EventCursor
+}
+
+// restoredConsumedEventCursor bounds a restored discuss watermark so a
+// poisoned backup cannot suppress future local events.
+func restoredConsumedEventCursor(cursor int64) int64 {
+	if cursor <= 0 || cursor > timeline.MaxTrustedEventCursor {
+		return 0
+	}
+	return cursor
 }

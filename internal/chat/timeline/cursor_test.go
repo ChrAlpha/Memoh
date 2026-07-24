@@ -147,16 +147,18 @@ func TestConsumedDiscussCursorTakesLatestGate(t *testing.T) {
 }
 
 func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
-	pipeline := NewPipeline(RenderParams{})
-	rc := pipeline.PushEvent("s1", MessageEvent{
-		SessionID:    "s1",
-		MessageID:    "m1",
-		EventCursor:  MaxJSONSafeEventCursor + 1,
-		ReceivedAtMs: 1000,
-		TimestampSec: 1,
-		Content:      []ContentNode{{Type: "text", Text: "poisoned"}},
-	})
-	if len(rc) != 1 || rc[0].LastEventCursor != 0 {
-		t.Fatalf("out-of-range payload cursor must be dropped, got %+v", rc)
+	for _, poisoned := range []int64{MaxJSONSafeEventCursor + 1, MaxJSONSafeEventCursor, MaxTrustedEventCursor + 1} {
+		pipeline := NewPipeline(RenderParams{})
+		rc := pipeline.PushEvent("s1", MessageEvent{
+			SessionID:    "s1",
+			MessageID:    "m1",
+			EventCursor:  poisoned,
+			ReceivedAtMs: 1000,
+			TimestampSec: 1,
+			Content:      []ContentNode{{Type: "text", Text: "poisoned"}},
+		})
+		if len(rc) != 1 || rc[0].LastEventCursor != 0 {
+			t.Fatalf("untrusted payload cursor %d must be dropped, got %+v", poisoned, rc)
+		}
 	}
 }
