@@ -46,8 +46,11 @@ function isImageOnlyModel(model: CompactionModelLike): boolean {
   if ((model.config?.compatibilities ?? []).includes('tool-call')) {
     return false
   }
+  // The family name lives in the last path segment for namespaced IDs like
+  // accounts/fireworks/models/flux-1-dev.
   const modelID = (model.model_id ?? '').trim().toLowerCase()
-  return IMAGE_MODEL_PREFIXES.some(prefix => modelID.startsWith(prefix)) || modelID.includes('seedream')
+  const base = modelID.slice(modelID.lastIndexOf('/') + 1)
+  return IMAGE_MODEL_PREFIXES.some(prefix => base.startsWith(prefix)) || base.includes('seedream')
 }
 
 function providerCanSummarize(provider: CompactionProviderLike): boolean {

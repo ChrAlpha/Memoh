@@ -161,18 +161,25 @@ func IsImageOnlyChatModel(model GetResponse, provider sqlc.Provider) bool {
 // ordinary chat models that merely share a leading token — e.g. "wan2"/"wanx"
 // (Alibaba Wan image/video) rather than a bare "wan" that would also match a
 // chat model like "wanjuan-chat", and "flux-"/"flux."/"flux1" rather than a
-// bare "flux". A tool-calling model bypasses this check entirely (see
+// bare "flux". The family name lives in the last path segment for namespaced
+// IDs like accounts/fireworks/models/flux-1-dev, so prefixes match against
+// that segment — never against a namespace, which could collide the other
+// way. A tool-calling model bypasses this check entirely (see
 // IsImageOnlyChatModel), which is the override when a name collision is wrong.
 func isKnownStandaloneImageModelID(lowerModel string) bool {
-	return strings.HasPrefix(lowerModel, "qwen-image") ||
-		strings.HasPrefix(lowerModel, "wan2") ||
-		strings.HasPrefix(lowerModel, "wanx") ||
-		strings.HasPrefix(lowerModel, "z-image") ||
-		strings.HasPrefix(lowerModel, "flux-") ||
-		strings.HasPrefix(lowerModel, "flux.") ||
-		strings.HasPrefix(lowerModel, "flux1") ||
-		strings.HasPrefix(lowerModel, "stable-diffusion") ||
-		strings.HasPrefix(lowerModel, "gpt-image") ||
-		strings.HasPrefix(lowerModel, "dall-e") ||
-		strings.Contains(lowerModel, "seedream")
+	base := lowerModel
+	if idx := strings.LastIndex(base, "/"); idx >= 0 {
+		base = base[idx+1:]
+	}
+	return strings.HasPrefix(base, "qwen-image") ||
+		strings.HasPrefix(base, "wan2") ||
+		strings.HasPrefix(base, "wanx") ||
+		strings.HasPrefix(base, "z-image") ||
+		strings.HasPrefix(base, "flux-") ||
+		strings.HasPrefix(base, "flux.") ||
+		strings.HasPrefix(base, "flux1") ||
+		strings.HasPrefix(base, "stable-diffusion") ||
+		strings.HasPrefix(base, "gpt-image") ||
+		strings.HasPrefix(base, "dall-e") ||
+		strings.Contains(base, "seedream")
 }

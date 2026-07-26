@@ -13,6 +13,7 @@ describe('filterCompactionModels', () => {
       { id: 'orphan-model', model_id: 'gpt-4o-mini', provider_id: 'missing-provider', enable: true, config: { context_window: 8192 } },
       { id: 'unknown-client-model', model_id: 'mystery-chat', provider_id: 'unknown-provider', enable: true, config: { context_window: 64000 } },
       { id: 'image-model', model_id: 'flux-schnell', provider_id: 'chat-provider', enable: true, config: { context_window: 32000 } },
+      { id: 'namespaced-image-model', model_id: 'accounts/fireworks/models/flux-1-dev', provider_id: 'chat-provider', enable: true, config: { context_window: 32000 } },
       {
         id: 'image-name-tool-caller',
         model_id: 'wan2.7-omni',

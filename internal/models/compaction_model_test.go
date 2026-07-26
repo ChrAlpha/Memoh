@@ -203,6 +203,10 @@ func TestIsKnownStandaloneImageModelID(t *testing.T) {
 		"qwen-image-2.0", "wan2.7-image", "z-image-turbo",
 		"flux-schnell", "stable-diffusion-3.5-large-turbo",
 		"gpt-image-1", "dall-e-3", "doubao-seedream-4-0-250828",
+		// Namespaced IDs (builtin Fireworks template) carry the family name in
+		// the last path segment.
+		"accounts/fireworks/models/flux-1-dev",
+		"accounts/fireworks/models/flux-1-schnell-fp8",
 	} {
 		if !isKnownStandaloneImageModelID(id) {
 			t.Errorf("isKnownStandaloneImageModelID(%q) = false, want true", id)
@@ -213,6 +217,9 @@ func TestIsKnownStandaloneImageModelID(t *testing.T) {
 		// Chat models that merely share a leading token must not match: the
 		// "wan"/"flux" prefixes are scoped to image-model naming conventions.
 		"wanjuan-chat", "want-to-talk", "fluxion-7b", "fluent-chat",
+		// A namespace that collides with a family prefix must not flag the
+		// chat model it hosts.
+		"flux-labs/chat-model",
 	} {
 		if isKnownStandaloneImageModelID(id) {
 			t.Errorf("isKnownStandaloneImageModelID(%q) = true, want false", id)
