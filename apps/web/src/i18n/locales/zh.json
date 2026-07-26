@@ -2391,7 +2391,7 @@
       "heartbeatModelPlaceholder": "使用聊天模型（默认）",
       "compactionEnabled": "启用上下文压缩",
       "compactionDescription": "当对话上下文过长时，自动对旧消息进行摘要以节省 Token。",
-      "compactionThreshold": "压缩阈值（输入 token 数）",
+      "compactionThreshold": "压缩阈值（输入 token 数，0 表示自动）",
       "compactionRatio": "压缩比例（%）",
       "compactionRatioDescription": "指定需要压缩的旧消息比例，最近的消息将保持原样。",
       "compactionModel": "压缩模型",

@@ -14,6 +14,7 @@ import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import PageShell from '@/components/page-shell/index.vue'
 import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
 import ModelSelect from './model-select.vue'
+import { filterCompactionModels } from './compaction-models'
 import {
   getBotsByBotIdSettings, putBotsByBotIdSettings,
   getBotsByBotIdCompactionLogs, deleteBotsByBotIdCompactionLogs,
@@ -64,6 +65,7 @@ const { data: providerData } = useQuery({
 
 const models = computed(() => modelData.value ?? [])
 const providers = computed(() => providerData.value ?? [])
+const compactionModels = computed(() => filterCompactionModels(models.value, providers.value))
 
 const settingsForm = reactive({
   compaction_enabled: false,
@@ -273,13 +275,14 @@ onBeforeUnmount(() => {
             <Input
               v-model.number="settingsForm.compaction_threshold"
               type="number"
-              :min="1"
-              placeholder="100000"
+              :min="0"
+              placeholder="0"
               class="h-8 w-32 tabular-nums"
             />
           </SettingsRow>
 
           <SettingsRow
+            v-if="settingsForm.compaction_threshold > 0"
             :label="$t('bots.settings.compactionRatio')"
             :description="$t('bots.settings.compactionRatioDescription')"
           >
@@ -593,10 +596,11 @@ onBeforeUnmount(() => {
       <DialogBody>
         <ModelSelect
           v-model="settingsForm.compaction_model_id"
-          :models="models"
+          :models="compactionModels"
           :providers="providers"
           model-type="chat"
           :placeholder="$t('bots.settings.compactionModelPlaceholder')"
+          :none-label="$t('bots.settings.compactionModelPlaceholder')"
           class="w-full"
         />
       </DialogBody>

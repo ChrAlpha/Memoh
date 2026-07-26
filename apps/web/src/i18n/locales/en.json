@@ -2391,7 +2391,7 @@
       "heartbeatModelPlaceholder": "Use chat model (default)",
       "compactionEnabled": "Enable Context Compaction",
       "compactionDescription": "Automatically summarize older messages when context gets too large",
-      "compactionThreshold": "Compaction Threshold (input tokens)",
+      "compactionThreshold": "Compaction Threshold (input tokens, 0 = automatic)",
       "compactionRatio": "Compaction Ratio (%)",
       "compactionRatioDescription": "The percentage of older messages to summarize. Recent messages are kept intact.",
       "compactionModel": "Compaction Model",
