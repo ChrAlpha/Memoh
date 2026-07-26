@@ -165,9 +165,22 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 		return
 	}
 	cfg.TargetTokens = asyncCompactionTargetTokens(botSettings.CompactionThreshold, rc.contextTokenBudget)
-	if err := s.drainCompactionBacklog(ctx, cfg); err != nil {
+	if err := s.drainCompactionBacklog(ctx, cfg, asyncCompactionPasses(botSettings.CompactionThreshold)); err != nil {
 		s.logger.Error("compaction failed", slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.Any("error", err))
 	}
+}
+
+// asyncCompactionPasses bounds the background drain per mode: the
+// model-relative policy may need several passes because a small summarizer
+// window caps each pass's input, while a legacy absolute threshold keeps the
+// historical one-shot semantics — its ratio selection re-reads the original
+// TotalInputTokens, so repeating it would keep compacting an already-reduced
+// tail.
+func asyncCompactionPasses(userThreshold int) int {
+	if modelRelativeCompaction(userThreshold) {
+		return maxAsyncCompactionPasses
+	}
+	return 1
 }
 
 // drainCompactionBacklog runs bounded consecutive passes until the backlog is
@@ -176,8 +189,8 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 // session barrier is re-acquired per pass: a turn that arrives between
 // passes runs before the next summarizer call instead of waiting out the
 // whole drain.
-func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig) error {
-	for pass := 0; pass < maxAsyncCompactionPasses; pass++ {
+func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig, maxPasses int) error {
+	for pass := 0; pass < maxPasses; pass++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

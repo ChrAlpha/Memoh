@@ -31,10 +31,16 @@ var (
 	// errIneffectiveSummary marks a summary that would replay at least as many
 	// tokens as the raw entries it replaces.
 	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
-	// errSummaryWindowTooSmall marks a summarizer whose declared window cannot
+	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
 	// hold the fixed prompt plus the output reserve; running it would overflow
 	// on every attempt, so it fails closed before claiming any source rows.
-	errSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
+	// Exported so manual surfaces can map it to a stable capability error.
+	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
+	// errCompactionInputOverflow marks a selection whose minimal entries (an
+	// unsplittable tool exchange) still exceed the summarizer input budget.
+	// Sending it anyway would overflow the provider window, so it fails closed
+	// before claiming any source rows.
+	errCompactionInputOverflow = errors.New("compaction: minimal entries exceed the summarizer input budget")
 )
 
 // maxCompactionSummaryTokens bounds a single summary's output so it can never

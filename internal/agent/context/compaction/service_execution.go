@@ -68,7 +68,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		inputBudget := cfg.SummaryWindowTokens - maxOutputTokens - fixedPromptTokens
 		if inputBudget <= 0 {
 			return Result{}, fmt.Errorf("%w: window=%d output_reserve=%d fixed_prompt=%d",
-				errSummaryWindowTooSmall, cfg.SummaryWindowTokens, maxOutputTokens, fixedPromptTokens)
+				ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, maxOutputTokens, fixedPromptTokens)
 		}
 		if inputBudget < maxCompactTokens {
 			maxCompactTokens = inputBudget
@@ -126,6 +126,16 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		// mark rows we cannot faithfully summarize. Leave them in raw history.
 		return Result{Status: StatusNoop}, nil
 	}
+	// Cap the rendered entries and verify the final prompt cost before any
+	// row is claimed: a selection that cannot fit (an unsplittable tool
+	// exchange larger than the budget) must fail closed with zero claims and
+	// zero provider calls instead of overflowing the summarizer window.
+	entries = capEntriesToBudget(entries, maxCompactTokens-priorTokens)
+	if cost := entriesPromptCost(entries); cost+priorTokens > maxCompactTokens {
+		return Result{}, fmt.Errorf("%w: entries=%d entry_tokens=%d max_compact_tokens=%d",
+			errCompactionInputOverflow, len(entries), cost, maxCompactTokens)
+	}
+
 	expectedCompactIDs, err := expectedCompactionClaims(rows, compactedMessageIDs)
 	if err != nil {
 		return Result{}, err
@@ -173,21 +183,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if err != nil {
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
-	}
-
-	// A single markable group larger than the whole budget survives trim by
-	// design (progress guarantee); truncate its rendered entries rather than
-	// send a prompt the model rejects on every pass. Entry floors can still
-	// exceed the budget when that group holds enough rows, so recheck and
-	// surface the overshoot instead of claiming an unconditional cap.
-	entries = capEntriesToBudget(entries, maxCompactTokens-priorTokens)
-	if cost := entriesPromptCost(entries); cost+priorTokens > maxCompactTokens {
-		s.logger.Warn("compaction: entry floors exceed the budget, prompt may overflow the compaction window",
-			slog.Int("entries", len(entries)),
-			slog.Int("entry_tokens", cost),
-			slog.Int("max_compact_tokens", maxCompactTokens),
-			slog.String("session_id", cfg.SessionID),
-		)
 	}
 
 	userPrompt := buildUserPrompt(priorSummaries, entries)

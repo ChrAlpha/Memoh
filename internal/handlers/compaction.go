@@ -162,7 +162,7 @@ func (h *CompactionHandler) TriggerCompact(c echo.Context) error {
 
 	res, err := h.service.RunCompactionSync(c.Request().Context(), cfg)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		return compactionRunFailure(err)
 	}
 	return c.JSON(http.StatusOK, TriggerCompactResponse{
 		Status:       res.Status,
@@ -245,4 +245,18 @@ func (*CompactionHandler) requireUserID(c echo.Context) (string, error) {
 
 func (h *CompactionHandler) authorizeBotAccess(ctx context.Context, userID, botID string) (bots.Bot, error) {
 	return AuthorizeBotAccess(ctx, h.botService, h.accountService, userID, botID)
+}
+
+// compactionRunFailure maps a summarizer run failure to its public shape: a
+// too-small summarizer window is a stable capability condition the user can
+// fix by picking another model, while any other failure surfaces as a generic
+// error — the diagnostic detail (windows, budgets, provider responses) stays
+// out of the response body.
+func compactionRunFailure(err error) error {
+	if errors.Is(err, compaction.ErrSummaryWindowTooSmall) {
+		return apperror.New(apperror.CodeCompactionModelUnavailable, map[string]string{
+			"reason": "window_too_small",
+		})
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, "compaction failed")
 }

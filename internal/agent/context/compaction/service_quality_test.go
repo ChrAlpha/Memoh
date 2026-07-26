@@ -102,8 +102,8 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 	cfg.SummaryWindowTokens = 512
 
 	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
-	if !errors.Is(err, errSummaryWindowTooSmall) {
-		t.Fatalf("RunCompactionSync error = %v, want errSummaryWindowTooSmall", err)
+	if !errors.Is(err, ErrSummaryWindowTooSmall) {
+		t.Fatalf("RunCompactionSync error = %v, want ErrSummaryWindowTooSmall", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("summarizer calls = %d, want 0: a hopeless window must not burn an LLM call", stub.calls)

@@ -2,15 +2,19 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
+	"github.com/memohai/memoh/internal/agent/context/compaction"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -106,5 +110,27 @@ func TestTriggerCompactRejectsProviderWithoutOutputLimitBeforeService(t *testing
 	public, ok := apperror.PublicFrom(err, "req-test")
 	if !ok || public.Args["reason"] != "output_limit_unsupported" {
 		t.Fatalf("TriggerCompact() public = %+v ok=%t, want output_limit_unsupported reason", public, ok)
+	}
+}
+
+func TestCompactionRunFailureShapes(t *testing.T) {
+	t.Parallel()
+
+	err := compactionRunFailure(fmt.Errorf("wrap: %w", compaction.ErrSummaryWindowTooSmall))
+	if got := apperror.CodeOf(err); got != apperror.CodeCompactionModelUnavailable {
+		t.Fatalf("window-too-small code = %q, want %q", got, apperror.CodeCompactionModelUnavailable)
+	}
+	public, ok := apperror.PublicFrom(err, "req")
+	if !ok || public.Args["reason"] != "window_too_small" {
+		t.Fatalf("window-too-small public = %+v ok=%t", public, ok)
+	}
+
+	generic := compactionRunFailure(errors.New("window=512 output_reserve=51 fixed_prompt=180"))
+	var httpErr *echo.HTTPError
+	if !errors.As(generic, &httpErr) || httpErr.Code != http.StatusInternalServerError {
+		t.Fatalf("generic failure = %v, want a plain 500", generic)
+	}
+	if message, _ := httpErr.Message.(string); strings.Contains(message, "window=") {
+		t.Fatalf("generic failure leaked diagnostics: %q", message)
 	}
 }

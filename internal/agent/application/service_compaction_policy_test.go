@@ -60,3 +60,14 @@ func TestAsyncCompactionTargetKeepsLegacyRatioSelection(t *testing.T) {
 		t.Fatalf("model-relative async target = %d, want 45%% of the window", got)
 	}
 }
+
+func TestAsyncCompactionPassesPerMode(t *testing.T) {
+	t.Parallel()
+
+	if got := asyncCompactionPasses(100000); got != 1 {
+		t.Fatalf("legacy passes = %d, want the historical one-shot semantics", got)
+	}
+	if got := asyncCompactionPasses(0); got != maxAsyncCompactionPasses {
+		t.Fatalf("model-relative passes = %d, want the bounded drain", got)
+	}
+}
