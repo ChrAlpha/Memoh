@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 )
@@ -136,6 +137,69 @@ func TestTrimMessagesByTokens_ZeroMeansNoLimit(t *testing.T) {
 	}
 }
 
+func TestTrimTinyBudgetNeverExceedsHardBudget(t *testing.T) {
+	t.Parallel()
+
+	messages := []historyfrag.HistoryRecord{
+		trimRecord(ModelMessage{Role: "user", Content: newTextContent(strings.Repeat("x", 400))}, nil),
+	}
+
+	trimmed, _, total := trimMessagesAndRecordsByTokens(nil, messages, 1)
+	if total > 1 {
+		t.Fatalf("total = %d, want the hard budget respected even when only the notice would remain", total)
+	}
+	if len(trimmed) != 0 {
+		t.Fatalf("trimmed = %+v, want everything (including the notice) dropped", trimmed)
+	}
+}
+
+func TestFinalizeTrimmedHistoryOmitsNoticeBeforeContent(t *testing.T) {
+	t.Parallel()
+
+	summary := historyfrag.SummaryRecord("compact-1", strings.Repeat("s", 200), nil, contextfrag.Scope{})
+	budget := estimateMessageTokens(summary.ModelMessage) + 5
+
+	messages, retained, total := finalizeTrimmedHistory([]historyfrag.HistoryRecord{summary}, true, budget)
+	if total > budget {
+		t.Fatalf("total = %d, want <= %d (the notice must be omitted before content is lost)", total, budget)
+	}
+	if len(messages) != 1 || len(retained) != 1 {
+		t.Fatalf("messages = %d retained = %d, want only the summary once the notice is omitted", len(messages), len(retained))
+	}
+}
+
+func TestFinalizeTrimmedHistoryEvictsOldestActiveSummaryLast(t *testing.T) {
+	t.Parallel()
+
+	oldest := historyfrag.SummaryRecord("compact-old", strings.Repeat("a", 400), nil, contextfrag.Scope{})
+	newest := historyfrag.SummaryRecord("compact-new", strings.Repeat("b", 200), nil, contextfrag.Scope{})
+	budget := estimateMessageTokens(newest.ModelMessage) + 5
+
+	messages, retained, total := finalizeTrimmedHistory([]historyfrag.HistoryRecord{oldest, newest}, true, budget)
+	if total > budget {
+		t.Fatalf("total = %d, want <= %d (active summaries must eventually yield to the hard budget)", total, budget)
+	}
+	if len(messages) != 1 || len(retained) != 1 || retained[0].Ref.ID != "compact-new" {
+		t.Fatalf("retained = %+v, want only the newest summary", retained)
+	}
+}
+
+func TestFinalizeTrimmedHistoryKeepsRequiredOverBudget(t *testing.T) {
+	t.Parallel()
+
+	required := trimRecord(ModelMessage{Role: "user", Content: newTextContent(strings.Repeat("r", 400))}, func(record *historyfrag.HistoryRecord) {
+		record.Required = true
+	})
+
+	messages, retained, total := finalizeTrimmedHistory([]historyfrag.HistoryRecord{required}, true, 10)
+	if len(messages) != 1 || len(retained) != 1 {
+		t.Fatalf("messages = %d retained = %d, want the required record as the only sanctioned overflow", len(messages), len(retained))
+	}
+	if total <= 10 {
+		t.Fatalf("total = %d, want the documented required-record overflow to stay visible", total)
+	}
+}
+
 func TestTrimMessagesByTokens_SmallBudgetTrims(t *testing.T) {
 	t.Parallel()
 
@@ -212,15 +276,14 @@ func TestTrimMessagesByTokens_PreservesRequiredMessage(t *testing.T) {
 		}, nil),
 	}
 
+	// Budget 5 fits the required prompt exactly; the trim notice must be
+	// omitted rather than blowing past the hard budget.
 	trimmed, _ := trimMessagesByTokens(nil, messages, 5)
-	if len(trimmed) < 2 {
-		t.Fatalf("expected system notice and required prompt, got %d", len(trimmed))
+	if len(trimmed) != 1 {
+		t.Fatalf("expected only the required prompt, got %d: %+v", len(trimmed), trimmed)
 	}
-	if trimmed[0].Role != "system" {
-		t.Fatalf("first message role = %q, want system", trimmed[0].Role)
-	}
-	if trimmed[1].Role != "user" || trimmed[1].TextContent() != "retry this exact prompt" {
-		t.Fatalf("required message was not preserved in order: %+v", trimmed)
+	if trimmed[0].Role != "user" || trimmed[0].TextContent() != "retry this exact prompt" {
+		t.Fatalf("required message was not preserved: %+v", trimmed)
 	}
 }
 

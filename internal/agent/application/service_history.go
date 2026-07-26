@@ -383,58 +383,77 @@ func historyTrimNotice() ModelMessage {
 // notice against the same hard budget, dropping the oldest droppable
 // survivors until everything fits. Deriving from survivors means every kept
 // workspace run is governed by its marker no matter where the cut fell —
-// including messages pulled back as Required — and the monotonic drop loop
-// keeps the declared budget a hard bound instead of an estimate.
+// including messages pulled back as Required. When only protected records
+// remain, the terminal ladder keeps the budget a hard bound: the notice is
+// omitted first (meta text loses to content), then the oldest active
+// summaries are evicted; Required records are the only sanctioned overflow.
 func finalizeTrimmedHistory(retained []historyfrag.HistoryRecord, trimmed bool, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	noticeDropped := false
 	for {
 		annotated := injectWorkspaceTransitionRecords(retained)
+		withNotice := trimmed && !noticeDropped
 		totalTokens := estimateMessagesTokens(annotated)
-		if trimmed {
+		if withNotice {
 			totalTokens += estimateMessageTokens(historyTrimNotice())
 		}
 		if maxTokens <= 0 || totalTokens <= maxTokens {
-			result := make([]ModelMessage, 0, len(annotated)+1)
-			if trimmed {
-				result = append(result, historyTrimNotice())
-			}
-			for _, record := range annotated {
-				result = append(result, record.ModelMessage)
-			}
-			return result, annotated, totalTokens
+			return emitTrimmedHistory(annotated, withNotice, totalTokens)
 		}
-		dropIndex := -1
-		for index, record := range retained {
-			// Required records and active summaries are protected: evicting
-			// the compressed carrier of already-trimmed history to make room
-			// for the trim notice would be self-defeating, and summaries stay
-			// small by the engine's ineffective-summary gate.
-			if record.Required || record.Lifecycle == historyfrag.LifecycleActiveSummary {
-				continue
-			}
-			dropIndex = index
-			break
+		// Active summaries are shielded from this first rung: evicting the
+		// compressed carrier of already-trimmed history before plain rows
+		// would be self-defeating, and summaries stay small by the engine's
+		// ineffective-summary gate.
+		if dropIndex := trimDropIndex(retained, false); dropIndex >= 0 {
+			retained = dropRetainedRecord(retained, dropIndex)
+			trimmed = true
+			continue
 		}
-		if dropIndex < 0 {
-			// Only Required records remain: emit them over budget, matching
-			// the required-overflow semantics of the token fit above.
-			result := make([]ModelMessage, 0, len(annotated)+1)
-			if trimmed {
-				result = append(result, historyTrimNotice())
-			}
-			for _, record := range annotated {
-				result = append(result, record.ModelMessage)
-			}
-			return result, annotated, totalTokens
+		if withNotice {
+			noticeDropped = true
+			continue
 		}
-		retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
-		// Dropping a call can orphan its tool results; drop those too.
-		for dropIndex < len(retained) &&
-			!retained[dropIndex].Required &&
-			strings.EqualFold(strings.TrimSpace(retained[dropIndex].ModelMessage.Role), "tool") {
-			retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+		if dropIndex := trimDropIndex(retained, true); dropIndex >= 0 {
+			retained = dropRetainedRecord(retained, dropIndex)
+			trimmed = true
+			continue
 		}
-		trimmed = true
+		return emitTrimmedHistory(annotated, withNotice, totalTokens)
 	}
+}
+
+func trimDropIndex(retained []historyfrag.HistoryRecord, allowActiveSummaries bool) int {
+	for index, record := range retained {
+		if record.Required {
+			continue
+		}
+		if !allowActiveSummaries && record.Lifecycle == historyfrag.LifecycleActiveSummary {
+			continue
+		}
+		return index
+	}
+	return -1
+}
+
+func dropRetainedRecord(retained []historyfrag.HistoryRecord, dropIndex int) []historyfrag.HistoryRecord {
+	retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+	// Dropping a call can orphan its tool results; drop those too.
+	for dropIndex < len(retained) &&
+		!retained[dropIndex].Required &&
+		strings.EqualFold(strings.TrimSpace(retained[dropIndex].ModelMessage.Role), "tool") {
+		retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+	}
+	return retained
+}
+
+func emitTrimmedHistory(annotated []historyfrag.HistoryRecord, withNotice bool, totalTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	result := make([]ModelMessage, 0, len(annotated)+1)
+	if withNotice {
+		result = append(result, historyTrimNotice())
+	}
+	for _, record := range annotated {
+		result = append(result, record.ModelMessage)
+	}
+	return result, annotated, totalTokens
 }
 
 func fitRequiredMessagesWithinBudget(messages []historyfrag.HistoryRecord, cutoff int, maxTokens int) (int, int) {
