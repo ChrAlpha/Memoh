@@ -69,7 +69,7 @@ const compactionModels = computed(() => filterCompactionModels(models.value, pro
 
 const settingsForm = reactive({
   compaction_enabled: false,
-  compaction_threshold: 100000,
+  compaction_threshold: 0,
   compaction_ratio: 80,
   compaction_model_id: '',
 })
@@ -77,7 +77,7 @@ const settingsForm = reactive({
 watch(settings, (val: SettingsSettings | undefined) => {
   if (val) {
     settingsForm.compaction_enabled = val.compaction_enabled ?? false
-    settingsForm.compaction_threshold = val.compaction_threshold ?? 100000
+    settingsForm.compaction_threshold = val.compaction_threshold ?? 0
     settingsForm.compaction_ratio = val.compaction_ratio ?? 80
     settingsForm.compaction_model_id = val.compaction_model_id ?? ''
   }
@@ -93,7 +93,7 @@ const settingsChanged = computed(() => {
   if (!settings.value) return false
   const s: SettingsSettings = settings.value
   return settingsForm.compaction_enabled !== (s.compaction_enabled ?? false)
-    || settingsForm.compaction_threshold !== (s.compaction_threshold ?? 100000)
+    || settingsForm.compaction_threshold !== (s.compaction_threshold ?? 0)
     || settingsForm.compaction_ratio !== (s.compaction_ratio ?? 80)
     || settingsForm.compaction_model_id !== (s.compaction_model_id ?? '')
 })
@@ -104,7 +104,7 @@ const pendingDisable = computed(() => !settingsForm.compaction_enabled && savedE
 function resetSettings() {
   const s = settings.value
   settingsForm.compaction_enabled = s?.compaction_enabled ?? false
-  settingsForm.compaction_threshold = s?.compaction_threshold ?? 100000
+  settingsForm.compaction_threshold = s?.compaction_threshold ?? 0
   settingsForm.compaction_ratio = s?.compaction_ratio ?? 80
   settingsForm.compaction_model_id = s?.compaction_model_id ?? ''
 }
