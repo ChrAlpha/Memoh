@@ -93,27 +93,22 @@ func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 	}
 }
 
-func TestRunCompactionDrainStopsAtNoopAndAtPassCap(t *testing.T) {
+func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 	t.Parallel()
 
-	shrink := &fakeQueries{uncompacted: qualityRows(t)}
-	shrink.onComplete = func() {
-		shrink.uncompacted = nil
-	}
+	q := &fakeQueries{uncompacted: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY"}
-	if err := newMachineryService(shrink).RunCompactionDrain(context.Background(), machineryConfig(stub, 200), 3); err != nil {
-		t.Fatalf("RunCompactionDrain: %v", err)
-	}
-	if stub.calls != 1 {
-		t.Fatalf("summarizer calls = %d, want 1: the drain must stop once the backlog is gone", stub.calls)
-	}
+	cfg := machineryConfig(stub, 200)
+	cfg.SummaryWindowTokens = 512
 
-	static := &fakeQueries{uncompacted: qualityRows(t)}
-	capped := &stubModel{summary: "SUMMARY"}
-	if err := newMachineryService(static).RunCompactionDrain(context.Background(), machineryConfig(capped, 200), 3); err != nil {
-		t.Fatalf("RunCompactionDrain static: %v", err)
+	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if !errors.Is(err, errSummaryWindowTooSmall) {
+		t.Fatalf("RunCompactionSync error = %v, want errSummaryWindowTooSmall", err)
 	}
-	if capped.calls != 3 {
-		t.Fatalf("summarizer calls = %d, want the 3-pass bound on a backlog that never shrinks", capped.calls)
+	if stub.calls != 0 {
+		t.Fatalf("summarizer calls = %d, want 0: a hopeless window must not burn an LLM call", stub.calls)
+	}
+	if q.created {
+		t.Fatal("attempt row was created: fail closed before claiming sources")
 	}
 }

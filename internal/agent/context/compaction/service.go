@@ -31,6 +31,10 @@ var (
 	// errIneffectiveSummary marks a summary that would replay at least as many
 	// tokens as the raw entries it replaces.
 	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
+	// errSummaryWindowTooSmall marks a summarizer whose declared window cannot
+	// hold the fixed prompt plus the output reserve; running it would overflow
+	// on every attempt, so it fails closed before claiming any source rows.
+	errSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
 )
 
 // maxCompactionSummaryTokens bounds a single summary's output so it can never
@@ -142,27 +146,6 @@ func ShouldCompact(inputTokens, threshold int) bool {
 func (s *Service) RunCompaction(ctx context.Context, cfg TriggerConfig) error {
 	_, _, err := s.runCompaction(context.WithoutCancel(ctx), cfg)
 	return err
-}
-
-// RunCompactionDrain runs bounded consecutive passes until the backlog is
-// drained (noop), a pass fails, or maxPasses is reached. A small summarizer
-// window caps each pass's input, so one trigger must be able to work through
-// a large backlog instead of leaving residue that future turns consume one
-// slice at a time.
-func (s *Service) RunCompactionDrain(ctx context.Context, cfg TriggerConfig, maxPasses int) error {
-	for pass := 0; pass < maxPasses; pass++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		res, err := s.RunCompactionSync(ctx, cfg)
-		if err != nil {
-			return err
-		}
-		if res.Status != StatusOK {
-			return nil
-		}
-	}
-	return nil
 }
 
 // RunCompactionSync runs compaction synchronously and reports this session's

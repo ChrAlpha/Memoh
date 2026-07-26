@@ -49,3 +49,14 @@ func TestSyncCompactionShouldRun(t *testing.T) {
 		t.Fatal("legacy mode must defer to the caller's shared-budget gate")
 	}
 }
+
+func TestAsyncCompactionTargetKeepsLegacyRatioSelection(t *testing.T) {
+	t.Parallel()
+
+	if got := asyncCompactionTargetTokens(100000, 2000000); got != 0 {
+		t.Fatalf("legacy async target = %d, want 0 so the engine keeps ratio-based selection", got)
+	}
+	if got := asyncCompactionTargetTokens(0, 200000); got != 90000 {
+		t.Fatalf("model-relative async target = %d, want 45%% of the window", got)
+	}
+}

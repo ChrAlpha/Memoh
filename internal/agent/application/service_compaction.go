@@ -53,7 +53,10 @@ func autoCompactionThreshold(userThreshold, contextTokenBudget int) int {
 }
 
 // compactionTargetTokensFor is the post-compaction raw-tail goal shared by the
-// async and synchronous paths, so both modes converge on the same pressure.
+// async and synchronous paths under the model-relative policy, so both modes
+// converge on the same pressure. Legacy mode keeps its historical split:
+// async compacts a ratio of the corpus (no target), sync keeps the
+// (100-ratio)% share of the window.
 func compactionTargetTokensFor(userThreshold, ratio, contextTokenBudget int) int {
 	if modelRelativeCompaction(userThreshold) {
 		if contextTokenBudget <= 0 {
@@ -62,6 +65,18 @@ func compactionTargetTokensFor(userThreshold, ratio, contextTokenBudget int) int
 		return contextTokenBudget * compactionTargetPercent / 100
 	}
 	return syncCompactionTargetTokens(contextTokenBudget, ratio)
+}
+
+// asyncCompactionTargetTokens is the background trigger's goal: only the
+// model-relative policy drives the engine's target-based selection; a legacy
+// absolute threshold keeps ratio-based selection (target zero), matching the
+// pre-policy behavior where a 2M-window bot with a 100k threshold compacted
+// on trigger instead of waiting for a 900k backlog.
+func asyncCompactionTargetTokens(userThreshold, contextTokenBudget int) int {
+	if !modelRelativeCompaction(userThreshold) {
+		return 0
+	}
+	return compactionTargetTokensFor(userThreshold, 0, contextTokenBudget)
 }
 
 // syncCompactionShouldRun gates the blocking backstop: model-relative bots
@@ -100,8 +115,6 @@ func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int
 }
 
 func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolvedContext, inputTokens int) {
-	done := s.enterSessionCompaction(req.BotID, req.ThreadID)
-	defer done()
 	inputTokens = asyncCompactionInputTokens(rc, inputTokens)
 	if s.compactionService == nil || s.settingsService == nil {
 		s.logger.Info("compaction: skipped, service or settings nil")
@@ -151,14 +164,44 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 		// so the compaction service doesn't run hooks + fail on empty UUIDs.
 		return
 	}
-	cfg.TargetTokens = compactionTargetTokensFor(botSettings.CompactionThreshold, cfg.Ratio, rc.contextTokenBudget)
-	if err := s.compactionService.RunCompactionDrain(ctx, cfg, maxAsyncCompactionPasses); err != nil {
+	cfg.TargetTokens = asyncCompactionTargetTokens(botSettings.CompactionThreshold, rc.contextTokenBudget)
+	if err := s.drainCompactionBacklog(ctx, cfg); err != nil {
 		s.logger.Error("compaction failed", slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.Any("error", err))
 	}
 }
 
-// runCompactionSync runs compaction synchronously when context reaches
-// 70% of the model's context window and reports the session-scoped result.
+// drainCompactionBacklog runs bounded consecutive passes until the backlog is
+// drained (noop), a pass fails, or the pass cap is reached, so a small
+// summarizer window cannot strand a large backlog for future turns. The
+// session barrier is re-acquired per pass: a turn that arrives between
+// passes runs before the next summarizer call instead of waiting out the
+// whole drain.
+func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig) error {
+	for pass := 0; pass < maxAsyncCompactionPasses; pass++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		res, err := s.runCompactionPass(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if res.Status != compaction.StatusOK {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
+	done := s.enterSessionCompaction(cfg.BotID, cfg.SessionID)
+	defer done()
+	return s.compactionService.RunCompactionSync(ctx, cfg)
+}
+
+// runCompactionSync runs compaction synchronously when context reaches the
+// blocking share of the model's context window (the hard threshold under the
+// model-relative policy, the shared budget gate in legacy mode) and reports
+// the session-scoped result.
 // A noop (failure cooldown, another compaction in flight, or nothing to
 // compact) leaves this turn's context untouched: the request proceeds as-is,
 // possibly still above the threshold, and the next turn re-evaluates.

@@ -54,7 +54,7 @@ type TriggerConfig struct {
 	HTTPClient       *http.Client
 	Ratio            int
 	TotalInputTokens int
-	MaxCompactTokens int // if > 0, cap compaction input to this many tokens (e.g. 90% of model window)
+	MaxCompactTokens int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
 	TargetTokens     int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
 	// SummaryWindowTokens is the summarizer model's full context window when
 	// declared; it bounds the summary output reserve. Zero means unknown and

@@ -58,6 +58,23 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		maxCompactTokens = 30000
 	}
 
+	// Bound the summary output and derive the hard input budget: window minus
+	// output reserve minus the fixed system prompt and wrapper framing. A
+	// window that cannot hold even that fails closed before claiming rows.
+	maxOutputTokens := maxCompactionSummaryTokens
+	if cfg.SummaryWindowTokens > 0 {
+		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
+		fixedPromptTokens := estimateBytesAsTokens(systemPrompt) + compactionPromptFramingTokens
+		inputBudget := cfg.SummaryWindowTokens - maxOutputTokens - fixedPromptTokens
+		if inputBudget <= 0 {
+			return Result{}, fmt.Errorf("%w: window=%d output_reserve=%d fixed_prompt=%d",
+				errSummaryWindowTooSmall, cfg.SummaryWindowTokens, maxOutputTokens, fixedPromptTokens)
+		}
+		if inputBudget < maxCompactTokens {
+			maxCompactTokens = inputBudget
+		}
+	}
+
 	frontier, err := NewArtifactProjection(s.queries).LoadActiveSession(ctx, ArtifactOwner{BotID: cfg.BotID, SessionID: cfg.SessionID, SessionIDKnown: true})
 	if err != nil {
 		return Result{}, err
@@ -175,13 +192,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	userPrompt := buildUserPrompt(priorSummaries, entries)
 
-	// Bound the summary so it can never crowd out the compaction window; a
-	// tenth of the summarizer window, capped at the fixed summary budget.
-	maxOutputTokens := maxCompactionSummaryTokens
-	if cfg.SummaryWindowTokens > 0 {
-		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
-	}
-
 	model := models.NewSDKChatModel(models.SDKModelConfig{
 		ClientType:     cfg.ClientType,
 		BaseURL:        cfg.BaseURL,
@@ -285,3 +295,8 @@ func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, su
 func estimateSummaryReplayTokens(summary string) int {
 	return estimateBytesAsTokens("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
 }
+
+// compactionPromptFramingTokens is a fixed safety allowance for the user
+// prompt wrapper, entry headers, and provider framing that the byte estimator
+// does not attribute to any single entry.
+const compactionPromptFramingTokens = 512
