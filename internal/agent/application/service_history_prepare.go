@@ -42,12 +42,25 @@ func (s *Service) prepareHistoryContext(
 		return preparedHistoryContext{}, err
 	}
 	compactableTokens := totalCompactableHistoryTokens(loaded)
-	loaded = injectWorkspaceTransitionRecords(loaded)
-	messages, records, estimatedTokens := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
+	_, records, _ := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
+	messages, records, estimatedTokens := finishPreparedHistory(records)
 	return preparedHistoryContext{
 		messages:          messages,
 		records:           records,
 		estimatedTokens:   estimatedTokens,
 		compactableTokens: compactableTokens,
 	}, nil
+}
+
+// finishPreparedHistory derives workspace-transition markers from the records
+// that actually survived trimming, so a marker can never outlive or orphan
+// the message it annotates: trimming first, deriving second keeps the pair
+// atomic by construction.
+func finishPreparedHistory(records []historyfrag.HistoryRecord) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	records = injectWorkspaceTransitionRecords(records)
+	estimated := 0
+	for _, record := range records {
+		estimated += estimateMessageTokens(record.ModelMessage)
+	}
+	return historyfrag.ToModelMessages(records), records, estimated
 }

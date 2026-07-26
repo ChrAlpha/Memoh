@@ -190,3 +190,29 @@ func workspaceHistoryRecord(role, text, targetID, kind, name, path string) histo
 		},
 	}
 }
+
+func TestFinishPreparedHistoryDerivesMarkersFromSurvivors(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a budget trim that dropped every Computer A message: the
+	// derived markers must describe only what the model will actually see,
+	// never an orphaned "changed from A" for a message that was cut.
+	survivors := []historyfrag.HistoryRecord{
+		workspaceHistoryRecord("user", "continue on b", "computer-b", "remote", "Computer B", "/work/b"),
+		workspaceHistoryRecord("assistant", "done", "computer-b", "remote", "Computer B", "/work/b"),
+	}
+	messages, records, estimated := finishPreparedHistory(survivors)
+	if len(records) != 3 || len(messages) != 3 {
+		t.Fatalf("records/messages = %d/%d, want one marker plus two survivors", len(records), len(messages))
+	}
+	marker := messages[0]
+	if marker.Role != "system" || !strings.Contains(marker.TextContent(), "Computer B") {
+		t.Fatalf("marker = %#v, want an initial Computer B marker", marker)
+	}
+	if strings.Contains(marker.TextContent(), "changed") {
+		t.Fatalf("marker text %q must not describe a transition from a trimmed-away workspace", marker.TextContent())
+	}
+	if estimated <= 0 {
+		t.Fatal("estimated tokens must include the derived marker")
+	}
+}

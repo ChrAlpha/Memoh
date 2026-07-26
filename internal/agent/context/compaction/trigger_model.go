@@ -7,7 +7,7 @@ type TriggerModel struct {
 	Slug           string // runtime model slug sent to the provider
 	RecordID       string // models.id row UUID recorded as artifact/log provenance
 	ClientType     string
-	APIKey         string
+	APIKey         string //nolint:gosec // runtime credential, not a hardcoded secret
 	CodexAccountID string
 	BaseURL        string
 	PromptCacheTTL string
