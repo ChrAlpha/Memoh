@@ -37,8 +37,12 @@ type HistoryRecord struct {
 	Lifecycle  Lifecycle
 
 	ModelMessage turn.ModelMessage
-	Assets       []MediaRef
-	Metadata     map[string]any
+	// Synthetic marks records derived at assembly time (workspace transition
+	// markers) rather than loaded from durable history: trimming treats a
+	// synthetic record and the message it annotates as one atomic unit.
+	Synthetic bool
+	Assets    []MediaRef
+	Metadata  map[string]any
 
 	Scope      contextfrag.Scope
 	Provenance contextfrag.Provenance

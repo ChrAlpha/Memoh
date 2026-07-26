@@ -191,28 +191,71 @@ func workspaceHistoryRecord(role, text, targetID, kind, name, path string) histo
 	}
 }
 
-func TestFinishPreparedHistoryDerivesMarkersFromSurvivors(t *testing.T) {
+func TestTrimKeepsWorkspaceMarkersAtomicUnderBudget(t *testing.T) {
 	t.Parallel()
 
-	// Simulates a budget trim that dropped every Computer A message: the
-	// derived markers must describe only what the model will actually see,
-	// never an orphaned "changed from A" for a message that was cut.
-	survivors := []historyfrag.HistoryRecord{
-		workspaceHistoryRecord("user", "continue on b", "computer-b", "remote", "Computer B", "/work/b"),
-		workspaceHistoryRecord("assistant", "done", "computer-b", "remote", "Computer B", "/work/b"),
+	records := injectWorkspaceTransitionRecords([]historyfrag.HistoryRecord{
+		workspaceHistoryRecord("user", strings.Repeat("work on a ", 30), "computer-a", "remote", "Computer A", "/a"),
+		workspaceHistoryRecord("user", strings.Repeat("switch to b ", 30), "computer-b", "remote", "Computer B", "/b"),
+		workspaceHistoryRecord("user", "current question", "computer-b", "remote", "Computer B", "/b"),
+	})
+
+	// Budget sized so a naive cutoff would drop Computer B's marker while
+	// keeping its message: the trim must drop the pair instead, because a
+	// message without its marker runs under the wrong implied workspace and
+	// re-adding markers after the trim would break the hard budget.
+	budget := 0
+	for _, record := range records[3:] {
+		budget += estimateMessageTokens(record.ModelMessage)
 	}
-	messages, records, estimated := finishPreparedHistory(survivors)
-	if len(records) != 3 || len(messages) != 3 {
-		t.Fatalf("records/messages = %d/%d, want one marker plus two survivors", len(records), len(messages))
+	budget += estimateMessageTokens(records[2].ModelMessage) / 2
+
+	messages, retained, estimated := trimMessagesAndRecordsByTokens(nil, records, budget)
+	for index, record := range retained {
+		if !record.Synthetic {
+			continue
+		}
+		if index+1 >= len(retained) || retained[index+1].Synthetic {
+			t.Fatalf("marker at %d is not followed by its message: %#v", index, recordTexts(retained))
+		}
 	}
-	marker := messages[0]
-	if marker.Role != "system" || !strings.Contains(marker.TextContent(), "Computer B") {
-		t.Fatalf("marker = %#v, want an initial Computer B marker", marker)
+	if len(retained) > 0 && retained[0].Synthetic && len(retained) == 1 {
+		t.Fatalf("retained a marker without any message: %#v", recordTexts(retained))
 	}
-	if strings.Contains(marker.TextContent(), "changed") {
-		t.Fatalf("marker text %q must not describe a transition from a trimmed-away workspace", marker.TextContent())
+	for _, record := range retained {
+		if record.Synthetic {
+			continue
+		}
+		if strings.Contains(record.ModelMessage.TextContent(), "switch to b") {
+			// If B's message survived, its marker must be directly before it.
+			found := false
+			for index, kept := range retained {
+				if kept.ModelMessage.TextContent() == record.ModelMessage.TextContent() && index > 0 && retained[index-1].Synthetic {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("kept Computer B message without its marker: %#v", recordTexts(retained))
+			}
+		}
 	}
-	if estimated <= 0 {
-		t.Fatal("estimated tokens must include the derived marker")
+	if estimated > budget {
+		t.Fatalf("estimated = %d, want a hard bound at budget %d", estimated, budget)
+	}
+	if len(messages) == 0 || messages[0].Role != "system" || !strings.Contains(messages[0].TextContent(), "trimmed") {
+		t.Fatalf("trim notice missing after a real cut: %#v", messages)
+	}
+}
+
+func TestTrimWithoutBudgetKeepsMarkersAndMessages(t *testing.T) {
+	t.Parallel()
+
+	records := injectWorkspaceTransitionRecords([]historyfrag.HistoryRecord{
+		workspaceHistoryRecord("user", "on a", "computer-a", "remote", "Computer A", "/a"),
+		workspaceHistoryRecord("user", "to b", "computer-b", "remote", "Computer B", "/b"),
+	})
+	messages, retained, _ := trimMessagesAndRecordsByTokens(nil, records, 0)
+	if len(retained) != 4 || len(messages) != 4 {
+		t.Fatalf("retained/messages = %d/%d, want markers and messages intact", len(retained), len(messages))
 	}
 }

@@ -25,7 +25,10 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 	for _, record := range records {
 		if current := workspaceTargetFromMetadata(record.Metadata); current != nil && !sameWorkspaceTarget(previous, current) {
 			text := renderWorkspaceTransition(previous, current)
-			result = append(result, historyfrag.HistoryRecord{ModelMessage: ModelMessage{Role: "system", Content: newTextContent(text)}})
+			result = append(result, historyfrag.HistoryRecord{
+				ModelMessage: ModelMessage{Role: "system", Content: newTextContent(text)},
+				Synthetic:    true,
+			})
 			previous = current
 		}
 		result = append(result, record)
@@ -341,9 +344,22 @@ func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.His
 		}
 	}
 
-	// Keep provider-valid message order: a "tool" message must follow a preceding
-	// assistant tool call. When history is head-trimmed, a leading tool message
-	// may become orphaned and cause provider 400 errors.
+	// Keep provider-valid message order and marker atomicity: a "tool" message
+	// must follow a preceding assistant tool call, and a message must not
+	// survive a cut that dropped the workspace marker annotating it — the kept
+	// message would run under the wrong implied workspace. Both rules advance
+	// the cutoff (drop more) so the budget stays a hard bound.
+	for cutoff > 0 && cutoff < len(messages) {
+		if strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
+			cutoff++
+			continue
+		}
+		if messages[cutoff-1].Synthetic {
+			cutoff++
+			continue
+		}
+		break
+	}
 	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
 		cutoff++
 	}
