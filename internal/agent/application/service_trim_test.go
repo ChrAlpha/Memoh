@@ -2,6 +2,7 @@ package application
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
@@ -40,7 +41,7 @@ func TestTrimMessagesByTokens_DropsLeadingOrphanTool(t *testing.T) {
 		trimRecord(ModelMessage{
 			Role:       "tool",
 			ToolCallID: "call-1",
-			Content:    newTextContent("2222"),
+			Content:    newTextContent(strings.Repeat("2", 400)),
 		}, nil),
 		trimRecord(ModelMessage{
 			Role:    "assistant",
@@ -50,10 +51,10 @@ func TestTrimMessagesByTokens_DropsLeadingOrphanTool(t *testing.T) {
 		}),
 	}
 
-	// Budget 2: newest assistant and tool result fit, adding the older assistant
-	// tool call exceeds the budget. The cutoff initially lands on the tool result,
-	// which must be skipped to avoid an orphan tool message.
-	trimmed, _ := trimMessagesByTokens(nil, messages, 2)
+	// Budget 62: the notice (~59 tokens) plus the latest assistant fit, adding
+	// the large tool result exceeds the budget. The cutoff initially lands on
+	// the tool result, which must be skipped to avoid an orphan tool message.
+	trimmed, _ := trimMessagesByTokens(nil, messages, 62)
 	if len(trimmed) != 2 {
 		t.Fatalf("expected truncation notice and latest assistant, got %d messages: %+v", len(trimmed), trimmed)
 	}
@@ -175,8 +176,10 @@ func TestTrimMessagesByTokens_EstimatesFallback(t *testing.T) {
 		}),
 	}
 
-	// Budget of 50: user message is ~100 estimated tokens (400/4), should be trimmed.
-	trimmed, _ := trimMessagesByTokens(nil, messages, 50)
+	// Budget of 70: the user message is ~100 estimated tokens (400/4), so it
+	// is trimmed; the truncation notice (~59 tokens) is charged against the
+	// same budget and still fits together with the short assistant message.
+	trimmed, _ := trimMessagesByTokens(nil, messages, 70)
 	// When trimming occurs, a system truncation notice is prepended.
 	// So we expect: 1 system notice + 1 assistant message (kept) = 2 total.
 	// The key check is that the long user message was removed.

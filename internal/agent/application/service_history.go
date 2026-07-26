@@ -323,11 +323,7 @@ func totalCompactableHistoryTokens(records []historyfrag.HistoryRecord) int {
 
 func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
 	if maxTokens == 0 || len(messages) == 0 {
-		totalTokens := 0
-		for _, m := range messages {
-			totalTokens += estimateMessageTokens(m.ModelMessage)
-		}
-		return historyfrag.ToModelMessages(messages), messages, totalTokens
+		return finalizeTrimmedHistory(messages, false, 0)
 	}
 
 	// Scan from newest to oldest, accumulating per-message estimated context
@@ -344,22 +340,9 @@ func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.His
 		}
 	}
 
-	// Keep provider-valid message order and marker atomicity: a "tool" message
-	// must follow a preceding assistant tool call, and a message must not
-	// survive a cut that dropped the workspace marker annotating it — the kept
-	// message would run under the wrong implied workspace. Both rules advance
-	// the cutoff (drop more) so the budget stays a hard bound.
-	for cutoff > 0 && cutoff < len(messages) {
-		if strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
-			cutoff++
-			continue
-		}
-		if messages[cutoff-1].Synthetic {
-			cutoff++
-			continue
-		}
-		break
-	}
+	// Keep provider-valid message order: a "tool" message must follow a
+	// preceding assistant tool call. When history is head-trimmed, a leading
+	// tool message may become orphaned and cause provider 400 errors.
 	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
 		cutoff++
 	}
@@ -379,24 +362,79 @@ func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.His
 	retained := make([]historyfrag.HistoryRecord, 0, len(messages)-cutoff+len(requiredPrefix))
 	retained = append(retained, requiredPrefix...)
 	retained = append(retained, messages[cutoff:]...)
-	result := make([]ModelMessage, 0, len(retained))
-	if cutoff > 0 {
-		// Add a truncation notice at the beginning so the LLM knows earlier
-		// context was trimmed and it can use tools (memory, search) to look up
-		// past information if needed.
-		result = append(result, ModelMessage{
-			Role: "system",
-			Content: newTextContent(
-				"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
-					"If you need information from earlier in the conversation, use the available tools " +
-					"(such as memory_read or web search) to retrieve it.",
-			),
-		})
+	return finalizeTrimmedHistory(retained, cutoff > 0, maxTokens)
+}
+
+// historyTrimNotice tells the LLM that earlier context was trimmed so it can
+// use tools (memory, search) to look up past information if needed.
+func historyTrimNotice() ModelMessage {
+	return ModelMessage{
+		Role: "system",
+		Content: newTextContent(
+			"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
+				"If you need information from earlier in the conversation, use the available tools " +
+				"(such as memory_read or web search) to retrieve it.",
+		),
 	}
-	for _, m := range retained {
-		result = append(result, m.ModelMessage)
+}
+
+// finalizeTrimmedHistory derives workspace-transition markers from the
+// records that survived trimming and charges markers and the truncation
+// notice against the same hard budget, dropping the oldest droppable
+// survivors until everything fits. Deriving from survivors means every kept
+// workspace run is governed by its marker no matter where the cut fell —
+// including messages pulled back as Required — and the monotonic drop loop
+// keeps the declared budget a hard bound instead of an estimate.
+func finalizeTrimmedHistory(retained []historyfrag.HistoryRecord, trimmed bool, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	for {
+		annotated := injectWorkspaceTransitionRecords(retained)
+		totalTokens := estimateMessagesTokens(annotated)
+		if trimmed {
+			totalTokens += estimateMessageTokens(historyTrimNotice())
+		}
+		if maxTokens <= 0 || totalTokens <= maxTokens {
+			result := make([]ModelMessage, 0, len(annotated)+1)
+			if trimmed {
+				result = append(result, historyTrimNotice())
+			}
+			for _, record := range annotated {
+				result = append(result, record.ModelMessage)
+			}
+			return result, annotated, totalTokens
+		}
+		dropIndex := -1
+		for index, record := range retained {
+			// Required records and active summaries are protected: evicting
+			// the compressed carrier of already-trimmed history to make room
+			// for the trim notice would be self-defeating, and summaries stay
+			// small by the engine's ineffective-summary gate.
+			if record.Required || record.Lifecycle == historyfrag.LifecycleActiveSummary {
+				continue
+			}
+			dropIndex = index
+			break
+		}
+		if dropIndex < 0 {
+			// Only Required records remain: emit them over budget, matching
+			// the required-overflow semantics of the token fit above.
+			result := make([]ModelMessage, 0, len(annotated)+1)
+			if trimmed {
+				result = append(result, historyTrimNotice())
+			}
+			for _, record := range annotated {
+				result = append(result, record.ModelMessage)
+			}
+			return result, annotated, totalTokens
+		}
+		retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+		// Dropping a call can orphan its tool results; drop those too.
+		for dropIndex < len(retained) &&
+			!retained[dropIndex].Required &&
+			strings.EqualFold(strings.TrimSpace(retained[dropIndex].ModelMessage.Role), "tool") {
+			retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+		}
+		trimmed = true
 	}
-	return result, retained, totalTokens
 }
 
 func fitRequiredMessagesWithinBudget(messages []historyfrag.HistoryRecord, cutoff int, maxTokens int) (int, int) {
