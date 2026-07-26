@@ -246,7 +246,7 @@ CREATE TABLE IF NOT EXISTS bots (
   heartbeat_prompt TEXT NOT NULL DEFAULT '',
   heartbeat_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   compaction_enabled BOOLEAN NOT NULL DEFAULT false,
-  compaction_threshold INTEGER NOT NULL DEFAULT 100000,
+  compaction_threshold INTEGER NOT NULL DEFAULT 0,
   compaction_ratio INTEGER NOT NULL DEFAULT 80,
   compaction_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   image_model_id UUID REFERENCES models(id) ON DELETE SET NULL,
