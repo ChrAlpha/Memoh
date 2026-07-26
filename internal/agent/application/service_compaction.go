@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/memohai/memoh/internal/agent/context/compaction"
+	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/providers"
 	"github.com/memohai/memoh/internal/settings"
@@ -136,7 +137,7 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 		slog.Int("ratio", botSettings.CompactionRatio),
 	)
 
-	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens)
+	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, rc.model.ID)
 	if err != nil {
 		s.logger.Warn("compaction: failed to build config", slog.Any("error", err))
 		return
@@ -158,7 +159,7 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 // A noop (failure cooldown, another compaction in flight, or nothing to
 // compact) leaves this turn's context untouched: the request proceeds as-is,
 // possibly still above the threshold, and the next turn re-evaluates.
-func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int) compaction.Result {
+func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string) compaction.Result {
 	if s.compactionService == nil || s.settingsService == nil {
 		s.logger.Warn("compaction sync: skipped, service or settings nil")
 		return compaction.Result{}
@@ -180,7 +181,7 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 		return compaction.Result{}
 	}
 
-	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens)
+	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)
 	if err != nil {
 		s.logger.Warn("compaction sync: failed to build config", slog.Any("error", err))
 		return compaction.Result{}
@@ -214,27 +215,30 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 	return res
 }
 
-// buildCompactionConfig resolves the compaction engine config through the
-// shared trigger resolver: model (compaction override or chat model), provider
-// credentials, and both token budgets. Unavailable-model conditions stand the
-// automatic trigger down silently; infrastructure errors propagate.
-func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, botSettings settings.Settings, inputTokens int) (compaction.TriggerConfig, error) {
+// buildCompactionConfig resolves the summarizer through the shared model
+// policy — explicit override first, then the turn's actually-resolved model,
+// then the bot chat default, then the session's latest model — and attaches
+// credentials. Unavailable-model conditions stand the automatic trigger down
+// silently; infrastructure errors propagate.
+func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, botSettings settings.Settings, inputTokens int, turnModelID string) (compaction.TriggerConfig, error) {
 	ratio := botSettings.CompactionRatio
 	if ratio <= 0 || ratio > 100 {
 		ratio = 80
 	}
-	authService := providers.NewService(nil, s.queries, "")
-	authCtx := oauthctx.WithUserID(ctx, req.UserID)
-	cfg, err := compaction.ResolveTriggerConfig(
-		authCtx,
+	sessionModelID := ""
+	if strings.TrimSpace(botSettings.CompactionModelID) == "" && strings.TrimSpace(turnModelID) == "" && strings.TrimSpace(botSettings.ChatModelID) == "" {
+		sessionModelID = models.LatestSessionModelID(ctx, s.queries, req.ThreadID)
+	}
+	resolution, err := models.ResolveCompactionModel(
+		ctx,
 		s.modelsService,
 		s.queries,
-		authService,
 		botSettings.CompactionModelID,
+		turnModelID,
 		botSettings.ChatModelID,
-		req.ThreadID,
+		sessionModelID,
 	)
-	if compaction.IsTriggerConfigUnavailable(err) {
+	if models.IsCompactionModelUnavailable(err) {
 		s.logger.Info("compaction: skipped",
 			slog.String("bot_id", req.BotID),
 			slog.String("session_id", req.ThreadID),
@@ -245,6 +249,22 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
+	authService := providers.NewService(nil, s.queries, "")
+	authCtx := oauthctx.WithUserID(ctx, req.UserID)
+	creds, err := authService.ResolveModelCredentials(authCtx, resolution.Provider)
+	if err != nil {
+		return compaction.TriggerConfig{}, err
+	}
+	cfg := compaction.NewTriggerConfig(compaction.TriggerModel{
+		Slug:           resolution.Model.ModelID,
+		RecordID:       resolution.Model.ID,
+		ClientType:     resolution.Provider.ClientType,
+		APIKey:         creds.APIKey,
+		CodexAccountID: creds.CodexAccountID,
+		BaseURL:        providers.ProviderConfigString(resolution.Provider, "base_url"),
+		PromptCacheTTL: providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
+		WindowTokens:   resolution.WindowTokens,
+	})
 	cfg.BotID = req.BotID
 	cfg.SessionID = req.ThreadID
 	cfg.Ratio = ratio

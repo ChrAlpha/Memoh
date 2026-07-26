@@ -96,6 +96,9 @@
     "channel": {
       "runtime_unavailable": "Channel サービスに接続できません。しばらくしてからもう一度お試しください。"
     },
+    "compaction": {
+      "model_unavailable": "圧縮Modelを利用できません。有効でコンテキストウィンドウが宣言されたチャットModelを選択してください。"
+    },
     "profile": {
       "request_invalid": "プロフィール更新リクエストが無効です。",
       "title_model_invalid": "選択したタイトルModelは利用できないか、チャットModelではありません。",

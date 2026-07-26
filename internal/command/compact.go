@@ -4,18 +4,26 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	"github.com/memohai/memoh/internal/db"
+	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/providers"
 )
 
 // errCompactNoModel is a sentinel returned by buildCompactConfig when neither
 // a compaction model nor a chat model is configured. The Handler catches it
 // via errors.Is and surfaces a localized user message; other (internal) errors
 // flow through friendlyCommandError's looksLikeInternalError path.
-var errCompactNoModel = errors.New("compact: no compaction or chat model configured")
+var (
+	errCompactNoModel = errors.New("compact: no compaction or chat model configured")
+	// errCompactModelUnavailable covers every other resolution failure (model
+	// or provider disabled, no output cap, unknown window).
+	errCompactModelUnavailable = errors.New("compact: compaction model unavailable")
+)
 
 func (h *Handler) buildCompactGroup() *CommandGroup {
 	g := newCommandGroup("compact", "Compact conversation context")
@@ -54,6 +62,9 @@ func (h *Handler) buildCompactGroup() *CommandGroup {
 				if errors.Is(err, errCompactNoModel) {
 					return cc.T("cmd.compact.noModel"), nil
 				}
+				if errors.Is(err, errCompactModelUnavailable) {
+					return cc.T("cmd.compact.modelUnavailable"), nil
+				}
 				return "", err
 			}
 
@@ -75,21 +86,41 @@ func (h *Handler) buildCompactConfig(cc CommandContext, sessionID string) (compa
 	if err != nil {
 		return compaction.TriggerConfig{}, fmt.Errorf("failed to load settings: %w", err)
 	}
-	cfg, err := compaction.ResolveTriggerConfig(
+	sessionModelID := ""
+	if strings.TrimSpace(botSettings.CompactionModelID) == "" {
+		sessionModelID = models.LatestSessionModelID(cc.Ctx, h.sqlcQueries, sessionID)
+	}
+	resolution, err := models.ResolveCompactionModel(
 		cc.Ctx,
 		h.modelsService,
 		h.sqlcQueries,
-		h.providersService,
 		botSettings.CompactionModelID,
+		sessionModelID,
 		botSettings.ChatModelID,
-		sessionID,
 	)
-	if errors.Is(err, compaction.ErrTriggerModelNotConfigured) {
+	if errors.Is(err, models.ErrCompactionModelNotConfigured) {
 		return compaction.TriggerConfig{}, errCompactNoModel
+	}
+	if models.IsCompactionModelUnavailable(err) {
+		return compaction.TriggerConfig{}, errCompactModelUnavailable
 	}
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
+	creds, err := h.providersService.ResolveModelCredentials(cc.Ctx, resolution.Provider)
+	if err != nil {
+		return compaction.TriggerConfig{}, fmt.Errorf("failed to resolve credentials: %w", err)
+	}
+	cfg := compaction.NewTriggerConfig(compaction.TriggerModel{
+		Slug:           resolution.Model.ModelID,
+		RecordID:       resolution.Model.ID,
+		ClientType:     resolution.Provider.ClientType,
+		APIKey:         creds.APIKey,
+		CodexAccountID: creds.CodexAccountID,
+		BaseURL:        providers.ProviderConfigString(resolution.Provider, "base_url"),
+		PromptCacheTTL: providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
+		WindowTokens:   resolution.WindowTokens,
+	})
 	cfg.BotID = cc.BotID
 	cfg.SessionID = sessionID
 	cfg.Ratio = 100

@@ -2,17 +2,16 @@ package handlers
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/bots"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -101,15 +100,11 @@ func TestTriggerCompactRejectsProviderWithoutOutputLimitBeforeService(t *testing
 	echoCtx.SetParamValues(botID, "00000000-0000-0000-0000-000000000424")
 
 	err := handler.TriggerCompact(echoCtx)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) {
-		t.Fatalf("TriggerCompact() error = %v, want HTTP 400", err)
+	if got := apperror.CodeOf(err); got != apperror.CodeCompactionModelUnavailable {
+		t.Fatalf("TriggerCompact() code = %q, want %q (err=%v)", got, apperror.CodeCompactionModelUnavailable, err)
 	}
-	if httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("TriggerCompact() status = %d, want 400", httpErr.Code)
-	}
-	message, _ := httpErr.Message.(string)
-	if !strings.Contains(message, "output limit") {
-		t.Fatalf("TriggerCompact() message = %q, want output-limit reason", message)
+	public, ok := apperror.PublicFrom(err, "req-test")
+	if !ok || public.Args["reason"] != "output_limit_unsupported" {
+		t.Fatalf("TriggerCompact() public = %+v ok=%t, want output_limit_unsupported reason", public, ok)
 	}
 }

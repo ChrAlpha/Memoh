@@ -420,7 +420,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 			// summary. A noop (cooldown, in-flight, nothing markable) keeps
 			// this turn's context untouched — possibly still above the
 			// threshold — and the next turn re-evaluates.
-			if res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget); res.Status == compaction.StatusOK {
+			if res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
 				prepared, loadErr = s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
 				if loadErr != nil {
 					s.logger.Error("resolve: prepare history context failed",

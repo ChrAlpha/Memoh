@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/memohai/memoh/internal/accounts"
 	"github.com/memohai/memoh/internal/agent/context/compaction"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/bots"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/models"
@@ -152,6 +154,9 @@ func (h *CompactionHandler) TriggerCompact(c echo.Context) error {
 
 	cfg, err := h.buildTriggerConfig(c.Request().Context(), botID, sessionID)
 	if err != nil {
+		if apperror.CodeOf(err) != "" {
+			return err
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
@@ -171,27 +176,67 @@ func (h *CompactionHandler) buildTriggerConfig(ctx context.Context, botID, sessi
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
-	cfg, err := compaction.ResolveTriggerConfig(
+	sessionModelID := ""
+	if strings.TrimSpace(botSettings.CompactionModelID) == "" {
+		sessionModelID = models.LatestSessionModelID(ctx, h.queries, sessionID)
+	}
+	resolution, err := models.ResolveCompactionModel(
 		ctx,
 		h.modelsService,
 		h.queries,
-		h.providersService,
 		botSettings.CompactionModelID,
+		sessionModelID,
 		botSettings.ChatModelID,
-		sessionID,
 	)
-	if compaction.IsTriggerConfigUnavailable(err) {
-		return compaction.TriggerConfig{}, echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	if models.IsCompactionModelUnavailable(err) {
+		return compaction.TriggerConfig{}, apperror.New(apperror.CodeCompactionModelUnavailable, map[string]string{
+			"reason": compactionUnavailableReason(err),
+		})
 	}
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
+	creds, err := h.providersService.ResolveModelCredentials(ctx, resolution.Provider)
+	if err != nil {
+		return compaction.TriggerConfig{}, err
+	}
+	cfg := compaction.NewTriggerConfig(compaction.TriggerModel{
+		Slug:           resolution.Model.ModelID,
+		RecordID:       resolution.Model.ID,
+		ClientType:     resolution.Provider.ClientType,
+		APIKey:         creds.APIKey,
+		CodexAccountID: creds.CodexAccountID,
+		BaseURL:        providers.ProviderConfigString(resolution.Provider, "base_url"),
+		PromptCacheTTL: providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
+		WindowTokens:   resolution.WindowTokens,
+	})
 	cfg.BotID = botID
 	cfg.SessionID = sessionID
 	cfg.Ratio = 100
 	cfg.TotalInputTokens = 1
 	cfg.Manual = true
 	return cfg, nil
+}
+
+// compactionUnavailableReason maps resolution sentinels to the stable reason
+// args of compaction.model_unavailable.
+func compactionUnavailableReason(err error) string {
+	switch {
+	case errors.Is(err, models.ErrCompactionModelNotConfigured):
+		return "not_configured"
+	case errors.Is(err, models.ErrCompactionModelNotChat):
+		return "not_chat"
+	case errors.Is(err, models.ErrCompactionModelDisabled):
+		return "model_disabled"
+	case errors.Is(err, models.ErrCompactionProviderDisabled):
+		return "provider_disabled"
+	case errors.Is(err, models.ErrCompactionOutputLimitUnsupported):
+		return "output_limit_unsupported"
+	case errors.Is(err, models.ErrCompactionWindowUnknown):
+		return "window_unknown"
+	default:
+		return "unavailable"
+	}
 }
 
 func (*CompactionHandler) requireUserID(c echo.Context) (string, error) {
