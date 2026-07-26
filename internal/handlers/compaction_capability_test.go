@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,9 +27,10 @@ import (
 
 type compactionCapabilityQueries struct {
 	dbstore.Queries
-	bot      sqlc.GetBotByIDRow
-	model    sqlc.Model
-	provider sqlc.Provider
+	bot         sqlc.GetBotByIDRow
+	model       sqlc.Model
+	provider    sqlc.Provider
+	settingsErr error
 }
 
 func (q *compactionCapabilityQueries) GetBotByID(context.Context, pgtype.UUID) (sqlc.GetBotByIDRow, error) {
@@ -36,6 +38,9 @@ func (q *compactionCapabilityQueries) GetBotByID(context.Context, pgtype.UUID) (
 }
 
 func (q *compactionCapabilityQueries) GetSettingsByBotID(context.Context, pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
+	if q.settingsErr != nil {
+		return sqlc.GetSettingsByBotIDRow{}, q.settingsErr
+	}
 	return sqlc.GetSettingsByBotIDRow{
 		Language:           settings.DefaultLanguage,
 		ReasoningEffort:    settings.DefaultReasoningEffort,
@@ -60,29 +65,11 @@ func (*compactionCapabilityQueries) GetProviderOAuthTokenByProvider(context.Cont
 	return sqlc.ProviderOauthToken{}, pgx.ErrNoRows
 }
 
-func TestTriggerCompactRejectsProviderWithoutOutputLimitBeforeService(t *testing.T) {
-	t.Parallel()
+func triggerCompactError(t *testing.T, queries *compactionCapabilityQueries) error {
+	t.Helper()
 
 	botID := "00000000-0000-0000-0000-000000000423"
 	userID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	modelID := testUUID("00000000-0000-0000-0000-000000000421")
-	providerID := testUUID("00000000-0000-0000-0000-000000000422")
-	queries := &compactionCapabilityQueries{
-		bot: testBotRow(botID, map[string]any{}),
-		model: sqlc.Model{
-			ID:         modelID,
-			ModelID:    "codex-compact-model",
-			ProviderID: providerID,
-			Type:       string(models.ModelTypeChat),
-			Enable:     true,
-		},
-		provider: sqlc.Provider{
-			ID:         providerID,
-			Name:       "codex-provider",
-			ClientType: string(models.ClientTypeOpenAICodex),
-			Enable:     true,
-		},
-	}
 	logger := slog.New(slog.DiscardHandler)
 	handler := NewCompactionHandler(
 		logger,
@@ -103,13 +90,65 @@ func TestTriggerCompactRejectsProviderWithoutOutputLimitBeforeService(t *testing
 	echoCtx.SetParamNames("bot_id", "session_id")
 	echoCtx.SetParamValues(botID, "00000000-0000-0000-0000-000000000424")
 
-	err := handler.TriggerCompact(echoCtx)
+	return handler.TriggerCompact(echoCtx)
+}
+
+func compactionCodexQueries(botID string) *compactionCapabilityQueries {
+	modelID := testUUID("00000000-0000-0000-0000-000000000421")
+	providerID := testUUID("00000000-0000-0000-0000-000000000422")
+	return &compactionCapabilityQueries{
+		bot: testBotRow(botID, map[string]any{}),
+		model: sqlc.Model{
+			ID:         modelID,
+			ModelID:    "codex-compact-model",
+			ProviderID: providerID,
+			Type:       string(models.ModelTypeChat),
+			Enable:     true,
+		},
+		provider: sqlc.Provider{
+			ID:         providerID,
+			Name:       "codex-provider",
+			ClientType: string(models.ClientTypeOpenAICodex),
+			Enable:     true,
+		},
+	}
+}
+
+func TestTriggerCompactRejectsProviderWithoutOutputLimitBeforeService(t *testing.T) {
+	t.Parallel()
+
+	err := triggerCompactError(t, compactionCodexQueries("00000000-0000-0000-0000-000000000423"))
 	if got := apperror.CodeOf(err); got != apperror.CodeCompactionModelUnavailable {
 		t.Fatalf("TriggerCompact() code = %q, want %q (err=%v)", got, apperror.CodeCompactionModelUnavailable, err)
 	}
-	public, ok := apperror.PublicFrom(err, "req-test")
-	if !ok || public.Args["reason"] != "output_limit_unsupported" {
-		t.Fatalf("TriggerCompact() public = %+v ok=%t, want output_limit_unsupported reason", public, ok)
+	problem, ok := apperror.ProblemFrom(err, "req-test")
+	if !ok || problem.Status != http.StatusBadRequest {
+		t.Fatalf("TriggerCompact() problem = %+v ok=%t, want a 400 problem shape", problem, ok)
+	}
+	body, marshalErr := json.Marshal(problem)
+	if marshalErr != nil {
+		t.Fatalf("marshal problem: %v", marshalErr)
+	}
+	for _, fragment := range []string{`"code":"compaction.model_unavailable"`, `"reason":"output_limit_unsupported"`} {
+		if !strings.Contains(string(body), fragment) {
+			t.Fatalf("problem body %s missing %s", body, fragment)
+		}
+	}
+}
+
+func TestTriggerCompactInfraFailureReturnsGeneric500(t *testing.T) {
+	t.Parallel()
+
+	queries := compactionCodexQueries("00000000-0000-0000-0000-000000000423")
+	queries.settingsErr = errors.New("pq: connection refused to db-internal-host")
+
+	err := triggerCompactError(t, queries)
+	var httpErr *echo.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusInternalServerError {
+		t.Fatalf("TriggerCompact() infra failure = %v, want a plain 500", err)
+	}
+	if message, _ := httpErr.Message.(string); strings.Contains(message, "pq:") || strings.Contains(message, "db-internal-host") {
+		t.Fatalf("infra failure leaked diagnostics: %q", message)
 	}
 }
 
@@ -120,9 +159,16 @@ func TestCompactionRunFailureShapes(t *testing.T) {
 	if got := apperror.CodeOf(err); got != apperror.CodeCompactionModelUnavailable {
 		t.Fatalf("window-too-small code = %q, want %q", got, apperror.CodeCompactionModelUnavailable)
 	}
-	public, ok := apperror.PublicFrom(err, "req")
-	if !ok || public.Args["reason"] != "window_too_small" {
-		t.Fatalf("window-too-small public = %+v ok=%t", public, ok)
+	problem, ok := apperror.ProblemFrom(err, "req")
+	if !ok || problem.Status != http.StatusBadRequest {
+		t.Fatalf("window-too-small problem = %+v ok=%t, want a 400 problem shape", problem, ok)
+	}
+	body, marshalErr := json.Marshal(problem)
+	if marshalErr != nil {
+		t.Fatalf("marshal problem: %v", marshalErr)
+	}
+	if !strings.Contains(string(body), `"reason":"window_too_small"`) {
+		t.Fatalf("problem body %s missing the window_too_small reason", body)
 	}
 
 	generic := compactionRunFailure(errors.New("window=512 output_reserve=51 fixed_prompt=180"))

@@ -70,7 +70,7 @@ func (h *Handler) buildCompactGroup() *CommandGroup {
 
 			res, err := h.compactionService.RunCompactionSync(cc.Ctx, cfg)
 			if err != nil {
-				return "", fmt.Errorf("compaction failed: %w", err)
+				return h.compactRunError(cc, err), nil
 			}
 			if res.Status != compaction.StatusOK {
 				return cc.T("cmd.compact.noop"), nil
@@ -79,6 +79,20 @@ func (h *Handler) buildCompactGroup() *CommandGroup {
 		},
 	})
 	return g
+}
+
+// compactRunError maps a summarizer run failure to a localized chat message:
+// a too-small summarizer window is actionable by the user, every other cause
+// stays in the server log — run errors carry window/budget/provider
+// diagnostics that must not reach chat verbatim.
+func (h *Handler) compactRunError(cc CommandContext, err error) string {
+	if errors.Is(err, compaction.ErrSummaryWindowTooSmall) {
+		return cc.T("cmd.compact.windowTooSmall")
+	}
+	if h.logger != nil {
+		h.logger.Error("compact: run failed", slog.String("bot_id", cc.BotID), slog.Any("error", err))
+	}
+	return cc.T("cmd.error.generic", map[string]any{"command": CmdRef("compact")})
 }
 
 func (h *Handler) buildCompactConfig(cc CommandContext, sessionID string) (compaction.TriggerConfig, error) {

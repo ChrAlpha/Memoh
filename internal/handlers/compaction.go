@@ -157,12 +157,19 @@ func (h *CompactionHandler) TriggerCompact(c echo.Context) error {
 		if apperror.CodeOf(err) != "" {
 			return err
 		}
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		h.logger.Error("compaction: build trigger config failed",
+			slog.String("bot_id", botID), slog.String("session_id", sessionID), slog.Any("error", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, "compaction failed")
 	}
 
 	res, err := h.service.RunCompactionSync(c.Request().Context(), cfg)
 	if err != nil {
-		return compactionRunFailure(err)
+		mapped := compactionRunFailure(err)
+		if apperror.CodeOf(mapped) == "" {
+			h.logger.Error("compaction: manual run failed",
+				slog.String("bot_id", botID), slog.String("session_id", sessionID), slog.Any("error", err))
+		}
+		return mapped
 	}
 	return c.JSON(http.StatusOK, TriggerCompactResponse{
 		Status:       res.Status,
