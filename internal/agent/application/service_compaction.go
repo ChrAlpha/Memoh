@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/memohai/memoh/internal/agent/context/compaction"
-	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/providers"
 	"github.com/memohai/memoh/internal/settings"
@@ -147,61 +146,42 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 	return res
 }
 
-// buildCompactionConfig resolves the compaction model, provider credentials,
-// and sets MaxCompactTokens to 90% of the compaction model's context window.
+// buildCompactionConfig resolves the compaction engine config through the
+// shared trigger resolver: model (compaction override or chat model), provider
+// credentials, and both token budgets. Unavailable-model conditions stand the
+// automatic trigger down silently; infrastructure errors propagate.
 func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, botSettings settings.Settings, inputTokens int) (compaction.TriggerConfig, error) {
-	modelID := botSettings.CompactionModelID
-	if modelID == "" {
-		return compaction.TriggerConfig{}, nil
-	}
-
 	ratio := botSettings.CompactionRatio
 	if ratio <= 0 || ratio > 100 {
 		ratio = 80
 	}
-
-	compactModel, err := s.modelsService.GetByID(ctx, modelID)
-	if err != nil {
-		return compaction.TriggerConfig{}, err
-	}
-	if !compactModel.Enable {
-		// Silently skip auto-compaction when the configured model is
-		// disabled — matches the existing "no model configured" path so the
-		// bot keeps running without spending tokens on a model the user
-		// explicitly turned off.
-		return compaction.TriggerConfig{}, nil
-	}
-
-	compactProvider, err := models.FetchProviderByID(ctx, s.queries, compactModel.ProviderID)
-	if err != nil {
-		return compaction.TriggerConfig{}, err
-	}
 	authService := providers.NewService(nil, s.queries, "")
 	authCtx := oauthctx.WithUserID(ctx, req.UserID)
-	creds, err := authService.ResolveModelCredentials(authCtx, compactProvider)
+	cfg, err := compaction.ResolveTriggerConfig(
+		authCtx,
+		s.modelsService,
+		s.queries,
+		authService,
+		botSettings.CompactionModelID,
+		botSettings.ChatModelID,
+		req.ThreadID,
+	)
+	if compaction.IsTriggerConfigUnavailable(err) {
+		s.logger.Info("compaction: skipped",
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.ThreadID),
+			slog.Any("reason", err),
+		)
+		return compaction.TriggerConfig{}, nil
+	}
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
-
-	cfg := compaction.TriggerConfig{
-		BotID:            req.BotID,
-		SessionID:        req.ThreadID,
-		ModelID:          compactModel.ModelID,
-		ClientType:       compactProvider.ClientType,
-		APIKey:           creds.APIKey,
-		CodexAccountID:   creds.CodexAccountID,
-		BaseURL:          providers.ProviderConfigString(compactProvider, "base_url"),
-		Ratio:            ratio,
-		TotalInputTokens: inputTokens,
-		HTTPClient:       s.streamHTTPClient,
-		PromptCacheTTL:   providers.ProviderConfigString(compactProvider, "prompt_cache_ttl"),
-	}
-
-	// Cap compaction input to 90% of the compaction model's context window.
-	if compactModel.Config.ContextWindow != nil && *compactModel.Config.ContextWindow > 0 {
-		cfg.MaxCompactTokens = *compactModel.Config.ContextWindow * 90 / 100
-	}
-
+	cfg.BotID = req.BotID
+	cfg.SessionID = req.ThreadID
+	cfg.Ratio = ratio
+	cfg.TotalInputTokens = inputTokens
+	cfg.HTTPClient = s.streamHTTPClient
 	return cfg, nil
 }
 

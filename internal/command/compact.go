@@ -9,8 +9,6 @@ import (
 
 	"github.com/memohai/memoh/internal/agent/context/compaction"
 	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/models"
-	"github.com/memohai/memoh/internal/providers"
 )
 
 // errCompactNoModel is a sentinel returned by buildCompactConfig when neither
@@ -77,45 +75,25 @@ func (h *Handler) buildCompactConfig(cc CommandContext, sessionID string) (compa
 	if err != nil {
 		return compaction.TriggerConfig{}, fmt.Errorf("failed to load settings: %w", err)
 	}
-	modelID := botSettings.CompactionModelID
-	if modelID == "" {
-		modelID = botSettings.ChatModelID
-	}
-	if modelID == "" {
+	cfg, err := compaction.ResolveTriggerConfig(
+		cc.Ctx,
+		h.modelsService,
+		h.sqlcQueries,
+		h.providersService,
+		botSettings.CompactionModelID,
+		botSettings.ChatModelID,
+		sessionID,
+	)
+	if errors.Is(err, compaction.ErrTriggerModelNotConfigured) {
 		return compaction.TriggerConfig{}, errCompactNoModel
 	}
-
-	compactModel, err := h.modelsService.GetByID(cc.Ctx, modelID)
 	if err != nil {
-		return compaction.TriggerConfig{}, fmt.Errorf("failed to load compaction model: %w", err)
+		return compaction.TriggerConfig{}, err
 	}
-	if !compactModel.Enable {
-		return compaction.TriggerConfig{}, fmt.Errorf("compaction model %s is disabled", compactModel.ModelID)
-	}
-	compactProvider, err := models.FetchProviderByID(cc.Ctx, h.sqlcQueries, compactModel.ProviderID)
-	if err != nil {
-		return compaction.TriggerConfig{}, fmt.Errorf("failed to load provider: %w", err)
-	}
-	creds, err := h.providersService.ResolveModelCredentials(cc.Ctx, compactProvider)
-	if err != nil {
-		return compaction.TriggerConfig{}, fmt.Errorf("failed to resolve credentials: %w", err)
-	}
-
-	cfg := compaction.TriggerConfig{
-		BotID:            cc.BotID,
-		SessionID:        sessionID,
-		ModelID:          compactModel.ModelID,
-		ClientType:       compactProvider.ClientType,
-		APIKey:           creds.APIKey,
-		CodexAccountID:   creds.CodexAccountID,
-		BaseURL:          providers.ProviderConfigString(compactProvider, "base_url"),
-		Ratio:            100,
-		TotalInputTokens: 1,
-		PromptCacheTTL:   providers.ProviderConfigString(compactProvider, "prompt_cache_ttl"),
-		Manual:           true,
-	}
-	if compactModel.Config.ContextWindow != nil && *compactModel.Config.ContextWindow > 0 {
-		cfg.MaxCompactTokens = *compactModel.Config.ContextWindow * 90 / 100
-	}
+	cfg.BotID = cc.BotID
+	cfg.SessionID = sessionID
+	cfg.Ratio = 100
+	cfg.TotalInputTokens = 1
+	cfg.Manual = true
 	return cfg, nil
 }

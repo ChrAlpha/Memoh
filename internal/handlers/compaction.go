@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -172,46 +171,26 @@ func (h *CompactionHandler) buildTriggerConfig(ctx context.Context, botID, sessi
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
-	modelID := botSettings.CompactionModelID
-	if modelID == "" {
-		modelID = botSettings.ChatModelID
+	cfg, err := compaction.ResolveTriggerConfig(
+		ctx,
+		h.modelsService,
+		h.queries,
+		h.providersService,
+		botSettings.CompactionModelID,
+		botSettings.ChatModelID,
+		sessionID,
+	)
+	if compaction.IsTriggerConfigUnavailable(err) {
+		return compaction.TriggerConfig{}, echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	if modelID == "" {
-		return compaction.TriggerConfig{}, echo.NewHTTPError(http.StatusBadRequest, "no compaction or chat model configured")
-	}
-
-	compactModel, err := h.modelsService.GetByID(ctx, modelID)
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
-	if !compactModel.Enable {
-		return compaction.TriggerConfig{}, echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("compaction model %s is disabled", compactModel.ModelID))
-	}
-	compactProvider, err := models.FetchProviderByID(ctx, h.queries, compactModel.ProviderID)
-	if err != nil {
-		return compaction.TriggerConfig{}, err
-	}
-	creds, err := h.providersService.ResolveModelCredentials(ctx, compactProvider)
-	if err != nil {
-		return compaction.TriggerConfig{}, err
-	}
-
-	cfg := compaction.TriggerConfig{
-		BotID:            botID,
-		SessionID:        sessionID,
-		ModelID:          compactModel.ModelID,
-		ClientType:       compactProvider.ClientType,
-		APIKey:           creds.APIKey,
-		CodexAccountID:   creds.CodexAccountID,
-		BaseURL:          providers.ProviderConfigString(compactProvider, "base_url"),
-		Ratio:            100,
-		TotalInputTokens: 1,
-		PromptCacheTTL:   providers.ProviderConfigString(compactProvider, "prompt_cache_ttl"),
-		Manual:           true,
-	}
-	if compactModel.Config.ContextWindow != nil && *compactModel.Config.ContextWindow > 0 {
-		cfg.MaxCompactTokens = *compactModel.Config.ContextWindow * 90 / 100
-	}
+	cfg.BotID = botID
+	cfg.SessionID = sessionID
+	cfg.Ratio = 100
+	cfg.TotalInputTokens = 1
+	cfg.Manual = true
 	return cfg, nil
 }
 
