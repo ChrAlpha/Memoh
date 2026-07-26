@@ -132,7 +132,7 @@ type TriggerCompactResponse struct {
 // @Param bot_id path string true "Bot ID"
 // @Param session_id path string true "Session ID"
 // @Success 200 {object} TriggerCompactResponse
-// @Failure 400 {object} ErrorResponse
+// @Failure 400 {object} apperror.Problem
 // @Failure 500 {object} ErrorResponse
 // @Router /bots/{bot_id}/sessions/{session_id}/compact [post].
 func (h *CompactionHandler) TriggerCompact(c echo.Context) error {

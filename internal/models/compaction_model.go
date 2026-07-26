@@ -72,6 +72,9 @@ func ResolveCompactionModel(
 	if !provider.Enable {
 		return CompactionModelResolution{}, fmt.Errorf("%w: %s", ErrCompactionProviderDisabled, provider.Name)
 	}
+	if IsImageOnlyChatModel(model, provider) {
+		return CompactionModelResolution{}, fmt.Errorf("%w: %s is a dedicated image model", ErrCompactionModelNotChat, model.ModelID)
+	}
 	clientType := ClientType(strings.TrimSpace(provider.ClientType))
 	if !IsLLMClientType(clientType) {
 		return CompactionModelResolution{}, fmt.Errorf("%w: %s", ErrCompactionModelNotChat, provider.ClientType)
@@ -116,4 +119,60 @@ func LatestSessionModelID(ctx context.Context, queries dbstore.Queries, sessionI
 		return ""
 	}
 	return modelID.String()
+}
+
+// IsImageOnlyChatModel reports whether a chat-typed model is actually a
+// dedicated image generator that cannot summarize text.
+func IsImageOnlyChatModel(model GetResponse, provider sqlc.Provider) bool {
+	// A model that advertises tool calling is usable as a chat model regardless
+	// of its name — this is the escape hatch for the name heuristic below, so a
+	// tool-capable model that merely looks like an image model (or a genuine
+	// multimodal chat model) is never blocked.
+	if model.HasCompatibility(CompatToolCall) {
+		return false
+	}
+	lowerModel := strings.ToLower(strings.TrimSpace(model.ModelID))
+	if lowerModel == "" {
+		return false
+	}
+	if isKnownStandaloneImageModelID(lowerModel) {
+		return true
+	}
+	lowerBase := strings.ToLower(providerConfigString(provider.Config, "base_url"))
+	if strings.Contains(lowerBase, "dashscope") && strings.Contains(lowerModel, "image") {
+		return true
+	}
+	if !model.HasCompatibility(CompatImageOutput) {
+		return false
+	}
+	ct := ClientType(provider.ClientType)
+	if ct != ClientTypeOpenAICompletions && ct != ClientTypeOpenAIResponses {
+		return false
+	}
+	return strings.Contains(lowerBase, "maas.aliyuncs.com") ||
+		strings.Contains(lowerBase, "api.openai.com") ||
+		strings.Contains(lowerBase, "volces.com") ||
+		strings.Contains(lowerBase, "bytepluses.com") ||
+		strings.Contains(lowerBase, "siliconflow")
+}
+
+// isKnownStandaloneImageModelID matches the naming conventions of dedicated
+// text-to-image model families. Prefixes are kept specific enough not to catch
+// ordinary chat models that merely share a leading token — e.g. "wan2"/"wanx"
+// (Alibaba Wan image/video) rather than a bare "wan" that would also match a
+// chat model like "wanjuan-chat", and "flux-"/"flux."/"flux1" rather than a
+// bare "flux". A tool-calling model bypasses this check entirely (see
+// IsImageOnlyChatModel), which is the override when a name collision is wrong.
+func isKnownStandaloneImageModelID(lowerModel string) bool {
+	return strings.HasPrefix(lowerModel, "qwen-image") ||
+		strings.HasPrefix(lowerModel, "wan2") ||
+		strings.HasPrefix(lowerModel, "wanx") ||
+		strings.HasPrefix(lowerModel, "z-image") ||
+		strings.HasPrefix(lowerModel, "flux-") ||
+		strings.HasPrefix(lowerModel, "flux.") ||
+		strings.HasPrefix(lowerModel, "flux1") ||
+		strings.HasPrefix(lowerModel, "stable-diffusion") ||
+		strings.HasPrefix(lowerModel, "gpt-image") ||
+		strings.HasPrefix(lowerModel, "dall-e") ||
+		strings.Contains(lowerModel, "seedream")
 }

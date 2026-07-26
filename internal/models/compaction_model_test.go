@@ -195,3 +195,53 @@ func TestLatestSessionModelIDFallback(t *testing.T) {
 		t.Fatalf("LatestSessionModelID(invalid) = %q, want empty", got)
 	}
 }
+
+func TestIsKnownStandaloneImageModelID(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range []string{
+		"qwen-image-2.0", "wan2.7-image", "z-image-turbo",
+		"flux-schnell", "stable-diffusion-3.5-large-turbo",
+		"gpt-image-1", "dall-e-3", "doubao-seedream-4-0-250828",
+	} {
+		if !isKnownStandaloneImageModelID(id) {
+			t.Errorf("isKnownStandaloneImageModelID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range []string{
+		"gpt-4o", "qwen-max", "deepseek-chat", "",
+		// Chat models that merely share a leading token must not match: the
+		// "wan"/"flux" prefixes are scoped to image-model naming conventions.
+		"wanjuan-chat", "want-to-talk", "fluxion-7b", "fluent-chat",
+	} {
+		if isKnownStandaloneImageModelID(id) {
+			t.Errorf("isKnownStandaloneImageModelID(%q) = true, want false", id)
+		}
+	}
+}
+
+func TestIsImageOnlyChatModelToolCallEscape(t *testing.T) {
+	t.Parallel()
+
+	// A model whose name looks like an image model but which advertises tool
+	// calling must not be classified as image-only — tool calling is the
+	// override that lets a name collision be used as a chat model.
+	toolCaller := GetResponse{
+		ModelID: "wan2.7-omni",
+		Model: Model{
+			Config: ModelConfig{Compatibilities: []string{CompatToolCall, CompatImageOutput}},
+		},
+	}
+	if IsImageOnlyChatModel(toolCaller, sqlc.Provider{}) {
+		t.Fatal("a tool-calling model must not be treated as image-only, even with an image-like name")
+	}
+
+	// Without tool calling, the same name is still rejected.
+	imageOnly := GetResponse{
+		ModelID: "wan2.7-image",
+		Model:   Model{Config: ModelConfig{Compatibilities: []string{CompatImageOutput}}},
+	}
+	if !IsImageOnlyChatModel(imageOnly, sqlc.Provider{}) {
+		t.Fatal("a non-tool-calling image model name should be treated as image-only")
+	}
+}

@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { filterCompactionModels } from './compaction-models'
 
 describe('filterCompactionModels', () => {
-  it('excludes models owned by openai-codex providers', () => {
+  it('offers only models the resolver can accept', () => {
     const models = [
-      { id: 'codex-model', provider_id: 'codex-provider', type: 'chat' as const },
-      { id: 'chat-model', provider_id: 'chat-provider', type: 'chat' as const },
-      { id: 'orphan-model', provider_id: 'missing-provider', type: 'chat' as const },
+      { id: 'codex-model', provider_id: 'codex-provider', type: 'chat' as const, config: { context_window: 200000 } },
+      { id: 'chat-model', provider_id: 'chat-provider', type: 'chat' as const, config: { context_window: 200000 } },
+      { id: 'windowless-model', provider_id: 'chat-provider', type: 'chat' as const, config: {} },
+      { id: 'orphan-model', provider_id: 'missing-provider', type: 'chat' as const, config: { context_window: 8192 } },
     ]
     const providers = [
       { id: 'codex-provider', client_type: 'openai-codex' },

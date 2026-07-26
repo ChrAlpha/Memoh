@@ -1,5 +1,8 @@
 interface CompactionModelLike {
   provider_id?: string | null
+  config?: {
+    context_window?: number | null
+  } | null
 }
 
 interface CompactionProviderLike {
@@ -18,5 +21,12 @@ export function filterCompactionModels<T extends CompactionModelLike>(
       .filter((id): id is string => Boolean(id)),
   )
 
-  return models.filter(model => !model.provider_id || !unsupportedProviderIds.has(model.provider_id))
+  return models.filter((model) => {
+    if (model.provider_id && unsupportedProviderIds.has(model.provider_id)) {
+      return false
+    }
+    // The resolver fails closed on models without a declared context window
+    // (the summary budget derives from it), so don't offer them.
+    return (model.config?.context_window ?? 0) > 0
+  })
 }

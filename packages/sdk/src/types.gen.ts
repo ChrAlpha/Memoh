@@ -8778,7 +8778,7 @@ export type PostBotsByBotIdSessionsBySessionIdCompactErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Internal Server Error
      */

@@ -5,6 +5,7 @@ packages:
 allowBuilds:
   electron-winstaller: true
   esbuild: true
+  protobufjs: set this to true or false
   vue-demi: true
 
 onlyBuiltDependencies:
