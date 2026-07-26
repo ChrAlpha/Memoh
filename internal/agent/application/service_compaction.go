@@ -41,7 +41,8 @@ func modelRelativeCompaction(userThreshold int) bool {
 
 // autoCompactionThreshold is the async trigger level: the soft window share
 // under the model-relative policy, or the clamped absolute threshold in
-// legacy mode. Zero disables the async trigger.
+// legacy mode. A zero return (no usable window in model-relative mode)
+// leaves the async trigger off.
 func autoCompactionThreshold(userThreshold, contextTokenBudget int) int {
 	if modelRelativeCompaction(userThreshold) {
 		if contextTokenBudget <= 0 {

@@ -38,8 +38,9 @@ type HistoryRecord struct {
 
 	ModelMessage turn.ModelMessage
 	// Synthetic marks records derived at assembly time (workspace transition
-	// markers) rather than loaded from durable history: trimming treats a
-	// synthetic record and the message it annotates as one atomic unit.
+	// markers) rather than loaded from durable history: they are re-derived
+	// from the surviving records after every trim decision instead of being
+	// persisted or trimmed on their own.
 	Synthetic bool
 	Assets    []MediaRef
 	Metadata  map[string]any

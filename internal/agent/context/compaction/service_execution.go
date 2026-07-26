@@ -49,8 +49,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 
 	// Cap the compaction input to avoid exceeding the compaction model's
-	// context window. MaxCompactTokens is typically set to 90% of the model's
-	// window. If not set, use a conservative default of 30K tokens. Prior
+	// context window. NewTriggerConfig sets MaxCompactTokens to 85% of the
+	// model's window. If not set, use a conservative default of 30K tokens. Prior
 	// summaries and message entries share this one budget — an additive prior
 	// allowance would let the combined prompt exceed the window headroom.
 	maxCompactTokens := cfg.MaxCompactTokens
