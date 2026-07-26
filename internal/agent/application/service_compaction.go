@@ -28,6 +28,9 @@ const (
 	compactionSoftThresholdPercent = 60
 	compactionHardThresholdPercent = 75
 	compactionTargetPercent        = 45
+	// maxAsyncCompactionPasses bounds how many consecutive summarizer calls
+	// one background trigger may spend draining a backlog.
+	maxAsyncCompactionPasses = 3
 )
 
 // modelRelativeCompaction reports whether the bot runs the model-relative
@@ -149,7 +152,7 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 		return
 	}
 	cfg.TargetTokens = compactionTargetTokensFor(botSettings.CompactionThreshold, cfg.Ratio, rc.contextTokenBudget)
-	if err := s.compactionService.RunCompaction(ctx, cfg); err != nil {
+	if err := s.compactionService.RunCompactionDrain(ctx, cfg, maxAsyncCompactionPasses); err != nil {
 		s.logger.Error("compaction failed", slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.Any("error", err))
 	}
 }

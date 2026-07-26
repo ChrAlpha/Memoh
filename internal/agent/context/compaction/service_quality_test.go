@@ -92,3 +92,28 @@ func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 		t.Fatalf("attempt status = %q, want error", q.completed.Status)
 	}
 }
+
+func TestRunCompactionDrainStopsAtNoopAndAtPassCap(t *testing.T) {
+	t.Parallel()
+
+	shrink := &fakeQueries{uncompacted: qualityRows(t)}
+	shrink.onComplete = func() {
+		shrink.uncompacted = nil
+	}
+	stub := &stubModel{summary: "SUMMARY"}
+	if err := newMachineryService(shrink).RunCompactionDrain(context.Background(), machineryConfig(stub, 200), 3); err != nil {
+		t.Fatalf("RunCompactionDrain: %v", err)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1: the drain must stop once the backlog is gone", stub.calls)
+	}
+
+	static := &fakeQueries{uncompacted: qualityRows(t)}
+	capped := &stubModel{summary: "SUMMARY"}
+	if err := newMachineryService(static).RunCompactionDrain(context.Background(), machineryConfig(capped, 200), 3); err != nil {
+		t.Fatalf("RunCompactionDrain static: %v", err)
+	}
+	if capped.calls != 3 {
+		t.Fatalf("summarizer calls = %d, want the 3-pass bound on a backlog that never shrinks", capped.calls)
+	}
+}

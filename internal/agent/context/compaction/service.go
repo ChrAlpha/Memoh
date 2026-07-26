@@ -144,6 +144,27 @@ func (s *Service) RunCompaction(ctx context.Context, cfg TriggerConfig) error {
 	return err
 }
 
+// RunCompactionDrain runs bounded consecutive passes until the backlog is
+// drained (noop), a pass fails, or maxPasses is reached. A small summarizer
+// window caps each pass's input, so one trigger must be able to work through
+// a large backlog instead of leaving residue that future turns consume one
+// slice at a time.
+func (s *Service) RunCompactionDrain(ctx context.Context, cfg TriggerConfig, maxPasses int) error {
+	for pass := 0; pass < maxPasses; pass++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		res, err := s.RunCompactionSync(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if res.Status != StatusOK {
+			return nil
+		}
+	}
+	return nil
+}
+
 // RunCompactionSync runs compaction synchronously and reports this session's
 // scoped Result, so callers act on their own outcome (a noop keeps their
 // current context) instead of reading an unscoped bot-wide log that may belong
