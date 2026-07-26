@@ -1,8 +1,10 @@
 interface CompactionModelLike {
+  model_id?: string
   provider_id?: string | null
   enable?: boolean
   config?: {
     context_window?: number | null
+    compatibilities?: string[] | null
   } | null
 }
 
@@ -12,18 +14,44 @@ interface CompactionProviderLike {
   enable?: boolean
 }
 
-const NON_TEXT_CLIENT_SUFFIXES = ['-speech', '-transcription', '-video']
+// Mirrors the server gate (models.IsLLMClientType && models.EnforcesMaxOutputTokens):
+// text LLM clients that honor an output cap. openai-codex ignores output caps
+// and unknown client types fail closed — the resolver would reject both.
+const SUMMARIZER_CLIENT_TYPES = new Set([
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+  'google-generative-ai',
+  'github-copilot',
+])
+
+// Mirrors models.isKnownStandaloneImageModelID: dedicated text-to-image
+// families that carry the chat type but cannot summarize. Tool calling is the
+// server's escape hatch for name collisions, honored here too. The server
+// resolver stays authoritative for provider-URL-based image heuristics.
+const IMAGE_MODEL_PREFIXES = [
+  'qwen-image',
+  'wan2',
+  'wanx',
+  'z-image',
+  'flux-',
+  'flux.',
+  'flux1',
+  'stable-diffusion',
+  'gpt-image',
+  'dall-e',
+]
+
+function isImageOnlyModel(model: CompactionModelLike): boolean {
+  if ((model.config?.compatibilities ?? []).includes('tool-call')) {
+    return false
+  }
+  const modelID = (model.model_id ?? '').trim().toLowerCase()
+  return IMAGE_MODEL_PREFIXES.some(prefix => modelID.startsWith(prefix)) || modelID.includes('seedream')
+}
 
 function providerCanSummarize(provider: CompactionProviderLike): boolean {
-  if (provider.enable === false) {
-    return false
-  }
-  const clientType = provider.client_type ?? ''
-  // openai-codex ignores output caps, so a summary cannot be bounded there.
-  if (clientType === 'openai-codex') {
-    return false
-  }
-  return !NON_TEXT_CLIENT_SUFFIXES.some(suffix => clientType.endsWith(suffix))
+  return provider.enable !== false && SUMMARIZER_CLIENT_TYPES.has(provider.client_type ?? '')
 }
 
 export function filterCompactionModels<T extends CompactionModelLike>(
@@ -36,15 +64,15 @@ export function filterCompactionModels<T extends CompactionModelLike>(
       .map(provider => provider.id)
       .filter((id): id is string => Boolean(id)),
   )
-  const knownProviderIds = new Set(
-    providers.map(provider => provider.id).filter((id): id is string => Boolean(id)),
-  )
 
   return models.filter((model) => {
     if (model.enable === false) {
       return false
     }
-    if (model.provider_id && knownProviderIds.has(model.provider_id) && !eligibleProviderIds.has(model.provider_id)) {
+    if (!model.provider_id || !eligibleProviderIds.has(model.provider_id)) {
+      return false
+    }
+    if (isImageOnlyModel(model)) {
       return false
     }
     // The resolver fails closed on models without a declared context window
