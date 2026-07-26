@@ -20,9 +20,11 @@ import (
 // --- stub summarizer model (intercepts the SDK HTTP call) ---------------------
 
 type stubModel struct {
-	summary string
-	calls   int
-	prompt  string // decoded text of the captured request messages
+	summary      string
+	finishReason string // defaults to "stop"
+	calls        int
+	prompt       string // decoded text of the captured request messages
+	maxTokens    int    // captured max_tokens of the last request
 }
 
 func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -30,9 +32,19 @@ func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		s.prompt = decodePromptMessages(body)
+		var limits struct {
+			MaxTokens           int `json:"max_tokens"`
+			MaxCompletionTokens int `json:"max_completion_tokens"`
+		}
+		_ = json.Unmarshal(body, &limits)
+		s.maxTokens = max(limits.MaxTokens, limits.MaxCompletionTokens)
+	}
+	finishReason := s.finishReason
+	if finishReason == "" {
+		finishReason = "stop"
 	}
 	resp := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
-		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":"stop"}],` +
+		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":` + jsonStr(finishReason) + `}],` +
 		`"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -380,9 +392,9 @@ func TestDoCompactionMarksOnlyContiguousRunAcrossEmptyMiddleRow(t *testing.T) {
 	// order. doCompaction must mark only the first contiguous run (row 0) and
 	// leave row 2 for a later pass.
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		mkRow(t, "user", `[{"type":"text","text":"old question"}]`, 100),       // 0
+		mkRow(t, "user", `[{"type":"text","text":"old question about a long-running project with plenty of detail to summarize"}]`, 100), // 0
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 100), // 1 renders empty
-		mkRow(t, "assistant", `[{"type":"text","text":"old answer"}]`, 100),    // 2
+		mkRow(t, "assistant", `[{"type":"text","text":"old answer covering the whole project state in enough words to compress"}]`, 100), // 2
 		mkRow(t, "user", `[{"type":"text","text":"recent question"}]`, 100),    // 3 kept
 		mkRow(t, "assistant", `[{"type":"text","text":"recent answer"}]`, 100), // 4 kept
 	}

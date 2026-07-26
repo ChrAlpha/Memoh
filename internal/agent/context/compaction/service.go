@@ -19,10 +19,23 @@ import (
 	"github.com/memohai/memoh/internal/hooks"
 )
 
-// errEmptySummary marks a completed LLM call that produced no usable summary
-// text. The compacted rows must stay reclaimable, so this must never reach
-// MarkMessagesCompacted.
-var errEmptySummary = errors.New("compaction: model returned an empty summary")
+var (
+	// errEmptySummary marks a completed LLM call that produced no usable summary
+	// text. The compacted rows must stay reclaimable, so this must never reach
+	// MarkMessagesCompacted.
+	errEmptySummary = errors.New("compaction: model returned an empty summary")
+	// errIncompleteSummary marks a summarizer call that stopped for any reason
+	// other than a natural stop (length cap, content filter): the text is
+	// unusable because it may cut mid-thought.
+	errIncompleteSummary = errors.New("compaction: model returned an incomplete summary")
+	// errIneffectiveSummary marks a summary that would replay at least as many
+	// tokens as the raw entries it replaces.
+	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
+)
+
+// maxCompactionSummaryTokens bounds a single summary's output so it can never
+// crowd out the raw history it is meant to replace.
+const maxCompactionSummaryTokens = 4096
 
 // compactionFailureCooldown bounds how often a session may retry compaction
 // after a failure, so a persistently failing model can't burn an LLM call on

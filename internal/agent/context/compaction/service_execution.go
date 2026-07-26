@@ -175,6 +175,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	userPrompt := buildUserPrompt(priorSummaries, entries)
 
+	// Bound the summary so it can never crowd out the compaction window; a
+	// tenth of the summarizer window, capped at the fixed summary budget.
+	maxOutputTokens := maxCompactionSummaryTokens
+	if cfg.SummaryWindowTokens > 0 {
+		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
+	}
+
 	model := models.NewSDKChatModel(models.SDKModelConfig{
 		ClientType:     cfg.ClientType,
 		BaseURL:        cfg.BaseURL,
@@ -193,28 +200,40 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		sdk.WithModel(model),
 		sdk.WithSystem(systemPromptDecorated),
 		sdk.WithMessages(sdkMessages),
+		sdk.WithMaxTokens(maxOutputTokens),
 	)
 	if err != nil {
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
 
-	if strings.TrimSpace(result.Text) == "" {
+	summary := strings.TrimSpace(result.Text)
+	if summary == "" {
 		_ = s.completeLog(persistCtx, logID, "error", "", errEmptySummary.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, errEmptySummary
+	}
+	if result.FinishReason != sdk.FinishReasonStop {
+		err = fmt.Errorf("%w: finish_reason=%s", errIncompleteSummary, result.FinishReason)
+		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
+		return Result{}, err
+	}
+	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= entriesPromptCost(entries) {
+		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", errIneffectiveSummary, summaryTokens, entriesPromptCost(entries))
+		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
+		return Result{}, err
 	}
 
 	usageJSON, _ := json.Marshal(result.Usage)
 
-	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelID)
-	if err := s.completeLog(persistCtx, logID, "ok", result.Text, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact); err != nil {
+	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelRecordID)
+	if err := s.completeLog(persistCtx, logID, "ok", summary, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact); err != nil {
 		// The rows are already marked, but the log never reached status=ok, so
 		// the reclaim SQL keeps them eligible for a later pass. Reporting ok
 		// here would claim a summary that was never persisted.
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	return Result{Status: StatusOK, Summary: result.Text, MessageCount: len(compactedMessageIDs)}, nil
+	return Result{Status: StatusOK, Summary: summary, MessageCount: len(compactedMessageIDs)}, nil
 }
 
 func expectedCompactionClaims(rows []sqlc.ListUncompactedMessagesBySessionRow, messageIDs []pgtype.UUID) ([]pgtype.UUID, error) {
@@ -258,4 +277,11 @@ func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, su
 		return err
 	}
 	return nil
+}
+
+// estimateSummaryReplayTokens meters the summary with the same byte-based
+// estimator the selection path uses, so the ineffective-summary check
+// compares like units.
+func estimateSummaryReplayTokens(summary string) int {
+	return estimateBytesAsTokens("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
 }
