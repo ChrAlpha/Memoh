@@ -62,3 +62,30 @@ func TestRefreshContextFragStampsToolDefs(t *testing.T) {
 		t.Fatalf("manifest tool defs = %+v, want %+v", cfg.ContextManifest.ToolDefs, defs)
 	}
 }
+
+func TestEffectiveHistoryBudgetTokens(t *testing.T) {
+	t.Parallel()
+
+	defs := []contextfrag.ToolDefAccounting{
+		{Provider: "native", Name: "send_message", TokenEstimate: 6000},
+		{Provider: "mcp", Name: "jira_search", TokenEstimate: 1500},
+	}
+	cases := []struct {
+		name string
+		cfg  RunConfig
+		want int
+	}{
+		{name: "zero budget stays unlimited", cfg: RunConfig{ContextToolDefs: defs}, want: 0},
+		{name: "deducts tool roster", cfg: RunConfig{ContextBudgetMaxTokens: 100000, ContextToolDefs: defs}, want: 92500},
+		{name: "no tool defs unchanged", cfg: RunConfig{ContextBudgetMaxTokens: 100000}, want: 100000},
+		{name: "never flips to unlimited", cfg: RunConfig{ContextBudgetMaxTokens: 100, ContextToolDefs: defs}, want: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.cfg.EffectiveHistoryBudgetTokens(); got != tc.want {
+				t.Fatalf("EffectiveHistoryBudgetTokens = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

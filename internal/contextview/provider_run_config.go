@@ -192,7 +192,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		Sources: sources,
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
-			MaxTokens:           cfg.ContextBudgetMaxTokens,
+			MaxTokens:           cfg.EffectiveHistoryBudgetTokens(),
 			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
 			ToolExchange:        cfg.ContextToolExchangePolicy,
 		},

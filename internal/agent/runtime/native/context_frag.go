@@ -36,6 +36,26 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 	return cfg
 }
 
+// EffectiveHistoryBudgetTokens is the droppable-history budget after the
+// fixed tool roster overhead: ContextBudgetMaxTokens is the whole model
+// window, and every serialized tool definition occupies it before any
+// history does. Zero passes through untouched (no budget configured), and
+// deduction never reaches zero because a zero result would flip the
+// semantics to unlimited.
+func (cfg RunConfig) EffectiveHistoryBudgetTokens() int {
+	budget := cfg.ContextBudgetMaxTokens
+	if budget <= 0 {
+		return budget
+	}
+	for _, def := range cfg.ContextToolDefs {
+		budget -= def.TokenEstimate
+	}
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
 func preserveLifecycleAccounting(previous, next contextfrag.Manifest) contextfrag.Manifest {
 	if previous.CachePlan != nil && next.CachePlan == nil {
 		plan := *previous.CachePlan
