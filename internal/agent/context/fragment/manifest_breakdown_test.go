@@ -115,3 +115,61 @@ func TestLifecycleHolderClonesBreakdown(t *testing.T) {
 		t.Fatal("holder must clone breakdown, not share the caller's slice")
 	}
 }
+
+func trustFixtureFrags() []ContextFrag {
+	sys := TextFrag(TextFragInput{
+		ID: "system.prompt", Kind: KindSystemPrompt, Slot: SlotSystem,
+		Trust: TrustSystem, Text: strings.Repeat("s", 40),
+	})
+	external := MessageFrag(MessageFragInput{
+		ID:      "history.db_message.m1",
+		Message: sdk.Message{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.TextPart{Text: strings.Repeat("e", 80)}}},
+		Kind:    KindConversationEvent,
+		Slot:    SlotHistory,
+		Trust:   TrustExternal,
+	})
+	workspace := MessageFrag(MessageFragInput{
+		ID:      "history.db_message.m2",
+		Message: sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: strings.Repeat("w", 40)}}},
+		Kind:    KindConversationEvent,
+		Slot:    SlotHistory,
+		Trust:   TrustWorkspace,
+	})
+	return []ContextFrag{sys, external, workspace}
+}
+
+func TestBuildManifestTrustBreakdownMeasuresExposure(t *testing.T) {
+	t.Parallel()
+
+	manifest := BuildManifest(trustFixtureFrags())
+	want := []TrustBreakdown{
+		{Trust: TrustExternal, Fragments: 1, TokenEstimate: 20, TextBytes: 80},
+		{Trust: TrustSystem, Fragments: 1, TokenEstimate: 10, TextBytes: 40},
+		{Trust: TrustWorkspace, Fragments: 1, TokenEstimate: 10, TextBytes: 40},
+	}
+	if len(manifest.TrustBreakdown) != len(want) {
+		t.Fatalf("trust breakdown = %+v, want %+v", manifest.TrustBreakdown, want)
+	}
+	for i := range want {
+		if manifest.TrustBreakdown[i] != want[i] {
+			t.Fatalf("trust breakdown[%d] = %+v, want %+v", i, manifest.TrustBreakdown[i], want[i])
+		}
+	}
+}
+
+func TestLifecycleSnapshotCarriesTrustBreakdown(t *testing.T) {
+	t.Parallel()
+
+	manifest := BuildManifest(trustFixtureFrags())
+	snapshot := BuildLifecycleSnapshot(manifest)
+	if len(snapshot.TrustBreakdown) != len(manifest.TrustBreakdown) {
+		t.Fatalf("snapshot trust breakdown = %+v, want %+v", snapshot.TrustBreakdown, manifest.TrustBreakdown)
+	}
+	holder := NewLifecycleHolder()
+	holder.SetManifest(manifest)
+	manifest.TrustBreakdown[0].TokenEstimate = -1
+	held, ok := holder.Snapshot()
+	if !ok || held.TrustBreakdown[0].TokenEstimate == -1 {
+		t.Fatal("holder must clone the trust breakdown, not share the caller's slice")
+	}
+}

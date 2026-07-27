@@ -60,8 +60,40 @@ func BuildManifest(frags []ContextFrag) Manifest {
 	}
 	manifest.Counts.Fragments = len(frags)
 	manifest.Breakdown = breakdownFromItems(manifest.Items)
+	manifest.TrustBreakdown = trustBreakdownFromItems(manifest.Items)
 	manifest.RenderedOutputs = renderedOutputRefs(frags)
 	return manifest
+}
+
+// trustBreakdownFromItems rolls manifest items up by TrustLevel, ordered by
+// descending token estimate with Trust as the tie-breaker.
+func trustBreakdownFromItems(items []ManifestItem) []TrustBreakdown {
+	if len(items) == 0 {
+		return nil
+	}
+	byTrust := make(map[TrustLevel]*TrustBreakdown, 4)
+	for _, item := range items {
+		entry, ok := byTrust[item.Trust]
+		if !ok {
+			entry = &TrustBreakdown{Trust: item.Trust}
+			byTrust[item.Trust] = entry
+		}
+		entry.Fragments++
+		entry.TokenEstimate += item.TokenEstimate
+		entry.TextBytes += item.TextBytes
+		entry.Images += item.ImageCount
+	}
+	out := make([]TrustBreakdown, 0, len(byTrust))
+	for _, entry := range byTrust {
+		out = append(out, *entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TokenEstimate != out[j].TokenEstimate {
+			return out[i].TokenEstimate > out[j].TokenEstimate
+		}
+		return out[i].Trust < out[j].Trust
+	})
+	return out
 }
 
 // breakdownFromItems rolls manifest items up by Kind, ordered by descending

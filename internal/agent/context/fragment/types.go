@@ -307,6 +307,7 @@ type Manifest struct {
 	ValidationWarnings []ValidationWarning `json:"validation_warnings,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
 	Breakdown          []KindBreakdown     `json:"breakdown,omitempty"`
+	TrustBreakdown     []TrustBreakdown    `json:"trust_breakdown,omitempty"`
 	ToolDefs           []ToolDefAccounting `json:"tool_defs,omitempty"`
 	Items              []ManifestItem      `json:"items,omitempty"`
 	Selection          *SelectionTrace     `json:"selection,omitempty"`
@@ -351,6 +352,17 @@ type KindBreakdown struct {
 	TokenEstimate int  `json:"token_estimate"`
 	TextBytes     int  `json:"text_bytes,omitempty"`
 	Images        int  `json:"images,omitempty"`
+}
+
+// TrustBreakdown aggregates manifest items of one TrustLevel so consumers
+// can measure how much of the context window is attacker-influenceable
+// (external) versus Memoh-controlled, per turn.
+type TrustBreakdown struct {
+	Trust         TrustLevel `json:"trust"`
+	Fragments     int        `json:"fragments"`
+	TokenEstimate int        `json:"token_estimate"`
+	TextBytes     int        `json:"text_bytes,omitempty"`
+	Images        int        `json:"images,omitempty"`
 }
 
 // ToolDefAccounting records the serialized size of one tool definition sent

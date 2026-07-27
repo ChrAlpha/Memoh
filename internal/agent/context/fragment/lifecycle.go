@@ -61,6 +61,7 @@ func (h *LifecycleHolder) SetManifest(manifest Manifest) {
 func cloneLifecycleManifest(manifest Manifest) Manifest {
 	out := manifest
 	out.Breakdown = append([]KindBreakdown(nil), manifest.Breakdown...)
+	out.TrustBreakdown = append([]TrustBreakdown(nil), manifest.TrustBreakdown...)
 	out.ToolDefs = append([]ToolDefAccounting(nil), manifest.ToolDefs...)
 	if manifest.Selection != nil {
 		selection := *manifest.Selection
@@ -102,6 +103,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		View:                        manifest.View,
 		Counts:                      manifest.Counts,
 		Breakdown:                   append([]KindBreakdown(nil), manifest.Breakdown...),
+		TrustBreakdown:              append([]TrustBreakdown(nil), manifest.TrustBreakdown...),
 		ToolDefs:                    append([]ToolDefAccounting(nil), manifest.ToolDefs...),
 		Selection:                   selectionSnapshot(manifest.Selection),
 		CacheComparatorPrefixHash:   "",
@@ -138,6 +140,7 @@ type LifecycleSnapshot struct {
 	View                        ManifestView        `json:"view,omitempty"`
 	Counts                      ManifestCounts      `json:"counts"`
 	Breakdown                   []KindBreakdown     `json:"breakdown,omitempty"`
+	TrustBreakdown              []TrustBreakdown    `json:"trust_breakdown,omitempty"`
 	ToolDefs                    []ToolDefAccounting `json:"tool_defs,omitempty"`
 	Selection                   SelectionTrace      `json:"selection"`
 	StablePrefixHash            string              `json:"stable_prefix_hash,omitempty"`
