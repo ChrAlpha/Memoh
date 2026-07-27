@@ -14,28 +14,27 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
-// TestUpsertBotSettingsClearsCompactionModelOverride pins the explicit-set
-// semantics of the compaction model override: submitting the field with a
-// NULL value must clear the override back to chat-model inheritance, while
-// omitting the field must leave the stored override untouched.
-func TestUpsertBotSettingsClearsCompactionModelOverride(t *testing.T) {
+// settingsTestTx opens a rolled-back transaction on an isolated schema with
+// the 0001 baseline and team fixtures applied, mirroring the schema every
+// settings query runs against.
+func settingsTestTx(t *testing.T, ctx context.Context) pgx.Tx {
+	t.Helper()
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not set")
 	}
-	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatalf("connect postgres: %v", err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
 
-	schema := "settings_override_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	schema := "settings_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 	if _, err := tx.Exec(ctx, "CREATE SCHEMA "+quotedSchema); err != nil {
 		t.Fatalf("create schema: %v", err)
@@ -58,6 +57,16 @@ ALTER TABLE memory_providers ADD COLUMN team_id UUID NOT NULL DEFAULT public.mem
 `); err != nil {
 		t.Fatalf("team-scope settings tables: %v", err)
 	}
+	return tx
+}
+
+// TestUpsertBotSettingsClearsCompactionModelOverride pins the explicit-set
+// semantics of the compaction model override: submitting the field with a
+// NULL value must clear the override back to chat-model inheritance, while
+// omitting the field must leave the stored override untouched.
+func TestUpsertBotSettingsClearsCompactionModelOverride(t *testing.T) {
+	ctx := context.Background()
+	tx := settingsTestTx(t, ctx)
 
 	var userID, botID, providerID, modelID uuid.UUID
 	if err := tx.QueryRow(ctx, `
@@ -119,5 +128,49 @@ VALUES ($1, 'override-bot', 'personal', 'ready', '{}', $2) RETURNING id
 	}
 	if stored != nil {
 		t.Fatalf("override after explicit clear = %v, want NULL so the bot inherits the chat model", *stored)
+	}
+}
+
+// TestNewBotDefaultsToCompactionEnabled pins the zero-config default: a
+// freshly created bot compacts out of the box, and resetting settings
+// returns to that default rather than to the legacy opt-in.
+func TestNewBotDefaultsToCompactionEnabled(t *testing.T) {
+	ctx := context.Background()
+	tx := settingsTestTx(t, ctx)
+
+	var userID, botID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+INSERT INTO users (username, is_active, metadata) VALUES ('default-on-owner', true, '{}') RETURNING id
+`).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `
+INSERT INTO bots (owner_user_id, name, type, status, metadata)
+VALUES ($1, 'default-on-bot', 'personal', 'ready', '{}') RETURNING id
+`, userID).Scan(&botID); err != nil {
+		t.Fatalf("insert bot: %v", err)
+	}
+
+	var enabled bool
+	var threshold int
+	if err := tx.QueryRow(ctx, `SELECT compaction_enabled, compaction_threshold FROM bots WHERE id = $1`, botID).Scan(&enabled, &threshold); err != nil {
+		t.Fatalf("read defaults: %v", err)
+	}
+	if !enabled || threshold != 0 {
+		t.Fatalf("new bot defaults = enabled %t threshold %d, want the model-relative policy on by default", enabled, threshold)
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE bots SET compaction_enabled = false WHERE id = $1`, botID); err != nil {
+		t.Fatalf("disable compaction: %v", err)
+	}
+	queries := sqlc.New(tx)
+	if err := queries.DeleteSettingsByBotID(ctx, pgtype.UUID{Bytes: botID, Valid: true}); err != nil {
+		t.Fatalf("reset settings: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT compaction_enabled, compaction_threshold FROM bots WHERE id = $1`, botID).Scan(&enabled, &threshold); err != nil {
+		t.Fatalf("read reset values: %v", err)
+	}
+	if !enabled || threshold != 0 {
+		t.Fatalf("reset settings = enabled %t threshold %d, want the same defaults a new bot gets", enabled, threshold)
 	}
 }
