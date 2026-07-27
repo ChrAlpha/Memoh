@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
+	"github.com/memohai/memoh/internal/messageconv"
 )
 
 func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
@@ -267,12 +267,7 @@ func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req
 }
 
 func estimateMessageTokens(msg ModelMessage) int {
-	text := msg.TextContent()
-	if len(text) == 0 {
-		data, _ := json.Marshal(msg.Content)
-		return len(data) / 4
-	}
-	return len(text) / 4
+	return contextfrag.EstimateSDKMessageTokens(messageconv.ModelMessageToSDKMessage(msg))
 }
 
 func trimMessagesByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, int) {

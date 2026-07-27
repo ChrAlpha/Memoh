@@ -3,7 +3,6 @@ package contextview
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -87,40 +86,35 @@ func fragBudgetExceeded(frag contextfrag.ContextFrag) (reason string, exceeded b
 	return "", false
 }
 
-// fragCharCount mirrors fragTokenEstimate's fallback: when a frag carries no
-// text content (a pure tool-call/tool-result SDK message), it falls back to
-// the serialized part length so the MaxChars guard sees the payload size
-// instead of a false zero.
+// fragCharCount is the rune-count twin of the shared token estimator: text
+// and reasoning count their runes, tool payloads count their serialized
+// runes additively, images are excluded because their cost is not
+// character-shaped.
 func fragCharCount(frag contextfrag.ContextFrag) int {
-	texts := make([]string, 0, len(frag.Parts))
-	var fallback int
+	total := 0
 	for _, part := range frag.Parts {
 		switch part.Type {
 		case contextfrag.PartText:
-			if strings.TrimSpace(part.Text) != "" {
-				texts = append(texts, part.Text)
-			}
+			total += utf8.RuneCountInString(part.Text)
 		case contextfrag.PartSDKMessage:
 			if msg := sdkMessagePart(part); msg != nil {
 				for _, mp := range msg.Content {
 					switch p := mp.(type) {
 					case sdk.TextPart:
-						if strings.TrimSpace(p.Text) != "" {
-							texts = append(texts, p.Text)
-						}
+						total += utf8.RuneCountInString(p.Text)
+					case sdk.ReasoningPart:
+						total += utf8.RuneCountInString(p.Text)
+					case sdk.ImagePart:
 					default:
 						if data, err := json.Marshal(mp); err == nil {
-							fallback += utf8.RuneCountInString(string(data))
+							total += utf8.RuneCountInString(string(data))
 						}
 					}
 				}
 			}
 		}
 	}
-	if len(texts) > 0 {
-		return utf8.RuneCountInString(strings.Join(texts, "\n"))
-	}
-	return fallback
+	return total
 }
 
 func isPureTextFrag(frag contextfrag.ContextFrag) bool {

@@ -2,6 +2,7 @@ package contextfrag
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -158,12 +159,30 @@ func TestEstimateFragTokensSDKMessagePart(t *testing.T) {
 	}
 }
 
-func TestEstimateFragTokensIgnoresImageParts(t *testing.T) {
+// Images carry a flat estimate: never their base64 payload bytes (which
+// overstate provider cost by orders of magnitude) and never zero (which
+// would make image-heavy history invisible to budget pressure).
+func TestEstimateFragTokensFlatImageEstimate(t *testing.T) {
 	t.Parallel()
 
-	frag := ImageFrag("current_user.images", []sdk.ImagePart{{Image: "data:image/png;base64,AAAA", MediaType: "image/png"}}, Scope{}, "run_config")
-	if got := EstimateFragTokens(frag); got != 0 {
-		t.Fatalf("EstimateFragTokens(image) = %d, want 0", got)
+	bulky := strings.Repeat("A", 40000)
+	frag := ImageFrag("current_user.images", []sdk.ImagePart{{Image: "data:image/png;base64," + bulky, MediaType: "image/png"}}, Scope{}, "run_config")
+	if got := EstimateFragTokens(frag); got != EstimateImageTokens {
+		t.Fatalf("EstimateFragTokens(image) = %d, want %d", got, EstimateImageTokens)
+	}
+}
+
+func TestEstimateSDKMessageTokensFlatImageEstimate(t *testing.T) {
+	t.Parallel()
+
+	bulky := strings.Repeat("A", 40000)
+	msg := sdk.Message{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{
+		sdk.TextPart{Text: "abcdefgh"},
+		sdk.ImagePart{Image: "data:image/png;base64," + bulky, MediaType: "image/png"},
+		sdk.ImagePart{Image: "data:image/png;base64," + bulky, MediaType: "image/png"},
+	}}
+	if got, want := EstimateSDKMessageTokens(msg), 2+2*EstimateImageTokens; got != want {
+		t.Fatalf("EstimateSDKMessageTokens = %d, want %d", got, want)
 	}
 }
 

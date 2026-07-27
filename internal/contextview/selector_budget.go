@@ -1,7 +1,6 @@
 package contextview
 
 import (
-	"encoding/json"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -332,38 +331,7 @@ func hasSpatialBudgetDrop(reasons map[int]string) bool {
 }
 
 func fragTokenEstimate(frag contextfrag.ContextFrag) int {
-	if frag.TokenEstimate > 0 {
-		return frag.TokenEstimate
-	}
-	texts := make([]string, 0, len(frag.Parts))
-	var fallback int
-	for _, part := range frag.Parts {
-		switch part.Type {
-		case contextfrag.PartText:
-			if strings.TrimSpace(part.Text) != "" {
-				texts = append(texts, part.Text)
-			}
-		case contextfrag.PartSDKMessage:
-			if msg := sdkMessagePart(part); msg != nil {
-				for _, mp := range msg.Content {
-					switch p := mp.(type) {
-					case sdk.TextPart:
-						if strings.TrimSpace(p.Text) != "" {
-							texts = append(texts, p.Text)
-						}
-					default:
-						if data, err := json.Marshal(mp); err == nil {
-							fallback += len(data)
-						}
-					}
-				}
-			}
-		}
-	}
-	if len(texts) > 0 {
-		return len(strings.Join(texts, "\n")) / 4
-	}
-	return fallback / 4
+	return contextfrag.ResolveFragTokens(frag)
 }
 
 // TrimNoticeFrag is the synthetic fragment the builder splices in when budget

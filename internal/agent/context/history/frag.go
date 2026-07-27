@@ -70,10 +70,7 @@ func recordTokenEstimate(record HistoryRecord) int {
 	if record.UsageOutputTokens != nil && *record.UsageOutputTokens > 0 {
 		return *record.UsageOutputTokens
 	}
-	if text := record.ModelMessage.TextContent(); len(text) > 0 {
-		return len(text) / 4
-	}
-	return len(record.ModelMessage.Content) / 4
+	return contextfrag.EstimateSDKMessageTokens(messageconv.ModelMessageToSDKMessage(record.ModelMessage))
 }
 
 func fragmentID(record HistoryRecord) string {

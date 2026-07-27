@@ -11,6 +11,12 @@ import (
 // accounting), and the single swap point for a real tokenizer.
 const EstimateBytesPerToken = 4
 
+// EstimateImageTokens is the flat per-image estimate. Real image cost is
+// resolution-dependent and provider-capped at roughly 1.1–1.6K tokens, so a
+// ceiling-magnitude flat figure keeps image-heavy history visible to budget
+// pressure without counting base64 payload bytes as text.
+const EstimateImageTokens = 1500
+
 // TokensFromBytes converts a byte count to the shared token estimate.
 func TokensFromBytes(n int) int {
 	if n <= 0 {
@@ -21,50 +27,54 @@ func TokensFromBytes(n int) int {
 
 // EstimateSDKMessageTokens estimates tokens for one SDK message additively
 // across all parts: text and reasoning count their raw bytes, tool calls and
-// tool results count their serialized payload, images are excluded because
-// their token cost is resolution-dependent and tracked as a separate count.
+// tool results count their serialized payload, and each image counts the
+// flat EstimateImageTokens instead of its base64 payload.
 func EstimateSDKMessageTokens(msg sdk.Message) int {
-	return TokensFromBytes(sdkMessageEstimateBytes(msg))
+	bytes, images := sdkMessageEstimate(msg)
+	return TokensFromBytes(bytes) + images*EstimateImageTokens
 }
 
-func sdkMessageEstimateBytes(msg sdk.Message) int {
-	total := 0
+func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 	for _, part := range msg.Content {
 		switch p := part.(type) {
 		case sdk.TextPart:
-			total += len(p.Text)
+			bytes += len(p.Text)
 		case sdk.ReasoningPart:
-			total += len(p.Text)
+			bytes += len(p.Text)
 		case sdk.ImagePart:
+			images++
 		default:
 			if data, err := json.Marshal(part); err == nil {
-				total += len(data)
+				bytes += len(data)
 			}
 		}
 	}
-	return total
+	return bytes, images
 }
 
 // EstimateFragTokens computes the token estimate from the fragment's parts,
 // ignoring any preset TokenEstimate.
 func EstimateFragTokens(frag ContextFrag) int {
-	return TokensFromBytes(fragEstimateBytes(frag))
+	bytes, images := fragEstimate(frag)
+	return TokensFromBytes(bytes) + images*EstimateImageTokens
 }
 
-func fragEstimateBytes(frag ContextFrag) int {
-	total := 0
+func fragEstimate(frag ContextFrag) (bytes, images int) {
 	for _, part := range frag.Parts {
 		switch part.Type {
 		case PartText:
-			total += len(part.Text)
+			bytes += len(part.Text)
 		case PartSDKMessage:
 			if msg := partMessage(part); msg != nil {
-				total += sdkMessageEstimateBytes(*msg)
+				msgBytes, msgImages := sdkMessageEstimate(*msg)
+				bytes += msgBytes
+				images += msgImages
 			}
 		case PartImage:
+			images++
 		}
 	}
-	return total
+	return bytes, images
 }
 
 // ResolveFragTokens returns the fragment's authoritative token estimate:

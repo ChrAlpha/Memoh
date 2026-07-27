@@ -1174,10 +1174,7 @@ func clampStableMessageCount(count, total int) int {
 }
 
 func tokenEstimateFromBytes(bytes int) int {
-	if bytes <= 0 {
-		return 0
-	}
-	return (bytes + 3) / 4
+	return contextfrag.TokensFromBytes(bytes)
 }
 
 func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams, snapshot contextfrag.StepSnapshot) {
