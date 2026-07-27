@@ -40,8 +40,13 @@ func NormalizeContextRefs(frags []ContextFrag) []ContextFrag {
 // provider call: the stable prefix identity plus how many leading rendered
 // messages are cache-stable and may carry a cache breakpoint.
 type CachePlan struct {
-	StablePrefixHash                   string `json:"stable_prefix_hash,omitempty"`
-	StableMessageCount                 int    `json:"stable_message_count,omitempty"`
+	StablePrefixHash   string `json:"stable_prefix_hash,omitempty"`
+	StableMessageCount int    `json:"stable_message_count,omitempty"`
+	// StablePrefixTokenEstimate is the plan-time estimate of everything the
+	// message-level breakpoint covers (tool definitions, stable system
+	// fragments, stable leading messages) — the denominator for judging how
+	// much of the cacheable prefix provider-reported cache reads recovered.
+	StablePrefixTokenEstimate          int    `json:"stable_prefix_token_estimate,omitempty"`
 	CacheComparatorPrefixHash          string `json:"cache_comparator_prefix_hash,omitempty"`
 	CacheComparatorPrefixBytes         int    `json:"cache_comparator_prefix_bytes,omitempty"`
 	CacheComparatorPrefixTokenEstimate int    `json:"cache_comparator_prefix_token_estimate,omitempty"`

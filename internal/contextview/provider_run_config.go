@@ -209,6 +209,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
+	plan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
 	manifest := view.Manifest
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
@@ -417,6 +418,34 @@ func fallbackHookContext(text string) string {
 		return ""
 	}
 	return text
+}
+
+// stablePrefixTokenEstimate measures everything the message-level cache
+// breakpoint covers: the tool roster, stable system-slot fragments (they
+// render into the system prompt ahead of history), and the stable leading
+// messages. Recorded on the plan so cache reads can be judged against the
+// prefix quality that was actually on offer.
+func stablePrefixTokenEstimate(placement PlacementPlan, selected []contextfrag.ContextFrag, toolDefs []contextfrag.ToolDefAccounting) int {
+	total := 0
+	for _, def := range toolDefs {
+		total += def.TokenEstimate
+	}
+	if len(placement.Items) == 0 {
+		return total
+	}
+	byID := make(map[string]contextfrag.ContextFrag, len(selected))
+	for _, frag := range selected {
+		byID[frag.ID] = frag
+	}
+	for i, item := range placement.Items {
+		if i >= placement.FirstVolatileIndex {
+			break
+		}
+		if frag, ok := byID[item.FragID]; ok {
+			total += contextfrag.ResolveFragTokens(frag)
+		}
+	}
+	return total
 }
 
 // cachePlanFromPlacement projects the placement plan onto the rendered

@@ -39,8 +39,27 @@ type ContextLifecycleAggregates struct {
 	CacheHitRate          float64        `json:"cache_hit_rate"`
 	TotalCacheReadTokens  int            `json:"total_cache_read_tokens"`
 	TotalCacheWriteTokens int            `json:"total_cache_write_tokens"`
-	DropReasons           map[string]int `json:"drop_reasons,omitempty"`
-	MutationKinds         map[string]int `json:"mutation_kinds,omitempty"`
+	// TotalExpectedStableTokens sums the plan-time stable prefix estimates of
+	// turns that had a chance to hit (first observations excluded), and
+	// CacheReadEfficiency is the share of that offer the provider actually
+	// read — a hit rate says breakpoints matched, this says how much of the
+	// prefix they recovered.
+	TotalExpectedStableTokens int                `json:"total_expected_stable_tokens"`
+	CacheReadEfficiency       float64            `json:"cache_read_efficiency"`
+	DropReasons               map[string]int     `json:"drop_reasons,omitempty"`
+	MutationKinds             map[string]int     `json:"mutation_kinds,omitempty"`
+	ToolRosterChanges         int                `json:"tool_roster_changes"`
+	ToolRosterChangeDetails   []ToolRosterChange `json:"tool_roster_change_details,omitempty"`
+}
+
+// ToolRosterChange records how a turn's serialized tool roster differs from
+// the previous turn's. Tools sit first in the provider cache order, so any
+// entry here invalidates every cached prefix behind it.
+type ToolRosterChange struct {
+	MessageID string   `json:"message_id"`
+	Added     []string `json:"added,omitempty"`
+	Removed   []string `json:"removed,omitempty"`
+	Resized   []string `json:"resized,omitempty"`
 }
 
 // GetSessionContextLifecycle godoc
@@ -197,6 +216,7 @@ func aggregateContextLifecycle(turns []ContextLifecycleTurn) ContextLifecycleAgg
 	agg := ContextLifecycleAggregates{Turns: len(turns)}
 	comparableTurns := 0
 	hits := 0
+	comparableReadTokens := 0
 	for _, turn := range turns {
 		agg.TotalCacheReadTokens += turn.Snapshot.CacheReadTokens
 		agg.TotalCacheWriteTokens += turn.Snapshot.CacheWriteTokens
@@ -207,6 +227,8 @@ func aggregateContextLifecycle(turns []ContextLifecycleTurn) ContextLifecycleAgg
 			agg.CacheOutcomes[comparison.Outcome]++
 			if comparison.Outcome != contextfrag.CacheOutcomeFirstObservation {
 				comparableTurns++
+				comparableReadTokens += turn.Snapshot.CacheReadTokens
+				agg.TotalExpectedStableTokens += turn.Snapshot.StablePrefixTokenEstimate
 				if comparison.Outcome == contextfrag.CacheOutcomeHit {
 					hits++
 				}
@@ -228,5 +250,65 @@ func aggregateContextLifecycle(turns []ContextLifecycleTurn) ContextLifecycleAgg
 	if comparableTurns > 0 {
 		agg.CacheHitRate = float64(hits) / float64(comparableTurns) * 100
 	}
+	if agg.TotalExpectedStableTokens > 0 {
+		agg.CacheReadEfficiency = float64(comparableReadTokens) / float64(agg.TotalExpectedStableTokens) * 100
+	}
+	agg.ToolRosterChanges, agg.ToolRosterChangeDetails = toolRosterChurn(turns)
 	return agg
+}
+
+const toolRosterChangeDetailCap = 10
+
+// toolRosterChurn diffs each turn's tool roster against the previous turn's
+// (turns arrive newest first). Turns where either side carries no accounting
+// are skipped so pre-accounting history does not read as a full roster swap.
+func toolRosterChurn(turns []ContextLifecycleTurn) (int, []ToolRosterChange) {
+	changes := 0
+	var details []ToolRosterChange
+	for i := 0; i+1 < len(turns); i++ {
+		current, previous := turns[i], turns[i+1]
+		if len(current.Snapshot.ToolDefs) == 0 || len(previous.Snapshot.ToolDefs) == 0 {
+			continue
+		}
+		change := diffToolRosters(previous.Snapshot.ToolDefs, current.Snapshot.ToolDefs)
+		if len(change.Added) == 0 && len(change.Removed) == 0 && len(change.Resized) == 0 {
+			continue
+		}
+		change.MessageID = current.MessageID
+		changes++
+		if len(details) < toolRosterChangeDetailCap {
+			details = append(details, change)
+		}
+	}
+	return changes, details
+}
+
+func diffToolRosters(previous, current []contextfrag.ToolDefAccounting) ToolRosterChange {
+	key := func(def contextfrag.ToolDefAccounting) string { return def.Provider + "/" + def.Name }
+	prevBytes := make(map[string]int, len(previous))
+	for _, def := range previous {
+		prevBytes[key(def)] = def.Bytes
+	}
+	var change ToolRosterChange
+	seen := make(map[string]bool, len(current))
+	for _, def := range current {
+		k := key(def)
+		seen[k] = true
+		before, existed := prevBytes[k]
+		switch {
+		case !existed:
+			change.Added = append(change.Added, k)
+		case before != def.Bytes:
+			change.Resized = append(change.Resized, k)
+		}
+	}
+	for _, def := range previous {
+		if k := key(def); !seen[k] {
+			change.Removed = append(change.Removed, k)
+		}
+	}
+	sort.Strings(change.Added)
+	sort.Strings(change.Removed)
+	sort.Strings(change.Resized)
+	return change
 }

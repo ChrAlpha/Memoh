@@ -116,6 +116,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 	if manifest.CachePlan != nil {
 		snapshot.StablePrefixHash = manifest.CachePlan.StablePrefixHash
 		snapshot.StableMessageCount = manifest.CachePlan.StableMessageCount
+		snapshot.StablePrefixTokenEstimate = manifest.CachePlan.StablePrefixTokenEstimate
 		snapshot.CacheComparatorPrefixHash = manifest.CachePlan.CacheComparatorPrefixHash
 		snapshot.DecoratedProviderPrefixHash = manifest.CachePlan.DecoratedProviderPrefixHash
 	}
@@ -145,6 +146,7 @@ type LifecycleSnapshot struct {
 	Selection                   SelectionTrace      `json:"selection"`
 	StablePrefixHash            string              `json:"stable_prefix_hash,omitempty"`
 	StableMessageCount          int                 `json:"stable_message_count,omitempty"`
+	StablePrefixTokenEstimate   int                 `json:"stable_prefix_token_estimate,omitempty"`
 	CacheComparatorPrefixHash   string              `json:"cache_comparator_prefix_hash"`
 	DecoratedProviderPrefixHash string              `json:"decorated_provider_prefix_hash,omitempty"`
 	CacheReadTokens             int                 `json:"cache_read_tokens"`
