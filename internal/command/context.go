@@ -3,9 +3,14 @@ package command
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
 // buildContextGroup registers /context — a focused token/context-window view for
@@ -64,11 +69,77 @@ func (h *Handler) renderContextUsage(cc CommandContext, sessionID string) (strin
 	} else {
 		fmt.Fprintf(&b, "%s", cc.T("cmd.context.tokensUsed", map[string]any{"used": formatTokens(used)}))
 	}
+	for _, row := range h.contextCompositionRows(cc, pgSessionID) {
+		fmt.Fprintf(&b, "\n- %s: ~%s", row.label, formatTokens(int64(row.tokens)))
+	}
 	fmt.Fprintf(&b, "\n\n- %s: %d", cc.T("cmd.status.fieldMessages"), msgCount)
 	if cacheRow.TotalInputTokens > 0 {
 		fmt.Fprintf(&b, "\n- %s: %.1f%%", cc.T("cmd.context.fieldCacheHit"), cacheHit)
 	}
 	return b.String(), nil
+}
+
+type contextCompositionRow struct {
+	label  string
+	tokens int
+}
+
+// contextCompositionRows renders the latest persisted lifecycle snapshot as
+// per-category estimate rows: the by-kind breakdown plus tool definition
+// buckets, largest first. Sessions without a snapshot render no rows.
+func (h *Handler) contextCompositionRows(cc CommandContext, sessionID pgtype.UUID) []contextCompositionRow {
+	rows, err := h.queries.ListRecentAssistantMessagesBySession(cc.Ctx, dbsqlc.ListRecentAssistantMessagesBySessionParams{
+		SessionID: sessionID,
+		MaxCount:  1,
+	})
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	snapshot, ok := contextfrag.LifecycleSnapshotFromMetadata(rows[0].Metadata)
+	if !ok {
+		return nil
+	}
+	out := make([]contextCompositionRow, 0, len(snapshot.Breakdown)+2)
+	for _, entry := range snapshot.Breakdown {
+		if entry.TokenEstimate <= 0 {
+			continue
+		}
+		out = append(out, contextCompositionRow{label: contextKindLabel(cc, entry.Kind), tokens: entry.TokenEstimate})
+	}
+	buckets := map[string]int{}
+	for _, def := range snapshot.ToolDefs {
+		buckets[def.Provider] += def.TokenEstimate
+	}
+	for provider, tokens := range buckets {
+		if tokens <= 0 {
+			continue
+		}
+		label := provider
+		switch provider {
+		case "mcp":
+			label = cc.T("cmd.context.mcpTools")
+		case "native":
+			label = cc.T("cmd.context.toolDefs")
+		}
+		out = append(out, contextCompositionRow{label: label, tokens: tokens})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].tokens != out[j].tokens {
+			return out[i].tokens > out[j].tokens
+		}
+		return out[i].label < out[j].label
+	})
+	return out
+}
+
+// contextKindLabel localizes a fragment kind for the /context rows, falling
+// back to the raw kind slug for kinds without a translation entry.
+func contextKindLabel(cc CommandContext, kind contextfrag.Kind) string {
+	key := "cmd.context.kind." + string(kind)
+	if label := cc.T(key); label != key {
+		return label
+	}
+	return string(kind)
 }
 
 // renderProgressBar draws a fixed-width unicode bar (█ filled, ░ empty). The

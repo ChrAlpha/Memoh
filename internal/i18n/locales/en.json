@@ -153,7 +153,28 @@
       "title": "Context",
       "usedWithWindow": "{percent} · {used} / {window} used",
       "tokensUsed": "{used} tokens used",
-      "fieldCacheHit": "Cache hit"
+      "fieldCacheHit": "Cache hit",
+      "toolDefs": "Tool definitions",
+      "mcpTools": "MCP tools",
+      "kind": {
+        "system_prompt": "System prompt",
+        "system_policy": "System policy",
+        "bot_identity": "Bot identity",
+        "workspace_instruction": "Workspace instructions",
+        "platform_identity": "Platform identities",
+        "tool_usage": "Tool usage guide",
+        "skills_catalog": "Skills",
+        "conversation_event": "Conversation",
+        "current_user_message": "Current message",
+        "conversation_summary": "Summaries",
+        "memory_recall": "Memory",
+        "hook_context": "Hooks",
+        "injected_message": "Injected messages",
+        "background_summary": "Background tasks",
+        "native_image": "Images",
+        "attachment_ref": "Attachments",
+        "acp_context": "ACP context"
+      }
     },
     "access": {
       "title": "Access",

@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -146,22 +146,51 @@ func lifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessionRow,
 		if len(turns) >= limit {
 			break
 		}
-		if len(row.Metadata) == 0 {
-			continue
-		}
-		var metadata struct {
-			ContextLifecycle *contextfrag.LifecycleSnapshot `json:"context_lifecycle"`
-		}
-		if json.Unmarshal(row.Metadata, &metadata) != nil || metadata.ContextLifecycle == nil {
+		snapshot, ok := contextfrag.LifecycleSnapshotFromMetadata(row.Metadata)
+		if !ok {
 			continue
 		}
 		turns = append(turns, ContextLifecycleTurn{
 			MessageID: row.ID.String(),
 			CreatedAt: row.CreatedAt.Time,
-			Snapshot:  *metadata.ContextLifecycle,
+			Snapshot:  snapshot,
 		})
 	}
 	return turns
+}
+
+// latestContextComposition projects the newest turn's snapshot into the
+// status panel shape: the by-kind breakdown as persisted, and tool
+// definitions rolled up per provider bucket, largest first.
+func latestContextComposition(turns []ContextLifecycleTurn) ([]contextfrag.KindBreakdown, []ToolDefBucket) {
+	if len(turns) == 0 {
+		return nil, nil
+	}
+	snapshot := turns[0].Snapshot
+	var buckets []ToolDefBucket
+	if len(snapshot.ToolDefs) > 0 {
+		byProvider := make(map[string]*ToolDefBucket, 2)
+		for _, def := range snapshot.ToolDefs {
+			bucket, ok := byProvider[def.Provider]
+			if !ok {
+				bucket = &ToolDefBucket{Provider: def.Provider}
+				byProvider[def.Provider] = bucket
+			}
+			bucket.Tools++
+			bucket.TokenEstimate += def.TokenEstimate
+		}
+		buckets = make([]ToolDefBucket, 0, len(byProvider))
+		for _, bucket := range byProvider {
+			buckets = append(buckets, *bucket)
+		}
+		sort.Slice(buckets, func(i, j int) bool {
+			if buckets[i].TokenEstimate != buckets[j].TokenEstimate {
+				return buckets[i].TokenEstimate > buckets[j].TokenEstimate
+			}
+			return buckets[i].Provider < buckets[j].Provider
+		})
+	}
+	return snapshot.Breakdown, buckets
 }
 
 func aggregateContextLifecycle(turns []ContextLifecycleTurn) ContextLifecycleAggregates {

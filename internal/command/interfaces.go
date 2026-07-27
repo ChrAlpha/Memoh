@@ -52,6 +52,7 @@ type CommandQueries interface {
 	GetSessionUsedSkills(ctx context.Context, sessionID pgtype.UUID) ([]string, error)
 	GetTokenUsageByDayAndType(ctx context.Context, arg dbsqlc.GetTokenUsageByDayAndTypeParams) ([]dbsqlc.GetTokenUsageByDayAndTypeRow, error)
 	GetTokenUsageByModel(ctx context.Context, arg dbsqlc.GetTokenUsageByModelParams) ([]dbsqlc.GetTokenUsageByModelRow, error)
+	ListRecentAssistantMessagesBySession(ctx context.Context, arg dbsqlc.ListRecentAssistantMessagesBySessionParams) ([]dbsqlc.ListRecentAssistantMessagesBySessionRow, error)
 }
 
 // AccessEvaluator checks whether the current channel context may trigger chat.

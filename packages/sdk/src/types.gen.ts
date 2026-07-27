@@ -1036,7 +1036,18 @@ export type ContextfragCacheUsageRecord = {
     step_index?: number;
 };
 
+export type ContextfragKind = 'system_prompt' | 'system_policy' | 'bot_identity' | 'workspace_instruction' | 'platform_identity' | 'tool_usage' | 'conversation_event' | 'current_user_message' | 'attachment_ref' | 'native_image' | 'skills_catalog' | 'hook_context' | 'injected_message' | 'background_summary' | 'acp_context' | 'memory_recall' | 'conversation_summary';
+
+export type ContextfragKindBreakdown = {
+    fragments?: number;
+    images?: number;
+    kind?: ContextfragKind;
+    text_bytes?: number;
+    token_estimate?: number;
+};
+
 export type ContextfragLifecycleSnapshot = {
+    breakdown?: Array<ContextfragKindBreakdown>;
     cache_comparator_prefix_hash?: string;
     cache_comparison?: ContextfragCacheComparison;
     cache_read_tokens?: number;
@@ -1054,6 +1065,7 @@ export type ContextfragLifecycleSnapshot = {
     stable_message_count?: number;
     stable_prefix_hash?: string;
     steps?: Array<ContextfragStepSnapshot>;
+    tool_defs?: Array<ContextfragToolDefAccounting>;
     version?: number;
     view?: ContextfragManifestView;
 };
@@ -1063,9 +1075,10 @@ export type ContextfragManifestCounts = {
     images?: number;
     messages?: number;
     text_bytes?: number;
+    token_estimate?: number;
 };
 
-export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
+export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
 
 export type ContextfragMemoryRecallQueryTrace = {
     recent_messages?: number;
@@ -1114,6 +1127,13 @@ export type ContextfragStepSnapshot = {
     reselection_applied?: boolean;
     step_index?: number;
     truncated?: number;
+};
+
+export type ContextfragToolDefAccounting = {
+    bytes?: number;
+    name?: string;
+    provider?: string;
+    token_estimate?: number;
 };
 
 export type ConversationSkillActivation = {
@@ -1621,7 +1641,9 @@ export type HandlersContextLifecycleTurn = {
 };
 
 export type HandlersContextUsage = {
+    breakdown?: Array<ContextfragKindBreakdown>;
     context_window?: number;
+    tool_defs?: Array<HandlersToolDefBucket>;
     used_tokens?: number;
 };
 
@@ -2045,6 +2067,12 @@ export type HandlersTokenUsageResponse = {
 
 export type HandlersToolApprovalDecisionRequest = {
     reason?: string;
+};
+
+export type HandlersToolDefBucket = {
+    provider?: string;
+    token_estimate?: number;
+    tools?: number;
 };
 
 export type HandlersTriggerCompactResponse = {

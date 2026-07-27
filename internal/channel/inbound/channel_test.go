@@ -444,6 +444,10 @@ func (*fakeCommandQueries) GetLatestSessionIDByBot(_ context.Context, _ pgtype.U
 	return pgtype.UUID{}, errors.New("unexpected latest session lookup")
 }
 
+func (*fakeCommandQueries) ListRecentAssistantMessagesBySession(_ context.Context, _ dbsqlc.ListRecentAssistantMessagesBySessionParams) ([]dbsqlc.ListRecentAssistantMessagesBySessionRow, error) {
+	return nil, nil
+}
+
 func (f *fakeCommandQueries) CountMessagesBySession(_ context.Context, sessionID pgtype.UUID) (int64, error) {
 	f.gotCountSession = sessionID
 	return f.messageCount, nil

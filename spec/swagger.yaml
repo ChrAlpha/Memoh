@@ -1773,8 +1773,63 @@ definitions:
       step_index:
         type: integer
     type: object
+  contextfrag.Kind:
+    enum:
+    - system_prompt
+    - system_policy
+    - bot_identity
+    - workspace_instruction
+    - platform_identity
+    - tool_usage
+    - conversation_event
+    - current_user_message
+    - attachment_ref
+    - native_image
+    - skills_catalog
+    - hook_context
+    - injected_message
+    - background_summary
+    - acp_context
+    - memory_recall
+    - conversation_summary
+    type: string
+    x-enum-varnames:
+    - KindSystemPrompt
+    - KindSystemPolicy
+    - KindBotIdentity
+    - KindWorkspaceInstruction
+    - KindPlatformIdentity
+    - KindToolUsage
+    - KindConversationEvent
+    - KindCurrentUserMessage
+    - KindAttachmentRef
+    - KindNativeImage
+    - KindSkillsCatalog
+    - KindHookContext
+    - KindInjectedMessage
+    - KindBackgroundSummary
+    - KindACPContext
+    - KindMemoryRecall
+    - KindConversationSummary
+  contextfrag.KindBreakdown:
+    properties:
+      fragments:
+        type: integer
+      images:
+        type: integer
+      kind:
+        $ref: '#/definitions/contextfrag.Kind'
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+    type: object
   contextfrag.LifecycleSnapshot:
     properties:
+      breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.KindBreakdown'
+        type: array
       cache_comparator_prefix_hash:
         type: string
       cache_comparison:
@@ -1815,6 +1870,10 @@ definitions:
         items:
           $ref: '#/definitions/contextfrag.StepSnapshot'
         type: array
+      tool_defs:
+        items:
+          $ref: '#/definitions/contextfrag.ToolDefAccounting'
+        type: array
       version:
         type: integer
       view:
@@ -1829,6 +1888,8 @@ definitions:
       messages:
         type: integer
       text_bytes:
+        type: integer
+      token_estimate:
         type: integer
     type: object
   contextfrag.ManifestView:
@@ -1935,6 +1996,17 @@ definitions:
       step_index:
         type: integer
       truncated:
+        type: integer
+    type: object
+  contextfrag.ToolDefAccounting:
+    properties:
+      bytes:
+        type: integer
+      name:
+        type: string
+      provider:
+        type: string
+      token_estimate:
         type: integer
     type: object
   conversation.SkillActivation:
@@ -2771,8 +2843,16 @@ definitions:
     type: object
   handlers.ContextUsage:
     properties:
+      breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.KindBreakdown'
+        type: array
       context_window:
         type: integer
+      tool_defs:
+        items:
+          $ref: '#/definitions/handlers.ToolDefBucket'
+        type: array
       used_tokens:
         type: integer
     type: object
@@ -3480,6 +3560,15 @@ definitions:
     properties:
       reason:
         type: string
+    type: object
+  handlers.ToolDefBucket:
+    properties:
+      provider:
+        type: string
+      token_estimate:
+        type: integer
+      tools:
+        type: integer
     type: object
   handlers.TriggerCompactResponse:
     properties:

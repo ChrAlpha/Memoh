@@ -153,7 +153,28 @@
       "title": "上下文",
       "usedWithWindow": "{percent} · 已用 {used} / {window}",
       "tokensUsed": "已用 {used} tokens",
-      "fieldCacheHit": "缓存命中"
+      "fieldCacheHit": "缓存命中",
+      "toolDefs": "工具定义",
+      "mcpTools": "MCP 工具",
+      "kind": {
+        "system_prompt": "系统提示",
+        "system_policy": "系统策略",
+        "bot_identity": "Bot 身份",
+        "workspace_instruction": "工作区指令",
+        "platform_identity": "平台身份",
+        "tool_usage": "工具用法说明",
+        "skills_catalog": "技能",
+        "conversation_event": "会话",
+        "current_user_message": "当前消息",
+        "conversation_summary": "压缩摘要",
+        "memory_recall": "记忆",
+        "hook_context": "钩子",
+        "injected_message": "注入消息",
+        "background_summary": "后台任务",
+        "native_image": "图片",
+        "attachment_ref": "附件",
+        "acp_context": "ACP 上下文"
+      }
     },
     "access": {
       "title": "权限",

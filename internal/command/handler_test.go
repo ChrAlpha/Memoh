@@ -50,6 +50,11 @@ type fakeCommandQueries struct {
 	cacheRow         dbsqlc.GetSessionCacheStatsRow
 	cacheErr         error
 	skills           []string
+	lifecycleRows    []dbsqlc.ListRecentAssistantMessagesBySessionRow
+}
+
+func (f *fakeCommandQueries) ListRecentAssistantMessagesBySession(_ context.Context, _ dbsqlc.ListRecentAssistantMessagesBySessionParams) ([]dbsqlc.ListRecentAssistantMessagesBySessionRow, error) {
+	return f.lifecycleRows, nil
 }
 
 func (f *fakeCommandQueries) GetLatestSessionIDByBot(_ context.Context, _ pgtype.UUID) (pgtype.UUID, error) {

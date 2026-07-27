@@ -16495,9 +16495,76 @@ const docTemplate = `{
                 }
             }
         },
+        "contextfrag.Kind": {
+            "type": "string",
+            "enum": [
+                "system_prompt",
+                "system_policy",
+                "bot_identity",
+                "workspace_instruction",
+                "platform_identity",
+                "tool_usage",
+                "conversation_event",
+                "current_user_message",
+                "attachment_ref",
+                "native_image",
+                "skills_catalog",
+                "hook_context",
+                "injected_message",
+                "background_summary",
+                "acp_context",
+                "memory_recall",
+                "conversation_summary"
+            ],
+            "x-enum-varnames": [
+                "KindSystemPrompt",
+                "KindSystemPolicy",
+                "KindBotIdentity",
+                "KindWorkspaceInstruction",
+                "KindPlatformIdentity",
+                "KindToolUsage",
+                "KindConversationEvent",
+                "KindCurrentUserMessage",
+                "KindAttachmentRef",
+                "KindNativeImage",
+                "KindSkillsCatalog",
+                "KindHookContext",
+                "KindInjectedMessage",
+                "KindBackgroundSummary",
+                "KindACPContext",
+                "KindMemoryRecall",
+                "KindConversationSummary"
+            ]
+        },
+        "contextfrag.KindBreakdown": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "integer"
+                },
+                "images": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.Kind"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
         "contextfrag.LifecycleSnapshot": {
             "type": "object",
             "properties": {
+                "breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.KindBreakdown"
+                    }
+                },
                 "cache_comparator_prefix_hash": {
                     "type": "string"
                 },
@@ -16558,6 +16625,12 @@ const docTemplate = `{
                         "$ref": "#/definitions/contextfrag.StepSnapshot"
                     }
                 },
+                "tool_defs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.ToolDefAccounting"
+                    }
+                },
                 "version": {
                     "type": "integer"
                 },
@@ -16579,6 +16652,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
                     "type": "integer"
                 }
             }
@@ -16731,6 +16807,23 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "truncated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ToolDefAccounting": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "token_estimate": {
                     "type": "integer"
                 }
             }
@@ -18002,8 +18095,20 @@ const docTemplate = `{
         "handlers.ContextUsage": {
             "type": "object",
             "properties": {
+                "breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.KindBreakdown"
+                    }
+                },
                 "context_window": {
                     "type": "integer"
+                },
+                "tool_defs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ToolDefBucket"
+                    }
                 },
                 "used_tokens": {
                     "type": "integer"
@@ -19089,6 +19194,20 @@ const docTemplate = `{
             "properties": {
                 "reason": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.ToolDefBucket": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                },
+                "tools": {
+                    "type": "integer"
                 }
             }
         },

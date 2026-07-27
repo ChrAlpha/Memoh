@@ -1,11 +1,27 @@
 package contextfrag
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 )
 
 const MetadataContextLifecycleKey = "context_lifecycle"
+
+// LifecycleSnapshotFromMetadata extracts the persisted lifecycle snapshot
+// from a message metadata JSON payload, reporting whether one was present.
+func LifecycleSnapshotFromMetadata(raw []byte) (LifecycleSnapshot, bool) {
+	if len(raw) == 0 {
+		return LifecycleSnapshot{}, false
+	}
+	var metadata struct {
+		ContextLifecycle *LifecycleSnapshot `json:"context_lifecycle"`
+	}
+	if json.Unmarshal(raw, &metadata) != nil || metadata.ContextLifecycle == nil {
+		return LifecycleSnapshot{}, false
+	}
+	return *metadata.ContextLifecycle, true
+}
 
 const maxMemoryRecallTraceRefs = 32
 

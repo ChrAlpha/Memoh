@@ -153,7 +153,28 @@
       "title": "コンテクスト",
       "usedWithWindow": "{percent}・{used}・{window}使用",
       "tokensUsed": "使用される {used} Token",
-      "fieldCacheHit": "キャッシュヒット"
+      "fieldCacheHit": "キャッシュヒット",
+      "toolDefs": "ツール定義",
+      "mcpTools": "MCP ツール",
+      "kind": {
+        "system_prompt": "システムプロンプト",
+        "system_policy": "システムポリシー",
+        "bot_identity": "Bot 情報",
+        "workspace_instruction": "Workspace 指示",
+        "platform_identity": "プラットフォーム識別",
+        "tool_usage": "ツール使用ガイド",
+        "skills_catalog": "スキル",
+        "conversation_event": "会話",
+        "current_user_message": "現在のメッセージ",
+        "conversation_summary": "要約",
+        "memory_recall": "メモリ",
+        "hook_context": "フック",
+        "injected_message": "注入メッセージ",
+        "background_summary": "バックグラウンドタスク",
+        "native_image": "画像",
+        "attachment_ref": "添付ファイル",
+        "acp_context": "ACP コンテクスト"
+      }
     },
     "access": {
       "title": "アクセス",
