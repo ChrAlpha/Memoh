@@ -210,6 +210,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 
 	plan := cachePlanFromPlacement(view.Placement)
 	plan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
+	plan.MidStableMessageCount = midStableMessageCount(view.Placement, view.Selected)
 	manifest := view.Manifest
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
@@ -446,6 +447,53 @@ func stablePrefixTokenEstimate(placement PlacementPlan, selected []contextfrag.C
 		}
 	}
 	return total
+}
+
+// midBreakpointMinSpanTokens gates the extra mid-span breakpoint: below
+// twice Anthropic's nominal minimum cacheable prefix, losing the tail costs
+// little and the extra cache entry is not worth its write.
+const midBreakpointMinSpanTokens = 2048
+
+// midStableMessageCount picks where the insurance breakpoint goes inside a
+// large stable message span: the smallest leading message count holding at
+// least half the span's token mass. Zero means the span is too small, or
+// the midpoint would duplicate the tail breakpoint.
+func midStableMessageCount(placement PlacementPlan, selected []contextfrag.ContextFrag) int {
+	byID := make(map[string]contextfrag.ContextFrag, len(selected))
+	for _, frag := range selected {
+		byID[frag.ID] = frag
+	}
+	var perMessage []int
+	total := 0
+	for i, item := range placement.Items {
+		if i >= placement.FirstVolatileIndex {
+			break
+		}
+		if item.Slot == contextfrag.SlotSystem {
+			continue
+		}
+		tokens := 0
+		if frag, ok := byID[item.FragID]; ok {
+			tokens = contextfrag.ResolveFragTokens(frag)
+		}
+		perMessage = append(perMessage, tokens)
+		total += tokens
+	}
+	if total < midBreakpointMinSpanTokens {
+		return 0
+	}
+	cumulative := 0
+	for i, tokens := range perMessage {
+		cumulative += tokens
+		if cumulative*2 >= total {
+			count := i + 1
+			if count >= len(perMessage) {
+				return 0
+			}
+			return count
+		}
+	}
+	return 0
 }
 
 // cachePlanFromPlacement projects the placement plan onto the rendered

@@ -29,6 +29,14 @@ const (
 // explicitly configure a cache policy.
 const DefaultPromptCacheTTL = PromptCacheTTL5m
 
+// MinCacheablePrefixTokens is the floor below which a message-level cache
+// breakpoint is withheld: Anthropic ignores breakpoints on prefixes under
+// its per-model minimum (1024–4096 real tokens), and our byte-heuristic
+// estimate undercounts CJK text, so the floor sits far below the provider
+// minimum to never withhold a viable breakpoint — it only stops the
+// bookkeeping from claiming a cached prefix the provider provably ignored.
+const MinCacheablePrefixTokens = 256
+
 // NormalizePromptCacheTTL coerces an arbitrary user-provided value to one
 // of the accepted TTL constants. Empty or unrecognized values fall back to
 // the recommended short-TTL default.
@@ -125,7 +133,14 @@ func applyAnthropicPromptCache(
 	}
 
 	actualStableMessageCount := plan.StableMessageCount
-	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) {
+	belowMinimum := plan.StablePrefixTokenEstimate > 0 && plan.StablePrefixTokenEstimate < MinCacheablePrefixTokens
+	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) && belowMinimum {
+		actualStableMessageCount = 0
+	}
+	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) && !belowMinimum {
+		if plan.MidStableMessageCount > 0 && plan.MidStableMessageCount < plan.StableMessageCount {
+			messages, _ = withMessageCacheBreakpoint(messages, plan.MidStableMessageCount-1, cc)
+		}
 		var breakpointIndex int
 		messages, breakpointIndex = withMessageCacheBreakpoint(messages, plan.StableMessageCount-1, cc)
 		if breakpointIndex >= 0 {

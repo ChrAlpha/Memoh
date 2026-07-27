@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	anthropicmessages "github.com/memohai/twilight-ai/provider/anthropic/messages"
@@ -74,11 +75,14 @@ func countCacheControlBreakpoints(messages []sdk.Message, tools []sdk.Tool) int 
 func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	t.Parallel()
 
+	// The stable prefix must clear models.MinCacheablePrefixTokens or the
+	// message-level breakpoint is (correctly) withheld as provably below the
+	// provider's minimum cacheable prefix.
 	cfg := agentpkg.RunConfig{
-		System: "stable system prompt",
+		System: strings.Repeat("stable system prompt ", 60),
 		Messages: []sdk.Message{
-			sdk.UserMessage("h1"),
-			sdk.AssistantMessage("h2"),
+			sdk.UserMessage(strings.Repeat("h1 ", 200)),
+			sdk.AssistantMessage(strings.Repeat("h2 ", 200)),
 		},
 		Query: "current question",
 		ContextScope: contextfrag.Scope{

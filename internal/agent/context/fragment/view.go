@@ -46,7 +46,12 @@ type CachePlan struct {
 	// message-level breakpoint covers (tool definitions, stable system
 	// fragments, stable leading messages) — the denominator for judging how
 	// much of the cacheable prefix provider-reported cache reads recovered.
-	StablePrefixTokenEstimate          int    `json:"stable_prefix_token_estimate,omitempty"`
+	StablePrefixTokenEstimate int `json:"stable_prefix_token_estimate,omitempty"`
+	// MidStableMessageCount asks for an additional breakpoint after this many
+	// leading messages, so a prune or compaction that busts the tail of a
+	// large stable span still hits the cached mid-span prefix. Zero means the
+	// span is too small to be worth the extra cache entry.
+	MidStableMessageCount              int    `json:"mid_stable_message_count,omitempty"`
 	CacheComparatorPrefixHash          string `json:"cache_comparator_prefix_hash,omitempty"`
 	CacheComparatorPrefixBytes         int    `json:"cache_comparator_prefix_bytes,omitempty"`
 	CacheComparatorPrefixTokenEstimate int    `json:"cache_comparator_prefix_token_estimate,omitempty"`

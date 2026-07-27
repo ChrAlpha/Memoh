@@ -184,3 +184,81 @@ func TestApplyPromptCacheWithPlanReportsSystemPromotion(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyPromptCachePlanSkipsBreakpointBelowMinPrefix(t *testing.T) {
+	t.Parallel()
+
+	model := anthropicTestModel()
+	messages := []sdk.Message{
+		sdk.UserMessage("tiny stable"),
+		sdk.UserMessage("volatile"),
+	}
+	plan := contextfrag.CachePlan{
+		StableMessageCount:        1,
+		StablePrefixTokenEstimate: MinCacheablePrefixTokens - 1,
+	}
+
+	_, got, _, _, actualStableCount := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
+	stable, ok := got[1].Content[len(got[1].Content)-1].(sdk.TextPart)
+	if !ok || stable.CacheControl != nil {
+		t.Fatalf("below-minimum prefix must not carry a message breakpoint: %#v", got[1].Content)
+	}
+	if actualStableCount != 0 {
+		t.Fatalf("actual stable message count = %d, want honest 0 when the breakpoint was withheld", actualStableCount)
+	}
+}
+
+func TestApplyPromptCachePlanKeepsBreakpointWithoutEstimate(t *testing.T) {
+	t.Parallel()
+
+	model := anthropicTestModel()
+	messages := []sdk.Message{
+		sdk.UserMessage("stable"),
+		sdk.UserMessage("volatile"),
+	}
+	plan := contextfrag.CachePlan{StableMessageCount: 1}
+
+	_, got, _, _, actualStableCount := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
+	stable, ok := got[1].Content[len(got[1].Content)-1].(sdk.TextPart)
+	if !ok || stable.CacheControl == nil {
+		t.Fatalf("plans without an estimate must keep today's placement: %#v", got[1].Content)
+	}
+	if actualStableCount != 1 {
+		t.Fatalf("actual stable message count = %d, want 1", actualStableCount)
+	}
+}
+
+func TestApplyPromptCachePlanPlacesMidSpanBreakpoint(t *testing.T) {
+	t.Parallel()
+
+	model := anthropicTestModel()
+	messages := []sdk.Message{
+		sdk.UserMessage("stable one"),
+		sdk.AssistantMessage("stable two"),
+		sdk.UserMessage("stable three"),
+		sdk.AssistantMessage("stable four"),
+		sdk.UserMessage("volatile"),
+	}
+	plan := contextfrag.CachePlan{
+		StableMessageCount:        4,
+		MidStableMessageCount:     2,
+		StablePrefixTokenEstimate: 5000,
+	}
+
+	_, got, _, _, actualStableCount := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
+	mid, ok := got[2].Content[len(got[2].Content)-1].(sdk.TextPart)
+	if !ok || mid.CacheControl == nil {
+		t.Fatalf("mid-span message should carry a breakpoint: %#v", got[2].Content)
+	}
+	tail, ok := got[4].Content[len(got[4].Content)-1].(sdk.TextPart)
+	if !ok || tail.CacheControl == nil {
+		t.Fatalf("tail stable message should carry a breakpoint: %#v", got[4].Content)
+	}
+	volatilePart, ok := got[5].Content[len(got[5].Content)-1].(sdk.TextPart)
+	if !ok || volatilePart.CacheControl != nil {
+		t.Fatalf("volatile message must stay undecorated: %#v", got[5].Content)
+	}
+	if actualStableCount != 4 {
+		t.Fatalf("actual stable message count = %d, want 4", actualStableCount)
+	}
+}
