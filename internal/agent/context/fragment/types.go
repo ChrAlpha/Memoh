@@ -305,6 +305,7 @@ type Manifest struct {
 	ContinuityGroups   []ContinuityGroup   `json:"continuity_groups,omitempty"`
 	ValidationWarnings []ValidationWarning `json:"validation_warnings,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
+	Breakdown          []KindBreakdown     `json:"breakdown,omitempty"`
 	Items              []ManifestItem      `json:"items,omitempty"`
 	Selection          *SelectionTrace     `json:"selection,omitempty"`
 	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
@@ -333,10 +334,21 @@ const (
 
 // ManifestCounts summarizes fragment composition.
 type ManifestCounts struct {
-	Fragments int `json:"fragments"`
-	Messages  int `json:"messages"`
-	Images    int `json:"images"`
-	TextBytes int `json:"text_bytes"`
+	Fragments     int `json:"fragments"`
+	Messages      int `json:"messages"`
+	Images        int `json:"images"`
+	TextBytes     int `json:"text_bytes"`
+	TokenEstimate int `json:"token_estimate"`
+}
+
+// KindBreakdown aggregates manifest items of one Kind so consumers can show
+// where the context window went without walking every item.
+type KindBreakdown struct {
+	Kind          Kind `json:"kind"`
+	Fragments     int  `json:"fragments"`
+	TokenEstimate int  `json:"token_estimate"`
+	TextBytes     int  `json:"text_bytes,omitempty"`
+	Images        int  `json:"images,omitempty"`
 }
 
 type SelectionTrace struct {
@@ -347,22 +359,23 @@ type SelectionTrace struct {
 
 // ManifestItem is one non-sensitive fragment entry.
 type ManifestItem struct {
-	ID          string          `json:"id"`
-	Ref         ContextRef      `json:"ref,omitempty"`
-	Kind        Kind            `json:"kind"`
-	Slot        Slot            `json:"slot"`
-	Role        sdk.MessageRole `json:"role,omitempty"`
-	Priority    int             `json:"priority,omitempty"`
-	CacheClass  CacheClass      `json:"cache_class,omitempty"`
-	Trust       TrustLevel      `json:"trust,omitempty"`
-	Source      string          `json:"source,omitempty"`
-	SourceID    string          `json:"source_id,omitempty"`
-	Collector   string          `json:"collector,omitempty"`
-	ConflictKey string          `json:"conflict_key,omitempty"`
-	PartTypes   []PartType      `json:"part_types,omitempty"`
-	TextBytes   int             `json:"text_bytes,omitempty"`
-	ImageCount  int             `json:"image_count,omitempty"`
-	Scope       Scope           `json:"scope,omitempty"`
+	ID            string          `json:"id"`
+	Ref           ContextRef      `json:"ref,omitempty"`
+	Kind          Kind            `json:"kind"`
+	Slot          Slot            `json:"slot"`
+	Role          sdk.MessageRole `json:"role,omitempty"`
+	Priority      int             `json:"priority,omitempty"`
+	CacheClass    CacheClass      `json:"cache_class,omitempty"`
+	Trust         TrustLevel      `json:"trust,omitempty"`
+	Source        string          `json:"source,omitempty"`
+	SourceID      string          `json:"source_id,omitempty"`
+	Collector     string          `json:"collector,omitempty"`
+	ConflictKey   string          `json:"conflict_key,omitempty"`
+	PartTypes     []PartType      `json:"part_types,omitempty"`
+	TextBytes     int             `json:"text_bytes,omitempty"`
+	ImageCount    int             `json:"image_count,omitempty"`
+	TokenEstimate int             `json:"token_estimate,omitempty"`
+	Scope         Scope           `json:"scope,omitempty"`
 }
 
 type SlotRenderPolicy struct {
