@@ -306,6 +306,7 @@ type Manifest struct {
 	ValidationWarnings []ValidationWarning `json:"validation_warnings,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
 	Breakdown          []KindBreakdown     `json:"breakdown,omitempty"`
+	ToolDefs           []ToolDefAccounting `json:"tool_defs,omitempty"`
 	Items              []ManifestItem      `json:"items,omitempty"`
 	Selection          *SelectionTrace     `json:"selection,omitempty"`
 	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
@@ -349,6 +350,16 @@ type KindBreakdown struct {
 	TokenEstimate int  `json:"token_estimate"`
 	TextBytes     int  `json:"text_bytes,omitempty"`
 	Images        int  `json:"images,omitempty"`
+}
+
+// ToolDefAccounting records the serialized size of one tool definition sent
+// to the provider. Tool schemas never render as fragments, so without this
+// entry the manifest understates the real prompt by the whole tool roster.
+type ToolDefAccounting struct {
+	Provider      string `json:"provider"`
+	Name          string `json:"name"`
+	Bytes         int    `json:"bytes"`
+	TokenEstimate int    `json:"token_estimate"`
 }
 
 type SelectionTrace struct {

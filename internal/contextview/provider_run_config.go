@@ -212,6 +212,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	manifest := view.Manifest
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
+	manifest.ToolDefs = cfg.ContextToolDefs
 
 	cfg.System = payload.System
 	cfg.Messages = materializeRenderedQuery(payload, cfg.ContextQueryMaterialized)

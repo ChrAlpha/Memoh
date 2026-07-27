@@ -86,3 +86,19 @@ func ResolveFragTokens(frag ContextFrag) int {
 	}
 	return EstimateFragTokens(frag)
 }
+
+// ToolDefAccountingFor measures one tool definition as the provider will
+// receive it (name, description, parameter schema). A definition that fails
+// to serialize falls back to its visible prose size.
+func ToolDefAccountingFor(provider string, tool sdk.Tool) ToolDefAccounting {
+	size := len(tool.Name) + len(tool.Description)
+	if data, err := json.Marshal(tool); err == nil {
+		size = len(data)
+	}
+	return ToolDefAccounting{
+		Provider:      provider,
+		Name:          tool.Name,
+		Bytes:         size,
+		TokenEstimate: TokensFromBytes(size),
+	}
+}

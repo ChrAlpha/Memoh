@@ -391,6 +391,12 @@ func (s SessionContext) FormatTime(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+// ProviderLabeler optionally names the accounting bucket a provider's tool
+// definitions belong to (e.g. "mcp"). Providers without it count as "native".
+type ProviderLabeler interface {
+	ProviderLabel() string
+}
+
 // ToolProvider supplies a set of tools for the agent.
 // Tools() is called per-request; implementations may return different
 // tool sets based on session context (e.g. subagent restrictions, bot settings).

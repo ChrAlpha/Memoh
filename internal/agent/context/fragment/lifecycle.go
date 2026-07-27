@@ -45,6 +45,7 @@ func (h *LifecycleHolder) SetManifest(manifest Manifest) {
 func cloneLifecycleManifest(manifest Manifest) Manifest {
 	out := manifest
 	out.Breakdown = append([]KindBreakdown(nil), manifest.Breakdown...)
+	out.ToolDefs = append([]ToolDefAccounting(nil), manifest.ToolDefs...)
 	if manifest.Selection != nil {
 		selection := *manifest.Selection
 		if manifest.Selection.DropReasons != nil {
@@ -85,6 +86,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		View:                        manifest.View,
 		Counts:                      manifest.Counts,
 		Breakdown:                   append([]KindBreakdown(nil), manifest.Breakdown...),
+		ToolDefs:                    append([]ToolDefAccounting(nil), manifest.ToolDefs...),
 		Selection:                   selectionSnapshot(manifest.Selection),
 		CacheComparatorPrefixHash:   "",
 		DecoratedProviderPrefixHash: "",
@@ -116,26 +118,27 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 }
 
 type LifecycleSnapshot struct {
-	Version                     int                `json:"version"`
-	View                        ManifestView       `json:"view,omitempty"`
-	Counts                      ManifestCounts     `json:"counts"`
-	Breakdown                   []KindBreakdown    `json:"breakdown,omitempty"`
-	Selection                   SelectionTrace     `json:"selection"`
-	StablePrefixHash            string             `json:"stable_prefix_hash,omitempty"`
-	StableMessageCount          int                `json:"stable_message_count,omitempty"`
-	CacheComparatorPrefixHash   string             `json:"cache_comparator_prefix_hash"`
-	DecoratedProviderPrefixHash string             `json:"decorated_provider_prefix_hash,omitempty"`
-	CacheReadTokens             int                `json:"cache_read_tokens"`
-	CacheWriteTokens            int                `json:"cache_write_tokens"`
-	CacheUsage                  []CacheUsageRecord `json:"cache_usage,omitempty"`
-	CacheComparison             *CacheComparison   `json:"cache_comparison,omitempty"`
-	Mutations                   []MutationRecord   `json:"mutations,omitempty"`
-	FinalInputHash              string             `json:"final_input_hash,omitempty"`
-	Model                       string             `json:"model,omitempty"`
-	ClientType                  string             `json:"client_type,omitempty"`
-	LoopSelectionMode           string             `json:"loop_selection_mode,omitempty"`
-	Steps                       []StepSnapshot     `json:"steps,omitempty"`
-	MemoryRecall                *MemoryRecallTrace `json:"memory_recall,omitempty"`
+	Version                     int                 `json:"version"`
+	View                        ManifestView        `json:"view,omitempty"`
+	Counts                      ManifestCounts      `json:"counts"`
+	Breakdown                   []KindBreakdown     `json:"breakdown,omitempty"`
+	ToolDefs                    []ToolDefAccounting `json:"tool_defs,omitempty"`
+	Selection                   SelectionTrace      `json:"selection"`
+	StablePrefixHash            string              `json:"stable_prefix_hash,omitempty"`
+	StableMessageCount          int                 `json:"stable_message_count,omitempty"`
+	CacheComparatorPrefixHash   string              `json:"cache_comparator_prefix_hash"`
+	DecoratedProviderPrefixHash string              `json:"decorated_provider_prefix_hash,omitempty"`
+	CacheReadTokens             int                 `json:"cache_read_tokens"`
+	CacheWriteTokens            int                 `json:"cache_write_tokens"`
+	CacheUsage                  []CacheUsageRecord  `json:"cache_usage,omitempty"`
+	CacheComparison             *CacheComparison    `json:"cache_comparison,omitempty"`
+	Mutations                   []MutationRecord    `json:"mutations,omitempty"`
+	FinalInputHash              string              `json:"final_input_hash,omitempty"`
+	Model                       string              `json:"model,omitempty"`
+	ClientType                  string              `json:"client_type,omitempty"`
+	LoopSelectionMode           string              `json:"loop_selection_mode,omitempty"`
+	Steps                       []StepSnapshot      `json:"steps,omitempty"`
+	MemoryRecall                *MemoryRecallTrace  `json:"memory_recall,omitempty"`
 }
 
 type MemoryRecallTrace struct {
