@@ -5,8 +5,8 @@ import "testing"
 func TestAutoCompactionThresholdModelRelative(t *testing.T) {
 	t.Parallel()
 
-	if got := autoCompactionThreshold(0, 200000); got != 120000 {
-		t.Fatalf("model-relative soft threshold = %d, want 60%% of the window", got)
+	if got := autoCompactionThreshold(0, 200000); got != 100000 {
+		t.Fatalf("model-relative soft threshold = %d, want 50%% of the window", got)
 	}
 	if got := autoCompactionThreshold(0, 0); got != 0 {
 		t.Fatalf("model-relative threshold without a window = %d, want 0 (async stays off)", got)
@@ -22,8 +22,8 @@ func TestAutoCompactionThresholdModelRelative(t *testing.T) {
 func TestCompactionTargetTokensForMode(t *testing.T) {
 	t.Parallel()
 
-	if got := compactionTargetTokensFor(0, 80, 200000); got != 90000 {
-		t.Fatalf("model-relative target = %d, want 45%% of the window", got)
+	if got := compactionTargetTokensFor(0, 80, 200000); got != 80000 {
+		t.Fatalf("model-relative target = %d, want 40%% of the window", got)
 	}
 	if got := compactionTargetTokensFor(0, 80, 0); got != 0 {
 		t.Fatalf("model-relative target without a window = %d, want 0", got)
@@ -56,8 +56,8 @@ func TestAsyncCompactionTargetKeepsLegacyRatioSelection(t *testing.T) {
 	if got := asyncCompactionTargetTokens(100000, 2000000); got != 0 {
 		t.Fatalf("legacy async target = %d, want 0 so the engine keeps ratio-based selection", got)
 	}
-	if got := asyncCompactionTargetTokens(0, 200000); got != 90000 {
-		t.Fatalf("model-relative async target = %d, want 45%% of the window", got)
+	if got := asyncCompactionTargetTokens(0, 200000); got != 80000 {
+		t.Fatalf("model-relative async target = %d, want 40%% of the window", got)
 	}
 }
 

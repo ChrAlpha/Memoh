@@ -23,11 +23,15 @@ const compactionBudgetThresholdPercent = 70
 // async maintenance pass fires at the soft share, the blocking pre-send
 // backstop waits for the hard share, and both compact the raw tail down to
 // the target share — three separate roles so background maintenance normally
-// keeps the backstop from ever blocking a turn.
+// keeps the backstop from ever blocking a turn. The shares are bench-tuned
+// against strict 8k/16k provider windows: soft above 50 leaves too thin a
+// margin on small windows, a hard below 75 adds blocking latency without
+// preventing single-turn jumps, and a target above 40 can re-trigger into
+// the summarizer's output cap.
 const (
-	compactionSoftThresholdPercent = 60
+	compactionSoftThresholdPercent = 50
 	compactionHardThresholdPercent = 75
-	compactionTargetPercent        = 45
+	compactionTargetPercent        = 40
 	// maxAsyncCompactionPasses bounds how many consecutive summarizer calls
 	// one background trigger may spend draining a backlog.
 	maxAsyncCompactionPasses = 3
