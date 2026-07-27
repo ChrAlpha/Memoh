@@ -249,7 +249,7 @@ func TestGenerateSystemSectionsTableChat(t *testing.T) {
 		{"system.prompt.body", contextfrag.KindSystemPrompt, 30},
 		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50},
 		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60},
-		{"system.skills", contextfrag.KindSystemPrompt, 65},
+		{"system.skills", contextfrag.KindSkillsCatalog, 65},
 		{"system.workspace_instructions", contextfrag.KindWorkspaceInstruction, 70},
 	})
 }

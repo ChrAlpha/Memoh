@@ -22,6 +22,7 @@ const (
 	KindCurrentUserMessage   Kind = "current_user_message"
 	KindAttachmentRef        Kind = "attachment_ref"
 	KindNativeImage          Kind = "native_image"
+	KindSkillsCatalog        Kind = "skills_catalog"
 	KindHookContext          Kind = "hook_context"
 	KindInjectedMessage      Kind = "injected_message"
 	KindBackgroundSummary    Kind = "background_summary"

@@ -97,7 +97,7 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 
 	if text := strings.TrimSpace(buildSkillsSection(params.Skills)); text != "" {
 		sections = append(sections, SystemSection{
-			ID: sectionIDSkills, Kind: contextfrag.KindSystemPrompt, Priority: prioritySkills, Text: text,
+			ID: sectionIDSkills, Kind: contextfrag.KindSkillsCatalog, Priority: prioritySkills, Text: text,
 		})
 	}
 	if text := strings.TrimSpace(buildFileSections(params.Files, params.MaxFilesBytes)); text != "" {
