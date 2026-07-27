@@ -16619,6 +16619,9 @@ const docTemplate = `{
                 "stable_prefix_hash": {
                     "type": "string"
                 },
+                "stable_prefix_token_estimate": {
+                    "type": "integer"
+                },
                 "steps": {
                     "type": "array",
                     "items": {
@@ -16629,6 +16632,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/contextfrag.ToolDefAccounting"
+                    }
+                },
+                "trust_breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.TrustBreakdown"
                     }
                 },
                 "version": {
@@ -16662,16 +16671,16 @@ const docTemplate = `{
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
-                "run_config_pre_provider",
                 "compaction_candidates",
                 "discuss_reply",
-                "acp_runtime_prompt"
+                "acp_runtime_prompt",
+                "run_config_pre_provider"
             ],
             "x-enum-varnames": [
-                "ViewRunConfigPreProvider",
                 "ViewCompactionCandidates",
                 "ViewDiscussReply",
-                "ViewACPRuntimePrompt"
+                "ViewACPRuntimePrompt",
+                "ViewRunConfigPreProvider"
             ]
         },
         "contextfrag.MemoryRecallQueryTrace": {
@@ -16827,6 +16836,41 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "contextfrag.TrustBreakdown": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "integer"
+                },
+                "images": {
+                    "type": "integer"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                },
+                "trust": {
+                    "$ref": "#/definitions/contextfrag.TrustLevel"
+                }
+            }
+        },
+        "contextfrag.TrustLevel": {
+            "type": "string",
+            "enum": [
+                "system",
+                "workspace",
+                "user",
+                "external"
+            ],
+            "x-enum-varnames": [
+                "TrustSystem",
+                "TrustWorkspace",
+                "TrustUser",
+                "TrustExternal"
+            ]
         },
         "conversation.SkillActivation": {
             "type": "object",
@@ -18041,6 +18085,9 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "cache_read_efficiency": {
+                    "type": "number"
+                },
                 "drop_reasons": {
                     "type": "object",
                     "additionalProperties": {
@@ -18053,10 +18100,23 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "tool_roster_change_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ToolRosterChange"
+                    }
+                },
+                "tool_roster_changes": {
+                    "type": "integer"
+                },
                 "total_cache_read_tokens": {
                     "type": "integer"
                 },
                 "total_cache_write_tokens": {
+                    "type": "integer"
+                },
+                "total_expected_stable_tokens": {
+                    "description": "TotalExpectedStableTokens sums the plan-time stable prefix estimates of\nturns that had a chance to hit (first observations excluded), and\nCacheReadEfficiency is the share of that offer the provider actually\nread — a hit rate says breakpoints matched, this says how much of the\nprefix they recovered.",
                     "type": "integer"
                 },
                 "turns": {
@@ -19208,6 +19268,32 @@ const docTemplate = `{
                 },
                 "tools": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.ToolRosterChange": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "message_id": {
+                    "type": "string"
+                },
+                "removed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resized": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

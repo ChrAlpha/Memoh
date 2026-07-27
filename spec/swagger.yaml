@@ -1866,6 +1866,8 @@ definitions:
         type: integer
       stable_prefix_hash:
         type: string
+      stable_prefix_token_estimate:
+        type: integer
       steps:
         items:
           $ref: '#/definitions/contextfrag.StepSnapshot'
@@ -1873,6 +1875,10 @@ definitions:
       tool_defs:
         items:
           $ref: '#/definitions/contextfrag.ToolDefAccounting'
+        type: array
+      trust_breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.TrustBreakdown'
         type: array
       version:
         type: integer
@@ -1894,16 +1900,16 @@ definitions:
     type: object
   contextfrag.ManifestView:
     enum:
-    - run_config_pre_provider
     - compaction_candidates
     - discuss_reply
     - acp_runtime_prompt
+    - run_config_pre_provider
     type: string
     x-enum-varnames:
-    - ViewRunConfigPreProvider
     - ViewCompactionCandidates
     - ViewDiscussReply
     - ViewACPRuntimePrompt
+    - ViewRunConfigPreProvider
   contextfrag.MemoryRecallQueryTrace:
     properties:
       recent_messages:
@@ -2009,6 +2015,31 @@ definitions:
       token_estimate:
         type: integer
     type: object
+  contextfrag.TrustBreakdown:
+    properties:
+      fragments:
+        type: integer
+      images:
+        type: integer
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+      trust:
+        $ref: '#/definitions/contextfrag.TrustLevel'
+    type: object
+  contextfrag.TrustLevel:
+    enum:
+    - system
+    - workspace
+    - user
+    - external
+    type: string
+    x-enum-varnames:
+    - TrustSystem
+    - TrustWorkspace
+    - TrustUser
+    - TrustExternal
   conversation.SkillActivation:
     properties:
       prompt:
@@ -2808,6 +2839,8 @@ definitions:
         additionalProperties:
           type: integer
         type: object
+      cache_read_efficiency:
+        type: number
       drop_reasons:
         additionalProperties:
           type: integer
@@ -2816,9 +2849,23 @@ definitions:
         additionalProperties:
           type: integer
         type: object
+      tool_roster_change_details:
+        items:
+          $ref: '#/definitions/handlers.ToolRosterChange'
+        type: array
+      tool_roster_changes:
+        type: integer
       total_cache_read_tokens:
         type: integer
       total_cache_write_tokens:
+        type: integer
+      total_expected_stable_tokens:
+        description: |-
+          TotalExpectedStableTokens sums the plan-time stable prefix estimates of
+          turns that had a chance to hit (first observations excluded), and
+          CacheReadEfficiency is the share of that offer the provider actually
+          read — a hit rate says breakpoints matched, this says how much of the
+          prefix they recovered.
         type: integer
       turns:
         type: integer
@@ -3569,6 +3616,23 @@ definitions:
         type: integer
       tools:
         type: integer
+    type: object
+  handlers.ToolRosterChange:
+    properties:
+      added:
+        items:
+          type: string
+        type: array
+      message_id:
+        type: string
+      removed:
+        items:
+          type: string
+        type: array
+      resized:
+        items:
+          type: string
+        type: array
     type: object
   handlers.TriggerCompactResponse:
     properties:

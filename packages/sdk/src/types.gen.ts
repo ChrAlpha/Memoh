@@ -1064,8 +1064,10 @@ export type ContextfragLifecycleSnapshot = {
     selection?: ContextfragSelectionTrace;
     stable_message_count?: number;
     stable_prefix_hash?: string;
+    stable_prefix_token_estimate?: number;
     steps?: Array<ContextfragStepSnapshot>;
     tool_defs?: Array<ContextfragToolDefAccounting>;
+    trust_breakdown?: Array<ContextfragTrustBreakdown>;
     version?: number;
     view?: ContextfragManifestView;
 };
@@ -1078,7 +1080,7 @@ export type ContextfragManifestCounts = {
     token_estimate?: number;
 };
 
-export type ContextfragManifestView = 'run_config_pre_provider' | 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt';
+export type ContextfragManifestView = 'compaction_candidates' | 'discuss_reply' | 'acp_runtime_prompt' | 'run_config_pre_provider';
 
 export type ContextfragMemoryRecallQueryTrace = {
     recent_messages?: number;
@@ -1135,6 +1137,16 @@ export type ContextfragToolDefAccounting = {
     provider?: string;
     token_estimate?: number;
 };
+
+export type ContextfragTrustBreakdown = {
+    fragments?: number;
+    images?: number;
+    text_bytes?: number;
+    token_estimate?: number;
+    trust?: ContextfragTrustLevel;
+};
+
+export type ContextfragTrustLevel = 'system' | 'workspace' | 'user' | 'external';
 
 export type ConversationSkillActivation = {
     prompt?: string;
@@ -1618,14 +1630,25 @@ export type HandlersContextLifecycleAggregates = {
     cache_outcomes?: {
         [key: string]: number;
     };
+    cache_read_efficiency?: number;
     drop_reasons?: {
         [key: string]: number;
     };
     mutation_kinds?: {
         [key: string]: number;
     };
+    tool_roster_change_details?: Array<HandlersToolRosterChange>;
+    tool_roster_changes?: number;
     total_cache_read_tokens?: number;
     total_cache_write_tokens?: number;
+    /**
+     * TotalExpectedStableTokens sums the plan-time stable prefix estimates of
+     * turns that had a chance to hit (first observations excluded), and
+     * CacheReadEfficiency is the share of that offer the provider actually
+     * read — a hit rate says breakpoints matched, this says how much of the
+     * prefix they recovered.
+     */
+    total_expected_stable_tokens?: number;
     turns?: number;
 };
 
@@ -2073,6 +2096,13 @@ export type HandlersToolDefBucket = {
     provider?: string;
     token_estimate?: number;
     tools?: number;
+};
+
+export type HandlersToolRosterChange = {
+    added?: Array<string>;
+    message_id?: string;
+    removed?: Array<string>;
+    resized?: Array<string>;
 };
 
 export type HandlersTriggerCompactResponse = {
