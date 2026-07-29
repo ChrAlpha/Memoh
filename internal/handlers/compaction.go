@@ -208,14 +208,15 @@ func (h *CompactionHandler) buildTriggerConfig(ctx context.Context, botID, sessi
 		return compaction.TriggerConfig{}, err
 	}
 	cfg := compaction.NewTriggerConfig(compaction.TriggerModel{
-		Slug:           resolution.Model.ModelID,
-		RecordID:       resolution.Model.ID,
-		ClientType:     resolution.Provider.ClientType,
-		APIKey:         creds.APIKey,
-		CodexAccountID: creds.CodexAccountID,
-		BaseURL:        providers.ProviderConfigString(resolution.Provider, "base_url"),
-		PromptCacheTTL: providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
-		WindowTokens:   resolution.WindowTokens,
+		Slug:                  resolution.Model.ModelID,
+		RecordID:              resolution.Model.ID,
+		ClientType:            resolution.Provider.ClientType,
+		APIKey:                creds.APIKey,
+		CodexAccountID:        creds.CodexAccountID,
+		BaseURL:               providers.ProviderConfigString(resolution.Provider, "base_url"),
+		ChatCompletionsCompat: providers.ProviderConfigString(resolution.Provider, models.ChatCompletionsCompatConfigKey),
+		PromptCacheTTL:        providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
+		WindowTokens:          resolution.WindowTokens,
 	})
 	cfg.BotID = botID
 	cfg.SessionID = sessionID

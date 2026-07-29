@@ -264,7 +264,7 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 		slog.String("model_id", cfg.ModelID),
 	)
 
-	done := s.enterSessionCompactionForStream(req.BotID, req.ThreadID, strings.TrimSpace(req.StreamID))
+	done := s.enterSessionCompactionForRun(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID))
 	defer done()
 	res, err := s.compactionService.RunCompactionSync(ctx, cfg)
 	if err != nil {
@@ -320,14 +320,15 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 		return compaction.TriggerConfig{}, err
 	}
 	cfg := compaction.NewTriggerConfig(compaction.TriggerModel{
-		Slug:           resolution.Model.ModelID,
-		RecordID:       resolution.Model.ID,
-		ClientType:     resolution.Provider.ClientType,
-		APIKey:         creds.APIKey,
-		CodexAccountID: creds.CodexAccountID,
-		BaseURL:        providers.ProviderConfigString(resolution.Provider, "base_url"),
-		PromptCacheTTL: providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
-		WindowTokens:   resolution.WindowTokens,
+		Slug:                  resolution.Model.ModelID,
+		RecordID:              resolution.Model.ID,
+		ClientType:            resolution.Provider.ClientType,
+		APIKey:                creds.APIKey,
+		CodexAccountID:        creds.CodexAccountID,
+		BaseURL:               providers.ProviderConfigString(resolution.Provider, "base_url"),
+		ChatCompletionsCompat: providers.ProviderConfigString(resolution.Provider, models.ChatCompletionsCompatConfigKey),
+		PromptCacheTTL:        providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
+		WindowTokens:          resolution.WindowTokens,
 	})
 	cfg.BotID = req.BotID
 	cfg.SessionID = req.ThreadID
