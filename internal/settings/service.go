@@ -454,6 +454,27 @@ func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEf
 	return settings
 }
 
+func normalizeCompactionTargetPercent(value pgtype.Int4) *int {
+	if !value.Valid {
+		return nil
+	}
+	return normalizeCompactionTargetPercentValue(int(value.Int32))
+}
+
+func normalizeCompactionTargetPercentValue(value int) *int {
+	if value < 1 || value > 99 {
+		return nil
+	}
+	return &value
+}
+
+func applyCompactionTargetPercentOverride(current, requested *int) (*int, bool) {
+	if requested == nil {
+		return current, false
+	}
+	return normalizeCompactionTargetPercentValue(*requested), true
+}
+
 // isValidReasoningEffort accepts the full effort tier range. Effort is now a
 // free-form tier string (models expose their own supported levels via capability
 // discovery), so we only reject empty/whitespace values here; the specific tiers
