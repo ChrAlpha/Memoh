@@ -469,9 +469,13 @@ func (s *Service) Import(ctx context.Context, actorUserID string, raw []byte, op
 		return ImportResult{}, err
 	}
 	profile = scrubImportedProfileACPSecrets(profile, state)
-	cfg, err := readEntry[settings.Settings](state, "bot/settings.json")
+	settingsRaw, err := readRawEntry(state, "bot/settings.json")
 	if err != nil {
 		return ImportResult{}, err
+	}
+	cfg, err := decodeBackupSettings(settingsRaw)
+	if err != nil {
+		return ImportResult{}, fmt.Errorf("read bot/settings.json: %w", err)
 	}
 	// Dependencies (providers/models/...) are global, idempotent resources; they
 	// are created before the bot and are intentionally NOT rolled back, so a
