@@ -20798,7 +20798,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "compaction_target_percent": {
-                    "type": "integer"
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "compaction_threshold": {
                     "type": "integer"

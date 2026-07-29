@@ -4696,6 +4696,7 @@ definitions:
         type: string
       compaction_target_percent:
         type: integer
+        x-nullable: true
       compaction_threshold:
         type: integer
       discuss_probe_model_id:

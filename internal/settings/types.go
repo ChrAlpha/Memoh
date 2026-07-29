@@ -40,7 +40,7 @@ type Settings struct {
 	HeartbeatModelID        string             `json:"heartbeat_model_id"`
 	CompactionEnabled       bool               `json:"compaction_enabled"`
 	CompactionThreshold     int                `json:"compaction_threshold"`
-	CompactionTargetPercent *int               `json:"compaction_target_percent"`
+	CompactionTargetPercent *int               `json:"compaction_target_percent" extensions:"x-nullable"`
 	CompactionModelID       string             `json:"compaction_model_id,omitempty"`
 	DiscussProbeModelID     string             `json:"discuss_probe_model_id,omitempty"`
 	PersistFullToolResults  bool               `json:"persist_full_tool_results"`
