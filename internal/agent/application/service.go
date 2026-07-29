@@ -226,6 +226,10 @@ func (s *Service) SetPlatformIdentitySource(source PlatformIdentitySource) {
 
 // SetCompactionService configures the compaction service for context compaction.
 func (s *Service) SetCompactionService(service *compaction.Service) {
+	if service == nil {
+		s.compactionService = nil
+		return
+	}
 	s.compactionService = service
 }
 

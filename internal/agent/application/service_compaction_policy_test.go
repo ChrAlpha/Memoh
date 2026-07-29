@@ -195,6 +195,16 @@ func TestAutomaticCompactionPathsShareTargetAndBoundAsyncDrain(t *testing.T) {
 	}
 }
 
+func TestSetCompactionServicePreservesNil(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetCompactionService(nil)
+	if service.compactionService != nil {
+		t.Fatal("SetCompactionService(nil) stored a non-nil runner")
+	}
+}
+
 func targetPercentPointer(value int) *int {
 	return &value
 }
