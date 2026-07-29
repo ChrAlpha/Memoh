@@ -94,6 +94,10 @@ type workspaceTargetResolver interface {
 	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
 }
 
+type compactionRunner interface {
+	RunCompactionSync(context.Context, compaction.TriggerConfig) (compaction.Result, error)
+}
+
 // Service orchestrates chat with the internal agent.
 type Service struct {
 	agent              *native.Agent
@@ -105,7 +109,7 @@ type Service struct {
 	accountService     *accounts.Service
 	sessionService     SessionService
 	acpPool            acpPrompter
-	compactionService  *compaction.Service
+	compactionService  compactionRunner
 	eventPublisher     messageevent.Publisher
 	skillLoader        SkillLoader
 	assetLoader        gatewayAssetLoader

@@ -116,7 +116,7 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 		return
 	}
 	cfg.TargetTokens = compactionTargetTokens(botSettings.CompactionTargetPercent, rc.contextTokenBudget)
-	if err := s.drainCompactionBacklog(ctx, cfg, maxAsyncCompactionPasses); err != nil {
+	if err := s.drainCompactionBacklog(ctx, cfg); err != nil {
 		s.logger.Error("compaction failed", slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.Any("error", err))
 	}
 }
@@ -127,8 +127,8 @@ func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolved
 // session barrier is re-acquired per pass: a turn that arrives between
 // passes runs before the next summarizer call instead of waiting out the
 // whole drain.
-func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig, maxPasses int) error {
-	for pass := 0; pass < maxPasses; pass++ {
+func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig) error {
+	for pass := 0; pass < maxAsyncCompactionPasses; pass++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
