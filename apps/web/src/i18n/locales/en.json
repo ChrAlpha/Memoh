@@ -99,6 +99,9 @@
     "channel": {
       "runtime_unavailable": "The channel service could not be reached. Please try again shortly."
     },
+    "compaction": {
+      "model_unavailable": "The compaction model is unavailable. Pick an enabled chat model with a declared context window."
+    },
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
@@ -2404,7 +2407,7 @@
       "heartbeatModelPlaceholder": "Use chat model (default)",
       "compactionEnabled": "Enable Context Compaction",
       "compactionDescription": "Automatically summarize older messages when context gets too large",
-      "compactionThreshold": "Compaction Threshold (input tokens)",
+      "compactionThreshold": "Compaction Threshold (input tokens, 0 = automatic)",
       "compactionRatio": "Compaction Ratio (%)",
       "compactionRatioDescription": "The percentage of older messages to summarize. Recent messages are kept intact.",
       "compactionModel": "Compaction Model",

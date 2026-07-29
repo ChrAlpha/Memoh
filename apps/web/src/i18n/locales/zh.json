@@ -99,6 +99,9 @@
     "channel": {
       "runtime_unavailable": "暂时无法连接 Channel 服务，请稍后重试。"
     },
+    "compaction": {
+      "model_unavailable": "压缩模型不可用。请选择一个已启用、且声明了上下文窗口的对话模型。"
+    },
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
@@ -2404,7 +2407,7 @@
       "heartbeatModelPlaceholder": "使用聊天模型（默认）",
       "compactionEnabled": "启用上下文压缩",
       "compactionDescription": "当对话上下文过长时，自动对旧消息进行摘要以节省 Token。",
-      "compactionThreshold": "压缩阈值（输入 token 数）",
+      "compactionThreshold": "压缩阈值（输入 token 数，0 表示自动）",
       "compactionRatio": "压缩比例（%）",
       "compactionRatioDescription": "指定需要压缩的旧消息比例，最近的消息将保持原样。",
       "compactionModel": "压缩模型",

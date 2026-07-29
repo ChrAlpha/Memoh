@@ -13,6 +13,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/turn"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
+	"github.com/memohai/memoh/internal/models"
 )
 
 // turnRuntimeHooks are test seams for the transport-facing turn lifecycle.
@@ -206,12 +207,17 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 // through streamTurnChat and inherit its trigger directly.
 func (s *Service) maybeCompactDiscuss(ctx context.Context, botID, threadID, modelID string, compactable int) {
 	budget := 0
+	var turnModel models.GetResponse
 	if s.modelsService != nil && strings.TrimSpace(modelID) != "" {
-		if model, err := s.modelsService.GetByID(ctx, modelID); err == nil && model.Config.ContextWindow != nil {
-			budget = *model.Config.ContextWindow
+		if model, err := s.modelsService.GetByID(ctx, modelID); err == nil {
+			turnModel = model
+			if model.Config.ContextWindow != nil {
+				budget = *model.Config.ContextWindow
+			}
 		}
 	}
 	s.maybeCompact(ctx, ChatRequest{BotID: botID, ThreadID: threadID}, resolvedContext{
+		model:                  turnModel,
 		compactableTokens:      compactable,
 		compactableTokensKnown: true,
 		contextTokenBudget:     budget,

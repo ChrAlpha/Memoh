@@ -13,6 +13,7 @@ type Code string
 const (
 	CodeBotNameTaken                     Code = "bot.name_taken"
 	CodeChannelRuntimeUnavailable        Code = "channel.runtime_unavailable"
+	CodeCompactionModelUnavailable       Code = "compaction.model_unavailable"
 	CodeWorkspaceUnreachable             Code = "workspace.unreachable"
 	CodeWorkspaceImageIncompatible       Code = "workspace.image_incompatible"
 	CodeWorkspaceTemplateBootstrapFailed Code = "workspace.template_bootstrap_failed"
@@ -61,6 +62,11 @@ var catalog = map[Code]Definition{
 	CodeChannelRuntimeUnavailable: {
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The channel service could not be reached.",
+	},
+	CodeCompactionModelUnavailable: {
+		HTTPStatus:  http.StatusBadRequest,
+		Detail:      "The compaction model is unavailable.",
+		AllowedArgs: []string{"reason"},
 	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,
