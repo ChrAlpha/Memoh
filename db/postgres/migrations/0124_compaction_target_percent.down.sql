@@ -1,6 +1,9 @@
 -- 0124_compaction_target_percent
 -- Restore the legacy compaction ratio from the window keep-share override.
 
+ALTER TABLE bots NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE bots DISABLE ROW LEVEL SECURITY;
+
 ALTER TABLE bots
   ADD COLUMN IF NOT EXISTS compaction_ratio INTEGER NOT NULL DEFAULT 80;
 
@@ -22,3 +25,6 @@ $$;
 
 ALTER TABLE bots
   DROP COLUMN IF EXISTS compaction_target_percent;
+
+ALTER TABLE bots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bots FORCE ROW LEVEL SECURITY;
