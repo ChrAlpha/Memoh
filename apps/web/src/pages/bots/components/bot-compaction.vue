@@ -16,6 +16,10 @@ import InlineLoadingRow from '@/components/inline-loading-row/index.vue'
 import ModelSelect from './model-select.vue'
 import { filterCompactionModels } from './compaction-models'
 import {
+  compactionTargetPercentAfterToggle,
+  isCompactionTargetPercentInvalid,
+} from './compaction-target'
+import {
   getBotsByBotIdSettings, putBotsByBotIdSettings,
   getBotsByBotIdCompactionLogs, deleteBotsByBotIdCompactionLogs,
   getModels, getProviders,
@@ -104,8 +108,7 @@ const settingsChanged = computed(() => {
 })
 
 const compactionTargetPercentInvalid = computed(() => {
-  const target = settingsForm.compaction_target_percent
-  return target !== null && (!Number.isInteger(target) || target < 1 || target > 99)
+  return isCompactionTargetPercentInvalid(settingsForm.compaction_target_percent)
 })
 
 // Was on, now toggled off but not yet saved — the cue that disabling is pending.
@@ -117,6 +120,15 @@ function resetSettings() {
   settingsForm.compaction_threshold = s?.compaction_threshold ?? 0
   settingsForm.compaction_target_percent = s?.compaction_target_percent ?? null
   settingsForm.compaction_model_id = s?.compaction_model_id ?? ''
+}
+
+function updateCompactionEnabled(value: boolean) {
+  settingsForm.compaction_target_percent = compactionTargetPercentAfterToggle(
+    value,
+    settingsForm.compaction_target_percent,
+    settings.value?.compaction_target_percent ?? null,
+  )
+  settingsForm.compaction_enabled = value
 }
 
 function updateCompactionTargetPercent(value: string | number) {
@@ -290,7 +302,7 @@ onBeforeUnmount(() => {
         >
           <Switch
             :model-value="settingsForm.compaction_enabled"
-            @update:model-value="(val) => settingsForm.compaction_enabled = !!val"
+            @update:model-value="updateCompactionEnabled"
           />
         </SettingsRow>
 
