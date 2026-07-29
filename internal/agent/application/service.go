@@ -392,18 +392,11 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		estimatedTokens = prepared.estimatedTokens
 		compactableTokens = prepared.compactableTokens
 		compactableTokensKnown = true
-		// When context reaches the shared budget share, run synchronous
-		// compaction before sending the request. contextTokenBudget is the
-		// authoritative limit for how much context the user wants to send
-		// to the LLM.
-		compactionThreshold := 0
-		if contextTokenBudget > 0 {
-			compactionThreshold = contextTokenBudget * compactionBudgetThresholdPercent / 100
-		}
 		// The trigger only counts raw (compactable) rows: active summaries can
 		// never be compacted away, so including them would make the trigger
 		// self-sustaining once accumulated summaries cross the threshold.
-		if compactionThreshold > 0 && compactableTokens >= compactionThreshold {
+		if syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
+			compactionThreshold := hardCompactionThreshold(contextTokenBudget)
 			s.logger.Warn("resolve: context reached compaction threshold, running synchronous compaction",
 				slog.String("bot_id", req.BotID),
 				slog.Int("estimated_tokens", estimatedTokens),
