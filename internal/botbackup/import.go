@@ -897,7 +897,7 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.HeartbeatInterval = current.HeartbeatInterval
 				eff.CompactionEnabled = current.CompactionEnabled
 				eff.CompactionThreshold = current.CompactionThreshold
-				eff.CompactionRatio = current.CompactionRatio
+				eff.CompactionTargetPercent = current.CompactionTargetPercent
 				eff.PersistFullToolResults = current.PersistFullToolResults
 				eff.ShowToolCallsInIM = current.ShowToolCallsInIM
 				eff.ToolApprovalConfig = current.ToolApprovalConfig
@@ -924,7 +924,10 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 	heartbeatInterval := eff.HeartbeatInterval
 	compactionEnabled := eff.CompactionEnabled
 	compactionThreshold := eff.CompactionThreshold
-	compactionRatio := eff.CompactionRatio
+	compactionTargetPercent := 0
+	if eff.CompactionTargetPercent != nil {
+		compactionTargetPercent = *eff.CompactionTargetPercent
+	}
 	persistFullToolResults := eff.PersistFullToolResults
 	showToolCalls := eff.ShowToolCallsInIM
 	toolApproval := eff.ToolApprovalConfig
@@ -934,37 +937,37 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 	reasoningEnabled := eff.ReasoningEnabled
 	fetchProviderID := modelID(eff.FetchProviderID, deps.fetchProviders)
 	_, err := s.settings.UpsertBot(ctx, botID, settings.UpsertRequest{
-		ChatModelID:            modelID(eff.ChatModelID, deps.models),
-		ChatRuntime:            ptrStringAllowEmpty(eff.ChatRuntime),
-		ChatACPAgentID:         ptrStringAllowEmpty(eff.ChatACPAgentID),
-		ChatACPProjectPath:     ptrStringAllowEmpty(eff.ChatACPProjectPath),
-		ChatACPProjectMode:     ptrStringAllowEmpty(eff.ChatACPProjectMode),
-		ImageModelID:           modelID(eff.ImageModelID, deps.models),
-		SearchProviderID:       modelID(eff.SearchProviderID, deps.searchProviders),
-		FetchProviderID:        &fetchProviderID,
-		MemoryProviderID:       modelID(eff.MemoryProviderID, deps.memoryProviders),
-		TtsModelID:             modelID(eff.TtsModelID, deps.models),
-		TranscriptionModelID:   modelID(eff.TranscriptionModelID, deps.models),
-		Language:               eff.Language,
-		AclDefaultEffect:       eff.AclDefaultEffect,
-		Timezone:               &timezone,
-		ReasoningEnabled:       &reasoningEnabled,
-		ReasoningEffort:        &reasoningEffort,
-		HeartbeatEnabled:       &heartbeatEnabled,
-		HeartbeatInterval:      &heartbeatInterval,
-		HeartbeatModelID:       modelID(eff.HeartbeatModelID, deps.models),
-		CompactionEnabled:      &compactionEnabled,
-		CompactionThreshold:    &compactionThreshold,
-		CompactionRatio:        &compactionRatio,
-		CompactionModelID:      ptrString(modelID(eff.CompactionModelID, deps.models)),
-		DiscussProbeModelID:    modelID(eff.DiscussProbeModelID, deps.models),
-		PersistFullToolResults: &persistFullToolResults,
-		ShowToolCallsInIM:      &showToolCalls,
-		ToolApprovalConfig:     &toolApproval,
-		DisplayEnabled:         &displayEnabled,
-		OverlayEnabled:         &overlayEnabled,
-		OverlayProvider:        &overlayProvider,
-		OverlayConfig:          eff.OverlayConfig,
+		ChatModelID:             modelID(eff.ChatModelID, deps.models),
+		ChatRuntime:             ptrStringAllowEmpty(eff.ChatRuntime),
+		ChatACPAgentID:          ptrStringAllowEmpty(eff.ChatACPAgentID),
+		ChatACPProjectPath:      ptrStringAllowEmpty(eff.ChatACPProjectPath),
+		ChatACPProjectMode:      ptrStringAllowEmpty(eff.ChatACPProjectMode),
+		ImageModelID:            modelID(eff.ImageModelID, deps.models),
+		SearchProviderID:        modelID(eff.SearchProviderID, deps.searchProviders),
+		FetchProviderID:         &fetchProviderID,
+		MemoryProviderID:        modelID(eff.MemoryProviderID, deps.memoryProviders),
+		TtsModelID:              modelID(eff.TtsModelID, deps.models),
+		TranscriptionModelID:    modelID(eff.TranscriptionModelID, deps.models),
+		Language:                eff.Language,
+		AclDefaultEffect:        eff.AclDefaultEffect,
+		Timezone:                &timezone,
+		ReasoningEnabled:        &reasoningEnabled,
+		ReasoningEffort:         &reasoningEffort,
+		HeartbeatEnabled:        &heartbeatEnabled,
+		HeartbeatInterval:       &heartbeatInterval,
+		HeartbeatModelID:        modelID(eff.HeartbeatModelID, deps.models),
+		CompactionEnabled:       &compactionEnabled,
+		CompactionThreshold:     &compactionThreshold,
+		CompactionTargetPercent: &compactionTargetPercent,
+		CompactionModelID:       ptrString(modelID(eff.CompactionModelID, deps.models)),
+		DiscussProbeModelID:     modelID(eff.DiscussProbeModelID, deps.models),
+		PersistFullToolResults:  &persistFullToolResults,
+		ShowToolCallsInIM:       &showToolCalls,
+		ToolApprovalConfig:      &toolApproval,
+		DisplayEnabled:          &displayEnabled,
+		OverlayEnabled:          &overlayEnabled,
+		OverlayProvider:         &overlayProvider,
+		OverlayConfig:           eff.OverlayConfig,
 	})
 	return err
 }

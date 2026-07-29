@@ -79,8 +79,8 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 		BotID:    "00000000-0000-0000-0000-000000000403",
 		ThreadID: "00000000-0000-0000-0000-000000000404",
 	}, settings.Settings{
-		CompactionModelID: modelUUID,
-		CompactionRatio:   60,
+		CompactionModelID:       modelUUID,
+		CompactionTargetPercent: intPtr(40),
 	}, 150000, "")
 	if err != nil {
 		t.Fatalf("buildCompactionConfig: %v", err)
@@ -171,8 +171,8 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 		BotID:    "00000000-0000-0000-0000-000000000413",
 		ThreadID: "00000000-0000-0000-0000-000000000414",
 	}, settings.Settings{
-		CompactionModelID: modelUUID,
-		CompactionRatio:   80,
+		CompactionModelID:       modelUUID,
+		CompactionTargetPercent: intPtr(20),
 	}, 150000, "")
 	if err != nil {
 		t.Fatalf("buildCompactionConfig() error = %v, want nil", err)

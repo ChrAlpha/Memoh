@@ -56,7 +56,7 @@ func (d *fakeDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 // language, reasoning_enabled, reasoning_effort,
 // chat_model_id, search_provider_id, memory_provider_id,
 // heartbeat_enabled, heartbeat_interval, heartbeat_prompt,
-// compaction_enabled, compaction_threshold, compaction_ratio, compaction_model_id,
+// compaction_enabled, compaction_threshold, compaction_target_percent, compaction_model_id,
 // metadata, created_at, updated_at.
 func makeBotRow(botID, ownerUserID pgtype.UUID) *fakeRow {
 	return &fakeRow{
@@ -83,7 +83,7 @@ func makeBotRow(botID, ownerUserID pgtype.UUID) *fakeRow {
 			*dest[16].(*string) = ""                 // HeartbeatPrompt
 			*dest[17].(*bool) = false                // CompactionEnabled
 			*dest[18].(*int32) = 100000              // CompactionThreshold
-			*dest[19].(*int32) = 80                  // CompactionRatio
+			*dest[19].(*pgtype.Int4) = pgtype.Int4{} // CompactionTargetPercent
 			*dest[20].(*pgtype.UUID) = pgtype.UUID{} // CompactionModelID
 			*dest[21].(*[]byte) = []byte(`{}`)
 			*dest[22].(*pgtype.Timestamptz) = pgtype.Timestamptz{}

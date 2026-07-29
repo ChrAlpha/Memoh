@@ -105,7 +105,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if err != nil {
 		return Settings{}, err
 	}
-	current := normalizeBotSetting(botRow.Language, "", aclDefaultEffect, botRow.ReasoningEnabled, botRow.ReasoningEffort, botRow.HeartbeatEnabled, botRow.HeartbeatInterval, botRow.CompactionEnabled, botRow.CompactionThreshold, botRow.CompactionRatio)
+	current := normalizeBotSetting(botRow.Language, "", aclDefaultEffect, botRow.ReasoningEnabled, botRow.ReasoningEffort, botRow.HeartbeatEnabled, botRow.HeartbeatInterval, botRow.CompactionEnabled, botRow.CompactionThreshold, botRow.CompactionTargetPercent)
 	// A read error here must abort: falling through would leave `current` at the
 	// model defaults and silently overwrite a saved chat_runtime=acp_agent (and
 	// its agent id) on the next save. ErrNoRows is impossible because the bot
@@ -156,9 +156,11 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if req.CompactionThreshold != nil && *req.CompactionThreshold >= 0 {
 		current.CompactionThreshold = *req.CompactionThreshold
 	}
-	if req.CompactionRatio != nil && *req.CompactionRatio >= 1 && *req.CompactionRatio <= 100 {
-		current.CompactionRatio = *req.CompactionRatio
-	}
+	compactionTargetPercent, compactionTargetPercentSet := applyCompactionTargetPercentOverride(
+		current.CompactionTargetPercent,
+		req.CompactionTargetPercent,
+	)
+	current.CompactionTargetPercent = compactionTargetPercent
 	if req.PersistFullToolResults != nil {
 		current.PersistFullToolResults = *req.PersistFullToolResults
 	}
@@ -346,41 +348,42 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		return Settings{}, rollbackNetworkChange(fmt.Errorf("marshal network config: %w", err))
 	}
 	updated, err := s.queries.UpsertBotSettings(ctx, sqlc.UpsertBotSettingsParams{
-		ID:                     pgID,
-		Timezone:               timezoneValue,
-		Language:               current.Language,
-		CommandUiLanguage:      current.CommandUILanguage,
-		ReasoningEnabled:       current.ReasoningEnabled,
-		ReasoningEffort:        current.ReasoningEffort,
-		HeartbeatEnabled:       current.HeartbeatEnabled,
-		HeartbeatInterval:      int32(current.HeartbeatInterval), //nolint:gosec // bounded by positive-only setter above
-		HeartbeatPrompt:        "",
-		CompactionEnabled:      current.CompactionEnabled,
-		CompactionThreshold:    int32(current.CompactionThreshold), //nolint:gosec // bounded by non-negative setter above
-		CompactionRatio:        int32(current.CompactionRatio),     //nolint:gosec // bounded 1-100 above
-		ChatModelID:            chatModelUUID,
-		ChatRuntime:            current.ChatRuntime,
-		ChatAcpAgentID:         nullableText(current.ChatACPAgentID),
-		ChatAcpProjectPath:     current.ChatACPProjectPath,
-		ChatAcpProjectMode:     current.ChatACPProjectMode,
-		HeartbeatModelID:       heartbeatModelUUID,
-		CompactionModelIDSet:   compactionModelIDSet,
-		CompactionModelID:      compactionModelUUID,
-		ImageModelID:           imageModelUUID,
-		SearchProviderID:       searchProviderUUID,
-		FetchProviderIDSet:     fetchProviderIDSet,
-		FetchProviderID:        fetchProviderUUID,
-		MemoryProviderID:       memoryProviderUUID,
-		TtsModelID:             ttsModelUUID,
-		TranscriptionModelID:   transcriptionModelUUID,
-		VideoModelID:           videoModelUUID,
-		PersistFullToolResults: current.PersistFullToolResults,
-		ShowToolCallsInIm:      current.ShowToolCallsInIM,
-		ToolApprovalConfig:     toolApprovalConfig,
-		DisplayEnabled:         current.DisplayEnabled,
-		OverlayProvider:        normalizedNetwork.OverlayProvider,
-		OverlayEnabled:         normalizedNetwork.OverlayEnabled,
-		OverlayConfig:          overlayConfigJSON,
+		ID:                         pgID,
+		Timezone:                   timezoneValue,
+		Language:                   current.Language,
+		CommandUiLanguage:          current.CommandUILanguage,
+		ReasoningEnabled:           current.ReasoningEnabled,
+		ReasoningEffort:            current.ReasoningEffort,
+		HeartbeatEnabled:           current.HeartbeatEnabled,
+		HeartbeatInterval:          int32(current.HeartbeatInterval), //nolint:gosec // bounded by positive-only setter above
+		HeartbeatPrompt:            "",
+		CompactionEnabled:          current.CompactionEnabled,
+		CompactionThreshold:        int32(current.CompactionThreshold), //nolint:gosec // bounded by non-negative setter above
+		CompactionTargetPercentSet: compactionTargetPercentSet,
+		CompactionTargetPercent:    nullableCompactionTargetPercent(current.CompactionTargetPercent),
+		ChatModelID:                chatModelUUID,
+		ChatRuntime:                current.ChatRuntime,
+		ChatAcpAgentID:             nullableText(current.ChatACPAgentID),
+		ChatAcpProjectPath:         current.ChatACPProjectPath,
+		ChatAcpProjectMode:         current.ChatACPProjectMode,
+		HeartbeatModelID:           heartbeatModelUUID,
+		CompactionModelIDSet:       compactionModelIDSet,
+		CompactionModelID:          compactionModelUUID,
+		ImageModelID:               imageModelUUID,
+		SearchProviderID:           searchProviderUUID,
+		FetchProviderIDSet:         fetchProviderIDSet,
+		FetchProviderID:            fetchProviderUUID,
+		MemoryProviderID:           memoryProviderUUID,
+		TtsModelID:                 ttsModelUUID,
+		TranscriptionModelID:       transcriptionModelUUID,
+		VideoModelID:               videoModelUUID,
+		PersistFullToolResults:     current.PersistFullToolResults,
+		ShowToolCallsInIm:          current.ShowToolCallsInIM,
+		ToolApprovalConfig:         toolApprovalConfig,
+		DisplayEnabled:             current.DisplayEnabled,
+		OverlayProvider:            normalizedNetwork.OverlayProvider,
+		OverlayEnabled:             normalizedNetwork.OverlayEnabled,
+		OverlayConfig:              overlayConfigJSON,
 	})
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(err)
@@ -412,22 +415,22 @@ func (s *Service) Delete(ctx context.Context, botID string) error {
 	return nil
 }
 
-func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEffect string, reasoningEnabled bool, reasoningEffort string, heartbeatEnabled bool, heartbeatInterval int32, compactionEnabled bool, compactionThreshold int32, compactionRatio int32) Settings {
+func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEffect string, reasoningEnabled bool, reasoningEffort string, heartbeatEnabled bool, heartbeatInterval int32, compactionEnabled bool, compactionThreshold int32, compactionTargetPercent pgtype.Int4) Settings {
 	settings := Settings{
-		Language:            strings.TrimSpace(language),
-		CommandUILanguage:   strings.TrimSpace(commandUILanguage),
-		AclDefaultEffect:    strings.TrimSpace(aclDefaultEffect),
-		ReasoningEnabled:    reasoningEnabled,
-		ReasoningEffort:     strings.TrimSpace(reasoningEffort),
-		HeartbeatEnabled:    heartbeatEnabled,
-		HeartbeatInterval:   int(heartbeatInterval),
-		CompactionEnabled:   compactionEnabled,
-		CompactionThreshold: int(compactionThreshold),
-		CompactionRatio:     int(compactionRatio),
-		ToolApprovalConfig:  DefaultToolApprovalConfig(),
-		ChatRuntime:         ChatRuntimeModel,
-		ChatACPProjectPath:  DefaultACPProjectPath,
-		ChatACPProjectMode:  DefaultACPProjectMode,
+		Language:                strings.TrimSpace(language),
+		CommandUILanguage:       strings.TrimSpace(commandUILanguage),
+		AclDefaultEffect:        strings.TrimSpace(aclDefaultEffect),
+		ReasoningEnabled:        reasoningEnabled,
+		ReasoningEffort:         strings.TrimSpace(reasoningEffort),
+		HeartbeatEnabled:        heartbeatEnabled,
+		HeartbeatInterval:       int(heartbeatInterval),
+		CompactionEnabled:       compactionEnabled,
+		CompactionThreshold:     int(compactionThreshold),
+		CompactionTargetPercent: normalizeCompactionTargetPercent(compactionTargetPercent),
+		ToolApprovalConfig:      DefaultToolApprovalConfig(),
+		ChatRuntime:             ChatRuntimeModel,
+		ChatACPProjectPath:      DefaultACPProjectPath,
+		ChatACPProjectMode:      DefaultACPProjectMode,
 	}
 	if settings.Language == "" {
 		settings.Language = DefaultLanguage
@@ -446,9 +449,6 @@ func normalizeBotSetting(language string, commandUILanguage string, aclDefaultEf
 	}
 	if settings.CompactionThreshold < 0 {
 		settings.CompactionThreshold = 0
-	}
-	if settings.CompactionRatio < 1 || settings.CompactionRatio > 100 {
-		settings.CompactionRatio = 80
 	}
 	settings.OverlayConfig = map[string]any{}
 	return settings
@@ -475,6 +475,13 @@ func applyCompactionTargetPercentOverride(current, requested *int) (*int, bool) 
 	return normalizeCompactionTargetPercentValue(*requested), true
 }
 
+func nullableCompactionTargetPercent(value *int) pgtype.Int4 {
+	if value == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(*value), Valid: true} //nolint:gosec // normalized to 1-99
+}
+
 // isValidReasoningEffort accepts the full effort tier range. Effort is now a
 // free-form tier string (models expose their own supported levels via capability
 // discovery), so we only reject empty/whitespace values here; the specific tiers
@@ -493,7 +500,7 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 		row.HeartbeatInterval,
 		row.CompactionEnabled,
 		row.CompactionThreshold,
-		row.CompactionRatio,
+		row.CompactionTargetPercent,
 		row.Timezone,
 		row.ChatModelID,
 		row.ChatRuntime,
@@ -529,7 +536,7 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 		row.HeartbeatInterval,
 		row.CompactionEnabled,
 		row.CompactionThreshold,
-		row.CompactionRatio,
+		row.CompactionTargetPercent,
 		row.Timezone,
 		row.ChatModelID,
 		row.ChatRuntime,
@@ -564,7 +571,7 @@ func normalizeBotSettingsFields(
 	heartbeatInterval int32,
 	compactionEnabled bool,
 	compactionThreshold int32,
-	compactionRatio int32,
+	compactionTargetPercent pgtype.Int4,
 	timezone pgtype.Text,
 	chatModelID pgtype.UUID,
 	chatRuntime string,
@@ -588,7 +595,7 @@ func normalizeBotSettingsFields(
 	overlayEnabled bool,
 	overlayConfig []byte,
 ) Settings {
-	settings := normalizeBotSetting(language, commandUILanguage, "", reasoningEnabled, reasoningEffort, heartbeatEnabled, heartbeatInterval, compactionEnabled, compactionThreshold, compactionRatio)
+	settings := normalizeBotSetting(language, commandUILanguage, "", reasoningEnabled, reasoningEffort, heartbeatEnabled, heartbeatInterval, compactionEnabled, compactionThreshold, compactionTargetPercent)
 	if timezone.Valid {
 		settings.Timezone = timezone.String
 	}

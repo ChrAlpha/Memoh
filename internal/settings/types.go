@@ -40,7 +40,6 @@ type Settings struct {
 	HeartbeatModelID        string             `json:"heartbeat_model_id"`
 	CompactionEnabled       bool               `json:"compaction_enabled"`
 	CompactionThreshold     int                `json:"compaction_threshold"`
-	CompactionRatio         int                `json:"compaction_ratio"`
 	CompactionTargetPercent *int               `json:"compaction_target_percent"`
 	CompactionModelID       string             `json:"compaction_model_id,omitempty"`
 	DiscussProbeModelID     string             `json:"discuss_probe_model_id,omitempty"`
@@ -77,7 +76,6 @@ type UpsertRequest struct {
 	HeartbeatModelID        string              `json:"heartbeat_model_id,omitempty"`
 	CompactionEnabled       *bool               `json:"compaction_enabled,omitempty"`
 	CompactionThreshold     *int                `json:"compaction_threshold,omitempty"`
-	CompactionRatio         *int                `json:"compaction_ratio,omitempty"`
 	CompactionTargetPercent *int                `json:"compaction_target_percent,omitempty"`
 	CompactionModelID       *string             `json:"compaction_model_id,omitempty"`
 	DiscussProbeModelID     string              `json:"discuss_probe_model_id,omitempty"`

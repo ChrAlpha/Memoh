@@ -21,7 +21,6 @@ func TestNormalizeBotSettingsReadRow_ShowToolCallsInIMDefault(t *testing.T) {
 		HeartbeatInterval:   60,
 		CompactionEnabled:   false,
 		CompactionThreshold: 0,
-		CompactionRatio:     80,
 		ShowToolCallsInIm:   false,
 	}
 	got := normalizeBotSettingsReadRow(row)
@@ -37,7 +36,6 @@ func TestNormalizeBotSettingsReadRow_ShowToolCallsInIMPropagates(t *testing.T) {
 		Language:          "en",
 		ReasoningEffort:   "medium",
 		HeartbeatInterval: 60,
-		CompactionRatio:   80,
 		ShowToolCallsInIm: true,
 	}
 	got := normalizeBotSettingsReadRow(row)
@@ -55,7 +53,6 @@ func TestNormalizeBotSettingsReadRow_CommandUILanguage(t *testing.T) {
 		CommandUiLanguage: "zh",
 		ReasoningEffort:   "medium",
 		HeartbeatInterval: 60,
-		CompactionRatio:   80,
 	})
 	if got.CommandUILanguage != "zh" {
 		t.Fatalf("CommandUILanguage = %q, want zh", got.CommandUILanguage)
@@ -66,7 +63,6 @@ func TestNormalizeBotSettingsReadRow_CommandUILanguage(t *testing.T) {
 		Language:          "en",
 		ReasoningEffort:   "medium",
 		HeartbeatInterval: 60,
-		CompactionRatio:   80,
 	})
 	if def.CommandUILanguage != DefaultCommandUILanguage {
 		t.Fatalf("default CommandUILanguage = %q, want %q", def.CommandUILanguage, DefaultCommandUILanguage)
@@ -80,7 +76,6 @@ func TestNormalizeBotSettingsReadRow_ChatRuntimeFields(t *testing.T) {
 		Language:           "en",
 		ReasoningEffort:    "medium",
 		HeartbeatInterval:  60,
-		CompactionRatio:    80,
 		ChatRuntime:        ChatRuntimeACPAgent,
 		ChatAcpAgentID:     pgtype.Text{String: "Codex", Valid: true},
 		ChatAcpProjectPath: "/data/app",
@@ -100,7 +95,6 @@ func TestNormalizeBotSettingsReadRow_ChatRuntimeFields(t *testing.T) {
 		Language:          "en",
 		ReasoningEffort:   "medium",
 		HeartbeatInterval: 60,
-		CompactionRatio:   80,
 	})
 	if def.ChatRuntime != ChatRuntimeModel || def.ChatACPProjectPath != DefaultACPProjectPath || def.ChatACPProjectMode != DefaultACPProjectMode {
 		t.Fatalf("default chat runtime fields = %#v", def)
@@ -176,7 +170,7 @@ func TestUpsertRequestShowToolCallsInIM_PointerSemantics(t *testing.T) {
 func TestNormalizeBotSettingDefaultHeartbeatInterval(t *testing.T) {
 	t.Parallel()
 
-	got := normalizeBotSetting("en", "auto", "allow", false, "medium", false, 0, false, 0, 80)
+	got := normalizeBotSetting("en", "auto", "allow", false, "medium", false, 0, false, 0, pgtype.Int4{})
 	if got.HeartbeatInterval != DefaultHeartbeatInterval {
 		t.Fatalf("heartbeat interval = %d, want %d", got.HeartbeatInterval, DefaultHeartbeatInterval)
 	}
@@ -230,6 +224,13 @@ func TestApplyCompactionTargetPercentOverride(t *testing.T) {
 	if !set || got != nil {
 		t.Fatalf("clear sentinel = (%v, %t), want nil and set=true", got, set)
 	}
+
+	if got := nullableCompactionTargetPercent(settingsIntPointer(30)); !got.Valid || got.Int32 != 30 {
+		t.Fatalf("nullableCompactionTargetPercent(30) = %v, want valid 30", got)
+	}
+	if got := nullableCompactionTargetPercent(nil); got.Valid {
+		t.Fatalf("nullableCompactionTargetPercent(nil) = %v, want null", got)
+	}
 }
 
 func settingsIntPointer(value int) *int {
@@ -250,7 +251,7 @@ func TestReasoningEffortAllowsFullModelLadder(t *testing.T) {
 		if !isValidReasoningEffort(effort) {
 			t.Fatalf("isValidReasoningEffort(%q) = false, want true", effort)
 		}
-		got := normalizeBotSetting("en", "auto", "allow", true, effort, false, 60, false, 0, 80)
+		got := normalizeBotSetting("en", "auto", "allow", true, effort, false, 60, false, 0, pgtype.Int4{})
 		if got.ReasoningEffort != effort {
 			t.Fatalf("normalizeBotSetting effort = %q, want %q", got.ReasoningEffort, effort)
 		}
