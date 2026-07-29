@@ -103,6 +103,11 @@ const settingsChanged = computed(() => {
     || settingsForm.compaction_model_id !== (s.compaction_model_id ?? '')
 })
 
+const compactionTargetPercentInvalid = computed(() => {
+  const target = settingsForm.compaction_target_percent
+  return target !== null && (!Number.isInteger(target) || target < 1 || target > 99)
+})
+
 // Was on, now toggled off but not yet saved — the cue that disabling is pending.
 const pendingDisable = computed(() => !settingsForm.compaction_enabled && savedEnabled.value)
 
@@ -136,6 +141,8 @@ const { mutateAsync: updateSettings, isLoading: isSaving } = useMutation({
 })
 
 async function handleSaveSettings() {
+  if (compactionTargetPercentInvalid.value) return
+
   try {
     await updateSettings({
       ...settingsForm,
@@ -319,6 +326,13 @@ onBeforeUnmount(() => {
               >
                 {{ $t('bots.settings.compactionTargetPercentDescription') }}
               </p>
+              <p
+                v-if="compactionTargetPercentInvalid"
+                id="compaction-target-percent-error"
+                class="mt-1 text-body text-destructive"
+              >
+                {{ $t('bots.settings.compactionTargetPercentInvalid') }}
+              </p>
             </template>
             <Input
               id="compaction-target-percent"
@@ -330,7 +344,10 @@ onBeforeUnmount(() => {
               placeholder="40"
               size="sm"
               class="w-32 tabular-nums"
-              aria-describedby="compaction-target-percent-description"
+              :aria-describedby="compactionTargetPercentInvalid
+                ? 'compaction-target-percent-description compaction-target-percent-error'
+                : 'compaction-target-percent-description'"
+              :aria-invalid="compactionTargetPercentInvalid"
               @update:model-value="updateCompactionTargetPercent"
             />
           </SettingsRow>
@@ -364,6 +381,7 @@ onBeforeUnmount(() => {
           <Button
             size="sm"
             :loading="isSaving"
+            :disabled="isSaving || compactionTargetPercentInvalid"
             @click="handleSaveSettings"
           >
             {{ $t('common.saveChanges') }}
