@@ -31,7 +31,7 @@ func autoCompactionThreshold(userThreshold, contextTokenBudget int) int {
 		return 0
 	}
 	if userThreshold <= 0 {
-		return contextTokenBudget * compactionSoftThresholdPercent / 100
+		return max(1, contextTokenBudget*compactionSoftThresholdPercent/100)
 	}
 	return min(userThreshold, hardCompactionThreshold(contextTokenBudget))
 }
@@ -40,7 +40,7 @@ func hardCompactionThreshold(contextTokenBudget int) int {
 	if contextTokenBudget <= 0 {
 		return 0
 	}
-	return contextTokenBudget * compactionHardThresholdPercent / 100
+	return max(1, contextTokenBudget*compactionHardThresholdPercent/100)
 }
 
 func compactionTargetTokens(targetPercent *int, contextTokenBudget int) int {
@@ -51,7 +51,7 @@ func compactionTargetTokens(targetPercent *int, contextTokenBudget int) int {
 	if targetPercent != nil && *targetPercent >= 1 && *targetPercent <= 99 {
 		percent = *targetPercent
 	}
-	return contextTokenBudget * percent / 100
+	return max(1, contextTokenBudget*percent/100)
 }
 
 func syncCompactionShouldRun(pressure, contextTokenBudget int) bool {

@@ -63,6 +63,16 @@ func TestUnifiedCompactionController(t *testing.T) {
 			targetPercent: targetPercentPointer(55),
 			pressure:      150000,
 		},
+		{
+			name:          "small positive budget keeps controller active",
+			threshold:     100,
+			targetPercent: targetPercentPointer(1),
+			budget:        1,
+			pressure:      1,
+			wantTrigger:   1,
+			wantTarget:    1,
+			wantSync:      true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
