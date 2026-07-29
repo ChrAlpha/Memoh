@@ -13,6 +13,7 @@ type Code string
 const (
 	CodeBotNameTaken                     Code = "bot.name_taken"
 	CodeChannelRuntimeUnavailable        Code = "channel.runtime_unavailable"
+	CodeCompactionModelUnavailable       Code = "compaction.model_unavailable"
 	CodeWorkspaceUnreachable             Code = "workspace.unreachable"
 	CodeWorkspaceImageIncompatible       Code = "workspace.image_incompatible"
 	CodeWorkspaceTemplateBootstrapFailed Code = "workspace.template_bootstrap_failed"
@@ -28,6 +29,7 @@ const (
 	CodeProfileTitleModelInvalid         Code = "profile.title_model_invalid"
 	CodeProfileUpdateFailed              Code = "profile.update_failed"
 	CodeACPRuntimeNotFound               Code = "acp.runtime_not_found"
+	CodeACPTurnReplacementUnsupported    Code = "acp.turn_replacement_unsupported"
 	CodeACPModelSelectionUnsupported     Code = "acp.model_selection_unsupported"
 	CodeACPModelIDRequired               Code = "acp.model_id_required"
 	CodeACPModelUnavailable              Code = "acp.model_unavailable"
@@ -35,6 +37,9 @@ const (
 	CodeACPReasoningEffortRequired       Code = "acp.reasoning_effort_required"
 	CodeACPReasoningUnavailable          Code = "acp.reasoning_effort_unavailable"
 	CodeACPConfigUpdateFailed            Code = "acp.config_update_failed"
+	CodeSessionBusy                      Code = "session_runtime.session_busy"
+	CodeSessionInvocationConflict        Code = "session_runtime.invocation_conflict"
+	CodeSessionHistoryInconsistent       Code = "session_runtime.history_inconsistent"
 )
 
 // Definition is the single catalog entry for a public error contract.
@@ -57,6 +62,11 @@ var catalog = map[Code]Definition{
 	CodeChannelRuntimeUnavailable: {
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The channel service could not be reached.",
+	},
+	CodeCompactionModelUnavailable: {
+		HTTPStatus:  http.StatusBadRequest,
+		Detail:      "The compaction model is unavailable.",
+		AllowedArgs: []string{"reason"},
 	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,
@@ -120,6 +130,10 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "The ACP runtime is no longer available.",
 	},
+	CodeACPTurnReplacementUnsupported: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "Retry and edit are unavailable for external agent sessions. Send a new message instead.",
+	},
 	CodeACPModelSelectionUnsupported: {
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "This external agent does not support model selection.",
@@ -147,6 +161,23 @@ var catalog = map[Code]Definition{
 	CodeACPConfigUpdateFailed: {
 		HTTPStatus: http.StatusBadGateway,
 		Detail:     "The external agent could not apply the selected settings. Please retry.",
+	},
+	// A session runs one turn at a time, so this is ordinary backpressure and
+	// the same submission succeeds once the session frees up. It is the one
+	// conflict in this catalog that a client should retry unchanged.
+	CodeSessionBusy: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This conversation is still working on the previous message. Please try again shortly.",
+	},
+	// Distinct from session_busy: retrying changes nothing, because the same
+	// retry identity was already used for different input.
+	CodeSessionInvocationConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This request was already submitted with different content.",
+	},
+	CodeSessionHistoryInconsistent: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The conversation history could not be reconciled. Refresh and try again.",
 	},
 }
 

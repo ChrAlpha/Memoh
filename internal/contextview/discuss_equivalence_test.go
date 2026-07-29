@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -203,7 +204,11 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 }
 
 func legacyDiscussMessages(rc pipeline.RenderedContext, trs []pipeline.TurnResponseEntry, summary string) []sdk.Message {
-	composed := pipeline.ComposeContext(rc, trs, summary)
+	var artifacts []pipeline.CompactionArtifact
+	if strings.TrimSpace(summary) != "" {
+		artifacts = []pipeline.CompactionArtifact{{ID: "equivalence-artifact", Summary: summary}}
+	}
+	composed := pipeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
 		return nil
 	}

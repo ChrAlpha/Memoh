@@ -65,7 +65,7 @@ func TestDiscussCollector_SummaryBeforeHistory(t *testing.T) {
 		t.Fatalf("summary Overflow = %q, want %q", summary.Budget.Overflow, contextfrag.OverflowKeep)
 	}
 	assertDiscussMessages(t, frags, []sdk.Message{
-		sdk.UserMessage("[Conversation summary]\nearlier context"),
+		sdk.UserMessage("<summary>\nearlier context\n</summary>"),
 		sdk.UserMessage("history"),
 	})
 }

@@ -12,7 +12,7 @@ func TestToolSessionContextStoreMergesLatestPromptContext(t *testing.T) {
 	store.Put(ToolSessionContext{
 		BotID:            "bot-1",
 		SessionID:        "session-1",
-		StreamID:         "stream-1",
+		RunID:            "run-1",
 		CurrentPlatform:  "web",
 		ReplyTarget:      "reply-1",
 		ConversationType: "private",
@@ -23,7 +23,7 @@ func TestToolSessionContextStoreMergesLatestPromptContext(t *testing.T) {
 		SessionID:    "session-1",
 		SessionToken: "header-token",
 	})
-	if merged.StreamID != "stream-1" || merged.CurrentPlatform != "web" || merged.ReplyTarget != "reply-1" || merged.ConversationType != "private" {
+	if merged.RunID != "run-1" || merged.CurrentPlatform != "web" || merged.ReplyTarget != "reply-1" || merged.ConversationType != "private" {
 		t.Fatalf("merged context = %#v", merged)
 	}
 	if merged.SessionToken != "header-token" {
@@ -88,18 +88,18 @@ func TestToolSessionContextMergePreservesRuntimeLifecycle(t *testing.T) {
 
 func TestToolSessionContextStorePutPreservesExistingNonEmptyFields(t *testing.T) {
 	store := NewToolSessionContextStore()
-	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"})
+	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", RunID: "run-1"})
 	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", CurrentPlatform: "web"})
 
 	merged := store.Merge(ToolSessionContext{BotID: "bot-1", SessionID: "session-1"})
-	if merged.StreamID != "stream-1" || merged.CurrentPlatform != "web" {
+	if merged.RunID != "run-1" || merged.CurrentPlatform != "web" {
 		t.Fatalf("merged context = %#v", merged)
 	}
 }
 
 func TestToolSessionContextStoreCloseSessionClearsContextAndSinks(t *testing.T) {
 	store := NewToolSessionContextStore()
-	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"}
+	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", RunID: "run-1"}
 	store.Put(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", CurrentPlatform: "web"})
 	store.RegisterToolEventSink(session, func(ToolStreamEvent) {})
 
@@ -120,7 +120,7 @@ func TestToolSessionContextStoreCloseSessionClearsContextAndSinks(t *testing.T) 
 
 func TestToolSessionContextStoreRegisteredSinkReceivesToolEvents(t *testing.T) {
 	store := NewToolSessionContextStore()
-	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"}
+	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", RunID: "run-1"}
 	var delivered []ToolStreamEvent
 	unregister := store.RegisterToolEventSink(session, func(event ToolStreamEvent) {
 		delivered = append(delivered, event)
@@ -142,7 +142,7 @@ func TestToolSessionContextStoreRegisteredSinkReceivesToolEvents(t *testing.T) {
 
 func TestToolSessionContextStoreOldCleanupDoesNotRemoveNewerSink(t *testing.T) {
 	store := NewToolSessionContextStore()
-	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"}
+	session := ToolSessionContext{BotID: "bot-1", SessionID: "session-1", RunID: "run-1"}
 	var first, second int
 	unregisterFirst := store.RegisterToolEventSink(session, func(ToolStreamEvent) {
 		first++
@@ -169,7 +169,7 @@ func TestToolSessionContextStoreOldCleanupDoesNotRemoveNewerSink(t *testing.T) {
 
 func TestToolSessionContextStoreDropsToolEventsWithoutSink(t *testing.T) {
 	store := NewToolSessionContextStore()
-	delivered := store.AppendToolEvent(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", StreamID: "stream-1"}, ToolStreamEvent{
+	delivered := store.AppendToolEvent(ToolSessionContext{BotID: "bot-1", SessionID: "session-1", RunID: "run-1"}, ToolStreamEvent{
 		Type:       "tool_call_start",
 		ToolCallID: "call-1",
 		ToolName:   "schedule_list",

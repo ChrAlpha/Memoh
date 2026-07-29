@@ -73,9 +73,6 @@ func TestGenerateAppliesContextViewAfterToolUsage(t *testing.T) {
 	if !strings.Contains(seen.System, usageMarker) {
 		t.Fatalf("applier must see the tool-usage-augmented system, got %q", seen.System)
 	}
-	if len(seen.ContextDynamicMutators) == 0 {
-		t.Fatal("applier must see dynamic mutators computed before the view")
-	}
 	if params := modelProvider.lastParams(); params.System != "VIEW_SYSTEM" {
 		t.Fatalf("model system = %q, want applier output to be authoritative", params.System)
 	}

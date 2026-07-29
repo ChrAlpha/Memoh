@@ -44,7 +44,11 @@ func TestDiscussACPPromptMatchesLegacyForAlternatingStreams(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildDiscussACPPrompt failed: %v", err)
 			}
-			composed := pipeline.ComposeContext(rc, trs, tc.summary)
+			var artifacts []pipeline.CompactionArtifact
+			if strings.TrimSpace(tc.summary) != "" {
+				artifacts = []pipeline.CompactionArtifact{{ID: "equivalence-artifact", Summary: tc.summary}}
+			}
+			composed := pipeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 			if composed == nil {
 				t.Fatal("composed should not be nil")
 			}

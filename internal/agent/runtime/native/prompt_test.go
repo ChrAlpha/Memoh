@@ -28,6 +28,21 @@ func TestGenerateSystemPromptIncludesPlatformIdentitiesInChat(t *testing.T) {
 	}
 }
 
+func TestGenerateSystemPromptOmitsVolatileCurrentTime(t *testing.T) {
+	t.Parallel()
+
+	prompt := GenerateSystemPrompt(SystemPromptParams{
+		SessionType: sessionmode.Chat,
+		Timezone:    "Asia/Singapore",
+	})
+	if strings.Contains(prompt, "Current time:") || strings.Contains(prompt, "{{currentTime}}") {
+		t.Fatalf("system prompt contains a volatile current time:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Timezone: Asia/Singapore") {
+		t.Fatalf("system prompt must retain the stable timezone:\n%s", prompt)
+	}
+}
+
 func TestGenerateSystemPromptIncludesCommonAndModeContracts(t *testing.T) {
 	t.Parallel()
 

@@ -96,6 +96,5 @@ func (cfg RunConfig) contextDynamicMutators(readMedia bool, beforeModelCallHook 
 	if cfg.BackgroundManager != nil {
 		mutators = append(mutators, contextfrag.DynamicMutatorBackgroundSummary)
 	}
-	mutators = append(mutators, contextfrag.DynamicMutatorMidTaskPrune)
 	return mutators
 }

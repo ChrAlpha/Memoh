@@ -238,18 +238,6 @@ func (m *Manager) ClearLegacyIP(botID string) {
 	m.legacyMu.Unlock()
 }
 
-func (m *Manager) usesKataRuntime() bool {
-	provider, ok := m.service.(interface{ RuntimeType() string })
-	if !ok {
-		return false
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(provider.RuntimeType())), "kata")
-}
-
-func (m *Manager) usesTCPBridge(ctx context.Context, containerID string) bool {
-	return m.IsLegacyContainer(ctx, containerID) || m.usesKataRuntime()
-}
-
 // clearLegacyRoute evicts any stale TCP fallback state for a bot so future
 // gRPC dials use the bridge container's Unix socket.
 func (m *Manager) clearLegacyRoute(botID string) {
@@ -594,11 +582,7 @@ func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, botID string,
 	skillEnv := skillset.ContainerEnv(skillRoots)
 	env := make([]string, 0, len(tzEnv)+1+len(skillEnv))
 	env = append(env, tzEnv...)
-	if m.usesKataRuntime() {
-		env = append(env, fmt.Sprintf("BRIDGE_TCP_ADDR=:%d", legacyGRPCPort))
-	} else {
-		env = append(env, "BRIDGE_SOCKET_PATH=/run/memoh/bridge.sock")
-	}
+	env = append(env, "BRIDGE_SOCKET_PATH=/run/memoh/bridge.sock")
 	env = m.appendBridgeTLSEnv(env)
 	if m.botDisplayEnabled(ctx, botID) {
 		env = append(env,
@@ -661,6 +645,12 @@ func (m *Manager) ensureBotWithImage(ctx context.Context, botID, image string, g
 	if err := validateBotID(botID); err != nil {
 		return err
 	}
+	containerID := m.resolveContainerID(ctx, botID)
+	if _, err := m.service.GetContainer(ctx, containerID); err == nil {
+		return nil
+	} else if !ctr.IsNotFound(err) {
+		return err
+	}
 	spec, err := m.buildWorkspaceContainerSpec(ctx, botID, gpu)
 	if err != nil {
 		return err
@@ -682,7 +672,7 @@ func (m *Manager) ensureBotWithImage(ctx context.Context, botID, image string, g
 	}
 
 	_, err = m.service.CreateContainer(ctx, ctr.CreateContainerRequest{
-		ID:              ContainerPrefix + botID,
+		ID:              containerID,
 		ImageRef:        image,
 		ImagePullPolicy: m.cfg.EffectiveImagePullPolicy(),
 		StorageRef:      ctr.StorageRef{Driver: m.cfg.Snapshotter, Kind: "active"},
@@ -768,6 +758,8 @@ func (m *Manager) StartWithResolvedConfig(ctx context.Context, botID, image stri
 
 func (m *Manager) startWithResolvedConfig(ctx context.Context, botID, image string, gpu WorkspaceGPUConfig) error {
 	containerID := m.resolveContainerID(ctx, botID)
+	unlock := m.lockContainer(containerID)
+	defer unlock()
 
 	// Before creating a new container, check for an orphaned snapshot
 	// (container deleted but snapshot with /data survived). Export /data
@@ -810,7 +802,7 @@ func (m *Manager) startWithResolvedConfig(ctx context.Context, botID, image stri
 			return fmt.Errorf("restore preserved data through bridge: %w", err)
 		}
 	}
-	if !m.usesTCPBridge(ctx, containerID) {
+	if !m.IsLegacyContainer(ctx, containerID) {
 		m.clearLegacyRoute(botID)
 	}
 	if err := m.runWorkspaceHook(context.WithoutCancel(ctx), botID, hooks.EventWorkspaceStart, map[string]any{

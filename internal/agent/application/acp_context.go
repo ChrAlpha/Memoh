@@ -18,12 +18,11 @@ const acpContextURI = "memoh://context/current-turn"
 const acpDynamicContextMaxChars = 8 * 1024
 
 type acpContextRenderInput struct {
-	Now                       time.Time
 	Timezone                  string
 	BotID                     string
 	ChatID                    string
 	SessionID                 string
-	StreamID                  string
+	RunID                     string
 	RouteID                   string
 	AgentID                   string
 	ProjectPath               string
@@ -43,16 +42,15 @@ type acpContextRenderInput struct {
 
 func (s *Service) buildACPContextSections(ctx context.Context, req ChatRequest, agentID, projectPath string) ([]contextview.ACPSection, *contextfrag.MemoryRecallTrace) {
 	timezoneName, timezoneLocation := s.resolveTimezone(ctx, req.BotID, req.UserID)
-	now := time.Now().UTC()
-	if timezoneLocation != nil {
-		now = now.In(timezoneLocation)
-	}
 
 	var files []native.SystemFile
 	limits := native.DefaultLimits()
 	if s != nil && s.agent != nil {
 		limits = s.agent.Limits()
-		nowFn := func() time.Time { return now }
+		nowFn := time.Now
+		if timezoneLocation != nil {
+			nowFn = func() time.Time { return time.Now().In(timezoneLocation) }
+		}
 		fs := native.NewFSClient(s.agent.BridgeProvider(), req.BotID, nowFn)
 		files = fs.LoadSystemFiles(ctx)
 	}
@@ -77,12 +75,11 @@ func (s *Service) buildACPContextSections(ctx context.Context, req ChatRequest, 
 	}
 
 	sections := buildACPContextSections(acpContextRenderInput{
-		Now:                       now,
 		Timezone:                  timezoneName,
 		BotID:                     req.BotID,
 		ChatID:                    req.ChatID,
 		SessionID:                 req.ThreadID,
-		StreamID:                  req.StreamID,
+		RunID:                     req.RunID,
 		RouteID:                   req.RouteID,
 		AgentID:                   agentID,
 		ProjectPath:               projectPath,
@@ -103,10 +100,6 @@ func (s *Service) buildACPContextSections(ctx context.Context, req ChatRequest, 
 }
 
 func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSection {
-	now := input.Now
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
 	timezoneName := strings.TrimSpace(input.Timezone)
 	if timezoneName == "" {
 		timezoneName = "UTC"
@@ -137,11 +130,10 @@ func buildACPContextSections(input acpContextRenderInput) []contextview.ACPSecti
 	})
 
 	runtimePairs := [][2]string{
-		{"Current time", now.Format(time.RFC3339)},
 		{"Timezone", timezoneName},
 		{"Bot ID", input.BotID},
 		{"Session ID", input.SessionID},
-		{"Stream ID", input.StreamID},
+		{"Run ID", input.RunID},
 		{"ACP agent", input.AgentID},
 		{"Workspace", input.ProjectPath},
 	}

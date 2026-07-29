@@ -24,16 +24,42 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 	var previous *WorkspaceTarget
 	for _, record := range records {
 		if current := workspaceTargetFromMetadata(record.Metadata); current != nil && !sameWorkspaceTarget(previous, current) {
-			text := fmt.Sprintf("[Execution location] Earlier file and command operations from this point belong to %q (target_id=%q).", current.Name, current.TargetID)
-			if previous != nil {
-				text = fmt.Sprintf("[Execution location changed] The default execution location changed from %q (target_id=%q) to %q (target_id=%q). Files, processes, and working-directory state do not transfer between them.", previous.Name, previous.TargetID, current.Name, current.TargetID)
-			}
-			result = append(result, historyfrag.HistoryRecord{ModelMessage: ModelMessage{Role: "system", Content: newTextContent(text)}})
+			text := renderWorkspaceTransition(previous, current)
+			result = append(result, historyfrag.HistoryRecord{
+				ModelMessage: ModelMessage{Role: "system", Content: newTextContent(text)},
+				Synthetic:    true,
+			})
 			previous = current
 		}
 		result = append(result, record)
 	}
 	return result
+}
+
+func renderWorkspaceTransition(previous, current *WorkspaceTarget) string {
+	if current == nil || strings.TrimSpace(current.TargetID) == "" {
+		return ""
+	}
+	if previous != nil && sameWorkspaceTarget(previous, current) {
+		return ""
+	}
+	if previous == nil {
+		return fmt.Sprintf(
+			"[Execution location] The default Computer is %q (target_id=%q, kind=%q). Workspace tools that omit target_id run there.",
+			current.Name,
+			current.TargetID,
+			current.Kind,
+		)
+	}
+	return fmt.Sprintf(
+		"[Execution location changed] The default Computer changed from %q (target_id=%q, kind=%q) to %q (target_id=%q, kind=%q). Earlier file and command results belong to their recorded Computer. Files, processes, and working-directory state do not transfer between Computers; inspect the new Computer before continuing.",
+		previous.Name,
+		previous.TargetID,
+		previous.Kind,
+		current.Name,
+		current.TargetID,
+		current.Kind,
+	)
 }
 
 func sameWorkspaceTarget(left, right *WorkspaceTarget) bool {
@@ -79,9 +105,9 @@ func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req ChatRe
 			}
 		}
 	}
-	text := fmt.Sprintf("[Current execution location] The default Computer for this request is %q (target_id=%q, kind=%q). Workspace tools that omit target_id run there.", current.Name, current.TargetID, current.Kind)
-	if previous != nil && !sameWorkspaceTarget(previous, current) {
-		text = fmt.Sprintf("[Current execution location changed] The default Computer for this request changed from %q (target_id=%q) to %q (target_id=%q, kind=%q). Earlier file and command results belong to their recorded Computer. Do not assume files, processes, or working-directory state exist on the new Computer; inspect it before continuing.", previous.Name, previous.TargetID, current.Name, current.TargetID, current.Kind)
+	text := renderWorkspaceTransition(previous, current)
+	if text == "" {
+		return nil
 	}
 	message := ModelMessage{Role: "system", Content: newTextContent(text)}
 	return &message
@@ -292,11 +318,7 @@ func totalCompactableHistoryTokens(records []historyfrag.HistoryRecord) int {
 
 func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
 	if maxTokens == 0 || len(messages) == 0 {
-		totalTokens := 0
-		for _, m := range messages {
-			totalTokens += estimateMessageTokens(m.ModelMessage)
-		}
-		return historyfrag.ToModelMessages(messages), messages, totalTokens
+		return finalizeTrimmedHistory(messages, false, 0)
 	}
 
 	// Scan from newest to oldest, accumulating per-message estimated context
@@ -313,9 +335,9 @@ func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.His
 		}
 	}
 
-	// Keep provider-valid message order: a "tool" message must follow a preceding
-	// assistant tool call. When history is head-trimmed, a leading tool message
-	// may become orphaned and cause provider 400 errors.
+	// Keep provider-valid message order: a "tool" message must follow a
+	// preceding assistant tool call. When history is head-trimmed, a leading
+	// tool message may become orphaned and cause provider 400 errors.
 	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
 		cutoff++
 	}
@@ -335,24 +357,98 @@ func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.His
 	retained := make([]historyfrag.HistoryRecord, 0, len(messages)-cutoff+len(requiredPrefix))
 	retained = append(retained, requiredPrefix...)
 	retained = append(retained, messages[cutoff:]...)
-	result := make([]ModelMessage, 0, len(retained))
-	if cutoff > 0 {
-		// Add a truncation notice at the beginning so the LLM knows earlier
-		// context was trimmed and it can use tools (memory, search) to look up
-		// past information if needed.
-		result = append(result, ModelMessage{
-			Role: "system",
-			Content: newTextContent(
-				"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
-					"If you need information from earlier in the conversation, use the available tools " +
-					"(such as memory_read or web search) to retrieve it.",
-			),
-		})
+	return finalizeTrimmedHistory(retained, cutoff > 0, maxTokens)
+}
+
+// historyTrimNotice tells the LLM that earlier context was trimmed so it can
+// use tools (memory, search) to look up past information if needed.
+func historyTrimNotice() ModelMessage {
+	return ModelMessage{
+		Role: "system",
+		Content: newTextContent(
+			"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
+				"If you need information from earlier in the conversation, use the available tools " +
+				"(such as memory_read or web search) to retrieve it.",
+		),
 	}
-	for _, m := range retained {
-		result = append(result, m.ModelMessage)
+}
+
+// finalizeTrimmedHistory derives workspace-transition markers from the
+// records that survived trimming and charges markers and the truncation
+// notice against the same hard budget, dropping the oldest droppable
+// survivors until everything fits. Deriving from survivors means every kept
+// workspace run is governed by its marker no matter where the cut fell —
+// including messages pulled back as Required. When only protected records
+// remain, the terminal ladder keeps the budget a hard bound: the notice is
+// omitted first (meta text loses to content), then the oldest active
+// summaries are evicted; Required records are the only sanctioned overflow.
+func finalizeTrimmedHistory(retained []historyfrag.HistoryRecord, trimmed bool, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	noticeDropped := false
+	for {
+		annotated := injectWorkspaceTransitionRecords(retained)
+		withNotice := trimmed && !noticeDropped
+		totalTokens := estimateMessagesTokens(annotated)
+		if withNotice {
+			totalTokens += estimateMessageTokens(historyTrimNotice())
+		}
+		if maxTokens <= 0 || totalTokens <= maxTokens {
+			return emitTrimmedHistory(annotated, withNotice, totalTokens)
+		}
+		// Active summaries are shielded from this first rung: evicting the
+		// compressed carrier of already-trimmed history before plain rows
+		// would be self-defeating, and summaries stay small by the engine's
+		// ineffective-summary gate.
+		if dropIndex := trimDropIndex(retained, false); dropIndex >= 0 {
+			retained = dropRetainedRecord(retained, dropIndex)
+			trimmed = true
+			continue
+		}
+		if withNotice {
+			noticeDropped = true
+			continue
+		}
+		if dropIndex := trimDropIndex(retained, true); dropIndex >= 0 {
+			retained = dropRetainedRecord(retained, dropIndex)
+			trimmed = true
+			continue
+		}
+		return emitTrimmedHistory(annotated, withNotice, totalTokens)
 	}
-	return result, retained, totalTokens
+}
+
+func trimDropIndex(retained []historyfrag.HistoryRecord, allowActiveSummaries bool) int {
+	for index, record := range retained {
+		if record.Required {
+			continue
+		}
+		if !allowActiveSummaries && record.Lifecycle == historyfrag.LifecycleActiveSummary {
+			continue
+		}
+		return index
+	}
+	return -1
+}
+
+func dropRetainedRecord(retained []historyfrag.HistoryRecord, dropIndex int) []historyfrag.HistoryRecord {
+	retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+	// Dropping a call can orphan its tool results; drop those too.
+	for dropIndex < len(retained) &&
+		!retained[dropIndex].Required &&
+		strings.EqualFold(strings.TrimSpace(retained[dropIndex].ModelMessage.Role), "tool") {
+		retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
+	}
+	return retained
+}
+
+func emitTrimmedHistory(annotated []historyfrag.HistoryRecord, withNotice bool, totalTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
+	result := make([]ModelMessage, 0, len(annotated)+1)
+	if withNotice {
+		result = append(result, historyTrimNotice())
+	}
+	for _, record := range annotated {
+		result = append(result, record.ModelMessage)
+	}
+	return result, annotated, totalTokens
 }
 
 func fitRequiredMessagesWithinBudget(messages []historyfrag.HistoryRecord, cutoff int, maxTokens int) (int, int) {

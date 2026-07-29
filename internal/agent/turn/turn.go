@@ -17,6 +17,20 @@ import (
 // delivery and drop the duplicate silently.
 var ErrDuplicateTurn = errors.New("turn: duplicate idempotency key")
 
+// ErrSessionBusy reports that the thread already has a run in flight, so this
+// command was not started and nothing was persisted for it.
+//
+// It is retryable by construction, and that is the whole point: a thread runs
+// one turn at a time, and the runtime holds nothing on a caller's behalf. The
+// caller redelivers through the retry mechanism it already owns — a platform
+// webhook retry, the next cron fire — and because a redelivery repeats the same
+// IdempotencyKey, the retry is the same invocation rather than a second turn.
+//
+// It is declared here rather than reused from the runtime because this package
+// is the only agent surface Channel may import, and it must not depend on the
+// runtime that produces the condition.
+var ErrSessionBusy = errors.New("turn: thread already has a run in flight")
+
 // ErrTeamNotServed reports that the service instance does not serve the
 // command's team. The in-process runtime binds its database pool to the
 // single self-hosted team, so commands for any other team must fail
@@ -95,24 +109,23 @@ type StartTurnCommand struct {
 
 	// DiscussMessages is the composed conversation context for a discuss
 	// turn (Mode == ModeDiscuss), already rendered by the caller's
-	// projection. The runtime appends its own late-binding prompt after
-	// image inlining so vision parts land on the last real user message.
+	// projection. Image parts are injected into the last real user message
+	// before the runtime starts streaming.
 	DiscussMessages  []DiscussMessage
 	DiscussImageRefs []DiscussImageRef
-	// DiscussMentioned reports an explicit @-mention or reply-to in the
-	// new context window; DiscussAddressed additionally covers direct
-	// (1:1) conversations. Expensive external runtimes (ACP) use
-	// DiscussAddressed as a participation gate and skip the run when
-	// false.
-	DiscussMentioned bool
+	// DiscussAddressed covers an explicit @-mention, a reply-to, or a direct
+	// (1:1) conversation. Expensive external runtimes (ACP) use it as a
+	// participation gate and skip the run when false. Mention/reply details
+	// stay attached to their canonical timeline messages.
 	DiscussAddressed bool
 }
 
 // DiscussMessage is one composed context message for a discuss turn.
 type DiscussMessage struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content"`
-	RawContent json.RawMessage `json:"raw_content,omitempty"`
+	Role                 string          `json:"role"`
+	Content              string          `json:"content"`
+	RawContent           json.RawMessage `json:"raw_content,omitempty"`
+	CompactionArtifactID string          `json:"compaction_artifact_id,omitempty"`
 }
 
 // DiscussImageRef references an image attachment to inline as vision input.
@@ -140,6 +153,7 @@ type DiscussRunResolvedPayload struct {
 // ToolApprovalResponse resumes a thread's turn deferred on tool approval
 // (RFC ResumeApprovalCommand).
 type ToolApprovalResponse struct {
+	ControlID                  string
 	BotID                      string
 	ThreadID                   string
 	ActorChannelIdentityID     string
@@ -156,6 +170,7 @@ type ToolApprovalResponse struct {
 // UserInputResponse resumes a thread's turn deferred on ask_user
 // (RFC ResumeUserInputCommand).
 type UserInputResponse struct {
+	ControlID                  string
 	BotID                      string
 	ThreadID                   string
 	ActorChannelIdentityID     string

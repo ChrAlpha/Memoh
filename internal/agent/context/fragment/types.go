@@ -332,7 +332,6 @@ const (
 	DynamicMutatorReadMedia           DynamicMutator = "read_media"
 	DynamicMutatorBeforeModelCallHook DynamicMutator = "before_model_call_hook"
 	DynamicMutatorBackgroundSummary   DynamicMutator = "background_summary"
-	DynamicMutatorMidTaskPrune        DynamicMutator = "mid_task_prune"
 )
 
 // ManifestCounts summarizes fragment composition.

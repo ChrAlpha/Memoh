@@ -31,13 +31,14 @@ import (
 
 var ErrTaskStopTimeout = errors.New("timeout waiting for task to stop")
 
+const runtimeType = "io.containerd.runc.v2"
+
 type DefaultService struct {
-	client      *containerd.Client
-	namespace   string
-	runtimeType string
-	logger      *slog.Logger
-	cniBinDir   string
-	cniConfDir  string
+	client     *containerd.Client
+	namespace  string
+	logger     *slog.Logger
+	cniBinDir  string
+	cniConfDir string
 }
 
 func NewService(log *slog.Logger, client *containerd.Client, cfg config.Config) *DefaultService {
@@ -58,25 +59,12 @@ func NewDefaultService(log *slog.Logger, client *containerd.Client, cfg config.C
 		cniConfDir = config.DefaultCNIConfigDir
 	}
 	return &DefaultService{
-		client:      client,
-		namespace:   namespace,
-		runtimeType: cfg.Containerd.RuntimeTypeOrDefault(),
-		logger:      log.With(slog.String("service", "containerd")),
-		cniBinDir:   cniBinDir,
-		cniConfDir:  cniConfDir,
+		client:     client,
+		namespace:  namespace,
+		logger:     log.With(slog.String("service", "containerd")),
+		cniBinDir:  cniBinDir,
+		cniConfDir: cniConfDir,
 	}
-}
-
-func (s *DefaultService) runtimeTypeOrDefault() string {
-	runtimeType := strings.TrimSpace(s.runtimeType)
-	if runtimeType == "" {
-		return config.DefaultContainerdRuntimeType
-	}
-	return runtimeType
-}
-
-func (s *DefaultService) RuntimeType() string {
-	return s.runtimeTypeOrDefault()
 }
 
 func (s *DefaultService) PullImage(ctx context.Context, ref string, opts *PullImageOptions) (ImageInfo, error) {
@@ -306,6 +294,11 @@ func (s *DefaultService) CreateContainer(ctx context.Context, req CreateContaine
 	req.ImageRef = config.NormalizeImageRef(req.ImageRef)
 
 	ctx = s.withNamespace(ctx)
+	if _, err := s.client.LoadContainer(ctx, req.ID); err == nil {
+		return ContainerInfo{}, ErrAlreadyExists
+	} else if !errdefs.IsNotFound(err) {
+		return ContainerInfo{}, mapContainerdErr(err)
+	}
 	ctx, done, err := s.client.WithLease(ctx)
 	if err != nil {
 		return ContainerInfo{}, mapContainerdErr(err)
@@ -362,7 +355,7 @@ func (s *DefaultService) CreateContainer(ctx context.Context, req CreateContaine
 		containerOpts = append(containerOpts, containerd.WithNewSnapshot(snapshotID, image))
 	}
 	containerOpts = append(containerOpts, containerd.WithNewSpec(specOpts...))
-	containerOpts = append(containerOpts, containerd.WithRuntime(s.runtimeTypeOrDefault(), nil))
+	containerOpts = append(containerOpts, containerd.WithRuntime(runtimeType, nil))
 	if len(req.Labels) > 0 {
 		containerOpts = append(containerOpts, containerd.WithContainerLabels(req.Labels))
 	}
@@ -783,7 +776,7 @@ func (s *DefaultService) RestoreContainer(ctx context.Context, req CreateContain
 		containerOpts = append(containerOpts, containerd.WithContainerLabels(req.Labels))
 	}
 
-	containerOpts = append(containerOpts, containerd.WithRuntime(s.runtimeTypeOrDefault(), nil))
+	containerOpts = append(containerOpts, containerd.WithRuntime(runtimeType, nil))
 
 	ctrObj, err := s.client.NewContainer(ctx, req.ID, containerOpts...)
 	if err != nil {

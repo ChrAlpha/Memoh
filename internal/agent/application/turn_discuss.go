@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
+	"github.com/memohai/memoh/internal/models"
 )
 
 // turnRuntimeHooks are test seams for the transport-facing turn lifecycle.
@@ -33,27 +34,28 @@ type turnRuntimeHooks struct {
 // gate for ACP runtimes lives here because it is a property of runtime
 // cost, not of channel policy: the caller supplies DiscussAddressed and
 // the runtime decides whether starting is worth it.
-func (s *Service) startDiscussTurn(ctx context.Context, cmd turn.StartTurnCommand, releaseClaim func()) (turn.RunHandle, error) {
+// The run context and its admission are established by StartTurn, so a discuss
+// turn occupies the thread's single slot on the same terms as a chat turn.
+func (s *Service) startDiscussTurn(runCtx context.Context, cmd turn.StartTurnCommand, cancel context.CancelFunc, admission sessionruntime.Admission) (turn.RunHandle, error) {
 	if !s.discussRuntimeConfigured() {
 		return nil, errors.New("turn: discuss runtime not configured")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
-	h := newDiscussHandle(runCtx, cmd, cancel, releaseClaim)
+	h := newDiscussHandle(runCtx, cmd, cancel, admission.RunID, s.turnRunFinisher(runCtx, admission))
 	go s.pumpDiscuss(runCtx, cmd, h)
 	return h, nil
 }
 
-func newDiscussHandle(ctx context.Context, cmd turn.StartTurnCommand, cancel context.CancelFunc, releaseClaim func()) *discussHandle {
+func newDiscussHandle(ctx context.Context, cmd turn.StartTurnCommand, cancel context.CancelFunc, runID string, finishRun func(status string, cause error)) *discussHandle {
 	return &discussHandle{
 		runHandle: runHandle{
-			id:           newRunID(),
-			events:       make(chan turn.Event, 16),
-			errs:         make(chan error, 1),
-			ctx:          ctx,
-			cancel:       cancel,
-			inject:       make(chan turn.InjectMessage), // unused in discuss mode
-			addAssets:    func([]turn.OutboundAssetRef) {},
-			releaseClaim: releaseClaim,
+			id:        runID,
+			events:    make(chan turn.Event, 16),
+			errs:      make(chan error, 1),
+			ctx:       ctx,
+			cancel:    cancel,
+			inject:    make(chan turn.InjectMessage), // unused in discuss mode
+			addAssets: func([]turn.OutboundAssetRef) {},
+			finishRun: finishRun,
 		},
 		teamID:    cmd.TeamID,
 		sessionID: cmd.ThreadID,
@@ -99,6 +101,11 @@ func (h *discussHandle) emit(kind string, payload []byte) bool {
 // run failed so finish releases the idempotency claim.
 func (h *discussHandle) emitErr(err error) bool {
 	h.failed.Store(true)
+	if h.streamErr == nil {
+		// Keep the first error: without it the terminal record cannot tell a
+		// discuss turn that broke from one that was stopped.
+		h.streamErr = err
+	}
 	select {
 	case h.errs <- err:
 		return true
@@ -180,7 +187,6 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		imageParts := s.inlineDiscussImages(ctx, cmd.BotID, refs)
 		injectImagePartsIntoLastUserMessage(runConfig.Messages, imageParts)
 	}
-	runConfig.Messages = append(runConfig.Messages, sdk.UserMessage(buildLateBindingPrompt(cmd.DiscussMentioned)))
 	runConfig = runConfig.RefreshContextFrag()
 
 	eventCh := s.streamDiscussAgent(ctx, runConfig)
@@ -210,10 +216,55 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			}
 		}
 	}
+
+	// Compute pressure on this goroutine so the detached trigger holds a few
+	// scalars instead of pinning the whole composed context until it runs.
+	if compactable := discussCompactableTokens(cmd.DiscussMessages); compactable > 0 && s.compactionService != nil && s.settingsService != nil {
+		go s.maybeCompactDiscuss(context.WithoutCancel(ctx), cmd.BotID, cmd.ThreadID, resolved.ModelID, compactable)
+	}
+}
+
+// maybeCompactDiscuss re-evaluates compaction pressure after a native discuss
+// turn with the same trigger policy as the chat path. ACP discuss turns run
+// through streamTurnChat and inherit its trigger directly.
+func (s *Service) maybeCompactDiscuss(ctx context.Context, botID, threadID, modelID string, compactable int) {
+	budget := 0
+	var turnModel models.GetResponse
+	if s.modelsService != nil && strings.TrimSpace(modelID) != "" {
+		if model, err := s.modelsService.GetByID(ctx, modelID); err == nil {
+			turnModel = model
+			if model.Config.ContextWindow != nil {
+				budget = *model.Config.ContextWindow
+			}
+		}
+	}
+	s.maybeCompact(ctx, ChatRequest{BotID: botID, ThreadID: threadID}, resolvedContext{
+		model:                  turnModel,
+		compactableTokens:      compactable,
+		compactableTokensKnown: true,
+		contextTokenBudget:     budget,
+	}, compactable)
+}
+
+// discussCompactableTokens estimates the raw history share of a discuss
+// context, excluding artifact summaries, in the chat trigger's token unit.
+func discussCompactableTokens(messages []turn.DiscussMessage) int {
+	total := 0
+	for _, message := range messages {
+		if message.CompactionArtifactID != "" {
+			continue
+		}
+		size := len(message.RawContent)
+		if size == 0 {
+			size = len(message.Content)
+		}
+		total += size / 4
+	}
+	return total
 }
 
 func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
-	prompt := discussACPFullContextPrompt(cmd.DiscussMessages, buildLateBindingPrompt(cmd.DiscussAddressed))
+	prompt := discussACPFullContextPrompt(cmd.DiscussMessages)
 	if strings.TrimSpace(prompt) == "" {
 		// No composable context: end without a skip marker so the caller
 		// does not advance its consumed cursor (pre-port semantics).
@@ -338,25 +389,6 @@ func (s *Service) storeDiscussRound(
 	return s.StoreRoundWithContextLifecycle(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID, lifecycle)
 }
 
-// buildLateBindingPrompt renders the per-turn runtime instructions. The
-// native runtime nudges on explicit mentions; the ACP runtime nudges on
-// the broader addressed condition (mention or direct conversation).
-func buildLateBindingPrompt(nudge bool) string {
-	now := time.Now().Format(time.RFC3339)
-	var sb strings.Builder
-	sb.WriteString("Current time: ")
-	sb.WriteString(now)
-	sb.WriteString("\n\n")
-	sb.WriteString("IMPORTANT: You MUST use the `send` tool to speak. Your text output is invisible to everyone — it is only internal monologue. ")
-	sb.WriteString("If you want to say something, you MUST call the `send` tool. Writing text without a tool call means absolute silence — no one will see it.")
-
-	if nudge {
-		sb.WriteString("\n\nYou are being addressed directly. You should respond by calling the `send` tool now.")
-	}
-
-	return sb.String()
-}
-
 // discussMessagesToSDK converts composed context messages into SDK
 // messages, preserving structured raw content when present.
 func discussMessagesToSDK(messages []turn.DiscussMessage) []sdk.Message {
@@ -412,10 +444,12 @@ func injectImagePartsIntoLastUserMessage(msgs []sdk.Message, parts []sdk.ImagePa
 }
 
 // discussACPFullContextPrompt renders the composed context into the single
-// reset-each-turn prompt used by external ACP runtimes.
-func discussACPFullContextPrompt(messages []turn.DiscussMessage, lateBinding string) string {
+// reset-each-turn prompt used by external ACP runtimes. ACP does not receive
+// native ToolUsage, so its stable preamble owns the send-only output contract.
+func discussACPFullContextPrompt(messages []turn.DiscussMessage) string {
 	var b strings.Builder
 	b.WriteString("You are replying in a discuss-mode conversation. The runtime is reset each turn, so use the complete context below as the source of truth.\n\n")
+	b.WriteString("IMPORTANT: You MUST use the `send` tool to speak in the observed conversation. Ordinary text output is internal and invisible to everyone.\n\n")
 	for _, msg := range messages {
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
@@ -432,9 +466,5 @@ func discussACPFullContextPrompt(messages []turn.DiscussMessage, lateBinding str
 		b.WriteString("\n\n")
 	}
 	b.WriteString("Reply to the latest user-visible message when a response is appropriate.")
-	if strings.TrimSpace(lateBinding) != "" {
-		b.WriteString("\n\n")
-		b.WriteString(lateBinding)
-	}
 	return b.String()
 }

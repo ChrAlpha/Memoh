@@ -51,7 +51,7 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 	if cfg.CompactSummary != "" {
 		frags = append(frags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
 			ID:         "discuss.summary",
-			Message:    sdk.UserMessage("[Conversation summary]\n" + cfg.CompactSummary),
+			Message:    sdk.UserMessage("<summary>\n" + cfg.CompactSummary + "\n</summary>"),
 			Kind:       contextfrag.KindConversationSummary,
 			Slot:       contextfrag.SlotBeforeHistory,
 			Priority:   10,

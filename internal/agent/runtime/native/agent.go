@@ -16,7 +16,6 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	contextlimit "github.com/memohai/memoh/internal/agent/context/limit"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/hooks"
@@ -36,6 +35,8 @@ type Agent struct {
 	prefixCache        *prefixCacheTracker
 	loopReselectMode   LoopReselectMode
 }
+
+const streamCancelDrainGrace = 250 * time.Millisecond
 
 // New creates a new Agent with the given dependencies.
 func New(deps Deps) *Agent {
@@ -371,10 +372,19 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	var allText strings.Builder
 	stepNumber := 0
 
-	for part := range streamResult.Stream {
-		if streamCtx.Err() != nil {
+	streamClosed := false
+	for !aborted && !streamClosed {
+		var part sdk.StreamPart
+		select {
+		case <-streamCtx.Done():
 			aborted = true
-			break
+			continue
+		case next, ok := <-streamResult.Stream:
+			if !ok {
+				streamClosed = true
+				continue
+			}
+			part = next
 		}
 
 		switch p := part.(type) {
@@ -589,31 +599,39 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 
-	if aborted {
-		for range streamResult.Stream {
-		}
+	if aborted && !streamClosed {
+		// A provider is expected to close its stream when the context is
+		// cancelled, but run termination must not depend on that cooperation.
+		// Preserve the final snapshot when it arrives promptly, then stop
+		// waiting so the caller can fence and finalize the run as aborted.
+		cancel(context.Canceled)
+		streamClosed = drainStreamUntilClosed(streamResult.Stream, streamCancelDrainGrace)
 	}
 
 	if textLoopProbeBuffer != nil {
 		textLoopProbeBuffer.Flush()
 	}
 
-	finalMessages := streamResult.Messages
-	if readMediaState != nil {
-		finalMessages = readMediaState.mergeMessages(streamResult.Steps, finalMessages)
+	var finalMessages []sdk.Message
+	var totalUsage sdk.Usage
+	if streamClosed {
+		finalMessages = streamResult.Messages
+		if readMediaState != nil {
+			finalMessages = readMediaState.mergeMessages(streamResult.Steps, finalMessages)
+		}
+		if streamResult.DeferredToolApproval != nil {
+			finalMessages = annotateDeferredApproval(finalMessages, *streamResult.DeferredToolApproval)
+		}
+		finalMessages = toolExecutionMetadata.annotate(finalMessages)
+		totalUsage = aggregateStepUsage(streamResult.Steps)
 	}
-	if streamResult.DeferredToolApproval != nil {
-		finalMessages = annotateDeferredApproval(finalMessages, *streamResult.DeferredToolApproval)
-	}
-	finalMessages = toolExecutionMetadata.annotate(finalMessages)
-	totalUsage := aggregateStepUsage(streamResult.Steps)
 	usageJSON, _ := json.Marshal(totalUsage)
 
 	termEvent := StreamEvent{
 		Messages: mustMarshal(finalMessages),
 		Usage:    usageJSON,
 	}
-	if streamResult.DeferredToolApproval != nil {
+	if streamClosed && streamResult.DeferredToolApproval != nil {
 		termEvent.ApprovalID = streamResult.DeferredToolApproval.ApprovalID
 		if isUserInputMetadata(streamResult.DeferredToolApproval.Metadata) {
 			termEvent.UserInputID = streamResult.DeferredToolApproval.ApprovalID
@@ -747,6 +765,24 @@ func (a *Agent) logContextLifecycle(cfg RunConfig) {
 		slog.String("cache_outcome", cacheOutcome),
 		slog.String("final_input_hash", cfg.ContextMutations.FinalInputHash()),
 	)
+}
+
+func drainStreamUntilClosed(stream <-chan sdk.StreamPart, grace time.Duration) bool {
+	if stream == nil {
+		return true
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-stream:
+			if !ok {
+				return true
+			}
+		case <-timer.C:
+			return false
+		}
+	}
 }
 
 func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *GenerateResult, retErr error) {
@@ -986,20 +1022,9 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		opts = append(opts, sdk.WithApprovalHandler(approvalHandler))
 	}
 
-	// Wrap the existing prepareStep (if any) with mid-task context pruning.
-	// When the message array grows large during multi-tool runs, this prunes
-	// older tool results to keep the context window manageable.
-	basePrepare := prepareStep
-	keepSteps := cfg.MidTaskPruneKeepSteps
-	if keepSteps <= 0 {
-		keepSteps = MidTaskPruneKeepStepsDefault
-	}
-	threshold := cfg.MidTaskPruneThreshold
-	if threshold <= 0 {
-		threshold = MidTaskPruneThresholdDefault
-	}
 	prepareIndex := 0
-	midTaskPrune := func(p *sdk.GenerateParams) *sdk.GenerateParams {
+	basePrepare := prepareStep
+	stepPrepare := func(p *sdk.GenerateParams) *sdk.GenerateParams {
 		if basePrepare != nil {
 			if override := basePrepare(p); override != nil {
 				p = override
@@ -1017,25 +1042,22 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				Messages:              p.Messages,
 				BudgetMaxTokens:       remainingStepBudget(cfg.EffectiveHistoryBudgetTokens(), p, initialProviderMessageCount),
 				RecentProtectTokens:   cfg.ContextRecentProtectTokens,
-				KeepRecentToolResults: keepSteps,
-				MinMessages:           threshold,
+				KeepRecentToolResults: stepReselectKeepRecentToolResults,
+				MinMessages:           stepReselectMinMessages,
 			})
-			appliedSelection := false
 			// PrepareStep call k feeds model call k+1's input (see the step-0
 			// snapshot recorded in buildGenerateOptions above).
 			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
 			switch {
 			case loopReselectMode == LoopReselectShadow:
-				// Shadow never applies the selection: the snapshot carries
-				// the reselector's would-be verdict, ReselectionApplied
-				// stays false, and legacy prune below performs the actual
-				// mutation.
+				// Shadow never applies the selection: the snapshot carries the
+				// reselector's would-be verdict and the provider input stays
+				// append-only.
 				snapshot.Dropped = selection.Dropped
 				snapshot.Truncated = selection.Truncated
 				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
 			case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount):
 				p.Messages = selection.Messages
-				appliedSelection = true
 				snapshot.ReselectionApplied = true
 				snapshot.Dropped = selection.Dropped
 				snapshot.Truncated = selection.Truncated
@@ -1044,34 +1066,13 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 					cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
 				}
 			}
-			if !appliedSelection {
-				var truncated int
-				p, truncated = pruneOldToolResults(p, keepSteps, threshold)
-				if truncated > 0 {
-					cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
-				}
-				if loopReselectMode != LoopReselectShadow {
-					snapshot.Truncated = truncated
-				}
-			}
 			recordPreparedProviderInputHash(cfg.ContextMutations, p, snapshot)
-			if cfg.ForkContext != nil {
-				_ = cfg.ForkContext.Store(p.Messages)
-			}
 			return p
 		}
-		var truncated int
-		p, truncated = pruneOldToolResults(p, keepSteps, threshold)
-		if truncated > 0 {
-			cfg.ContextMutations.Record(contextfrag.MutationMidTaskPrune, fmt.Sprintf("truncated=%d", truncated))
-		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex + 1, Truncated: truncated})
-		if cfg.ForkContext != nil {
-			_ = cfg.ForkContext.Store(p.Messages)
-		}
+		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex + 1})
 		return p
 	}
-	opts = append(opts, sdk.WithPrepareStep(midTaskPrune))
+	opts = append(opts, sdk.WithPrepareStep(wrapPrepareStepWithForkSnapshot(stepPrepare, cfg.ForkContext)))
 
 	opts = append(opts, models.BuildReasoningOptions(models.SDKModelConfig{
 		ClientType:            models.ResolveClientType(cfg.Model),
@@ -1624,77 +1625,30 @@ func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs
 }
 
 const (
-	// MidTaskPruneKeepStepsDefault is the number of recent tool-call steps to keep
-	// intact when pruning older tool results during a multi-step agent run.
-	MidTaskPruneKeepStepsDefault = 4
-	// MidTaskPruneThresholdDefault is the minimum number of messages before pruning activates.
-	MidTaskPruneThresholdDefault = 20
+	// stepReselectKeepRecentToolResults hints the step reselector to keep the
+	// most recent tool-call cycles intact when it considers mid-run drops.
+	stepReselectKeepRecentToolResults = 4
+	// stepReselectMinMessages is the minimum provider message count before the
+	// step reselector considers dropping anything at all.
+	stepReselectMinMessages = 20
 )
 
-// pruneOldToolResults prunes older tool result messages in the SDK params to
-// keep the context window manageable during long multi-tool agent runs. It
-// keeps the most recent keepSteps tool-call cycles intact and replaces older
-// tool results with size summaries, returning how many tool-result messages
-// were actually truncated (message count is never changed).
-func pruneOldToolResults(p *sdk.GenerateParams, keepSteps, threshold int) (*sdk.GenerateParams, int) {
-	msgs := p.Messages
-	if len(msgs) < threshold {
-		return p, 0
+func wrapPrepareStepWithForkSnapshot(
+	prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams,
+	forkContext *tools.MessageSnapshot,
+) func(*sdk.GenerateParams) *sdk.GenerateParams {
+	if forkContext == nil {
+		return prepareStep
 	}
-
-	// Count complete tool-call cycles (tool-result pair) from the end to find the cutoff.
-	toolResultCount := 0
-	cutoffIdx := len(msgs)
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == sdk.MessageRoleTool {
-			// Check that the preceding assistant message contains the matching tool call
-			// to ensure we count complete cycles, not orphaned results.
-			hasMatchingCall := false
-			for j := i - 1; j >= 0; j-- {
-				if msgs[j].Role == sdk.MessageRoleAssistant {
-					// If there's another tool result between this and the assistant msg,
-					// it means this assistant message belongs to a different cycle.
-					if j+1 < i && msgs[j+1].Role == sdk.MessageRoleTool {
-						break
-					}
-					hasMatchingCall = true
-					break
-				}
-				if msgs[j].Role == sdk.MessageRoleUser {
-					break
-				}
-			}
-			if hasMatchingCall {
-				toolResultCount++
-				if toolResultCount > keepSteps {
-					cutoffIdx = i
-					break
-				}
+	return func(p *sdk.GenerateParams) *sdk.GenerateParams {
+		if prepareStep != nil {
+			if override := prepareStep(p); override != nil {
+				p = override
 			}
 		}
+		_ = forkContext.Store(p.Messages)
+		return p
 	}
-	if cutoffIdx >= len(msgs) {
-		return p, 0 // not enough tool messages to prune
-	}
-
-	// Build a new slice so the original messages can be GC'd.
-	pruned := make([]sdk.Message, 0, len(msgs))
-	pruned = append(pruned, msgs[:cutoffIdx]...)
-	truncated := 0
-	for i := cutoffIdx; i < len(msgs); i++ {
-		if msgs[i].Role != sdk.MessageRoleTool {
-			pruned = append(pruned, msgs[i])
-			continue
-		}
-		replaced, changed := contextlimit.TruncateStepToolResult(msgs[i], contextlimit.StepToolResultTruncateBytes)
-		if changed {
-			truncated++
-		}
-		pruned = append(pruned, replaced)
-	}
-
-	p.Messages = pruned
-	return p, truncated
 }
 
 // runMidStreamRetry attempts to continue the agent stream after a retryable

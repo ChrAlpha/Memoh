@@ -133,13 +133,11 @@ func TestAgentGenerateOffModeNeverInvokesReselectorAndMatchesReselectorNilRun(t 
 	controlAgent := New(Deps{})
 	controlAgent.SetToolProviders(mockToolLoopTools())
 	controlParams := captureParams(controlAgent, RunConfig{
-		Model:                 &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
-		Messages:              []sdk.Message{sdk.UserMessage("start")},
-		SupportsToolCall:      true,
-		Identity:              SessionContext{BotID: "bot-1"},
-		ContextMutations:      contextfrag.NewMutationLedger(),
-		MidTaskPruneThreshold: 4,
-		MidTaskPruneKeepSteps: 1,
+		Model:            &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: contextfrag.NewMutationLedger(),
 	})
 
 	var reselectorCalls atomic.Int32
@@ -147,13 +145,11 @@ func TestAgentGenerateOffModeNeverInvokesReselectorAndMatchesReselectorNilRun(t 
 	offAgent.SetToolProviders(mockToolLoopTools())
 	ledger := contextfrag.NewMutationLedger()
 	offParams := captureParams(offAgent, RunConfig{
-		Model:                 &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
-		Messages:              []sdk.Message{sdk.UserMessage("start")},
-		SupportsToolCall:      true,
-		Identity:              SessionContext{BotID: "bot-1"},
-		ContextMutations:      ledger,
-		MidTaskPruneThreshold: 4,
-		MidTaskPruneKeepSteps: 1,
+		Model:            &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
 		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
 			reselectorCalls.Add(1)
 			return ContextStepSelectionResult{}
@@ -206,13 +202,11 @@ func TestAgentGenerateShadowModeInvokesReselectorButNeverAppliesSelection(t *tes
 	controlAgent := New(Deps{})
 	controlAgent.SetToolProviders(mockToolLoopTools())
 	controlParams := captureParams(controlAgent, RunConfig{
-		Model:                 &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
-		Messages:              []sdk.Message{sdk.UserMessage("start")},
-		SupportsToolCall:      true,
-		Identity:              SessionContext{BotID: "bot-1"},
-		ContextMutations:      contextfrag.NewMutationLedger(),
-		MidTaskPruneThreshold: 4,
-		MidTaskPruneKeepSteps: 1,
+		Model:            &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: contextfrag.NewMutationLedger(),
 	})
 
 	var reselectorCalls atomic.Int32
@@ -220,13 +214,11 @@ func TestAgentGenerateShadowModeInvokesReselectorButNeverAppliesSelection(t *tes
 	shadowAgent.SetToolProviders(mockToolLoopTools())
 	ledger := contextfrag.NewMutationLedger()
 	shadowParams := captureParams(shadowAgent, RunConfig{
-		Model:                 &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
-		Messages:              []sdk.Message{sdk.UserMessage("start")},
-		SupportsToolCall:      true,
-		Identity:              SessionContext{BotID: "bot-1"},
-		ContextMutations:      ledger,
-		MidTaskPruneThreshold: 4,
-		MidTaskPruneKeepSteps: 1,
+		Model:            &sdk.Model{ID: "mock-model", Provider: mockToolLoopProvider(5, "call")},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
 		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
 			reselectorCalls.Add(1)
 			dropped := len(input.Messages) - input.InitialMessageCount
