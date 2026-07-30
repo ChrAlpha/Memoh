@@ -1449,7 +1449,7 @@ func remainingStepBudget(maxTokens int, params *sdk.GenerateParams, prefixCount 
 	}
 	prefixMessages := append([]sdk.Message(nil), params.Messages[:prefixCount]...)
 	_, bytes := contextfrag.ProviderPayloadHashAndBytes(params.System, prefixMessages, params.Tools)
-	remaining := maxTokens - tokenEstimateFromBytes(bytes)
+	remaining := maxTokens - contextfrag.ProviderBudgetTokensFromBytes(bytes)
 	if remaining < 1 {
 		return 1
 	}
