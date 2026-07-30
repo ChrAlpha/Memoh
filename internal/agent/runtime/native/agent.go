@@ -132,6 +132,33 @@ func contextStepBudgetError(ctx context.Context) error {
 	}
 }
 
+type contextBudgetGuardProvider struct {
+	sdk.Provider
+}
+
+func (p contextBudgetGuardProvider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	if err := contextStepBudgetError(ctx); err != nil {
+		return nil, err
+	}
+	return p.Provider.DoGenerate(ctx, params)
+}
+
+func (p contextBudgetGuardProvider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+	if err := contextStepBudgetError(ctx); err != nil {
+		return nil, err
+	}
+	return p.Provider.DoStream(ctx, params)
+}
+
+func contextBudgetGuardedModel(model *sdk.Model) *sdk.Model {
+	if model == nil || model.Provider == nil {
+		return model
+	}
+	guarded := *model
+	guarded.Provider = contextBudgetGuardProvider{Provider: model.Provider}
+	return &guarded
+}
+
 // BridgeProvider returns the underlying bridge provider (workspace manager).
 func (a *Agent) BridgeProvider() bridge.Provider {
 	return a.bridgeProvider
@@ -1090,7 +1117,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		}
 	}
 	opts := []sdk.GenerateOption{
-		sdk.WithModel(cfg.Model),
+		sdk.WithModel(contextBudgetGuardedModel(cfg.Model)),
 		sdk.WithMessages(messages),
 		sdk.WithSystem(system),
 		sdk.WithMaxSteps(-1),
@@ -1133,12 +1160,6 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			// snapshot recorded in buildGenerateOptions above).
 			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
 			switch {
-			case selection.FatalError != nil:
-				p.Messages = append([]sdk.Message(nil), p.Messages[:initialProviderMessageCount]...)
-				cfg.ContextMutations.AppendStepSnapshot(snapshot)
-				if cfg.contextStepFailure != nil {
-					cfg.contextStepFailure(selection.FatalError)
-				}
 			case loopReselectMode == LoopReselectShadow:
 				// Shadow never applies the selection: the snapshot carries the
 				// reselector's would-be verdict and the provider input stays
@@ -1146,6 +1167,13 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				snapshot.Dropped = selection.Dropped
 				snapshot.Truncated = selection.Truncated
 				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
+			case selection.FatalError != nil:
+				p.Messages = append([]sdk.Message(nil), p.Messages[:initialProviderMessageCount]...)
+				cfg.ContextMutations.AppendStepSnapshot(snapshot)
+				if cfg.contextStepFailure != nil {
+					cfg.contextStepFailure(selection.FatalError)
+				}
+				return p
 			case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount):
 				p.Messages = selection.Messages
 				snapshot.ReselectionApplied = true

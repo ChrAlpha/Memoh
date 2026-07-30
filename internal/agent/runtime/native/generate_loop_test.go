@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -46,12 +47,7 @@ func (*atomicMockProvider) TestModel(context.Context, string) (*sdk.ModelTestRes
 	return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
 }
 
-func (m *atomicMockProvider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
+func (m *atomicMockProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
 	call := int(m.calls.Add(1))
 	return m.handler(call, params)
 }
@@ -368,7 +364,7 @@ func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
 	modelProvider := &atomicMockProvider{
 		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
 			if call != 1 {
-				t.Fatalf("provider call = %d, want no call after protected overflow", call)
+				return nil, fmt.Errorf("unexpected provider call %d after protected overflow", call)
 			}
 			return &sdk.GenerateResult{
 				FinishReason: sdk.FinishReasonToolCalls,
@@ -410,6 +406,13 @@ func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
 	if got := modelProvider.calls.Load(); got != 1 {
 		t.Fatalf("provider calls = %d, want 1", got)
 	}
+	steps := ledger.StepSnapshots()
+	if len(steps) != 2 || steps[0].StepIndex != 0 || steps[1].StepIndex != 1 {
+		t.Fatalf("step snapshots = %#v, want exactly one entry for initial and failed steps", steps)
+	}
+	if steps[1].PostPrepareInputHash != "" {
+		t.Fatalf("failed step snapshot has provider input hash %q, want none", steps[1].PostPrepareInputHash)
+	}
 	records := ledger.Records()
 	if len(records) != 1 ||
 		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
@@ -424,7 +427,7 @@ func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
 	modelProvider := &atomicMockProvider{
 		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
 			if call != 1 {
-				t.Fatalf("provider call = %d, want no call after protected overflow", call)
+				return nil, fmt.Errorf("unexpected provider call %d after protected overflow", call)
 			}
 			return &sdk.GenerateResult{
 				FinishReason: sdk.FinishReasonToolCalls,

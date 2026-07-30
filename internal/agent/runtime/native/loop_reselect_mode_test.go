@@ -270,3 +270,39 @@ func TestAgentGenerateShadowModeInvokesReselectorButNeverAppliesSelection(t *tes
 		}
 	}
 }
+
+func TestAgentGenerateShadowModeDoesNotApplyFatalReselection(t *testing.T) {
+	t.Parallel()
+
+	var reselectorCalls atomic.Int32
+	ledger := contextfrag.NewMutationLedger()
+	provider := mockToolLoopProvider(1, "call-shadow-fatal")
+	a := New(Deps{LoopReselectMode: LoopReselectShadow})
+	a.SetToolProviders(mockToolLoopTools())
+
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
+		Messages:         []sdk.Message{sdk.UserMessage("start")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			reselectorCalls.Add(1)
+			return ContextStepSelectionResult{FatalError: contextfrag.ErrProtectedContextOverflow}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v, want shadow mode to preserve the legacy run", err)
+	}
+	if reselectorCalls.Load() != 1 {
+		t.Fatalf("reselector calls = %d, want 1", reselectorCalls.Load())
+	}
+	if got := provider.calls.Load(); got != 2 {
+		t.Fatalf("provider calls = %d, want both legacy model steps", got)
+	}
+	for _, record := range ledger.Records() {
+		if record.Kind == contextfrag.MutationContextBudgetFailure {
+			t.Fatalf("shadow mode applied fatal reselection: %#v", ledger.Records())
+		}
+	}
+}
