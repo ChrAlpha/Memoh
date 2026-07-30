@@ -83,6 +83,9 @@ func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig,
 func captureProviderAttemptPrefix(cfg RunConfig) RunConfig {
 	cfg.initialProviderMessageCount = len(cfg.Messages)
 	cfg.initialProviderPrefixSet = true
+	if cfg.providerAttemptState == nil {
+		cfg.providerAttemptState = &providerAttemptState{}
+	}
 	return cfg
 }
 
@@ -1088,6 +1091,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 }
 
 func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools []sdk.Tool, approvalTools []sdk.Tool, prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams) []sdk.GenerateOption {
+	tools = canonicalizeProviderToolSchemas(tools)
 	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
 	loopReselectMode := a.LoopReselectMode()
 	if loopReselectMode == LoopReselectOff {
@@ -1134,7 +1138,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	if len(tools) > 0 && cfg.SupportsToolCall {
 		providerTools = tools
 	}
-	initialParams := prepareProviderAttempt(ctx, cfg, loopReselectMode, initialProviderMessageCount, 0, &sdk.GenerateParams{
+	initialParams := prepareProviderAttempt(ctx, cfg, loopReselectMode, systemPrepended, initialProviderMessageCount, 0, &sdk.GenerateParams{
 		System:   system,
 		Messages: messages,
 		Tools:    providerTools,
@@ -1196,6 +1200,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			ctx,
 			cfg,
 			loopReselectMode,
+			systemPrepended,
 			initialProviderMessageCount,
 			prepareIndex+1,
 			p,
@@ -1318,6 +1323,7 @@ func prepareProviderAttempt(
 	ctx context.Context,
 	cfg RunConfig,
 	mode LoopReselectMode,
+	systemPrepended bool,
 	prefixCount int,
 	stepIndex int,
 	params *sdk.GenerateParams,
@@ -1333,7 +1339,7 @@ func prepareProviderAttempt(
 		reselector = nil
 	}
 	if reselector == nil || prefixCount >= len(params.Messages) {
-		recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+		recordPreparedProviderAttempt(cfg, params, snapshot, systemPrepended)
 		return params
 	}
 
@@ -1360,7 +1366,7 @@ func prepareProviderAttempt(
 		default:
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+		recordPreparedProviderAttempt(cfg, params, snapshot, systemPrepended)
 		return params
 	}
 
@@ -1386,18 +1392,24 @@ func prepareProviderAttempt(
 	default:
 		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 	}
-	recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+	recordPreparedProviderAttempt(cfg, params, snapshot, systemPrepended)
 	return params
 }
 
-func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams, snapshot contextfrag.StepSnapshot) {
+func recordPreparedProviderAttempt(
+	cfg RunConfig,
+	params *sdk.GenerateParams,
+	snapshot contextfrag.StepSnapshot,
+	systemPrepended bool,
+) {
 	if params == nil {
 		return
 	}
 	hash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
-	ledger.SetFinalInputHash(hash)
+	cfg.ContextMutations.SetFinalInputHash(hash)
 	snapshot.PostPrepareInputHash = hash
-	ledger.AppendStepSnapshot(snapshot)
+	cfg.ContextMutations.AppendStepSnapshot(snapshot)
+	cfg.providerAttemptState.store(params, snapshot.StepIndex, systemPrepended)
 }
 
 func copyDropReasons(reasons map[string]int) map[string]int {
@@ -1918,6 +1930,8 @@ func (a *Agent) runMidStreamRetry(
 		for range prevResult.Stream {
 		}
 	}
+	retryMessages := retryProviderAttemptMessages(cfg, prevResult)
+	accumulatedCount := len(prevResult.Messages)
 
 	retryCfg := DefaultRetryConfig()
 	for attempt := 0; attempt < retryCfg.MaxAttempts; attempt++ {
@@ -1943,11 +1957,10 @@ func (a *Agent) runMidStreamRetry(
 			}
 		}
 
-		// Re-invoke StreamText with the original conversation plus the output
-		// accumulated before the failure. Use buildGenerateOptions so retry
-		// benefits from mid-task pruning, media resolution, and other
-		// prepare-step logic — same as initial stream.
-		retryCfgCopy := prepareMidStreamRetryConfig(cfg, prevResult.Messages, errMsg)
+		// Re-invoke StreamText from the failed attempt's exact provider input
+		// plus its partial output. Use buildGenerateOptions so retry benefits
+		// from mid-task pruning, media resolution, and other prepare-step logic.
+		retryCfgCopy := prepareMidStreamRetryConfigWithMessages(cfg, retryMessages, accumulatedCount, errMsg)
 		if a == nil || a.contextViewApplier == nil {
 			retryCfgCopy = retryCfgCopy.RefreshContextFrag()
 		}
@@ -2115,11 +2128,20 @@ func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message, errMs
 	merged := make([]sdk.Message, 0, len(cfg.Messages)+len(accumulated))
 	merged = append(merged, cfg.Messages...)
 	merged = append(merged, accumulated...)
-	cfg.Messages = merged
+	return prepareMidStreamRetryConfigWithMessages(cfg, merged, len(accumulated), errMsg)
+}
+
+func prepareMidStreamRetryConfigWithMessages(
+	cfg RunConfig,
+	messages []sdk.Message,
+	accumulatedCount int,
+	errMsg string,
+) RunConfig {
+	cfg.Messages = append([]sdk.Message(nil), messages...)
 	attempt := cfg.ContextMutations.AdvanceAttempt()
 	errorHash := sha256.Sum256([]byte(strings.TrimSpace(errMsg)))
 	cfg.ContextMutations.Record(contextfrag.MutationMidStreamRetry,
-		fmt.Sprintf("attempt=%d accumulated=%d error_sha256=%x", attempt, len(accumulated), errorHash))
+		fmt.Sprintf("attempt=%d accumulated=%d error_sha256=%x", attempt, accumulatedCount, errorHash))
 	return cfg
 }
 

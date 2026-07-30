@@ -159,6 +159,7 @@ type RunConfig struct {
 	ContextStepReselector        ContextStepReselector
 	initialProviderMessageCount  int
 	initialProviderPrefixSet     bool
+	providerAttemptState         *providerAttemptState
 	contextStepFailure           func(error)
 	SessionType                  string
 	LiveToolStream               bool

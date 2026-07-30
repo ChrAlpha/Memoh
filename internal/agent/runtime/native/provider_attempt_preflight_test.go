@@ -300,6 +300,7 @@ func TestPrepareProviderAttemptStepZeroWindowZeroAppliesSuffixHygiene(t *testing
 		context.Background(),
 		cfg,
 		LoopReselectActive,
+		false,
 		len(prefix),
 		0,
 		&sdk.GenerateParams{Messages: messages},
@@ -320,6 +321,68 @@ func TestPrepareProviderAttemptStepZeroWindowZeroAppliesSuffixHygiene(t *testing
 	wantHash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
 	if steps[0].PostPrepareInputHash != wantHash || ledger.FinalInputHash() != wantHash {
 		t.Fatalf("step/final hashes = %q/%q, want %q", steps[0].PostPrepareInputHash, ledger.FinalInputHash(), wantHash)
+	}
+}
+
+func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	var providerParams sdk.GenerateParams
+	modelProvider := &atomicMockProvider{
+		handler: func(_ int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			providerParams = cloneGenerateParams(params)
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+		Name: "lookup",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string"},
+			},
+			"required": []string{"query"},
+		},
+		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			return nil, nil
+		},
+	}}}})
+
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("task")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(providerParams.Tools) != 1 {
+		t.Fatalf("provider tools = %#v, want one", providerParams.Tools)
+	}
+	if _, ok := providerParams.Tools[0].Parameters.(*jsonschema.Schema); !ok {
+		t.Fatalf("provider schema type = %T, want resolved *jsonschema.Schema", providerParams.Tools[0].Parameters)
+	}
+
+	steps := ledger.StepSnapshots()
+	if len(steps) != 1 {
+		t.Fatalf("step snapshots = %#v, want one", steps)
+	}
+	wantHash, _ := contextfrag.ProviderPayloadHashAndBytes(
+		providerParams.System,
+		providerParams.Messages,
+		providerParams.Tools,
+	)
+	if steps[0].PostPrepareInputHash != wantHash || ledger.FinalInputHash() != wantHash {
+		t.Fatalf(
+			"step/final hashes = %q/%q, want resolved provider payload hash %q",
+			steps[0].PostPrepareInputHash,
+			ledger.FinalInputHash(),
+			wantHash,
+		)
 	}
 }
 
