@@ -1747,6 +1747,16 @@ definitions:
         type: string
       usage: {}
     type: object
+  contextfrag.CacheClass:
+    enum:
+    - stable
+    - dynamic
+    - never
+    type: string
+    x-enum-varnames:
+    - CacheStable
+    - CacheDynamic
+    - CacheNever
   contextfrag.CacheComparison:
     properties:
       first_step_cache_read_tokens:
@@ -1771,6 +1781,51 @@ definitions:
       no_cache_tokens:
         type: integer
       step_index:
+        type: integer
+    type: object
+  contextfrag.ContentRange:
+    properties:
+      end:
+        type: integer
+      start:
+        type: integer
+    type: object
+  contextfrag.ContextBudgetPlan:
+    properties:
+      actual_system_cost:
+        type: integer
+      current_request_cost:
+        type: integer
+      history_budget:
+        type: integer
+      output_reserve:
+        type: integer
+      system_budget:
+        type: integer
+      tool_defs_cost:
+        type: integer
+      window:
+        type: integer
+    type: object
+  contextfrag.ContextRef:
+    properties:
+      content_hash:
+        type: string
+      durability:
+        $ref: '#/definitions/contextfrag.RefDurability'
+      hash_algo:
+        type: string
+      hash_scope:
+        type: string
+      id:
+        type: string
+      namespace:
+        type: string
+      range:
+        $ref: '#/definitions/contextfrag.ContentRange'
+      schema:
+        type: string
+      version:
         type: integer
     type: object
   contextfrag.Kind:
@@ -1826,10 +1881,14 @@ definitions:
     type: object
   contextfrag.LifecycleSnapshot:
     properties:
+      assistant_message_id:
+        type: string
       breakdown:
         items:
           $ref: '#/definitions/contextfrag.KindBreakdown'
         type: array
+      budget_plan:
+        $ref: '#/definitions/contextfrag.ContextBudgetPlan'
       cache_comparator_prefix_hash:
         type: string
       cache_comparison:
@@ -1862,6 +1921,10 @@ definitions:
         type: array
       selection:
         $ref: '#/definitions/contextfrag.SelectionTrace'
+      selection_decisions:
+        items:
+          $ref: '#/definitions/contextfrag.SelectionDecision'
+        type: array
       stable_message_count:
         type: integer
       stable_prefix_hash:
@@ -1955,6 +2018,9 @@ definitions:
     - loop_step_reselection
     - injected_message
     - context_view_fallback
+    - context_budget_failure
+    - context_budget_disabled
+    - capability_gate
     - read_media
     - mid_stream_retry
     type: string
@@ -1965,6 +2031,9 @@ definitions:
     - MutationLoopStepReselection
     - MutationInjectedMessage
     - MutationContextViewFallback
+    - MutationContextBudgetFailure
+    - MutationContextBudgetDisabled
+    - MutationCapabilityGate
     - MutationReadMedia
     - MutationMidStreamRetry
   contextfrag.MutationRecord:
@@ -1974,6 +2043,65 @@ definitions:
       kind:
         $ref: '#/definitions/contextfrag.MutationKind'
     type: object
+  contextfrag.RefDurability:
+    enum:
+    - durable
+    - synthetic
+    - debug
+    type: string
+    x-enum-varnames:
+    - RefDurable
+    - RefSynthetic
+    - RefDebug
+  contextfrag.RetentionTier:
+    enum:
+    - ""
+    - required
+    - preferred
+    - optional
+    type: string
+    x-enum-varnames:
+    - RetentionUnspecified
+    - RetentionRequired
+    - RetentionPreferred
+    - RetentionOptional
+  contextfrag.SelectionDecision:
+    properties:
+      cache_class:
+        $ref: '#/definitions/contextfrag.CacheClass'
+      decision:
+        $ref: '#/definitions/contextfrag.SelectionDecisionKind'
+      id:
+        type: string
+      image_count:
+        type: integer
+      reason:
+        type: string
+      ref:
+        $ref: '#/definitions/contextfrag.ContextRef'
+      retention_tier:
+        $ref: '#/definitions/contextfrag.RetentionTier'
+      slot:
+        $ref: '#/definitions/contextfrag.Slot'
+      source:
+        type: string
+      source_id:
+        type: string
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+    type: object
+  contextfrag.SelectionDecisionKind:
+    enum:
+    - selected
+    - trimmed
+    - dropped
+    type: string
+    x-enum-varnames:
+    - DecisionSelected
+    - DecisionTrimmed
+    - DecisionDropped
   contextfrag.SelectionTrace:
     properties:
       drop_reasons:
@@ -1985,6 +2113,22 @@ definitions:
       selected:
         type: integer
     type: object
+  contextfrag.Slot:
+    enum:
+    - system
+    - before_history
+    - history
+    - after_history_before_current
+    - current_user
+    - after_current
+    type: string
+    x-enum-varnames:
+    - SlotSystem
+    - SlotBeforeHistory
+    - SlotHistory
+    - SlotAfterHistoryBeforeCurrent
+    - SlotCurrentUser
+    - SlotAfterCurrent
   contextfrag.StepSnapshot:
     properties:
       attempt:
@@ -1999,6 +2143,8 @@ definitions:
         type: string
       reselection_applied:
         type: boolean
+      reselection_outcome:
+        type: string
       step_index:
         type: integer
       truncated:
@@ -2893,12 +3039,18 @@ definitions:
     type: object
   handlers.ContextLifecycleTurn:
     properties:
+      assistant_message_id:
+        type: string
       created_at:
         type: string
-      message_id:
+      error_code:
+        type: string
+      run_id:
         type: string
       snapshot:
         $ref: '#/definitions/contextfrag.LifecycleSnapshot'
+      status:
+        type: string
     type: object
   handlers.ContextUsage:
     properties:
@@ -3637,8 +3789,6 @@ definitions:
         items:
           type: string
         type: array
-      message_id:
-        type: string
       removed:
         items:
           type: string
@@ -3647,6 +3797,8 @@ definitions:
         items:
           type: string
         type: array
+      run_id:
+        type: string
     type: object
   handlers.TriggerCompactResponse:
     properties:
@@ -4068,6 +4220,10 @@ definitions:
     properties:
       action_type:
         type: string
+      append_system_sections:
+        items:
+          $ref: '#/definitions/hooks.SystemSectionOutput'
+        type: array
       decision:
         type: string
       error:
@@ -4086,6 +4242,21 @@ definitions:
         type: string
       stdout:
         type: string
+      warnings:
+        items:
+          $ref: '#/definitions/hooks.OutputWarning'
+        type: array
+    type: object
+  hooks.OutputWarning:
+    properties:
+      code:
+        type: string
+      hook_name:
+        type: string
+      message:
+        type: string
+      section_id:
+        type: string
     type: object
   hooks.Result:
     properties:
@@ -4097,6 +4268,10 @@ definitions:
         type: integer
       append_context:
         type: string
+      append_system_sections:
+        items:
+          $ref: '#/definitions/hooks.SystemSectionOutput'
+        type: array
       decision:
         type: string
       hooks_matched:
@@ -4108,7 +4283,40 @@ definitions:
         type: string
       runtime_supported:
         type: boolean
+      warnings:
+        items:
+          $ref: '#/definitions/hooks.OutputWarning'
+        type: array
     type: object
+  hooks.SystemSectionCache:
+    enum:
+    - dynamic
+    - stable
+    type: string
+    x-enum-varnames:
+    - SystemSectionCacheDynamic
+    - SystemSectionCacheStable
+  hooks.SystemSectionOutput:
+    properties:
+      cache:
+        $ref: '#/definitions/hooks.SystemSectionCache'
+      hook_name:
+        type: string
+      id:
+        type: string
+      retention:
+        $ref: '#/definitions/hooks.SystemSectionRetention'
+      text:
+        type: string
+    type: object
+  hooks.SystemSectionRetention:
+    enum:
+    - optional
+    - preferred
+    type: string
+    x-enum-varnames:
+    - SystemSectionRetentionOptional
+    - SystemSectionRetentionPreferred
   hooks.ToolPayload:
     properties:
       call_id:
@@ -10062,9 +10270,9 @@ paths:
       - compaction
   /bots/{bot_id}/sessions/{session_id}/context-lifecycle:
     get:
-      description: List the persisted context lifecycle snapshots (selection, cache
-        plan, mutations, cache attribution) for a chat session with aggregated cache
-        and drop statistics
+      description: List run-keyed context lifecycle snapshots (selection, cache plan,
+        mutations, cache attribution) for a chat session with aggregated cache and
+        drop statistics; pre-run-table sessions fall back to legacy assistant metadata
       parameters:
       - description: Bot ID
         in: path

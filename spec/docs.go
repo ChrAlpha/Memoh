@@ -7065,7 +7065,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/sessions/{session_id}/context-lifecycle": {
             "get": {
-                "description": "List the persisted context lifecycle snapshots (selection, cache plan, mutations, cache attribution) for a chat session with aggregated cache and drop statistics",
+                "description": "List run-keyed context lifecycle snapshots (selection, cache plan, mutations, cache attribution) for a chat session with aggregated cache and drop statistics; pre-run-table sessions fall back to legacy assistant metadata",
                 "tags": [
                     "sessions"
                 ],
@@ -16396,6 +16396,19 @@ const docTemplate = `{
                 "usage": {}
             }
         },
+        "contextfrag.CacheClass": {
+            "type": "string",
+            "enum": [
+                "stable",
+                "dynamic",
+                "never"
+            ],
+            "x-enum-varnames": [
+                "CacheStable",
+                "CacheDynamic",
+                "CacheNever"
+            ]
+        },
         "contextfrag.CacheComparison": {
             "type": "object",
             "properties": {
@@ -16432,6 +16445,75 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "step_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContentRange": {
+            "type": "object",
+            "properties": {
+                "end": {
+                    "type": "integer"
+                },
+                "start": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContextBudgetPlan": {
+            "type": "object",
+            "properties": {
+                "actual_system_cost": {
+                    "type": "integer"
+                },
+                "current_request_cost": {
+                    "type": "integer"
+                },
+                "history_budget": {
+                    "type": "integer"
+                },
+                "output_reserve": {
+                    "type": "integer"
+                },
+                "system_budget": {
+                    "type": "integer"
+                },
+                "tool_defs_cost": {
+                    "type": "integer"
+                },
+                "window": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContextRef": {
+            "type": "object",
+            "properties": {
+                "content_hash": {
+                    "type": "string"
+                },
+                "durability": {
+                    "$ref": "#/definitions/contextfrag.RefDurability"
+                },
+                "hash_algo": {
+                    "type": "string"
+                },
+                "hash_scope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "range": {
+                    "$ref": "#/definitions/contextfrag.ContentRange"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "version": {
                     "type": "integer"
                 }
             }
@@ -16500,11 +16582,17 @@ const docTemplate = `{
         "contextfrag.LifecycleSnapshot": {
             "type": "object",
             "properties": {
+                "assistant_message_id": {
+                    "type": "string"
+                },
                 "breakdown": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/contextfrag.KindBreakdown"
                     }
+                },
+                "budget_plan": {
+                    "$ref": "#/definitions/contextfrag.ContextBudgetPlan"
                 },
                 "cache_comparator_prefix_hash": {
                     "type": "string"
@@ -16553,6 +16641,12 @@ const docTemplate = `{
                 },
                 "selection": {
                     "$ref": "#/definitions/contextfrag.SelectionTrace"
+                },
+                "selection_decisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.SelectionDecision"
+                    }
                 },
                 "stable_message_count": {
                     "type": "integer"
@@ -16690,6 +16784,9 @@ const docTemplate = `{
                 "loop_step_reselection",
                 "injected_message",
                 "context_view_fallback",
+                "context_budget_failure",
+                "context_budget_disabled",
+                "capability_gate",
                 "read_media",
                 "mid_stream_retry"
             ],
@@ -16700,6 +16797,9 @@ const docTemplate = `{
                 "MutationLoopStepReselection",
                 "MutationInjectedMessage",
                 "MutationContextViewFallback",
+                "MutationContextBudgetFailure",
+                "MutationContextBudgetDisabled",
+                "MutationCapabilityGate",
                 "MutationReadMedia",
                 "MutationMidStreamRetry"
             ]
@@ -16714,6 +16814,88 @@ const docTemplate = `{
                     "$ref": "#/definitions/contextfrag.MutationKind"
                 }
             }
+        },
+        "contextfrag.RefDurability": {
+            "type": "string",
+            "enum": [
+                "durable",
+                "synthetic",
+                "debug"
+            ],
+            "x-enum-varnames": [
+                "RefDurable",
+                "RefSynthetic",
+                "RefDebug"
+            ]
+        },
+        "contextfrag.RetentionTier": {
+            "type": "string",
+            "enum": [
+                "",
+                "required",
+                "preferred",
+                "optional"
+            ],
+            "x-enum-varnames": [
+                "RetentionUnspecified",
+                "RetentionRequired",
+                "RetentionPreferred",
+                "RetentionOptional"
+            ]
+        },
+        "contextfrag.SelectionDecision": {
+            "type": "object",
+            "properties": {
+                "cache_class": {
+                    "$ref": "#/definitions/contextfrag.CacheClass"
+                },
+                "decision": {
+                    "$ref": "#/definitions/contextfrag.SelectionDecisionKind"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image_count": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "ref": {
+                    "$ref": "#/definitions/contextfrag.ContextRef"
+                },
+                "retention_tier": {
+                    "$ref": "#/definitions/contextfrag.RetentionTier"
+                },
+                "slot": {
+                    "$ref": "#/definitions/contextfrag.Slot"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.SelectionDecisionKind": {
+            "type": "string",
+            "enum": [
+                "selected",
+                "trimmed",
+                "dropped"
+            ],
+            "x-enum-varnames": [
+                "DecisionSelected",
+                "DecisionTrimmed",
+                "DecisionDropped"
+            ]
         },
         "contextfrag.SelectionTrace": {
             "type": "object",
@@ -16731,6 +16913,25 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
+        },
+        "contextfrag.Slot": {
+            "type": "string",
+            "enum": [
+                "system",
+                "before_history",
+                "history",
+                "after_history_before_current",
+                "current_user",
+                "after_current"
+            ],
+            "x-enum-varnames": [
+                "SlotSystem",
+                "SlotBeforeHistory",
+                "SlotHistory",
+                "SlotAfterHistoryBeforeCurrent",
+                "SlotCurrentUser",
+                "SlotAfterCurrent"
+            ]
         },
         "contextfrag.StepSnapshot": {
             "type": "object",
@@ -16752,6 +16953,9 @@ const docTemplate = `{
                 },
                 "reselection_applied": {
                     "type": "boolean"
+                },
+                "reselection_outcome": {
+                    "type": "string"
                 },
                 "step_index": {
                     "type": "integer"
@@ -18097,14 +18301,23 @@ const docTemplate = `{
         "handlers.ContextLifecycleTurn": {
             "type": "object",
             "properties": {
+                "assistant_message_id": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
-                "message_id": {
+                "error_code": {
+                    "type": "string"
+                },
+                "run_id": {
                     "type": "string"
                 },
                 "snapshot": {
                     "$ref": "#/definitions/contextfrag.LifecycleSnapshot"
+                },
+                "status": {
+                    "type": "string"
                 }
             }
         },
@@ -19239,9 +19452,6 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "message_id": {
-                    "type": "string"
-                },
                 "removed": {
                     "type": "array",
                     "items": {
@@ -19253,6 +19463,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "run_id": {
+                    "type": "string"
                 }
             }
         },
@@ -19894,6 +20107,12 @@ const docTemplate = `{
                 "action_type": {
                     "type": "string"
                 },
+                "append_system_sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.SystemSectionOutput"
+                    }
+                },
                 "decision": {
                     "type": "string"
                 },
@@ -19919,6 +20138,29 @@ const docTemplate = `{
                 },
                 "stdout": {
                     "type": "string"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.OutputWarning"
+                    }
+                }
+            }
+        },
+        "hooks.OutputWarning": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "hook_name": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "section_id": {
+                    "type": "string"
                 }
             }
         },
@@ -19937,6 +20179,12 @@ const docTemplate = `{
                 "append_context": {
                     "type": "string"
                 },
+                "append_system_sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.SystemSectionOutput"
+                    }
+                },
                 "decision": {
                     "type": "string"
                 },
@@ -19952,8 +20200,56 @@ const docTemplate = `{
                 },
                 "runtime_supported": {
                     "type": "boolean"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.OutputWarning"
+                    }
                 }
             }
+        },
+        "hooks.SystemSectionCache": {
+            "type": "string",
+            "enum": [
+                "dynamic",
+                "stable"
+            ],
+            "x-enum-varnames": [
+                "SystemSectionCacheDynamic",
+                "SystemSectionCacheStable"
+            ]
+        },
+        "hooks.SystemSectionOutput": {
+            "type": "object",
+            "properties": {
+                "cache": {
+                    "$ref": "#/definitions/hooks.SystemSectionCache"
+                },
+                "hook_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "retention": {
+                    "$ref": "#/definitions/hooks.SystemSectionRetention"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "hooks.SystemSectionRetention": {
+            "type": "string",
+            "enum": [
+                "optional",
+                "preferred"
+            ],
+            "x-enum-varnames": [
+                "SystemSectionRetentionOptional",
+                "SystemSectionRetentionPreferred"
+            ]
         },
         "hooks.ToolPayload": {
             "type": "object",

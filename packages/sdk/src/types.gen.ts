@@ -1020,6 +1020,8 @@ export type CompactionLog = {
     usage?: unknown;
 };
 
+export type ContextfragCacheClass = 'stable' | 'dynamic' | 'never';
+
 export type ContextfragCacheComparison = {
     first_step_cache_read_tokens?: number;
     outcome?: string;
@@ -1036,6 +1038,33 @@ export type ContextfragCacheUsageRecord = {
     step_index?: number;
 };
 
+export type ContextfragContentRange = {
+    end?: number;
+    start?: number;
+};
+
+export type ContextfragContextBudgetPlan = {
+    actual_system_cost?: number;
+    current_request_cost?: number;
+    history_budget?: number;
+    output_reserve?: number;
+    system_budget?: number;
+    tool_defs_cost?: number;
+    window?: number;
+};
+
+export type ContextfragContextRef = {
+    content_hash?: string;
+    durability?: ContextfragRefDurability;
+    hash_algo?: string;
+    hash_scope?: string;
+    id?: string;
+    namespace?: string;
+    range?: ContextfragContentRange;
+    schema?: string;
+    version?: number;
+};
+
 export type ContextfragKind = 'system_prompt' | 'system_policy' | 'bot_identity' | 'workspace_instruction' | 'platform_identity' | 'tool_usage' | 'conversation_event' | 'current_user_message' | 'attachment_ref' | 'native_image' | 'skills_catalog' | 'hook_context' | 'injected_message' | 'background_summary' | 'acp_context' | 'memory_recall' | 'conversation_summary';
 
 export type ContextfragKindBreakdown = {
@@ -1047,7 +1076,9 @@ export type ContextfragKindBreakdown = {
 };
 
 export type ContextfragLifecycleSnapshot = {
+    assistant_message_id?: string;
     breakdown?: Array<ContextfragKindBreakdown>;
+    budget_plan?: ContextfragContextBudgetPlan;
     cache_comparator_prefix_hash?: string;
     cache_comparison?: ContextfragCacheComparison;
     cache_read_tokens?: number;
@@ -1062,6 +1093,7 @@ export type ContextfragLifecycleSnapshot = {
     model?: string;
     mutations?: Array<ContextfragMutationRecord>;
     selection?: ContextfragSelectionTrace;
+    selection_decisions?: Array<ContextfragSelectionDecision>;
     stable_message_count?: number;
     stable_prefix_hash?: string;
     stable_prefix_token_estimate?: number;
@@ -1104,12 +1136,33 @@ export type ContextfragMemoryRecallTrace = {
     retrieval_mode?: string;
 };
 
-export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'read_media' | 'mid_stream_retry';
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'mid_stream_retry';
 
 export type ContextfragMutationRecord = {
     detail?: string;
     kind?: ContextfragMutationKind;
 };
+
+export type ContextfragRefDurability = 'durable' | 'synthetic' | 'debug';
+
+export type ContextfragRetentionTier = '' | 'required' | 'preferred' | 'optional';
+
+export type ContextfragSelectionDecision = {
+    cache_class?: ContextfragCacheClass;
+    decision?: ContextfragSelectionDecisionKind;
+    id?: string;
+    image_count?: number;
+    reason?: string;
+    ref?: ContextfragContextRef;
+    retention_tier?: ContextfragRetentionTier;
+    slot?: ContextfragSlot;
+    source?: string;
+    source_id?: string;
+    text_bytes?: number;
+    token_estimate?: number;
+};
+
+export type ContextfragSelectionDecisionKind = 'selected' | 'trimmed' | 'dropped';
 
 export type ContextfragSelectionTrace = {
     drop_reasons?: {
@@ -1119,6 +1172,8 @@ export type ContextfragSelectionTrace = {
     selected?: number;
 };
 
+export type ContextfragSlot = 'system' | 'before_history' | 'history' | 'after_history_before_current' | 'current_user' | 'after_current';
+
 export type ContextfragStepSnapshot = {
     attempt?: number;
     drop_reasons?: {
@@ -1127,6 +1182,7 @@ export type ContextfragStepSnapshot = {
     dropped?: number;
     post_prepare_input_hash?: string;
     reselection_applied?: boolean;
+    reselection_outcome?: string;
     step_index?: number;
     truncated?: number;
 };
@@ -1659,9 +1715,12 @@ export type HandlersContextLifecycleResponse = {
 };
 
 export type HandlersContextLifecycleTurn = {
+    assistant_message_id?: string;
     created_at?: string;
-    message_id?: string;
+    error_code?: string;
+    run_id?: string;
     snapshot?: ContextfragLifecycleSnapshot;
+    status?: string;
 };
 
 export type HandlersContextUsage = {
@@ -2102,9 +2161,9 @@ export type HandlersToolDefBucket = {
 
 export type HandlersToolRosterChange = {
     added?: Array<string>;
-    message_id?: string;
     removed?: Array<string>;
     resized?: Array<string>;
+    run_id?: string;
 };
 
 export type HandlersTriggerCompactResponse = {
@@ -2373,6 +2432,7 @@ export type HeartbeatLog = {
 
 export type HooksActionResult = {
     action_type?: string;
+    append_system_sections?: Array<HooksSystemSectionOutput>;
     decision?: string;
     error?: string;
     exit_code?: number;
@@ -2384,12 +2444,21 @@ export type HooksActionResult = {
     result?: unknown;
     stderr?: string;
     stdout?: string;
+    warnings?: Array<HooksOutputWarning>;
+};
+
+export type HooksOutputWarning = {
+    code?: string;
+    hook_name?: string;
+    message?: string;
+    section_id?: string;
 };
 
 export type HooksResult = {
     action_results?: Array<HooksActionResult>;
     actions_run?: number;
     append_context?: string;
+    append_system_sections?: Array<HooksSystemSectionOutput>;
     decision?: string;
     hooks_matched?: number;
     metadata?: {
@@ -2397,7 +2466,20 @@ export type HooksResult = {
     };
     reason?: string;
     runtime_supported?: boolean;
+    warnings?: Array<HooksOutputWarning>;
 };
+
+export type HooksSystemSectionCache = 'dynamic' | 'stable';
+
+export type HooksSystemSectionOutput = {
+    cache?: HooksSystemSectionCache;
+    hook_name?: string;
+    id?: string;
+    retention?: HooksSystemSectionRetention;
+    text?: string;
+};
+
+export type HooksSystemSectionRetention = 'optional' | 'preferred';
 
 export type HooksToolPayload = {
     call_id?: string;
