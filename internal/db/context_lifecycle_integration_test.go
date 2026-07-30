@@ -198,6 +198,46 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 		t.Fatalf("duplicate run lifecycle SQLSTATE = %q, want 23505", sqlState(err))
 	}
 
+	replacementSnapshot := []byte(`{"version":999}`)
+	aborted, err := queries.UpsertAbortedContextLifecycle(ctx, sqlc.UpsertAbortedContextLifecycleParams{
+		RunID:     parsedRunID,
+		BotID:     parsedBotID,
+		SessionID: parsedSessionID,
+		Snapshot:  replacementSnapshot,
+	})
+	if err != nil {
+		t.Fatalf("upsert existing aborted context lifecycle: %v", err)
+	}
+	if aborted.Status != "aborted" || aborted.ErrorCode.Valid {
+		t.Fatalf("aborted lifecycle terminal = (%q, %#v), want aborted with no error code", aborted.Status, aborted.ErrorCode)
+	}
+	if !reflect.DeepEqual(aborted.Snapshot, created.Snapshot) {
+		t.Fatalf("aborted lifecycle replaced existing snapshot = %s, want %s", aborted.Snapshot, created.Snapshot)
+	}
+	if aborted.CreatedAt != created.CreatedAt {
+		t.Fatalf("aborted lifecycle changed created_at = %#v, want %#v", aborted.CreatedAt, created.CreatedAt)
+	}
+
+	const abortedRunID = "00000000-0000-0000-0000-00000000d503"
+	parsedAbortedRunID := mustParseUUID(t, abortedRunID)
+	insertedAborted, err := queries.UpsertAbortedContextLifecycle(ctx, sqlc.UpsertAbortedContextLifecycleParams{
+		RunID:     parsedAbortedRunID,
+		BotID:     parsedBotID,
+		SessionID: parsedSessionID,
+		Snapshot:  replacementSnapshot,
+	})
+	if err != nil {
+		t.Fatalf("insert aborted context lifecycle: %v", err)
+	}
+	var insertedSnapshot map[string]any
+	if err := json.Unmarshal(insertedAborted.Snapshot, &insertedSnapshot); err != nil {
+		t.Fatalf("unmarshal inserted aborted snapshot: %v", err)
+	}
+	if insertedAborted.Status != "aborted" || insertedAborted.ErrorCode.Valid ||
+		insertedSnapshot["version"] != float64(999) {
+		t.Fatalf("inserted aborted lifecycle = %#v", insertedAborted)
+	}
+
 	const teamTwo = "00000000-0000-0000-0000-0000000000f2"
 	if _, err := pool.Exec(ctx, `INSERT INTO teams (id, slug) VALUES ($1, 'context-lifecycle-team-two')`, teamTwo); err != nil {
 		t.Fatalf("seed second team: %v", err)
@@ -279,7 +319,7 @@ WHERE c.oid = 'public.context_lifecycles'::regclass
 			indexExists, rlsEnabled, rlsForced, sessionRunFKs, tenantFKs, tenantKeyFound,
 		)
 	}
-	for _, status := range []string{"completed", "failed_budget", "failed_provider", "fallback"} {
+	for _, status := range []string{"completed", "failed_budget", "failed_provider", "fallback", "aborted"} {
 		if !strings.Contains(statusValues, status) {
 			t.Fatalf("context lifecycle status CHECK %q is missing %q", statusValues, status)
 		}

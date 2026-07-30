@@ -184,6 +184,7 @@ type Queries interface {
 	GetLatestPendingToolApprovalBySession(ctx context.Context, arg dbsqlc.GetLatestPendingToolApprovalBySessionParams) (dbsqlc.ToolApprovalRequest, error)
 	GetLatestPendingUserInputBySession(ctx context.Context, arg dbsqlc.GetLatestPendingUserInputBySessionParams) (dbsqlc.UserInputRequest, error)
 	GetLatestSessionModelID(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error)
+	GetSessionRun(ctx context.Context, runID pgtype.UUID) (dbsqlc.SessionRun, error)
 	GetMessageByIDBySession(ctx context.Context, arg dbsqlc.GetMessageByIDBySessionParams) (dbsqlc.GetMessageByIDBySessionRow, error)
 	GetLatestSessionIDByBot(ctx context.Context, botID pgtype.UUID) (pgtype.UUID, error)
 	GetMCPConnectionByID(ctx context.Context, arg dbsqlc.GetMCPConnectionByIDParams) (dbsqlc.McpConnection, error)
@@ -419,6 +420,7 @@ type Queries interface {
 	SupersedeHistoryTurn(ctx context.Context, arg dbsqlc.SupersedeHistoryTurnParams) (HistoryTurn, error)
 	UpdateUserProviderOAuthState(ctx context.Context, arg dbsqlc.UpdateUserProviderOAuthStateParams) error
 	UpsertAccountByUsername(ctx context.Context, arg dbsqlc.UpsertAccountByUsernameParams) (dbsqlc.UpsertAccountByUsernameRow, error)
+	UpsertAbortedContextLifecycle(ctx context.Context, arg dbsqlc.UpsertAbortedContextLifecycleParams) (dbsqlc.ContextLifecycle, error)
 	UpsertBotChannelConfig(ctx context.Context, arg dbsqlc.UpsertBotChannelConfigParams) (dbsqlc.BotChannelConfig, error)
 	UpsertBotSettings(ctx context.Context, arg dbsqlc.UpsertBotSettingsParams) (dbsqlc.UpsertBotSettingsRow, error)
 	UpsertBotStorageBinding(ctx context.Context, arg dbsqlc.UpsertBotStorageBindingParams) (dbsqlc.BotStorageBinding, error)

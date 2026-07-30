@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS public.context_lifecycles (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT context_lifecycles_team_run_key UNIQUE (team_id, run_id),
     CONSTRAINT context_lifecycles_status_check CHECK (status IN (
-        'completed', 'failed_budget', 'failed_provider', 'fallback'
+        'completed', 'failed_budget', 'failed_provider', 'fallback', 'aborted'
     )),
     CONSTRAINT context_lifecycles_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)

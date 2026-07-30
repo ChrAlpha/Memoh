@@ -36,6 +36,32 @@ FROM context_lifecycles
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = sqlc.arg(run_id);
 
+-- name: UpsertAbortedContextLifecycle :one
+INSERT INTO context_lifecycles (
+  run_id,
+  bot_id,
+  session_id,
+  status,
+  error_code,
+  snapshot
+)
+VALUES (
+  sqlc.arg(run_id),
+  sqlc.arg(bot_id),
+  sqlc.arg(session_id),
+  'aborted',
+  NULL,
+  sqlc.arg(snapshot)
+)
+ON CONFLICT (run_id) DO UPDATE
+SET
+  status = 'aborted',
+  error_code = NULL
+WHERE context_lifecycles.team_id = public.memoh_current_team_id()
+  AND context_lifecycles.bot_id = EXCLUDED.bot_id
+  AND context_lifecycles.session_id = EXCLUDED.session_id
+RETURNING *;
+
 -- name: GetLatestAssistantContextLifecycleMetadataByRunID :one
 SELECT metadata
 FROM bot_history_messages

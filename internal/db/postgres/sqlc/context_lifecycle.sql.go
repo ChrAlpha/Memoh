@@ -204,3 +204,58 @@ func (q *Queries) ListRecentContextLifecyclesBySession(ctx context.Context, arg 
 	}
 	return items, nil
 }
+
+const upsertAbortedContextLifecycle = `-- name: UpsertAbortedContextLifecycle :one
+INSERT INTO context_lifecycles (
+  run_id,
+  bot_id,
+  session_id,
+  status,
+  error_code,
+  snapshot
+)
+VALUES (
+  $1,
+  $2,
+  $3,
+  'aborted',
+  NULL,
+  $4
+)
+ON CONFLICT (run_id) DO UPDATE
+SET
+  status = 'aborted',
+  error_code = NULL
+WHERE context_lifecycles.team_id = public.memoh_current_team_id()
+  AND context_lifecycles.bot_id = EXCLUDED.bot_id
+  AND context_lifecycles.session_id = EXCLUDED.session_id
+RETURNING run_id, team_id, bot_id, session_id, status, error_code, snapshot, created_at
+`
+
+type UpsertAbortedContextLifecycleParams struct {
+	RunID     pgtype.UUID `json:"run_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+	Snapshot  []byte      `json:"snapshot"`
+}
+
+func (q *Queries) UpsertAbortedContextLifecycle(ctx context.Context, arg UpsertAbortedContextLifecycleParams) (ContextLifecycle, error) {
+	row := q.db.QueryRow(ctx, upsertAbortedContextLifecycle,
+		arg.RunID,
+		arg.BotID,
+		arg.SessionID,
+		arg.Snapshot,
+	)
+	var i ContextLifecycle
+	err := row.Scan(
+		&i.RunID,
+		&i.TeamID,
+		&i.BotID,
+		&i.SessionID,
+		&i.Status,
+		&i.ErrorCode,
+		&i.Snapshot,
+		&i.CreatedAt,
+	)
+	return i, err
+}
