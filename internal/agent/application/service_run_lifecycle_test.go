@@ -3,11 +3,14 @@ package application
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
@@ -59,8 +62,12 @@ func (r *lifecycleSubagentRuntime) FinishRun(
 
 type recordingContextLifecycleQueries struct {
 	dbstore.Queries
-	params []sqlc.CreateContextLifecycleParams
-	err    error
+	params      []sqlc.CreateContextLifecycleParams
+	err         error
+	existing    *sqlc.ContextLifecycle
+	getErr      error
+	metadata    []byte
+	metadataErr error
 }
 
 func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
@@ -69,6 +76,32 @@ func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
 ) (sqlc.ContextLifecycle, error) {
 	q.params = append(q.params, arg)
 	return sqlc.ContextLifecycle{}, q.err
+}
+
+func (q *recordingContextLifecycleQueries) GetContextLifecycleByRunID(
+	_ context.Context,
+	_ pgtype.UUID,
+) (sqlc.ContextLifecycle, error) {
+	if q.getErr != nil {
+		return sqlc.ContextLifecycle{}, q.getErr
+	}
+	if q.existing == nil {
+		return sqlc.ContextLifecycle{}, pgx.ErrNoRows
+	}
+	return *q.existing, nil
+}
+
+func (q *recordingContextLifecycleQueries) GetLatestAssistantContextLifecycleMetadataByRunID(
+	_ context.Context,
+	_ pgtype.UUID,
+) ([]byte, error) {
+	if q.metadataErr != nil {
+		return nil, q.metadataErr
+	}
+	if q.metadata == nil {
+		return nil, pgx.ErrNoRows
+	}
+	return q.metadata, nil
 }
 
 func lifecycleTestRunConfig(t *testing.T, runID string, mutations ...contextfrag.MutationRecord) native.RunConfig {
@@ -317,5 +350,76 @@ func TestContextLifecycleStoreErrorIsCountedAndNotReturned(t *testing.T) {
 
 	if got := service.contextLifecyclePersistenceErrors.Load(); got != 1 {
 		t.Fatalf("persistence error count = %d, want 1", got)
+	}
+}
+
+func TestRecoverContextLifecycleFromAssistantMetadataWritesFailedRun(t *testing.T) {
+	cfg := lifecycleTestRunConfig(t, lifecycleTestRunID)
+	snapshot, ok := cfg.ContextLifecycle.Snapshot()
+	if !ok {
+		t.Fatal("test lifecycle snapshot is unavailable")
+	}
+	metadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: snapshot,
+	})
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
+	}
+	queries := &recordingContextLifecycleQueries{metadata: metadata}
+	service := &Service{contextLifecycles: queries}
+
+	service.recoverContextLifecycleFromAssistantMetadata(
+		context.Background(),
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		errors.New("continuation failed before resume"),
+	)
+
+	if len(queries.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
+	}
+	if got := pgUUIDString(queries.params[0].RunID); got != lifecycleTestRunID {
+		t.Fatalf("persisted run ID = %q, want %q", got, lifecycleTestRunID)
+	}
+	if got := queries.params[0].Status; got != contextLifecycleStatusFailedProvider {
+		t.Fatalf("status = %q, want %q", got, contextLifecycleStatusFailedProvider)
+	}
+}
+
+func TestRecoverContextLifecycleFromAssistantMetadataDoesNotDuplicateExistingRow(t *testing.T) {
+	queries := &recordingContextLifecycleQueries{existing: &sqlc.ContextLifecycle{}}
+	service := &Service{contextLifecycles: queries}
+
+	service.recoverContextLifecycleFromAssistantMetadata(
+		context.Background(),
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		errors.New("late continuation error"),
+	)
+
+	if len(queries.params) != 0 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 0", len(queries.params))
+	}
+}
+
+func TestRecoverContextLifecycleStoreErrorIsCountedAndNotReturned(t *testing.T) {
+	queries := &recordingContextLifecycleQueries{getErr: errors.New("database unavailable")}
+	service := &Service{contextLifecycles: queries}
+
+	service.recoverContextLifecycleFromAssistantMetadata(
+		context.Background(),
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		errors.New("continuation failed"),
+	)
+
+	if got := service.contextLifecyclePersistenceErrors.Load(); got != 1 {
+		t.Fatalf("persistence error count = %d, want 1", got)
+	}
+	if len(queries.params) != 0 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 0", len(queries.params))
 	}
 }

@@ -102,6 +102,8 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 					resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}},
 					snap,
 				); storeErr != nil {
+					lifecycleCause = storeErr
+					lifecycleDeferred = false
 					return storeErr
 				}
 				stored = true

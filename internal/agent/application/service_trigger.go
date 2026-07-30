@@ -99,6 +99,9 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	storeErr := s.storeRoundWithOptions(ctx, req, roundMessages, rc.model.ID, storeRoundOptions{
 		ContextLifecycle: cfg.ContextLifecycle,
 	})
+	if storeErr != nil {
+		lifecycleCause = storeErr
+	}
 
 	totalUsageJSON, _ := json.Marshal(result.Usage)
 	return schedule.TriggerResult{

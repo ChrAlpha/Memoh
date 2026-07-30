@@ -191,12 +191,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	runConfig = runConfig.RefreshContextFrag()
 	terminal := s.contextLifecycleTerminal(ctx, runConfig)
 	var lifecycleCause error
-	var lifecycleDeferred bool
-	defer func() {
-		if !lifecycleDeferred {
-			terminal(lifecycleCause)
-		}
-	}()
+	defer func() { terminal(lifecycleCause) }()
 
 	eventCh := s.streamDiscussAgent(ctx, runConfig)
 
@@ -207,8 +202,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		}
 		if event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort {
 			finalMessages = event.Messages
-			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
-			if event.Type == native.EventAgentAbort && !lifecycleDeferred && lifecycleCause == nil {
+			if event.Type == native.EventAgentAbort && strings.TrimSpace(event.ApprovalID) == "" && lifecycleCause == nil {
 				lifecycleCause = errors.New("agent run aborted")
 			}
 		}
@@ -231,6 +225,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 				cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
 				sdkMsgs, resolved.ModelID, runConfig.ContextLifecycle,
 			); storeErr != nil {
+				lifecycleCause = storeErr
 				h.emitErr(storeErr)
 			}
 		}

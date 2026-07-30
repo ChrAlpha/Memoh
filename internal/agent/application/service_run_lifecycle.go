@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -28,6 +29,8 @@ const (
 
 type contextLifecycleStore interface {
 	CreateContextLifecycle(context.Context, sqlc.CreateContextLifecycleParams) (sqlc.ContextLifecycle, error)
+	GetContextLifecycleByRunID(context.Context, pgtype.UUID) (sqlc.ContextLifecycle, error)
+	GetLatestAssistantContextLifecycleMetadataByRunID(context.Context, pgtype.UUID) ([]byte, error)
 }
 
 func (s *Service) contextLifecycleTerminal(ctx context.Context, cfg native.RunConfig) func(error) {
@@ -55,6 +58,64 @@ func (s *Service) persistRunContextLifecycle(ctx context.Context, cfg native.Run
 		&snapshot,
 		cause,
 	)
+}
+
+func (s *Service) recoverContextLifecycleFromAssistantMetadata(
+	ctx context.Context,
+	runID, botID, sessionID string,
+	cause error,
+) {
+	if s == nil || s.contextLifecycles == nil || runOwnershipLost(ctx) {
+		return
+	}
+	runUUID, err := db.ParseUUID(runID)
+	if err != nil {
+		s.recordContextLifecyclePersistenceError(
+			err,
+			runID,
+			botID,
+			sessionID,
+			contextLifecycleStatusFailedProvider,
+		)
+		return
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextLifecycleWriteTimeout)
+	defer cancel()
+	if _, err = s.contextLifecycles.GetContextLifecycleByRunID(readCtx, runUUID); err == nil {
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		s.recordContextLifecyclePersistenceError(
+			err,
+			runID,
+			botID,
+			sessionID,
+			contextLifecycleStatusFailedProvider,
+		)
+		return
+	}
+	metadata, err := s.contextLifecycles.GetLatestAssistantContextLifecycleMetadataByRunID(readCtx, runUUID)
+	if err != nil {
+		s.recordContextLifecyclePersistenceError(
+			err,
+			runID,
+			botID,
+			sessionID,
+			contextLifecycleStatusFailedProvider,
+		)
+		return
+	}
+	snapshot, ok := contextfrag.LifecycleSnapshotFromMetadata(metadata)
+	if !ok {
+		s.recordContextLifecyclePersistenceError(
+			errors.New("assistant message has no context lifecycle snapshot"),
+			runID,
+			botID,
+			sessionID,
+			contextLifecycleStatusFailedProvider,
+		)
+		return
+	}
+	s.persistContextLifecycleSnapshot(ctx, runID, botID, sessionID, &snapshot, cause)
 }
 
 func (s *Service) persistContextLifecycleSnapshot(

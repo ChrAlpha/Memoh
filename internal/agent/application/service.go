@@ -678,9 +678,11 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		SkipMemory:       storeReq.SkipMemoryExtraction,
 		ContextLifecycle: cfg.ContextLifecycle,
 	}); err != nil {
+		lifecycleCause = err
 		return ChatResponse{}, err
 	}
 	if err := s.persistSessionWorkspaceTarget(ctx, storeReq); err != nil {
+		lifecycleCause = err
 		return ChatResponse{}, err
 	}
 

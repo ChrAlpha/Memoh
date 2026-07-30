@@ -174,12 +174,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		cfg = s.prepareRunConfig(streamCtx, cfg)
 		terminal := s.contextLifecycleTerminal(streamCtx, cfg)
 		var agentStreamErr error
-		var lifecycleDeferred bool
-		defer func() {
-			if !lifecycleDeferred {
-				terminal(agentStreamErr)
-			}
-		}()
+		defer func() { terminal(agentStreamErr) }()
 
 		// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.
 		idleCtx, idleCancel := withIdleTimeout(streamCtx)
@@ -214,8 +209,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				)
 			}
 			if event.Type == native.EventAgentAbort {
-				lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
-				if !lifecycleDeferred && agentStreamErr == nil {
+				if strings.TrimSpace(event.ApprovalID) == "" && agentStreamErr == nil {
 					agentStreamErr = errors.New("agent run aborted")
 				}
 			}
@@ -232,8 +226,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					snap.visibleOutput = hasVisibleOutput
 					lastSnapshot = snap
 					hasSnapshot = true
-					lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
-					if snap.aborted && !lifecycleDeferred && agentStreamErr == nil {
+					if snap.aborted && strings.TrimSpace(event.ApprovalID) == "" && snap.deferredToolID == "" && agentStreamErr == nil {
 						agentStreamErr = errors.New("agent run aborted")
 					}
 					if !stored && !runOwnershipLost(streamCtx) {
@@ -508,6 +501,8 @@ func (s *Service) streamChatWSResultWithHooks(
 
 		if event.IsTerminal() && postPersist != nil && !postPersistApplied {
 			if err := postPersist(context.WithoutCancel(ctx), persistedMessages); err != nil {
+				lifecycleCause = err
+				lifecycleDeferred = false
 				return persistedMessages, err
 			}
 			postPersistApplied = true
@@ -572,6 +567,8 @@ func (s *Service) streamChatWSResultWithHooks(
 
 	if postPersist != nil && !postPersistApplied {
 		if err := postPersist(context.WithoutCancel(ctx), persistedMessages); err != nil {
+			lifecycleCause = err
+			lifecycleDeferred = false
 			return persistedMessages, err
 		}
 	}

@@ -326,6 +326,13 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 		Generation: command.Generation,
 	}
 	if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
+		s.recoverContextLifecycleFromAssistantMetadata(
+			ctx,
+			command.RunID,
+			command.BotID,
+			command.SessionID,
+			err,
+		)
 		_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, sessionruntime.RunStatusErrored, err.Error())
 		return
 	}
@@ -356,6 +363,13 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 	}
 	finishCtx := context.WithoutCancel(ctx)
 	if runErr != nil {
+		s.recoverContextLifecycleFromAssistantMetadata(
+			ctx,
+			command.RunID,
+			command.BotID,
+			command.SessionID,
+			runErr,
+		)
 		_ = s.decisionRuntime.FinishRun(finishCtx, handle, sessionruntime.RunStatusErrored, runErr.Error())
 		return
 	}
