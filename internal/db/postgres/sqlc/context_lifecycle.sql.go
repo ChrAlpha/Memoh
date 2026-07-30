@@ -11,6 +11,81 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createContextLifecycle = `-- name: CreateContextLifecycle :one
+INSERT INTO context_lifecycles (
+  run_id,
+  bot_id,
+  session_id,
+  status,
+  error_code,
+  snapshot
+)
+VALUES (
+  $1,
+  $2,
+  $3,
+  $4,
+  $5::text,
+  $6
+)
+RETURNING run_id, team_id, bot_id, session_id, status, error_code, snapshot, created_at
+`
+
+type CreateContextLifecycleParams struct {
+	RunID     pgtype.UUID `json:"run_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+	Status    string      `json:"status"`
+	ErrorCode pgtype.Text `json:"error_code"`
+	Snapshot  []byte      `json:"snapshot"`
+}
+
+func (q *Queries) CreateContextLifecycle(ctx context.Context, arg CreateContextLifecycleParams) (ContextLifecycle, error) {
+	row := q.db.QueryRow(ctx, createContextLifecycle,
+		arg.RunID,
+		arg.BotID,
+		arg.SessionID,
+		arg.Status,
+		arg.ErrorCode,
+		arg.Snapshot,
+	)
+	var i ContextLifecycle
+	err := row.Scan(
+		&i.RunID,
+		&i.TeamID,
+		&i.BotID,
+		&i.SessionID,
+		&i.Status,
+		&i.ErrorCode,
+		&i.Snapshot,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getContextLifecycleByRunID = `-- name: GetContextLifecycleByRunID :one
+SELECT run_id, team_id, bot_id, session_id, status, error_code, snapshot, created_at
+FROM context_lifecycles
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = $1
+`
+
+func (q *Queries) GetContextLifecycleByRunID(ctx context.Context, runID pgtype.UUID) (ContextLifecycle, error) {
+	row := q.db.QueryRow(ctx, getContextLifecycleByRunID, runID)
+	var i ContextLifecycle
+	err := row.Scan(
+		&i.RunID,
+		&i.TeamID,
+		&i.BotID,
+		&i.SessionID,
+		&i.Status,
+		&i.ErrorCode,
+		&i.Snapshot,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listRecentAssistantMessagesBySession = `-- name: ListRecentAssistantMessagesBySession :many
 SELECT
   id,
@@ -51,6 +126,56 @@ func (q *Queries) ListRecentAssistantMessagesBySession(ctx context.Context, arg 
 			&i.Role,
 			&i.Metadata,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentContextLifecyclesBySession = `-- name: ListRecentContextLifecyclesBySession :many
+SELECT
+  run_id,
+  status,
+  created_at,
+  snapshot
+FROM context_lifecycles
+WHERE team_id = public.memoh_current_team_id()
+  AND session_id = $1
+ORDER BY created_at DESC, run_id DESC
+LIMIT $2
+`
+
+type ListRecentContextLifecyclesBySessionParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	MaxCount  int32       `json:"max_count"`
+}
+
+type ListRecentContextLifecyclesBySessionRow struct {
+	RunID     pgtype.UUID        `json:"run_id"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Snapshot  []byte             `json:"snapshot"`
+}
+
+func (q *Queries) ListRecentContextLifecyclesBySession(ctx context.Context, arg ListRecentContextLifecyclesBySessionParams) ([]ListRecentContextLifecyclesBySessionRow, error) {
+	rows, err := q.db.Query(ctx, listRecentContextLifecyclesBySession, arg.SessionID, arg.MaxCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentContextLifecyclesBySessionRow
+	for rows.Next() {
+		var i ListRecentContextLifecyclesBySessionRow
+		if err := rows.Scan(
+			&i.RunID,
+			&i.Status,
+			&i.CreatedAt,
+			&i.Snapshot,
 		); err != nil {
 			return nil, err
 		}
