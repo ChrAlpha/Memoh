@@ -512,17 +512,18 @@ func TestBudgetAttention_OldestFirstWithinTierNoZeroGainScatter(t *testing.T) {
 }
 
 func budgetAttentionRunConfig(holder *contextfrag.LifecycleHolder) agentpkg.RunConfig {
-	return agentpkg.RunConfig{
+	cfg := agentpkg.RunConfig{
 		ContextSourceFrags: []contextfrag.ContextFrag{
 			attentionMessageFrag("directed-old", sdk.UserMessage("@bot old ask"), 250, contextfrag.AttentionMention),
 			attentionMessageFrag("passive-new", sdk.UserMessage("recent group chatter"), 100, contextfrag.AttentionPassive),
 			attentionMessageFrag("latest", sdk.UserMessage("latest"), 50, contextfrag.AttentionDirect),
 		},
 		ContextQueryMaterialized: true,
-		ContextBudgetMaxTokens:   300,
 		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 		ContextLifecycle:         holder,
 	}
+	activateHistoryBudget(&cfg, 300)
+	return cfg
 }
 
 func messageText(t *testing.T, msg sdk.Message) string {
@@ -639,7 +640,7 @@ func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) 
 
 	holder := contextfrag.NewLifecycleHolder()
 	zero := 0
-	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	cfg := agentpkg.RunConfig{
 		Messages: []sdk.Message{
 			sdk.UserMessage("old question"),
 			sdk.AssistantMessage("old reply"),
@@ -647,7 +648,6 @@ func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) 
 		},
 		ContextHistoryTokenEstimates: []int{100, 5, 5},
 		ContextTrimmableMessages:     3,
-		ContextBudgetMaxTokens:       50,
 		ContextRecentProtectTokens:   &zero,
 		ContextQueryMaterialized:     true,
 		ContextScope: contextfrag.Scope{
@@ -656,7 +656,9 @@ func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) 
 			Attention: []contextfrag.AttentionReason{contextfrag.AttentionDirect},
 		},
 		ContextLifecycle: holder,
-	})
+	}
+	activateHistoryBudget(&cfg, 50)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want notice plus two kept", len(got.Messages))
@@ -684,7 +686,7 @@ func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
 	callResult := toolResultFrag("directed-result", "search", "call-1", "found")
 	callResult.TokenEstimate = 50
 
-	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	cfg := agentpkg.RunConfig{
 		ContextSourceFrags: []contextfrag.ContextFrag{
 			call,
 			attentionMessageFrag("passive-mid", sdk.UserMessage("group chatter"), 100, contextfrag.AttentionPassive),
@@ -692,9 +694,10 @@ func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
 			attentionMessageFrag("latest", sdk.UserMessage("latest"), 100, contextfrag.AttentionDirect),
 		},
 		ContextQueryMaterialized: true,
-		ContextBudgetMaxTokens:   150,
 		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
-	})
+	}
+	activateHistoryBudget(&cfg, 150)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 4 {
 		t.Fatalf("messages = %d, want call, result, notice, latest", len(got.Messages))
@@ -725,7 +728,7 @@ func TestApplyProviderRunConfigMixedClosureStaysWhole(t *testing.T) {
 	droppableResult := toolResultFrag("droppable-result", "search", "call-1", "found")
 	droppableResult.TokenEstimate = 200
 
-	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	cfg := agentpkg.RunConfig{
 		ContextSourceFrags: []contextfrag.ContextFrag{
 			attentionMessageFrag("filler-old", sdk.UserMessage("old filler"), 100),
 			pinnedCall,
@@ -733,9 +736,10 @@ func TestApplyProviderRunConfigMixedClosureStaysWhole(t *testing.T) {
 			attentionMessageFrag("latest", sdk.UserMessage("latest"), 50, contextfrag.AttentionDirect),
 		},
 		ContextQueryMaterialized: true,
-		ContextBudgetMaxTokens:   50,
 		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
-	})
+	}
+	activateHistoryBudget(&cfg, 50)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	assertNoOrphanToolExchange(t, got.Messages)
 	if len(got.Messages) != 4 {

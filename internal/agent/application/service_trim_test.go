@@ -410,19 +410,32 @@ func TestStripToolMessages_PreservesAskUserInteraction(t *testing.T) {
 // history plus per-message estimates to the selection engine.
 func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) []sdk.Message {
 	t.Helper()
+	window, scale := activeProviderHistoryWindow(budget)
 	estimates := make([]int, len(history))
 	for i := range history {
-		estimates[i] = estimateMessageTokens(history[i])
+		estimates[i] = estimateMessageTokens(history[i]) * scale
 	}
 	cfg := agentpkg.RunConfig{
 		Messages:                     modelMessagesToSDKMessages(history),
 		ContextHistoryTokenEstimates: estimates,
 		ContextTrimmableMessages:     len(history),
-		ContextBudgetMaxTokens:       budget,
+		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
 	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
 	return got.Messages
+}
+
+func activeProviderHistoryWindow(legacyBudget int) (window, scale int) {
+	if legacyBudget <= 0 {
+		return 0, 1
+	}
+	scale = 2
+	if scaled := legacyBudget * scale; scaled < contextview.MinimumSystemBudgetTokens {
+		scale = (contextview.MinimumSystemBudgetTokens + legacyBudget - 1) / legacyBudget
+	}
+	noticeCost := contextfrag.ResolveFragTokens(contextview.TrimNoticeFrag(contextfrag.Scope{}))
+	return contextview.DefaultOutputReserveTokens + legacyBudget*scale + noticeCost, scale
 }
 
 func rolesOf(messages []sdk.Message) []string {
@@ -580,9 +593,10 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		{Role: "user", Content: newTextContent(long)},
 		{Role: "assistant", Content: newTextContent(long)},
 	}
+	window, scale := activeProviderHistoryWindow(1)
 	estimates := make([]int, len(history))
 	for i := range history {
-		estimates[i] = estimateMessageTokens(history[i])
+		estimates[i] = estimateMessageTokens(history[i]) * scale
 	}
 	messages := modelMessagesToSDKMessages(history)
 	messages = append(messages, sdk.UserMessage("memory context"), sdk.UserMessage("current request"))
@@ -591,7 +605,7 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		Messages:                     messages,
 		ContextHistoryTokenEstimates: estimates,
 		ContextTrimmableMessages:     len(history),
-		ContextBudgetMaxTokens:       1,
+		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1"},
 	}
 	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)

@@ -104,12 +104,12 @@ func TestApplyProviderContextViewUsesContextBudget(t *testing.T) {
 		ContextHistoryTokenEstimates: []int{100, 100, 100},
 		ContextTrimmableMessages:     3,
 		ContextQueryMaterialized:     true,
-		ContextBudgetMaxTokens:       1,
 		ContextScope: contextfrag.Scope{
 			BotID:     "bot-1",
 			SessionID: "session-1",
 		},
 	}
+	activateHistoryBudget(&cfg, 1)
 
 	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
@@ -143,12 +143,12 @@ func TestApplyProviderContextViewCountsImagesAgainstTokenBudget(t *testing.T) {
 		},
 		ContextTrimmableMessages: 2,
 		ContextQueryMaterialized: true,
-		ContextBudgetMaxTokens:   1,
 		ContextScope: contextfrag.Scope{
 			BotID:     "bot-1",
 			SessionID: "session-1",
 		},
 	}
+	activateHistoryBudget(&cfg, MinimumSystemBudgetTokens)
 
 	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
@@ -294,19 +294,20 @@ func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure
 
 	currentUserIndex := 1
 	zero := 0
-	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	cfg := agentpkg.RunConfig{
 		Messages: []sdk.Message{
 			sdk.AssistantMessage("old answer"),
 			sdk.UserMessage("pipeline current question"),
 		},
 		ContextCurrentUserMessageIndex: &currentUserIndex,
-		ContextHistoryTokenEstimates:   []int{100, 100},
+		ContextHistoryTokenEstimates:   []int{200, 100},
 		ContextTrimmableMessages:       2,
 		ContextMemoryText:              "remembered fact",
 		ContextHookText:                "workspace hook guidance",
-		ContextBudgetMaxTokens:         1,
 		ContextRecentProtectTokens:     &zero,
-	})
+	}
+	activateHistoryBudget(&cfg, 100)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
 
 	if len(got.Messages) == 0 || messageText(t, got.Messages[len(got.Messages)-1]) != "pipeline current question" {
 		t.Fatalf("messages = %#v, materialized current user must survive as the trailing request", got.Messages)

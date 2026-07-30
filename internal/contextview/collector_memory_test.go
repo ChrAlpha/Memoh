@@ -97,11 +97,10 @@ func TestApplyProviderRunConfigDropsOversizedMemoryBeforeCurrentQuery(t *testing
 	t.Parallel()
 
 	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
-		System:                 "system",
-		Query:                  "current question",
-		ContextMemoryText:      strings.Repeat("m", maxMemoryContextChars+1),
-		ContextBudgetMaxTokens: 1,
-		ContextScope:           contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
+		System:            "system",
+		Query:             "current question",
+		ContextMemoryText: strings.Repeat("m", maxMemoryContextChars+1),
+		ContextScope:      contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	})
 
 	if len(got.Messages) != 1 {

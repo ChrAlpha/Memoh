@@ -162,7 +162,11 @@ func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 		t.Fatalf("plan-disabled selection dropped %v, want none", fragIDs(withoutPlan.Dropped))
 	}
 
-	plan := &contextfrag.ContextBudgetPlan{Window: 1000, SystemBudget: 200}
+	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: 150 + noticeCost + 1,
+	}
 	withPlan := selector.Select(frags, profile, BudgetEnvelope{
 		MaxTokens:           200,
 		RecentProtectTokens: 0,
@@ -174,8 +178,8 @@ func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 	if got := fragIDs(withPlan.Dropped); !reflect.DeepEqual(got, []string{"old"}) {
 		t.Fatalf("dropped = %v, want old history after system leaves 50 tokens", got)
 	}
-	if plan.HistoryBudget != 50 {
-		t.Fatalf("history budget = %d, want 50", plan.HistoryBudget)
+	if plan.HistoryBudget != noticeCost+1 {
+		t.Fatalf("history budget = %d, want notice cost plus one token %d", plan.HistoryBudget, noticeCost+1)
 	}
 }
 

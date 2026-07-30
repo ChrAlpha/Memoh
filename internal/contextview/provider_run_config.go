@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -10,13 +11,14 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 )
 
 // ProviderRunConfigApplier adapts ApplyProviderRunConfig to the agent's
 // injected applier hook.
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
 	return func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-		return ApplyProviderRunConfig(ctx, logger, cfg), nil
+		return applyProviderRunConfig(ctx, logger, cfg)
 	}
 }
 
@@ -140,6 +142,15 @@ func resolveRecentProtectTokens(override *int) int {
 // derive them from the materialized legacy fields. Selection, placement and
 // the SDK render then produce System/Messages as outputs.
 func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	out, _ := applyProviderRunConfig(ctx, logger, cfg)
+	return out
+}
+
+func applyProviderRunConfig(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg agentpkg.RunConfig,
+) (agentpkg.RunConfig, error) {
 	var sources []SourceSpec
 	var registry CollectorRegistry
 	if len(cfg.ContextSourceFrags) > 0 {
@@ -186,6 +197,11 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		}
 	}
 	ledger := contextfrag.NewMutationLedger()
+	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
+	if budgetErr != nil && !isContextBudgetError(budgetErr) {
+		return providerViewFallback(logger, cfg, ledger, "budget_plan_error",
+			"context budget plan failed; using legacy assembly", budgetErr), nil
+	}
 	builder := NewBuilder(registry, &FragmentSelector{}, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
 	view, err := builder.Build(ctx, BuildInput{
 		Scope:   cfg.ContextScope,
@@ -194,19 +210,26 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
 			MaxTokens:           cfg.EffectiveHistoryBudgetTokens(),
+			Plan:                budgetPlan,
 			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
 			ToolExchange:        cfg.ContextToolExchangePolicy,
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
 	if err != nil {
+		if isContextBudgetError(err) {
+			return providerBudgetAuditConfig(cfg, view, ledger), err
+		}
 		return providerViewFallback(logger, cfg, ledger, "build_error",
-			"context view build failed; using legacy assembly", err)
+			"context view build failed; using legacy assembly", err), nil
+	}
+	if budgetErr != nil {
+		return providerBudgetAuditConfig(cfg, view, ledger), budgetErr
 	}
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
 		return providerViewFallback(logger, cfg, ledger, "unexpected_payload",
-			"context view rendered unexpected payload; using legacy assembly", nil)
+			"context view rendered unexpected payload; using legacy assembly", nil), nil
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
@@ -228,6 +251,109 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
 	cfg.ContextStepReselector = SelectProviderStepMessages
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
+	return cfg, nil
+}
+
+func providerContextBudgetPlan(
+	ctx context.Context,
+	cfg agentpkg.RunConfig,
+) (*contextfrag.ContextBudgetPlan, error) {
+	if cfg.ContextBudgetMaxTokens <= 0 ||
+		strings.EqualFold(strings.TrimSpace(cfg.SessionType), sessionmode.Discuss) {
+		return nil, nil
+	}
+	currentRequestCost, err := providerCurrentRequestCost(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	toolDefsCost := 0
+	for _, def := range cfg.ContextToolDefs {
+		toolDefsCost += def.TokenEstimate
+	}
+	return ComputeContextBudgetPlan(
+		cfg.ContextBudgetMaxTokens,
+		DefaultOutputReserveTokens,
+		toolDefsCost,
+		currentRequestCost,
+	)
+}
+
+func providerCurrentRequestCost(ctx context.Context, cfg agentpkg.RunConfig) (int, error) {
+	if len(cfg.ContextSourceFrags) > 0 {
+		return currentRequestFragCost(cfg.ContextSourceFrags), nil
+	}
+
+	query := cfg.Query
+	inlineImages := cfg.InlineImages
+	if cfg.ContextQueryMaterialized {
+		query = ""
+		inlineImages = nil
+	}
+	specs := []struct {
+		collector Collector
+		config    any
+	}{
+		{&materializedCurrentUserCollector{}, HistoryMessagesConfig{
+			Messages:                cfg.Messages,
+			CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+			TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+		}},
+		{&CurrentUserCollector{}, CurrentUserConfig{Query: query}},
+		{&InlineImageCollector{}, InlineImageConfig{Images: inlineImages}},
+	}
+	var frags []contextfrag.ContextFrag
+	for _, spec := range specs {
+		collected, err := spec.collector.Collect(ctx, CollectRequest{
+			Scope:  cfg.ContextScope,
+			Intent: contextfrag.IntentRunConfigPreProvider,
+			Config: spec.config,
+		})
+		if err != nil {
+			return 0, err
+		}
+		frags = append(frags, collected...)
+	}
+	return currentRequestFragCost(frags), nil
+}
+
+func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
+	total := 0
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			total += contextfrag.ResolveFragTokens(frag)
+		}
+	}
+	return total
+}
+
+func isContextBudgetError(err error) bool {
+	return errors.Is(err, contextfrag.ErrProtectedContextOverflow) ||
+		errors.Is(err, contextfrag.ErrBudgetUnsatisfied)
+}
+
+func providerBudgetAuditConfig(
+	cfg agentpkg.RunConfig,
+	view *ContextView,
+	ledger *contextfrag.MutationLedger,
+) agentpkg.RunConfig {
+	if view == nil {
+		return cfg
+	}
+	cachePlan := cachePlanFromPlacement(view.Placement)
+	cachePlan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
+	cachePlan.MidStableMessageCount = midStableMessageCount(view.Placement, view.Selected)
+	manifest := view.Manifest
+	manifest.CachePlan = &cachePlan
+	manifest.Mutations = ledger
+	manifest.ToolDefs = cfg.ContextToolDefs
+
+	cfg.ContextFrags = view.Selected
+	cfg.ContextManifest = manifest
+	cfg.ContextCachePlan = cachePlan
+	cfg.ContextMutations = ledger
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
