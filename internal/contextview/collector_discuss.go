@@ -94,6 +94,9 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 			}
 		}
 	}
+	if req.Intent == contextfrag.IntentRunConfigPreProvider {
+		frags = contextfrag.RepairToolClosureFrags(frags, req.Scope, discussContextCollectorName)
+	}
 	frags = injectDiscussImages(frags, cfg.InlineImages)
 	if lateBinding := strings.TrimSpace(cfg.LateBinding); lateBinding != "" {
 		frags = append(frags, discussLateBindingFrag(lateBinding, req.Scope))

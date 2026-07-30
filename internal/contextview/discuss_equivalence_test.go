@@ -9,6 +9,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	pipeline "github.com/memohai/memoh/internal/chat/timeline"
 )
 
@@ -54,6 +55,7 @@ func TestDiscussEquivalence_TRWithRawContent(t *testing.T) {
 	t.Parallel()
 
 	assertDiscussEquivalent(t, discussLegacyInput{
+		rc: pipeline.RenderedContext{renderedTextSegment(200, "next question")},
 		trs: []pipeline.TurnResponseEntry{{
 			RequestedAtMs: 100,
 			Role:          "tool",
@@ -166,40 +168,40 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	t.Helper()
 	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}
 	composedMessages := composeDiscussMessages(input.rc, input.trs, input.summary)
-	wantMessages := legacyContextMessagesToSDK(composedMessages)
-
-	builder := NewBuilder(
-		NewMapCollectorRegistry(
-			&SystemPromptCollector{},
-			&DiscussContextCollector{},
-		),
-		&FragmentSelector{},
-		IdentityPlacer{},
-		NewMapRendererRegistry(&SDKMessagesRenderer{}),
-	)
-	view, err := builder.Build(context.Background(), BuildInput{
-		Scope:  scope,
-		Intent: contextfrag.IntentDiscussReply,
-		Sources: []SourceSpec{
-			{Name: "system_prompt", Config: SystemPromptConfig{System: input.system}},
-			{Name: "discuss_context", Config: DiscussContextConfig{
-				ComposedMessages: composedMessages,
-			}},
-		},
-		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
+	flatMessages := legacyContextMessagesToSDK(composedMessages)
+	legacyRendered, err := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		System:                   input.system,
+		Messages:                 flatMessages,
+		ContextQueryMaterialized: true,
+		ContextScope:             scope,
 	})
 	if err != nil {
-		t.Fatalf("Build() error: %v", err)
+		t.Fatalf("legacy ApplyProviderRunConfig() error: %v", err)
 	}
-	rendered, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
-	if !ok {
-		t.Fatalf("rendered data type = %T, want *SDKRenderedPayload", view.Rendered[contextfrag.RenderSDKMessages].Data)
+	typedFrags, err := (&DiscussSDKContextBuilder{}).CollectDiscussSourceFrags(
+		context.Background(),
+		scope,
+		input.system,
+		DiscussContextInput{ComposedMessages: composedMessages},
+	)
+	if err != nil {
+		t.Fatalf("CollectDiscussSourceFrags() error: %v", err)
+	}
+	typedRendered, err := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		System:                   input.system,
+		Messages:                 flatMessages,
+		ContextSourceFrags:       typedFrags,
+		ContextQueryMaterialized: true,
+		ContextScope:             scope,
+	})
+	if err != nil {
+		t.Fatalf("typed ApplyProviderRunConfig() error: %v", err)
 	}
 
-	if rendered.System != input.system {
-		t.Fatalf("System = %q, want %q", rendered.System, input.system)
+	if typedRendered.System != legacyRendered.System {
+		t.Fatalf("typed System = %q, want legacy %q", typedRendered.System, legacyRendered.System)
 	}
-	assertMessagesEqual(t, rendered.Messages, wantMessages)
+	assertMessagesEqual(t, typedRendered.Messages, legacyRendered.Messages)
 }
 
 func composeDiscussMessages(rc pipeline.RenderedContext, trs []pipeline.TurnResponseEntry, summary string) []pipeline.ContextMessage {

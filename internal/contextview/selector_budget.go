@@ -330,9 +330,11 @@ func budgetTrimDropsEnabled(tagged []TaggedFrag, maxTokens, recentProtectTokens 
 }
 
 // protectedHistoryTokenCost charges every protected non-system/non-current
-// fragment to the unified history budget. Unit protection is atomic: when a
-// protected tool-call/result member makes the whole closure non-droppable,
-// every history member of that closure is charged.
+// fragment to the unified history budget. Current requests may intentionally
+// retain the history slot to preserve composed order, so kind is authoritative
+// alongside slot. Unit protection is atomic: when a protected tool-call/result
+// member makes the whole closure non-droppable, every history member of that
+// closure is charged.
 func protectedHistoryTokenCost(tagged []TaggedFrag) int {
 	units := buildBudgetUnits(tagged)
 	total := 0
@@ -343,7 +345,9 @@ func protectedHistoryTokenCost(tagged []TaggedFrag) int {
 		}
 		for _, idx := range unit.indexes {
 			frag := tagged[idx].Frag
-			if frag.Slot == contextfrag.SlotSystem || frag.Slot == contextfrag.SlotCurrentUser {
+			if frag.Slot == contextfrag.SlotSystem ||
+				frag.Slot == contextfrag.SlotCurrentUser ||
+				frag.Kind == contextfrag.KindCurrentUserMessage {
 				continue
 			}
 			total += fragTokenEstimate(frag)

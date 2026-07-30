@@ -173,6 +173,50 @@ func TestApplyProviderRunConfigSmallWindowUsesScaledOutputReserve(t *testing.T) 
 	}
 }
 
+func TestApplyProviderRunConfigSemanticCurrentIsNotDoubleCharged(t *testing.T) {
+	t.Parallel()
+
+	requiredSystem := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:            "system.required",
+		Kind:          contextfrag.KindSystemPrompt,
+		Role:          sdk.MessageRoleSystem,
+		Slot:          contextfrag.SlotSystem,
+		Text:          "required system",
+		RetentionTier: contextfrag.RetentionRequired,
+		Trust:         contextfrag.TrustSystem,
+	})
+	requiredSystem.TokenEstimate = 200
+	semanticCurrent := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            "discuss.current",
+		Message:       sdk.UserMessage("current discuss request"),
+		Kind:          contextfrag.KindCurrentUserMessage,
+		Slot:          contextfrag.SlotHistory,
+		TokenEstimate: 100,
+		Trust:         contextfrag.TrustUser,
+		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+	})
+	cfg := agentpkg.RunConfig{
+		ContextSourceFrags:     []contextfrag.ContextFrag{requiredSystem, semanticCurrent},
+		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(356),
+	}
+
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want payload that fits its provider envelope", err)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil ||
+		plan.CurrentRequestCost != 100 ||
+		plan.SystemBudget != 256 ||
+		plan.ActualSystemCost != 200 ||
+		plan.HistoryBudget != 56 {
+		t.Fatalf("budget plan = %#v, want current/system/actual/history = 100/256/200/56", plan)
+	}
+	if len(out.Messages) != 1 || !sdkMessagesJSONEqual(out.Messages[0], sdk.UserMessage("current discuss request")) {
+		t.Fatalf("messages = %#v, want the semantic current request exactly once", out.Messages)
+	}
+}
+
 func TestProviderContextBudgetPlanDefaultOutputReserveCrossover(t *testing.T) {
 	t.Parallel()
 
