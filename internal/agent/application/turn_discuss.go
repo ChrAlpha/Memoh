@@ -25,7 +25,7 @@ type turnRuntimeHooks struct {
 	streamAgent      func(context.Context, native.RunConfig) <-chan native.StreamEvent
 	resolveRunConfig func(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
 	inlineImages     func(context.Context, string, []timeline.ImageAttachmentRef) []sdk.ImagePart
-	storeRound       func(context.Context, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
+	storeRound       func(context.Context, string, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
 }
 
 // startDiscussTurn orchestrates one discuss turn: resolve the run config,
@@ -236,7 +236,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		var sdkMsgs []sdk.Message
 		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
 			if storeErr := s.storeDiscussRound(ctx,
-				cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
+				runConfig.RunID, cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
 				sdkMsgs, resolved.ModelID, runConfig.ContextLifecycle,
 			); storeErr != nil {
 				lifecycleCause = storeErr
@@ -398,7 +398,7 @@ func (s *Service) streamDiscussAgent(ctx context.Context, cfg native.RunConfig) 
 
 func (s *Service) storeDiscussRound(
 	ctx context.Context,
-	botID, sessionID, channelIdentityID, currentPlatform string,
+	runID, botID, sessionID, channelIdentityID, currentPlatform string,
 	messages []sdk.Message,
 	modelID string,
 	lifecycle *contextfrag.LifecycleHolder,
@@ -406,6 +406,7 @@ func (s *Service) storeDiscussRound(
 	if s.turnHooks != nil && s.turnHooks.storeRound != nil {
 		return s.turnHooks.storeRound(
 			ctx,
+			runID,
 			botID,
 			sessionID,
 			channelIdentityID,
@@ -415,7 +416,16 @@ func (s *Service) storeDiscussRound(
 			lifecycle,
 		)
 	}
-	return s.StoreRoundWithContextLifecycle(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID, lifecycle)
+	modelMessages := sdkMessagesToModelMessages(messages)
+	return s.storeRoundWithOptions(ctx, ChatRequest{
+		RunID:                   runID,
+		BotID:                   botID,
+		ChatID:                  botID,
+		ThreadID:                sessionID,
+		SourceChannelIdentityID: channelIdentityID,
+		CurrentChannel:          currentPlatform,
+		UserMessagePersisted:    true,
+	}, modelMessages, modelID, storeRoundOptions{ContextLifecycle: lifecycle})
 }
 
 // discussMessagesToSDK converts composed context messages into SDK

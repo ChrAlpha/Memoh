@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ type fakeDiscussService struct {
 	resolveResult      ResolveRunConfigResult
 	inlineFn           func(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart
 	storeCalls         int
+	lastStoreRunID     string
 	lastStoreLifecycle *contextfrag.LifecycleHolder
 }
 
@@ -49,8 +51,9 @@ func (f *fakeDiscussService) InlineImageAttachments(ctx context.Context, botID s
 	return nil
 }
 
-func (f *fakeDiscussService) StoreRound(_ context.Context, _, _, _, _ string, _ []sdk.Message, _ string, lifecycle *contextfrag.LifecycleHolder) error {
+func (f *fakeDiscussService) StoreRound(_ context.Context, runID, _, _, _, _ string, _ []sdk.Message, _ string, lifecycle *contextfrag.LifecycleHolder) error {
 	f.storeCalls++
+	f.lastStoreRunID = runID
 	f.lastStoreLifecycle = lifecycle
 	return nil
 }
@@ -62,7 +65,7 @@ type testAgentStreamer interface {
 type testDiscussService interface {
 	ResolveRunConfig(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
 	InlineImageAttachments(context.Context, string, []timeline.ImageAttachmentRef) []sdk.ImagePart
-	StoreRound(context.Context, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
+	StoreRound(context.Context, string, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
 }
 
 func newDiscussTestService(streamer testChatStreamer, agent testAgentStreamer, resolver testDiscussService) *Service {
@@ -432,6 +435,38 @@ func TestDiscussStoresRoundWithContextLifecycle(t *testing.T) {
 	}
 	if resolver.lastStoreLifecycle == nil {
 		t.Fatal("expected the defaulted ContextLifecycle to reach StoreRoundWithContextLifecycle")
+	}
+	if resolver.lastStoreRunID != h.RunID() {
+		t.Fatalf("persisted discuss RunID = %q, want admitted run ID %q", resolver.lastStoreRunID, h.RunID())
+	}
+}
+
+func TestStoreDiscussRoundPersistsAdmittedRunID(t *testing.T) {
+	messages := &recordingMessageService{}
+	service := &Service{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+
+	err := service.storeDiscussRound(
+		context.Background(),
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		"",
+		"local",
+		[]sdk.Message{sdk.AssistantMessage("done")},
+		"model-id",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("storeDiscussRound() error = %v", err)
+	}
+	if len(messages.persisted) != 1 {
+		t.Fatalf("persisted messages = %d, want 1", len(messages.persisted))
+	}
+	if got := messages.persisted[0].RunID; got != lifecycleTestRunID {
+		t.Fatalf("persisted discuss RunID = %q, want admitted ID %q", got, lifecycleTestRunID)
 	}
 }
 
