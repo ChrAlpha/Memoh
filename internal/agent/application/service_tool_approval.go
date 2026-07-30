@@ -110,6 +110,15 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 }
 
 func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
+	return s.continueCommittedToolApprovalResponse(ctx, committed, nil, eventCh)
+}
+
+func (s *Service) continueCommittedToolApprovalResponse(
+	ctx context.Context,
+	committed CommittedToolApprovalResponse,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	target := committed.request
 	if strings.TrimSpace(target.ID) == "" {
 		return errors.New("committed tool approval response is missing its request")
@@ -147,7 +156,15 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 	default:
 		return fmt.Errorf("committed tool approval has unexpected status %q", target.Status)
 	}
-	return s.storeToolResultAndContinue(ctx, target, committed.input, toolResult, runID, eventCh)
+	return s.storeToolResultAndContinue(
+		ctx,
+		target,
+		committed.input,
+		toolResult,
+		runID,
+		runtimeLifecycle,
+		eventCh,
+	)
 }
 
 func (s *Service) toolOutputLimit() contextlimit.ToolOutputLimit {
@@ -289,7 +306,15 @@ func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Requ
 	})
 }
 
-func (s *Service) storeToolResultAndContinue(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, result sdk.ToolResultPart, runID string, eventCh chan<- WSStreamEvent) error {
+func (s *Service) storeToolResultAndContinue(
+	ctx context.Context,
+	approval toolapproval.Request,
+	input ToolApprovalResponseInput,
+	result sdk.ToolResultPart,
+	runID string,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
@@ -313,10 +338,17 @@ func (s *Service) storeToolResultAndContinue(ctx context.Context, approval toola
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
-	return s.continueToolApprovalSession(ctx, approval, input, runID, eventCh)
+	return s.continueToolApprovalSession(ctx, approval, input, runID, runtimeLifecycle, eventCh)
 }
 
-func (s *Service) continueToolApprovalSession(ctx context.Context, approval toolapproval.Request, input ToolApprovalResponseInput, runID string, eventCh chan<- WSStreamEvent) error {
+func (s *Service) continueToolApprovalSession(
+	ctx context.Context,
+	approval toolapproval.Request,
+	input ToolApprovalResponseInput,
+	runID string,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	return s.resumeAgentSession(ctx, continuationParams{
@@ -329,6 +361,7 @@ func (s *Service) continueToolApprovalSession(ctx context.Context, approval tool
 		ConversationType:  approval.ConversationType,
 		ChatToken:         input.ChatToken,
 		SummaryScopeBotID: firstNonEmpty(approval.BotID, input.BotID),
+		RuntimeLifecycle:  runtimeLifecycle,
 	}, eventCh)
 }
 

@@ -6,10 +6,16 @@ import (
 	"errors"
 	"strings"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/models"
 )
+
+type continuationLifecycleResult struct {
+	snapshot *contextfrag.LifecycleSnapshot
+	deferred bool
+}
 
 type continuationParams struct {
 	RunID             string
@@ -23,6 +29,9 @@ type continuationParams struct {
 	// SummaryScopeBotID scopes compaction summaries when the originating
 	// request carries its own bot id; falls back to BotID when empty.
 	SummaryScopeBotID string
+	// RuntimeLifecycle defers the one terminal lifecycle write to the
+	// session-runtime loop and returns the in-memory snapshot to that owner.
+	RuntimeLifecycle *continuationLifecycleResult
 }
 
 // resumeAgentSession is the shared core of continueToolApprovalSession and
@@ -56,6 +65,13 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 	var lifecycleCause error
 	var lifecycleDeferred bool
 	defer func() {
+		if p.RuntimeLifecycle != nil {
+			p.RuntimeLifecycle.deferred = lifecycleDeferred
+			if snapshot, ok := cfg.ContextLifecycle.Snapshot(); ok {
+				p.RuntimeLifecycle.snapshot = &snapshot
+			}
+			return
+		}
 		if !lifecycleDeferred {
 			terminal(lifecycleCause)
 		}
@@ -119,6 +135,10 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 				return ctx.Err()
 			}
 		}
+	}
+	if ctx.Err() != nil {
+		lifecycleCause = context.Cause(ctx)
+		return lifecycleCause
 	}
 	return nil
 }

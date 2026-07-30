@@ -14,6 +14,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -65,7 +66,8 @@ func (s *Service) recoverContextLifecycleFromAssistantMetadata(
 	runID, botID, sessionID string,
 	cause error,
 ) {
-	if s == nil || s.contextLifecycles == nil || runOwnershipLost(ctx) {
+	if s == nil || s.contextLifecycles == nil || runOwnershipLost(ctx) ||
+		errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
 		return
 	}
 	runUUID, err := db.ParseUUID(runID)
@@ -124,7 +126,8 @@ func (s *Service) persistContextLifecycleSnapshot(
 	snapshot *contextfrag.LifecycleSnapshot,
 	cause error,
 ) {
-	if s == nil || s.contextLifecycles == nil || snapshot == nil || runOwnershipLost(ctx) {
+	if s == nil || s.contextLifecycles == nil || snapshot == nil || runOwnershipLost(ctx) ||
+		errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
 		return
 	}
 	status, errorCode := classifyContextLifecycleTerminal(*snapshot, cause)

@@ -152,6 +152,15 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 }
 
 func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- WSStreamEvent) error {
+	return s.continueCommittedUserInputResponse(ctx, committed, nil, eventCh)
+}
+
+func (s *Service) continueCommittedUserInputResponse(
+	ctx context.Context,
+	committed CommittedUserInputResponse,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	resolved := committed.request
 	if strings.TrimSpace(resolved.ID) == "" {
 		return errors.New("committed user input response is missing its request")
@@ -183,7 +192,15 @@ func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, commit
 	if s.continueUserInputFn != nil {
 		return s.continueUserInputFn(ctx, resolved, committed.input, toolResult, eventCh)
 	}
-	return s.storeUserInputResultAndContinue(ctx, resolved, committed.input, toolResult, runID, eventCh)
+	return s.storeUserInputResultAndContinue(
+		ctx,
+		resolved,
+		committed.input,
+		toolResult,
+		runID,
+		runtimeLifecycle,
+		eventCh,
+	)
 }
 
 func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target userinput.Request, input UserInputResponseInput) error {
@@ -300,7 +317,15 @@ func splitUserInputAnswerText(text string) []string {
 	return parts
 }
 
-func (s *Service) storeUserInputResultAndContinue(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, runID string, eventCh chan<- WSStreamEvent) error {
+func (s *Service) storeUserInputResultAndContinue(
+	ctx context.Context,
+	req userinput.Request,
+	input UserInputResponseInput,
+	result sdk.ToolResultPart,
+	runID string,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	req = withLocalWebUserInputReplyTarget(req)
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, req.WorkspaceTargetID)
@@ -324,10 +349,17 @@ func (s *Service) storeUserInputResultAndContinue(ctx context.Context, req useri
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
 		return err
 	}
-	return s.continueUserInputSession(ctx, req, input, runID, eventCh)
+	return s.continueUserInputSession(ctx, req, input, runID, runtimeLifecycle, eventCh)
 }
 
-func (s *Service) continueUserInputSession(ctx context.Context, req userinput.Request, input UserInputResponseInput, runID string, eventCh chan<- WSStreamEvent) error {
+func (s *Service) continueUserInputSession(
+	ctx context.Context,
+	req userinput.Request,
+	input UserInputResponseInput,
+	runID string,
+	runtimeLifecycle *continuationLifecycleResult,
+	eventCh chan<- WSStreamEvent,
+) error {
 	req = withLocalWebUserInputReplyTarget(req)
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	return s.resumeAgentSession(ctx, continuationParams{
@@ -340,6 +372,7 @@ func (s *Service) continueUserInputSession(ctx context.Context, req userinput.Re
 		ConversationType:  req.ConversationType,
 		ChatToken:         input.ChatToken,
 		SummaryScopeBotID: firstNonEmpty(req.BotID, input.BotID),
+		RuntimeLifecycle:  runtimeLifecycle,
 	}, eventCh)
 }
 
