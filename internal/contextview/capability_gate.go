@@ -126,11 +126,21 @@ func capabilitySafeFallbackConfig(
 	sourceFrags []contextfrag.ContextFrag,
 	available map[string]struct{},
 ) agentpkg.RunConfig {
-	kept, _ := filterUnavailableCapabilities(sourceFrags, available)
+	normalized := contextfrag.NormalizeContextRefs(sourceFrags)
+	kept, gated := filterUnavailableCapabilities(normalized, available)
 	cfg.System = renderSystemOnly(kept)
 	cfg.ContextToolUsage = ""
 	cfg.ContextToolUsageFrags = nil
 	cfg.ContextFrags = nonSystemFrags(cfg.ContextFrags)
+	result := appendCapabilityGateDrops(SelectionResult{
+		Selected: kept,
+		Summary: SelectionSummary{
+			TotalCollected: len(kept),
+			TotalSelected:  len(kept),
+		},
+	}, gated)
+	cfg.ContextManifest.Selection = selectionTrace(result.Summary)
+	cfg.ContextManifest.SelectionDecisions = selectionDecisions(normalized, result)
 	return cfg
 }
 

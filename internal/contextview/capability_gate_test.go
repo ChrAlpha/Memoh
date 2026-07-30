@@ -154,6 +154,16 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 		records[1].Kind != contextfrag.MutationContextViewFallback {
 		t.Fatalf("fallback mutations = %+v, want capability gate then context-view fallback", records)
 	}
+	if got.ContextManifest.Selection == nil ||
+		got.ContextManifest.Selection.DropReasons[capabilityGateDropReason] != 2 {
+		t.Fatalf("fallback selection = %#v, want two capability-gated drops", got.ContextManifest.Selection)
+	}
+	for _, id := range []string{"system.skills.header", "system.skill.alpha"} {
+		decision, ok := decisionByID(got.ContextManifest.SelectionDecisions, id)
+		if !ok || decision.Decision != contextfrag.DecisionDropped || decision.Reason != capabilityGateDropReason {
+			t.Errorf("fallback decision for %q = %#v, want dropped/%s", id, decision, capabilityGateDropReason)
+		}
+	}
 }
 
 func capabilityGateFixture() agentpkg.RunConfig {
