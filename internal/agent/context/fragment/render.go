@@ -132,17 +132,21 @@ func breakdownFromItems(items []ManifestItem) []KindBreakdown {
 // Render builds the legacy SDK-shaped view from fragments.
 func Render(frags []ContextFrag) AssembledContext {
 	var out AssembledContext
+	var previousSystemRender RenderPolicy
+	hasRenderedSystem := false
 	for _, frag := range frags {
 		switch frag.Slot {
 		case SlotSystem:
 			for _, part := range frag.Parts {
-				if part.Type != PartText || strings.TrimSpace(part.Text) == "" {
+				if part.Type != PartText || RenderText(part.Text, frag.Render) == "" {
 					continue
 				}
-				if out.System != "" {
-					out.System += "\n\n"
+				if hasRenderedSystem {
+					out.System += RenderSeparator(previousSystemRender, frag.Render)
 				}
-				out.System += strings.TrimSpace(part.Text)
+				out.System += RenderText(part.Text, frag.Render)
+				previousSystemRender = frag.Render
+				hasRenderedSystem = true
 			}
 		case SlotCurrentUser:
 			for _, part := range frag.Parts {

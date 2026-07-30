@@ -208,8 +208,30 @@ const (
 // RenderPolicy stores rendering hints. Anchor is used for sections such as
 // tool usage that must land before a known heading.
 type RenderPolicy struct {
-	Format RenderFormat `json:"format,omitempty"`
-	Anchor string       `json:"anchor,omitempty"`
+	Format      RenderFormat `json:"format,omitempty"`
+	Anchor      string       `json:"anchor,omitempty"`
+	GroupID     string       `json:"group_id,omitempty"`
+	GroupJoiner string       `json:"group_joiner,omitempty"`
+}
+
+func RenderText(text string, policy RenderPolicy) string {
+	if policy.GroupID != "" {
+		return strings.Trim(text, " \t\r")
+	}
+	return strings.TrimSpace(text)
+}
+
+func RenderSeparator(previous, current RenderPolicy) string {
+	if previous.GroupID == "" || previous.GroupID != current.GroupID {
+		return "\n\n"
+	}
+	if current.GroupJoiner != "" {
+		return current.GroupJoiner
+	}
+	if previous.GroupJoiner != "" {
+		return previous.GroupJoiner
+	}
+	return "\n\n"
 }
 
 // Provenance identifies where a fragment came from.

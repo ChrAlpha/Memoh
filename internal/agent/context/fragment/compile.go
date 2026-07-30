@@ -241,7 +241,7 @@ func TextFrag(input TextFragInput) ContextFrag {
 		},
 		Parts: []Part{{
 			Type: PartText,
-			Text: strings.TrimSpace(input.Text),
+			Text: RenderText(input.Text, input.Render),
 		}},
 	}
 }

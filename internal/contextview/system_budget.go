@@ -84,20 +84,28 @@ func enforceSystemBudget(
 			hasScope = true
 		}
 	}
+	droppedIndexes := make(map[int]bool)
+	dropped := make([]contextfrag.ContextFrag, 0)
+	for _, header := range sweepEmptySystemGroupHeaders(frags, droppedIndexes) {
+		droppedIndexes[header.index] = true
+		dropped = append(dropped, header.frag)
+		droppedIDs = append(droppedIDs, header.frag.ID)
+	}
 	var marker contextfrag.ContextFrag
 	if len(droppedIDs) > 0 {
 		marker = systemBudgetMarkerFrag(droppedIDs, scope)
 	}
-	selected := systemBudgetSelection(frags, nil, marker)
+	selected := systemBudgetSelection(frags, droppedIndexes, marker)
 	total := systemFragCost(selected)
 	if total <= plan.SystemBudget {
 		finishSystemBudgetPlan(plan, total)
-		return selected, nil, nil
+		return selected, dropped, nil
 	}
 
 	candidates := make([]systemBudgetCandidate, 0)
 	for i, frag := range frags {
 		if frag.Slot != contextfrag.SlotSystem ||
+			isRenderGroupHeader(frag) ||
 			frag.Budget.Overflow == contextfrag.OverflowKeep ||
 			(frag.RetentionTier != contextfrag.RetentionOptional && frag.RetentionTier != contextfrag.RetentionPreferred) {
 			continue
@@ -118,12 +126,18 @@ func enforceSystemBudget(
 		return left.ID < right.ID
 	})
 
-	droppedIndexes := make(map[int]bool, len(candidates))
-	dropped := make([]contextfrag.ContextFrag, 0, len(candidates))
 	for _, candidate := range candidates {
+		if droppedIndexes[candidate.index] {
+			continue
+		}
 		droppedIndexes[candidate.index] = true
 		dropped = append(dropped, candidate.frag)
 		droppedIDs = append(droppedIDs, candidate.frag.ID)
+		for _, header := range sweepEmptySystemGroupHeaders(frags, droppedIndexes) {
+			droppedIndexes[header.index] = true
+			dropped = append(dropped, header.frag)
+			droppedIDs = append(droppedIDs, header.frag.ID)
+		}
 		marker = systemBudgetMarkerFrag(droppedIDs, scope)
 		selected = systemBudgetSelection(frags, droppedIndexes, marker)
 		actual := systemFragCost(selected)
@@ -159,19 +173,21 @@ func systemFragCost(frags []contextfrag.ContextFrag) int {
 	resolved := 0
 	renderedBytes := 0
 	count := 0
+	var previousRender contextfrag.RenderPolicy
 	for _, frag := range frags {
 		if frag.Slot != contextfrag.SlotSystem {
 			continue
 		}
 		if count > 0 {
-			renderedBytes += len("\n\n")
+			renderedBytes += len(contextfrag.RenderSeparator(previousRender, frag.Render))
 		}
 		for _, part := range frag.Parts {
 			if part.Type == contextfrag.PartText {
-				renderedBytes += len(strings.TrimSpace(part.Text))
+				renderedBytes += len(contextfrag.RenderText(part.Text, frag.Render))
 			}
 		}
 		resolved += contextfrag.ResolveFragTokens(frag)
+		previousRender = frag.Render
 		count++
 	}
 	// Preserve authoritative per-fragment estimates while also measuring the
@@ -185,6 +201,40 @@ func systemFragCost(frags []contextfrag.ContextFrag) int {
 		return rendered
 	}
 	return conservative
+}
+
+func isRenderGroupHeader(frag contextfrag.ContextFrag) bool {
+	return frag.Render.GroupID != "" && frag.ID == frag.Render.GroupID+".header"
+}
+
+func sweepEmptySystemGroupHeaders(
+	frags []contextfrag.ContextFrag,
+	droppedIndexes map[int]bool,
+) []systemBudgetCandidate {
+	itemCounts := make(map[string]int)
+	headers := make(map[string]systemBudgetCandidate)
+	for i, frag := range frags {
+		if droppedIndexes[i] ||
+			frag.Slot != contextfrag.SlotSystem ||
+			frag.Render.GroupID == "" {
+			continue
+		}
+		if isRenderGroupHeader(frag) {
+			headers[frag.Render.GroupID] = systemBudgetCandidate{index: i, frag: frag}
+			continue
+		}
+		itemCounts[frag.Render.GroupID]++
+	}
+	var swept []systemBudgetCandidate
+	for groupID, header := range headers {
+		if itemCounts[groupID] == 0 {
+			swept = append(swept, header)
+		}
+	}
+	sort.Slice(swept, func(i, j int) bool {
+		return swept[i].frag.ID < swept[j].frag.ID
+	})
+	return swept
 }
 
 func firstSystemScope(frags []contextfrag.ContextFrag) contextfrag.Scope {

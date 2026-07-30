@@ -123,6 +123,80 @@ func TestSystemBudgetDropsOptionalBeforePreferredInDeterministicOrder(t *testing
 	}
 }
 
+func TestSystemBudgetDropsGroupedItemsIndividually(t *testing.T) {
+	t.Parallel()
+
+	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
+	header := systemBudgetGroupFrag("system.skills.header", "system.skills", "skills header", 10)
+	alpha := systemBudgetGroupFrag("system.skill.alpha", "system.skills", "alpha", 100)
+	unicode := systemBudgetGroupFrag("system.skill.技能", "system.skills", "技能", 100)
+	marker := systemBudgetMarkerFrag([]string{alpha.ID}, contextfrag.Scope{})
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required, header, unicode, marker}),
+	}
+	selector := &FragmentSelector{}
+	result := selector.Select(
+		[]contextfrag.ContextFrag{required, header, alpha, unicode},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if result.FatalError != nil {
+		t.Fatalf("Select() error = %v", result.FatalError)
+	}
+	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, []string{alpha.ID}) {
+		t.Fatalf("system-budget drops = %v, want only %s", got, alpha.ID)
+	}
+	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{
+		required.ID,
+		header.ID,
+		unicode.ID,
+		systemBudgetMarkerID,
+	}) {
+		t.Fatalf("selected IDs = %v, want header and remaining skill item", got)
+	}
+	payload := renderSDK(t, result.Selected, placementFor(result.Selected))
+	want := "required\n\nskills header\n技能\n\n" + marker.Parts[0].Text
+	if payload.System != want {
+		t.Fatalf("rendered system = %q, want %q", payload.System, want)
+	}
+}
+
+func TestSystemBudgetSweepsGroupHeaderAfterLastItemDrops(t *testing.T) {
+	t.Parallel()
+
+	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
+	header := systemBudgetGroupFrag("system.skills.header", "system.skills", "skills header", 10)
+	alpha := systemBudgetGroupFrag("system.skill.alpha", "system.skills", "alpha", 100)
+	unicode := systemBudgetGroupFrag("system.skill.技能", "system.skills", "技能", 100)
+	wantDropped := []string{alpha.ID, unicode.ID, header.ID}
+	marker := systemBudgetMarkerFrag(wantDropped, contextfrag.Scope{})
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required, marker}),
+	}
+	selector := &FragmentSelector{}
+	result := selector.Select(
+		[]contextfrag.ContextFrag{required, header, alpha, unicode},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if result.FatalError != nil {
+		t.Fatalf("Select() error = %v", result.FatalError)
+	}
+	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, wantDropped) {
+		t.Fatalf("system-budget drops = %v, want items followed by swept header %v", got, wantDropped)
+	}
+	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{required.ID, systemBudgetMarkerID}) {
+		t.Fatalf("selected IDs = %v, want required + marker", got)
+	}
+	if got := result.Selected[1].Parts[0].Text; got != marker.Parts[0].Text {
+		t.Fatalf("marker = %q, want exactly dropped IDs in %q", got, marker.Parts[0].Text)
+	}
+}
+
 func TestSystemBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
 	t.Parallel()
 
@@ -373,6 +447,17 @@ func systemBudgetTestFrag(
 		TokenEstimate: tokens,
 		Parts:         []contextfrag.Part{{Type: contextfrag.PartText, Text: id}},
 	}
+}
+
+func systemBudgetGroupFrag(id, groupID, text string, tokens int) contextfrag.ContextFrag {
+	frag := systemBudgetTestFrag(id, contextfrag.RetentionOptional, tokens, 65, 0, "")
+	frag.Parts[0].Text = text
+	frag.Render = contextfrag.RenderPolicy{
+		Format:      contextfrag.RenderMarkdown,
+		GroupID:     groupID,
+		GroupJoiner: "\n",
+	}
+	return frag
 }
 
 func historyBudgetTestFrag(id string, tokens int) contextfrag.ContextFrag {
