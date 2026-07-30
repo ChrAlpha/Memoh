@@ -1068,7 +1068,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 				Scope:                 cfg.ContextScope,
 				InitialMessageCount:   initialProviderMessageCount,
 				Messages:              p.Messages,
-				BudgetMaxTokens:       remainingStepBudget(cfg.EffectiveHistoryBudgetTokens(), p, initialProviderMessageCount),
+				BudgetMaxTokens:       remainingStepBudget(stepReselectionAllowance(cfg), p, initialProviderMessageCount),
 				RecentProtectTokens:   cfg.ContextRecentProtectTokens,
 				KeepRecentToolResults: stepReselectKeepRecentToolResults,
 				MinMessages:           stepReselectMinMessages,
@@ -1229,6 +1229,17 @@ func copyDropReasons(reasons map[string]int) map[string]int {
 		out[reason] = count
 	}
 	return out
+}
+
+func stepReselectionAllowance(cfg RunConfig) int {
+	if plan := cfg.ContextManifest.BudgetPlan; plan != nil {
+		allowance := plan.Window - plan.OutputReserve
+		if allowance < 1 {
+			return 1
+		}
+		return allowance
+	}
+	return cfg.EffectiveHistoryBudgetTokens()
 }
 
 func remainingStepBudget(maxTokens int, params *sdk.GenerateParams, prefixCount int) int {

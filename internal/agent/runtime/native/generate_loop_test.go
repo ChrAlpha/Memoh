@@ -285,6 +285,77 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 	}
 }
 
+func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.T) {
+	t.Parallel()
+
+	lookupTool := sdk.Tool{
+		Name:       "lookup",
+		Parameters: &jsonschema.Schema{Type: "object"},
+		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+			return map[string]any{"answer": "ok"}, nil
+		},
+	}
+	toolCost := contextfrag.ToolDefAccountingFor("native", lookupTool).TokenEstimate
+	plan := contextfrag.ContextBudgetPlan{
+		Window:        2048,
+		OutputReserve: toolCost + 200,
+	}
+
+	var firstParams sdk.GenerateParams
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call == 1 {
+				firstParams = cloneGenerateParams(params)
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-budget-plan",
+						ToolName:   "lookup",
+						Input:      map[string]any{"q": "one"},
+					}},
+				}, nil
+			}
+			return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		return cfg, nil
+	}})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{lookupTool}},
+	})
+
+	var seenBudget int
+	var expectedBudget int
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:                  &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		System:                 "fixed system prefix",
+		Messages:               []sdk.Message{sdk.UserMessage(strings.Repeat("prefix ", 20))},
+		SupportsToolCall:       true,
+		Identity:               SessionContext{BotID: "bot-1"},
+		ContextMutations:       contextfrag.NewMutationLedger(),
+		ContextBudgetMaxTokens: plan.Window,
+		ContextManifest:        contextfrag.Manifest{BudgetPlan: &plan},
+		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+			allowance := plan.Window - plan.OutputReserve
+			expectedBudget = remainingStepBudget(allowance, &firstParams, input.InitialMessageCount)
+			seenBudget = input.BudgetMaxTokens
+			return ContextStepSelectionResult{}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if seenBudget != expectedBudget {
+		t.Fatalf("step budget = %d, want %d from window-output reserve minus the actual fixed prefix/tools once", seenBudget, expectedBudget)
+	}
+	legacyDoubleCounted := remainingStepBudget(plan.Window-toolCost, &firstParams, len(firstParams.Messages))
+	if expectedBudget == legacyDoubleCounted {
+		t.Fatalf("test setup does not distinguish active plan allowance %d from legacy double-counted allowance %d", expectedBudget, legacyDoubleCounted)
+	}
+}
+
 func TestAgentGenerateRejectsNonPrefixPreservingStepSelectionWithoutMutationRecord(t *testing.T) {
 	t.Parallel()
 
