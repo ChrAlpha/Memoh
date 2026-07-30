@@ -99,6 +99,54 @@ func TestCanonicalFragmentHashIsStableAndIgnoresDebugID(t *testing.T) {
 	}
 }
 
+func TestCanonicalFragmentHashIncludesRetentionPolicy(t *testing.T) {
+	t.Parallel()
+
+	base := TextFrag(TextFragInput{
+		ID:            "system.prompt",
+		Kind:          KindSystemPrompt,
+		Role:          sdk.MessageRoleSystem,
+		Slot:          SlotSystem,
+		Text:          "system",
+		RetentionTier: RetentionRequired,
+		DropPriority:  10,
+	})
+	changedTier := base
+	changedTier.RetentionTier = RetentionPreferred
+	changedPriority := base
+	changedPriority.DropPriority = 20
+
+	baseHash, err := CanonicalFragmentHash(base)
+	if err != nil {
+		t.Fatalf("canonical base hash: %v", err)
+	}
+	tierHash, err := CanonicalFragmentHash(changedTier)
+	if err != nil {
+		t.Fatalf("canonical tier hash: %v", err)
+	}
+	priorityHash, err := CanonicalFragmentHash(changedPriority)
+	if err != nil {
+		t.Fatalf("canonical priority hash: %v", err)
+	}
+	if tierHash.Value == baseHash.Value {
+		t.Fatal("canonical hash must change with retention tier")
+	}
+	if priorityHash.Value == baseHash.Value {
+		t.Fatal("canonical hash must change with drop priority")
+	}
+}
+
+func TestDropPriorityHigherValuesDropFirst(t *testing.T) {
+	t.Parallel()
+
+	if !DropPriority(20).DropsBefore(10) {
+		t.Fatal("higher drop priority must drop before a lower value")
+	}
+	if DropPriority(10).DropsBefore(20) {
+		t.Fatal("lower drop priority must survive longer than a higher value")
+	}
+}
+
 func TestCanonicalFragmentHashGoldenValue(t *testing.T) {
 	t.Parallel()
 
@@ -122,6 +170,28 @@ func TestCanonicalFragmentHashGoldenValue(t *testing.T) {
 	const want = "a33139d731966124ebcadf9eb4f2ce815b63650e866794086fc587c504193764"
 	if hash.Value != want {
 		t.Fatalf("golden hash drifted: got %q, want %q — if the canonical struct shape changed intentionally, update this value", hash.Value, want)
+	}
+}
+
+func TestBuildManifestItemCarriesRetentionPolicy(t *testing.T) {
+	t.Parallel()
+
+	frag := TextFrag(TextFragInput{
+		ID:            "system.skills",
+		Kind:          KindSkillsCatalog,
+		Slot:          SlotSystem,
+		Text:          "skills",
+		RetentionTier: RetentionOptional,
+		DropPriority:  30,
+	})
+	manifest := BuildManifest([]ContextFrag{frag})
+
+	if len(manifest.Items) != 1 {
+		t.Fatalf("manifest items = %d, want 1", len(manifest.Items))
+	}
+	item := manifest.Items[0]
+	if item.RetentionTier != RetentionOptional || item.DropPriority != 30 {
+		t.Fatalf("manifest retention policy = %s/%d, want optional/30", item.RetentionTier, item.DropPriority)
 	}
 }
 

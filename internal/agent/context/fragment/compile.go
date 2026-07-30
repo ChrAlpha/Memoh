@@ -178,56 +178,61 @@ func systemFrags(system string, toolUsage string, scope Scope, source string) []
 
 func systemTextFrag(id string, kind Kind, text string, priority int, cacheClass CacheClass, scope Scope, source string, index int) ContextFrag {
 	return TextFrag(TextFragInput{
-		ID:         id,
-		Kind:       kind,
-		Role:       sdk.MessageRoleSystem,
-		Slot:       SlotSystem,
-		Text:       text,
-		Priority:   priority,
-		CacheClass: cacheClass,
-		Trust:      TrustSystem,
-		Scope:      scope,
-		Source:     source,
-		Collector:  CollectorRunConfigFields,
-		Index:      index,
-		Render:     RenderPolicy{Format: RenderMarkdown},
+		ID:            id,
+		Kind:          kind,
+		Role:          sdk.MessageRoleSystem,
+		Slot:          SlotSystem,
+		Text:          text,
+		Priority:      priority,
+		RetentionTier: RetentionRequired,
+		CacheClass:    cacheClass,
+		Trust:         TrustSystem,
+		Scope:         scope,
+		Source:        source,
+		Collector:     CollectorRunConfigFields,
+		Index:         index,
+		Render:        RenderPolicy{Format: RenderMarkdown},
 	})
 }
 
 // TextFragInput describes a text fragment to construct.
 type TextFragInput struct {
-	ID          string
-	Kind        Kind
-	Role        sdk.MessageRole
-	Slot        Slot
-	Text        string
-	Priority    int
-	CacheClass  CacheClass
-	Trust       TrustLevel
-	Scope       Scope
-	Source      string
-	SourceID    string
-	Collector   string
-	Index       int
-	Render      RenderPolicy
-	Budget      BudgetPolicy
-	ConflictKey string
+	ID            string
+	Kind          Kind
+	Role          sdk.MessageRole
+	Slot          Slot
+	Text          string
+	Priority      int
+	RetentionTier RetentionTier
+	DropPriority  DropPriority
+	CacheClass    CacheClass
+	Trust         TrustLevel
+	Scope         Scope
+	Source        string
+	SourceID      string
+	Collector     string
+	Index         int
+	Render        RenderPolicy
+	Budget        BudgetPolicy
+	ConflictKey   string
 }
 
 // TextFrag creates a text-backed fragment.
 func TextFrag(input TextFragInput) ContextFrag {
 	return ContextFrag{
-		ID:          strings.TrimSpace(input.ID),
-		Kind:        input.Kind,
-		Role:        input.Role,
-		Slot:        input.Slot,
-		Priority:    input.Priority,
-		CacheClass:  input.CacheClass,
-		Trust:       input.Trust,
-		Scope:       normalizeScope(input.Scope),
-		Budget:      input.Budget,
-		Render:      input.Render,
-		ConflictKey: input.ConflictKey,
+		ID:            strings.TrimSpace(input.ID),
+		Kind:          input.Kind,
+		Role:          input.Role,
+		Slot:          input.Slot,
+		Priority:      input.Priority,
+		RetentionTier: input.RetentionTier,
+		DropPriority:  input.DropPriority,
+		CacheClass:    input.CacheClass,
+		Trust:         input.Trust,
+		Scope:         normalizeScope(input.Scope),
+		Budget:        input.Budget,
+		Render:        input.Render,
+		ConflictKey:   input.ConflictKey,
 		Provenance: Provenance{
 			Source:    strings.TrimSpace(input.Source),
 			SourceID:  strings.TrimSpace(input.SourceID),
@@ -248,6 +253,8 @@ type MessageFragInput struct {
 	Kind          Kind
 	Slot          Slot
 	Priority      int
+	RetentionTier RetentionTier
+	DropPriority  DropPriority
 	CacheClass    CacheClass
 	Trust         TrustLevel
 	Scope         Scope
@@ -270,6 +277,8 @@ func MessageFrag(input MessageFragInput) ContextFrag {
 		Role:          input.Message.Role,
 		Slot:          input.Slot,
 		Priority:      input.Priority,
+		RetentionTier: input.RetentionTier,
+		DropPriority:  input.DropPriority,
 		CacheClass:    input.CacheClass,
 		Trust:         input.Trust,
 		Scope:         normalizeScope(input.Scope),

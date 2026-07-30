@@ -22,19 +22,21 @@ func BuildManifest(frags []ContextFrag) Manifest {
 		}
 		manifest.ValidationWarnings = append(manifest.ValidationWarnings, ContextRefWarnings(ref)...)
 		item := ManifestItem{
-			ID:          frag.ID,
-			Ref:         ref,
-			Kind:        frag.Kind,
-			Slot:        frag.Slot,
-			Role:        frag.Role,
-			Priority:    frag.Priority,
-			CacheClass:  frag.CacheClass,
-			Trust:       frag.Trust,
-			Source:      frag.Provenance.Source,
-			SourceID:    frag.Provenance.SourceID,
-			Collector:   frag.Provenance.Collector,
-			ConflictKey: frag.ConflictKey,
-			Scope:       frag.Scope,
+			ID:            frag.ID,
+			Ref:           ref,
+			Kind:          frag.Kind,
+			Slot:          frag.Slot,
+			Role:          frag.Role,
+			Priority:      frag.Priority,
+			RetentionTier: frag.RetentionTier,
+			DropPriority:  frag.DropPriority,
+			CacheClass:    frag.CacheClass,
+			Trust:         frag.Trust,
+			Source:        frag.Provenance.Source,
+			SourceID:      frag.Provenance.SourceID,
+			Collector:     frag.Provenance.Collector,
+			ConflictKey:   frag.ConflictKey,
+			Scope:         frag.Scope,
 		}
 		for _, part := range frag.Parts {
 			item.PartTypes = append(item.PartTypes, part.Type)

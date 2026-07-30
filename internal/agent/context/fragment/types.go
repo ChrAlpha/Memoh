@@ -161,6 +161,25 @@ const (
 	OverflowDrop      OverflowAction = "drop"
 )
 
+// RetentionTier groups fragments by how strongly a budget pass must retain
+// them. The zero value leaves the policy unspecified.
+type RetentionTier string
+
+const (
+	RetentionUnspecified RetentionTier = ""
+	RetentionRequired    RetentionTier = "required"
+	RetentionPreferred   RetentionTier = "preferred"
+	RetentionOptional    RetentionTier = "optional"
+)
+
+// DropPriority orders fragments within one retention tier. Higher values drop
+// before lower values, so lower values survive longer under budget pressure.
+type DropPriority int
+
+func (p DropPriority) DropsBefore(other DropPriority) bool {
+	return p > other
+}
+
 // BudgetPolicy captures the budget behavior for a fragment: the selector
 // enforces MaxTokens/MaxChars via Trim or Drop, Summarize is not implemented
 // (deferred to compaction), and Keep marks the fragment as must-keep.
@@ -269,6 +288,8 @@ type ContextFrag struct {
 	Role          sdk.MessageRole `json:"role,omitempty"`
 	Slot          Slot            `json:"slot"`
 	Priority      int             `json:"priority,omitempty"`
+	RetentionTier RetentionTier   `json:"retention_tier,omitempty"`
+	DropPriority  DropPriority    `json:"drop_priority,omitempty"`
 	CacheClass    CacheClass      `json:"cache_class,omitempty"`
 	Trust         TrustLevel      `json:"trust,omitempty"`
 	Scope         Scope           `json:"scope,omitempty"`
@@ -388,6 +409,8 @@ type ManifestItem struct {
 	Slot          Slot            `json:"slot"`
 	Role          sdk.MessageRole `json:"role,omitempty"`
 	Priority      int             `json:"priority,omitempty"`
+	RetentionTier RetentionTier   `json:"retention_tier,omitempty"`
+	DropPriority  DropPriority    `json:"drop_priority,omitempty"`
 	CacheClass    CacheClass      `json:"cache_class,omitempty"`
 	Trust         TrustLevel      `json:"trust,omitempty"`
 	Source        string          `json:"source,omitempty"`

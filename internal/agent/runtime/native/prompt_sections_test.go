@@ -213,9 +213,10 @@ func TestGenerateSystemSectionsOmitsEmptyOptionalSections(t *testing.T) {
 }
 
 type goldenSectionExpectation struct {
-	ID       string
-	Kind     contextfrag.Kind
-	Priority int
+	ID            string
+	Kind          contextfrag.Kind
+	Priority      int
+	RetentionTier contextfrag.RetentionTier
 }
 
 func assertSectionTable(t *testing.T, sections []SystemSection, want []goldenSectionExpectation) {
@@ -225,9 +226,9 @@ func assertSectionTable(t *testing.T, sections []SystemSection, want []goldenSec
 	}
 	for i, w := range want {
 		got := sections[i]
-		if got.ID != w.ID || got.Kind != w.Kind || got.Priority != w.Priority {
-			t.Fatalf("section[%d] = {ID:%s Kind:%s Priority:%d}, want {ID:%s Kind:%s Priority:%d}",
-				i, got.ID, got.Kind, got.Priority, w.ID, w.Kind, w.Priority)
+		if got.ID != w.ID || got.Kind != w.Kind || got.Priority != w.Priority || got.RetentionTier != w.RetentionTier {
+			t.Fatalf("section[%d] = {ID:%s Kind:%s Priority:%d RetentionTier:%s}, want {ID:%s Kind:%s Priority:%d RetentionTier:%s}",
+				i, got.ID, got.Kind, got.Priority, got.RetentionTier, w.ID, w.Kind, w.Priority, w.RetentionTier)
 		}
 	}
 }
@@ -244,13 +245,13 @@ func TestGenerateSystemSectionsTableChat(t *testing.T) {
 	})
 
 	assertSectionTable(t, sections, []goldenSectionExpectation{
-		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10},
-		{"system.bot_identity", contextfrag.KindBotIdentity, 20},
-		{"system.prompt.body", contextfrag.KindSystemPrompt, 30},
-		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50},
-		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60},
-		{"system.skills", contextfrag.KindSkillsCatalog, 65},
-		{"system.workspace_instructions", contextfrag.KindWorkspaceInstruction, 70},
+		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10, contextfrag.RetentionRequired},
+		{"system.bot_identity", contextfrag.KindBotIdentity, 20, contextfrag.RetentionPreferred},
+		{"system.prompt.body", contextfrag.KindSystemPrompt, 30, contextfrag.RetentionRequired},
+		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50, contextfrag.RetentionRequired},
+		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
+		{"system.skills", contextfrag.KindSkillsCatalog, 65, contextfrag.RetentionOptional},
+		{"system.workspace_instructions", contextfrag.KindWorkspaceInstruction, 70, contextfrag.RetentionPreferred},
 	})
 }
 
@@ -267,11 +268,11 @@ func TestGenerateSystemSectionsTableSubagent(t *testing.T) {
 	})
 
 	assertSectionTable(t, sections, []goldenSectionExpectation{
-		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10},
-		{"system.bot_identity", contextfrag.KindBotIdentity, 20},
-		{"system.prompt.body", contextfrag.KindSystemPrompt, 30},
-		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50},
-		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60},
+		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10, contextfrag.RetentionRequired},
+		{"system.bot_identity", contextfrag.KindBotIdentity, 20, contextfrag.RetentionPreferred},
+		{"system.prompt.body", contextfrag.KindSystemPrompt, 30, contextfrag.RetentionRequired},
+		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50, contextfrag.RetentionRequired},
+		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
 	})
 }
 
@@ -284,10 +285,10 @@ func TestGenerateSystemSectionsTableSubagentMinimal(t *testing.T) {
 	sections := GenerateSystemSections(SystemPromptParams{SessionType: sessionmode.Subagent, Timezone: "UTC"})
 
 	assertSectionTable(t, sections, []goldenSectionExpectation{
-		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10},
-		{"system.bot_identity", contextfrag.KindBotIdentity, 20},
-		{"system.prompt.body", contextfrag.KindSystemPrompt, 30},
-		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50},
+		{"system.prompt.intro", contextfrag.KindSystemPrompt, 10, contextfrag.RetentionRequired},
+		{"system.bot_identity", contextfrag.KindBotIdentity, 20, contextfrag.RetentionPreferred},
+		{"system.prompt.body", contextfrag.KindSystemPrompt, 30, contextfrag.RetentionRequired},
+		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50, contextfrag.RetentionRequired},
 	})
 }
 
@@ -313,9 +314,11 @@ func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
 	seenKinds := make(map[contextfrag.Kind]bool, len(frags))
 	for i, frag := range frags {
 		seenKinds[frag.Kind] = true
-		if frag.ID != sections[i].ID || frag.Kind != sections[i].Kind || frag.Priority != sections[i].Priority {
-			t.Fatalf("frag[%d] = {ID:%s Kind:%s Priority:%d}, want {ID:%s Kind:%s Priority:%d}",
-				i, frag.ID, frag.Kind, frag.Priority, sections[i].ID, sections[i].Kind, sections[i].Priority)
+		if frag.ID != sections[i].ID || frag.Kind != sections[i].Kind || frag.Priority != sections[i].Priority ||
+			frag.RetentionTier != sections[i].RetentionTier {
+			t.Fatalf("frag[%d] = {ID:%s Kind:%s Priority:%d RetentionTier:%s}, want {ID:%s Kind:%s Priority:%d RetentionTier:%s}",
+				i, frag.ID, frag.Kind, frag.Priority, frag.RetentionTier,
+				sections[i].ID, sections[i].Kind, sections[i].Priority, sections[i].RetentionTier)
 		}
 		if frag.Slot != contextfrag.SlotSystem || frag.Role != sdk.MessageRoleSystem {
 			t.Fatalf("frag[%d] slot/role = %s/%s, want system/system", i, frag.Slot, frag.Role)
@@ -332,6 +335,34 @@ func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
 		if !seenKinds[want] {
 			t.Fatalf("frags missing Kind %s: %#v", want, frags)
 		}
+	}
+}
+
+func TestSystemSectionFragsPreservesRetentionBudgetPolicy(t *testing.T) {
+	t.Parallel()
+
+	section := SystemSection{
+		ID:            "system.test",
+		Kind:          contextfrag.KindSystemPrompt,
+		Priority:      25,
+		Text:          "test",
+		RetentionTier: contextfrag.RetentionPreferred,
+		DropPriority:  40,
+		Budget: contextfrag.BudgetPolicy{
+			MaxChars: 128,
+			Overflow: contextfrag.OverflowTrim,
+		},
+	}
+
+	frags := SystemSectionFrags([]SystemSection{section}, contextfrag.Scope{})
+	if len(frags) != 1 {
+		t.Fatalf("frags = %d, want 1", len(frags))
+	}
+	frag := frags[0]
+	if frag.RetentionTier != section.RetentionTier || frag.DropPriority != section.DropPriority || frag.Budget != section.Budget {
+		t.Fatalf("frag policy = %+v/%d/%+v, want %+v/%d/%+v",
+			frag.RetentionTier, frag.DropPriority, frag.Budget,
+			section.RetentionTier, section.DropPriority, section.Budget)
 	}
 }
 
@@ -364,6 +395,9 @@ func TestGenerateSystemSectionsDegradesGracefullyWhenSystemTemplateAnchorMissing
 	}
 	if sections[0].Kind != contextfrag.KindSystemPrompt {
 		t.Fatalf("degraded section Kind = %s, want KindSystemPrompt", sections[0].Kind)
+	}
+	if sections[0].RetentionTier != contextfrag.RetentionRequired {
+		t.Fatalf("degraded section retention = %s, want required", sections[0].RetentionTier)
 	}
 	if strings.Contains(sections[0].Text, "{{") {
 		t.Fatalf("degraded section text must not leak a raw template placeholder: %q", sections[0].Text)

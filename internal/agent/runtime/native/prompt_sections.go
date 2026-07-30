@@ -15,10 +15,13 @@ import (
 
 // SystemSection is one typed, priority-ordered piece of the system prompt.
 type SystemSection struct {
-	ID       string
-	Kind     contextfrag.Kind
-	Priority int
-	Text     string
+	ID            string
+	Kind          contextfrag.Kind
+	Priority      int
+	RetentionTier contextfrag.RetentionTier
+	DropPriority  contextfrag.DropPriority
+	Budget        contextfrag.BudgetPolicy
+	Text          string
 }
 
 const (
@@ -74,20 +77,21 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 
 	sections := []SystemSection{
 		{
-			ID: sectionIDIntro, Kind: contextfrag.KindSystemPrompt, Priority: priorityIntro,
+			ID: sectionIDIntro, Kind: contextfrag.KindSystemPrompt, Priority: priorityIntro, RetentionTier: contextfrag.RetentionRequired,
 			Text: render(intro, map[string]string{"home": home, "timezone": timezone}),
 		},
 		{
-			ID: sectionIDBotIdentity, Kind: contextfrag.KindBotIdentity, Priority: priorityBotIdentity,
+			ID: sectionIDBotIdentity, Kind: contextfrag.KindBotIdentity, Priority: priorityBotIdentity, RetentionTier: contextfrag.RetentionPreferred,
 			Text: buildBotInfoSection(params.Bot),
 		},
-		{ID: sectionIDBody, Kind: contextfrag.KindSystemPrompt, Priority: priorityBody, Text: body},
-		{ID: sectionIDTail, Kind: contextfrag.KindSystemPrompt, Priority: priorityTail, Text: tail},
+		{ID: sectionIDBody, Kind: contextfrag.KindSystemPrompt, Priority: priorityBody, RetentionTier: contextfrag.RetentionRequired, Text: body},
+		{ID: sectionIDTail, Kind: contextfrag.KindSystemPrompt, Priority: priorityTail, RetentionTier: contextfrag.RetentionRequired, Text: tail},
 	}
 
 	if text := strings.TrimSpace(params.PlatformIdentitiesSection); text != "" {
 		sections = append(sections, SystemSection{
-			ID: sectionIDPlatformIdentity, Kind: contextfrag.KindPlatformIdentity, Priority: priorityPlatformIdentity, Text: text,
+			ID: sectionIDPlatformIdentity, Kind: contextfrag.KindPlatformIdentity, Priority: priorityPlatformIdentity,
+			RetentionTier: contextfrag.RetentionPreferred, Text: text,
 		})
 	}
 
@@ -97,12 +101,14 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 
 	if text := strings.TrimSpace(buildSkillsSection(params.Skills)); text != "" {
 		sections = append(sections, SystemSection{
-			ID: sectionIDSkills, Kind: contextfrag.KindSkillsCatalog, Priority: prioritySkills, Text: text,
+			ID: sectionIDSkills, Kind: contextfrag.KindSkillsCatalog, Priority: prioritySkills,
+			RetentionTier: contextfrag.RetentionOptional, Text: text,
 		})
 	}
 	if text := strings.TrimSpace(buildFileSections(params.Files, params.MaxFilesBytes)); text != "" {
 		sections = append(sections, SystemSection{
-			ID: sectionIDWorkspaceInstructions, Kind: contextfrag.KindWorkspaceInstruction, Priority: priorityWorkspaceInstructions, Text: text,
+			ID: sectionIDWorkspaceInstructions, Kind: contextfrag.KindWorkspaceInstruction, Priority: priorityWorkspaceInstructions,
+			RetentionTier: contextfrag.RetentionPreferred, Text: text,
 		})
 	}
 
@@ -133,10 +139,11 @@ func degradedSystemSections(params SystemPromptParams, home, timezone string, ca
 		text += "\n\n" + strings.TrimSpace(includes["_memory"])
 	}
 	return []SystemSection{{
-		ID:       sectionIDFallback,
-		Kind:     contextfrag.KindSystemPrompt,
-		Priority: priorityBody,
-		Text:     text,
+		ID:            sectionIDFallback,
+		Kind:          contextfrag.KindSystemPrompt,
+		Priority:      priorityBody,
+		RetentionTier: contextfrag.RetentionRequired,
+		Text:          text,
 	}}
 }
 
@@ -148,18 +155,21 @@ func SystemSectionFrags(sections []SystemSection, scope contextfrag.Scope) []con
 	frags := make([]contextfrag.ContextFrag, 0, len(sections))
 	for _, section := range sections {
 		frags = append(frags, contextfrag.TextFrag(contextfrag.TextFragInput{
-			ID:         section.ID,
-			Kind:       section.Kind,
-			Role:       sdk.MessageRoleSystem,
-			Slot:       contextfrag.SlotSystem,
-			Text:       section.Text,
-			Priority:   section.Priority,
-			CacheClass: contextfrag.CacheStable,
-			Trust:      contextfrag.TrustSystem,
-			Scope:      scope,
-			Source:     contextfrag.SourceRunConfig,
-			Collector:  "system_sections",
-			Render:     contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
+			ID:            section.ID,
+			Kind:          section.Kind,
+			Role:          sdk.MessageRoleSystem,
+			Slot:          contextfrag.SlotSystem,
+			Text:          section.Text,
+			Priority:      section.Priority,
+			RetentionTier: section.RetentionTier,
+			DropPriority:  section.DropPriority,
+			CacheClass:    contextfrag.CacheStable,
+			Trust:         contextfrag.TrustSystem,
+			Scope:         scope,
+			Source:        contextfrag.SourceRunConfig,
+			Collector:     "system_sections",
+			Render:        contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
+			Budget:        section.Budget,
 		}))
 	}
 	return frags
