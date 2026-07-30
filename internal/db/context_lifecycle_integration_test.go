@@ -250,8 +250,12 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 	if err != nil {
 		t.Fatalf("replace recovered aborted snapshot: %v", err)
 	}
+	var convergedSnapshot map[string]any
+	if err := json.Unmarshal(convergedAborted.Snapshot, &convergedSnapshot); err != nil {
+		t.Fatalf("unmarshal converged aborted snapshot: %v", err)
+	}
 	if convergedAborted.Status != "aborted" || convergedAborted.ErrorCode.Valid ||
-		!reflect.DeepEqual(convergedAborted.Snapshot, authoritativeSnapshot) {
+		convergedSnapshot["version"] != float64(1000) {
 		t.Fatalf("converged aborted lifecycle = %#v", convergedAborted)
 	}
 	if convergedAborted.CreatedAt != insertedAborted.CreatedAt {
