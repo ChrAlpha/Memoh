@@ -205,6 +205,10 @@ func ApplyProviderRunConfig(
 		}
 	}
 	ledger := contextfrag.NewMutationLedger()
+	if cfg.ContextBudgetMaxTokens != 0 &&
+		strings.EqualFold(strings.TrimSpace(cfg.SessionType), sessionmode.Discuss) {
+		ledger.Record(contextfrag.MutationContextBudgetDisabled, "discuss_flat_reverse_parse")
+	}
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
 	selector := Selector(&FragmentSelector{})
 	fallbackCfg := cfg

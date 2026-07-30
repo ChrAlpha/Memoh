@@ -9,24 +9,25 @@ import (
 	"time"
 )
 
-// MutationKind identifies a post-render context mutator: code that changes
-// the provider payload after the context view rendered it.
+// MutationKind identifies an auditable context assembly decision or
+// post-render provider-payload mutation.
 type MutationKind string
 
 const (
-	MutationBeforeModelCallHook  MutationKind = "before_model_call_hook"
-	MutationBackgroundSummary    MutationKind = "background_summary"
-	MutationMidTaskPrune         MutationKind = "mid_task_prune"
-	MutationLoopStepReselection  MutationKind = "loop_step_reselection"
-	MutationInjectedMessage      MutationKind = "injected_message"
-	MutationContextViewFallback  MutationKind = "context_view_fallback"
-	MutationContextBudgetFailure MutationKind = "context_budget_failure"
-	MutationCapabilityGate       MutationKind = "capability_gate"
-	MutationReadMedia            MutationKind = "read_media"
-	MutationMidStreamRetry       MutationKind = "mid_stream_retry"
+	MutationBeforeModelCallHook   MutationKind = "before_model_call_hook"
+	MutationBackgroundSummary     MutationKind = "background_summary"
+	MutationMidTaskPrune          MutationKind = "mid_task_prune"
+	MutationLoopStepReselection   MutationKind = "loop_step_reselection"
+	MutationInjectedMessage       MutationKind = "injected_message"
+	MutationContextViewFallback   MutationKind = "context_view_fallback"
+	MutationContextBudgetFailure  MutationKind = "context_budget_failure"
+	MutationContextBudgetDisabled MutationKind = "context_budget_disabled"
+	MutationCapabilityGate        MutationKind = "capability_gate"
+	MutationReadMedia             MutationKind = "read_media"
+	MutationMidStreamRetry        MutationKind = "mid_stream_retry"
 )
 
-// MutationRecord is one ledger entry describing a post-render mutation.
+// MutationRecord is one entry in the context mutation ledger.
 type MutationRecord struct {
 	Kind   MutationKind `json:"kind"`
 	Detail string       `json:"detail,omitempty"`
@@ -90,9 +91,9 @@ type StepSnapshot struct {
 	DropReasons          map[string]int `json:"drop_reasons,omitempty"`
 }
 
-// MutationLedger collects the post-render mutations applied to a run's
-// context together with the hash of the first provider input, so the
-// manifest chain from rendered payload to final model input stays auditable.
+// MutationLedger collects auditable context assembly decisions and post-render
+// mutations together with the hash of the first provider input, so the manifest
+// chain from rendered payload to final model input stays auditable.
 // All methods are nil-safe.
 type MutationLedger struct {
 	mu                           sync.Mutex
