@@ -429,13 +429,15 @@ type ToolDefAccounting struct {
 // ContextBudgetPlan records the numeric input-envelope allocation used for one
 // provider-bound turn. Raw prompt content never enters this accounting view.
 type ContextBudgetPlan struct {
-	Window             int `json:"window"`
-	OutputReserve      int `json:"output_reserve"`
-	ToolDefsCost       int `json:"tool_defs_cost"`
-	CurrentRequestCost int `json:"current_request_cost"`
-	SystemBudget       int `json:"system_budget"`
-	ActualSystemCost   int `json:"actual_system_cost"`
-	HistoryBudget      int `json:"history_budget"`
+	Estimator                    string `json:"estimator"`
+	EstimatorSafetyFactorPercent int    `json:"estimator_safety_factor_percent"`
+	Window                       int    `json:"window"`
+	OutputReserve                int    `json:"output_reserve"`
+	ToolDefsCost                 int    `json:"tool_defs_cost"`
+	CurrentRequestCost           int    `json:"current_request_cost"`
+	SystemBudget                 int    `json:"system_budget"`
+	ActualSystemCost             int    `json:"actual_system_cost"`
+	HistoryBudget                int    `json:"history_budget"`
 }
 
 type SelectionTrace struct {
