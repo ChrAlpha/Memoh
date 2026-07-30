@@ -252,6 +252,40 @@ func TestSystemBudgetCostMatchesRenderedShortSections(t *testing.T) {
 	}
 }
 
+func TestSystemBudgetCostUsesRendererPriorityOrderForGroups(t *testing.T) {
+	t.Parallel()
+
+	grouped := func(id string) contextfrag.ContextFrag {
+		frag := systemBudgetGroupFrag(id, "system.skills", "xxx", 0)
+		frag.Priority = 60
+		return frag
+	}
+	ungrouped := func(id string) contextfrag.ContextFrag {
+		frag := systemBudgetTestFrag(id, contextfrag.RetentionRequired, 0, 50, 0, contextfrag.OverflowKeep)
+		frag.Parts[0].Text = "xxx"
+		return frag
+	}
+	frags := []contextfrag.ContextFrag{
+		grouped("system.skills.header"),
+		ungrouped("unrelated.1"),
+		grouped("system.skill.1"),
+		ungrouped("unrelated.2"),
+		grouped("system.skill.2"),
+		ungrouped("unrelated.3"),
+		grouped("system.skill.3"),
+		grouped("system.skill.4"),
+	}
+
+	payload := renderSDK(t, frags, placementFor(frags))
+	want := contextfrag.TokensFromBytes(len(payload.System))
+	if want != 8 {
+		t.Fatalf("fixture rendered cost = %d, want 8", want)
+	}
+	if got := systemFragCost(frags); got != want {
+		t.Fatalf("system cost = %d, want renderer-ordered cost %d for %q", got, want, payload.System)
+	}
+}
+
 func TestSystemBudgetRecomputesCostAfterEveryDrop(t *testing.T) {
 	t.Parallel()
 

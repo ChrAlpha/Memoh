@@ -170,6 +170,7 @@ func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
 }
 
 func systemFragCost(frags []contextfrag.ContextFrag) int {
+	frags = sortSystemFragsByPriority(frags)
 	resolved := 0
 	renderedBytes := 0
 	count := 0
