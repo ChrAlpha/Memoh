@@ -21,6 +21,7 @@ const (
 	MutationInjectedMessage      MutationKind = "injected_message"
 	MutationContextViewFallback  MutationKind = "context_view_fallback"
 	MutationContextBudgetFailure MutationKind = "context_budget_failure"
+	MutationCapabilityGate       MutationKind = "capability_gate"
 	MutationReadMedia            MutationKind = "read_media"
 	MutationMidStreamRetry       MutationKind = "mid_stream_retry"
 )

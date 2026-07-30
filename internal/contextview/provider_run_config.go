@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
@@ -148,7 +149,9 @@ func ApplyProviderRunConfig(
 ) (agentpkg.RunConfig, error) {
 	var sources []SourceSpec
 	var registry CollectorRegistry
-	if len(cfg.ContextSourceFrags) > 0 {
+	fragsFirst := len(cfg.ContextSourceFrags) > 0
+	var providerSourceFrags []contextfrag.ContextFrag
+	if fragsFirst {
 		frags := append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
 		if len(cfg.ContextToolUsageFrags) > 0 {
 			filtered := frags[:0]
@@ -162,6 +165,7 @@ func ApplyProviderRunConfig(
 		} else if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" {
 			frags = append(frags, ToolUsageFrag(usage, cfg.ContextScope))
 		}
+		providerSourceFrags = frags
 		registry = NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})
 		sources = []SourceSpec{{Name: sourceFragsCollectorName}}
 	} else {
@@ -202,11 +206,22 @@ func ApplyProviderRunConfig(
 	}
 	ledger := contextfrag.NewMutationLedger()
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
+	selector := Selector(&FragmentSelector{})
+	fallbackCfg := cfg
+	if fragsFirst && cfg.ContextToolDefsResolved {
+		gate := newCapabilityGateSelector(selector, cfg.ContextToolDefs)
+		_, gated := filterUnavailableCapabilities(providerSourceFrags, gate.available)
+		if len(gated) > 0 {
+			ledger.Record(contextfrag.MutationCapabilityGate, fmt.Sprintf("dropped=%d", len(gated)))
+			fallbackCfg = capabilitySafeFallbackConfig(cfg, providerSourceFrags, gate.available)
+		}
+		selector = gate
+	}
 	if budgetErr != nil && !isContextBudgetError(budgetErr) {
-		return providerViewFallback(logger, cfg, ledger, "budget_plan_error",
+		return providerViewFallback(logger, fallbackCfg, ledger, "budget_plan_error",
 			"context budget plan failed; using legacy assembly", budgetErr), nil
 	}
-	builder := NewBuilder(registry, &FragmentSelector{}, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
+	builder := NewBuilder(registry, selector, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
 	view, err := builder.Build(ctx, BuildInput{
 		Scope:   cfg.ContextScope,
 		Intent:  contextfrag.IntentRunConfigPreProvider,
@@ -229,12 +244,12 @@ func ApplyProviderRunConfig(
 			recordContextBudgetFailure(ledger, err)
 			return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
 		}
-		return providerViewFallback(logger, cfg, ledger, "build_error",
+		return providerViewFallback(logger, fallbackCfg, ledger, "build_error",
 			"context view build failed; using legacy assembly", err), nil
 	}
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
-		return providerViewFallback(logger, cfg, ledger, "unexpected_payload",
+		return providerViewFallback(logger, fallbackCfg, ledger, "unexpected_payload",
 			"context view rendered unexpected payload; using legacy assembly", nil), nil
 	}
 

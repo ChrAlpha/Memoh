@@ -80,6 +80,9 @@ func TestGenerateAppliesContextViewAfterToolUsage(t *testing.T) {
 		seen.ContextToolUsageFrags[1].ID != "system.tool_usage.fake_tool" {
 		t.Fatalf("applier saw structured tool usage %+v, want header and provider item", seen.ContextToolUsageFrags)
 	}
+	if !seen.ContextToolDefsResolved {
+		t.Fatal("applier must see an authoritative tool capability roster")
+	}
 	if !strings.Contains(seen.System, usageMarker) {
 		t.Fatalf("applier must see the tool-usage-augmented system, got %q", seen.System)
 	}

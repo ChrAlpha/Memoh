@@ -127,6 +127,7 @@ type RunConfig struct {
 	ContextFrags             []contextfrag.ContextFrag
 	ContextManifest          contextfrag.Manifest
 	ContextToolDefs          []contextfrag.ToolDefAccounting
+	ContextToolDefsResolved  bool
 	ContextScope             contextfrag.Scope
 	ContextQueryMaterialized bool
 	// ContextCurrentUserMessageIndex identifies a current request already

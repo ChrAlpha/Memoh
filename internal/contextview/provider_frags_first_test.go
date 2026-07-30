@@ -70,7 +70,8 @@ func fragsFirstFixture() agentpkg.RunConfig {
 			{Name: "zeta_tool"},
 			{Name: "alpha_tool"},
 		},
-		ContextScope: contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
+		ContextToolDefsResolved: true,
+		ContextScope:            contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
 }
 
