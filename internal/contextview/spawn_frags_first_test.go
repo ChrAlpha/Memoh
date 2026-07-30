@@ -48,10 +48,10 @@ func TestSpawnRunConfigFragsFirstMatchesLegacyReverseParse(t *testing.T) {
 
 	got1 := base
 	got1.ContextSourceFrags = agentpkg.SpawnContextSourceFrags(got1)
-	rendered1 := ApplyProviderRunConfig(context.Background(), nil, got1)
+	rendered1 := applyProviderRunConfigOK(context.Background(), nil, got1)
 
 	got2 := base // ContextSourceFrags stays empty: ApplyProviderRunConfig takes the legacy collector branch.
-	rendered2 := ApplyProviderRunConfig(context.Background(), nil, got2)
+	rendered2 := applyProviderRunConfigOK(context.Background(), nil, got2)
 
 	if rendered1.System != rendered2.System {
 		t.Fatalf("frags-first System diverges from legacy reverse-parse System:\ngot:  %q\nwant: %q", rendered1.System, rendered2.System)

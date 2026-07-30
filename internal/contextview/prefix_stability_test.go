@@ -112,7 +112,7 @@ func TestApplyProviderRunConfigCrossTurnPrefixStable(t *testing.T) {
 	turn1Frags := prefixStabilitySystemFrags()
 	turn1Frags = append(turn1Frags, prefixStabilityHistoryFrags()...)
 	turn1Frags = append(turn1Frags, currentUserTextFrag("q1"))
-	turn1 := ApplyProviderRunConfig(ctx, nil, agentpkg.RunConfig{
+	turn1 := applyProviderRunConfigOK(ctx, nil, agentpkg.RunConfig{
 		ContextSourceFrags: turn1Frags,
 		ContextScope:       prefixStabilityScope(),
 	})
@@ -124,7 +124,7 @@ func TestApplyProviderRunConfigCrossTurnPrefixStable(t *testing.T) {
 		historyMessageFrag("message.003", sdk.AssistantMessage("a1")),
 	)
 	turn2Frags = append(turn2Frags, currentUserTextFrag("q2"))
-	turn2 := ApplyProviderRunConfig(ctx, nil, agentpkg.RunConfig{
+	turn2 := applyProviderRunConfigOK(ctx, nil, agentpkg.RunConfig{
 		ContextSourceFrags: turn2Frags,
 		ContextScope:       prefixStabilityScope(),
 	})
@@ -160,8 +160,8 @@ func TestApplyProviderRunConfigMemoryRecallSystemIsolation(t *testing.T) {
 		return agentpkg.RunConfig{ContextSourceFrags: frags, ContextScope: prefixStabilityScope()}
 	}
 
-	got1 := ApplyProviderRunConfig(ctx, nil, withMemory("remembered fact"))
-	got2 := ApplyProviderRunConfig(ctx, nil, withMemory("remembered fact"))
+	got1 := applyProviderRunConfigOK(ctx, nil, withMemory("remembered fact"))
+	got2 := applyProviderRunConfigOK(ctx, nil, withMemory("remembered fact"))
 
 	if got1.System != got2.System {
 		t.Fatalf("identical fixtures must render byte-identical system prompts:\ngot1 = %q\ngot2 = %q", got1.System, got2.System)
@@ -170,7 +170,7 @@ func TestApplyProviderRunConfigMemoryRecallSystemIsolation(t *testing.T) {
 		t.Fatalf("identical fixtures must render identical messages:\ngot1 = %#v\ngot2 = %#v", got1.Messages, got2.Messages)
 	}
 
-	got3 := ApplyProviderRunConfig(ctx, nil, withMemory("a completely different remembered fact"))
+	got3 := applyProviderRunConfigOK(ctx, nil, withMemory("a completely different remembered fact"))
 	if got3.System != got1.System {
 		t.Fatalf("memory recall text must never leak into the system prompt:\ngot1.System = %q\ngot3.System = %q", got1.System, got3.System)
 	}
@@ -193,8 +193,8 @@ func TestApplyProviderRunConfigHookContextSystemIsolation(t *testing.T) {
 		return agentpkg.RunConfig{ContextSourceFrags: frags, ContextScope: prefixStabilityScope()}
 	}
 
-	got1 := ApplyProviderRunConfig(ctx, nil, withHookContext("hook says hi"))
-	got2 := ApplyProviderRunConfig(ctx, nil, withHookContext("hook says hi"))
+	got1 := applyProviderRunConfigOK(ctx, nil, withHookContext("hook says hi"))
+	got2 := applyProviderRunConfigOK(ctx, nil, withHookContext("hook says hi"))
 
 	if got1.System != got2.System {
 		t.Fatalf("identical fixtures must render byte-identical system prompts:\ngot1 = %q\ngot2 = %q", got1.System, got2.System)
@@ -203,7 +203,7 @@ func TestApplyProviderRunConfigHookContextSystemIsolation(t *testing.T) {
 		t.Fatalf("identical fixtures must render identical messages:\ngot1 = %#v\ngot2 = %#v", got1.Messages, got2.Messages)
 	}
 
-	got3 := ApplyProviderRunConfig(ctx, nil, withHookContext("a completely different hook message"))
+	got3 := applyProviderRunConfigOK(ctx, nil, withHookContext("a completely different hook message"))
 	if got3.System != got1.System {
 		t.Fatalf("hook context text must never leak into the system prompt:\ngot1.System = %q\ngot3.System = %q", got1.System, got3.System)
 	}
@@ -223,8 +223,8 @@ func TestApplyProviderRunConfigSameTurnIdempotent(t *testing.T) {
 	frags = append(frags, currentUserTextFrag("idempotent question"))
 	cfg := agentpkg.RunConfig{ContextSourceFrags: frags, ContextScope: prefixStabilityScope()}
 
-	first := ApplyProviderRunConfig(ctx, nil, cfg)
-	second := ApplyProviderRunConfig(ctx, nil, cfg)
+	first := applyProviderRunConfigOK(ctx, nil, cfg)
+	second := applyProviderRunConfigOK(ctx, nil, cfg)
 
 	if first.System != second.System {
 		t.Fatalf("the same input applied twice must render byte-identical system prompts:\nfirst = %q\nsecond = %q", first.System, second.System)

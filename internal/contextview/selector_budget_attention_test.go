@@ -546,7 +546,7 @@ func TestApplyProviderRunConfigDefaultsRecentProtectWindow(t *testing.T) {
 	t.Parallel()
 
 	holder := contextfrag.NewLifecycleHolder()
-	got := ApplyProviderRunConfig(context.Background(), nil, budgetAttentionRunConfig(holder))
+	got := applyProviderRunConfigOK(context.Background(), nil, budgetAttentionRunConfig(holder))
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want directed history, notice, latest", len(got.Messages))
@@ -574,7 +574,7 @@ func TestApplyProviderRunConfigRecentProtectOverrideDisablesWindow(t *testing.T)
 	zero := 0
 	cfg.ContextRecentProtectTokens = &zero
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want directed history, notice, latest", len(got.Messages))
@@ -658,7 +658,7 @@ func TestApplyProviderRunConfigChatHistoryPressureReportsUntiered(t *testing.T) 
 		ContextLifecycle: holder,
 	}
 	activateHistoryBudget(&cfg, 50)
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want notice plus two kept", len(got.Messages))
@@ -697,7 +697,7 @@ func TestApplyProviderRunConfigNoticeSlidesPastKeptClosure(t *testing.T) {
 		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
 	activateHistoryBudget(&cfg, 150)
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 4 {
 		t.Fatalf("messages = %d, want call, result, notice, latest", len(got.Messages))
@@ -739,7 +739,7 @@ func TestApplyProviderRunConfigMixedClosureStaysWhole(t *testing.T) {
 		ContextScope:             contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
 	activateHistoryBudget(&cfg, 50)
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	assertNoOrphanToolExchange(t, got.Messages)
 	if len(got.Messages) != 4 {

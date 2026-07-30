@@ -118,7 +118,7 @@ func TestFragsFirstDedupesAgentToolUsage(t *testing.T) {
 
 	cfg := fragsFirstFixture()
 	cfg.ContextSourceFrags = append(cfg.ContextSourceFrags, ToolUsageFrag("stale embedded usage", cfg.ContextScope))
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if strings.Contains(got.System, "stale embedded usage") {
 		t.Fatalf("agent-supplied tool usage must supersede the embedded one: %q", got.System)
