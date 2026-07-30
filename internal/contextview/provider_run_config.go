@@ -342,7 +342,8 @@ func providerCurrentRequestCost(ctx context.Context, cfg agentpkg.RunConfig) (in
 func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 	total := 0
 	for _, frag := range frags {
-		if frag.Slot == contextfrag.SlotCurrentUser {
+		if frag.Slot == contextfrag.SlotCurrentUser ||
+			frag.Kind == contextfrag.KindCurrentUserMessage {
 			total += contextfrag.ResolveFragTokens(frag)
 		}
 	}

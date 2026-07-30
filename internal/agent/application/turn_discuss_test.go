@@ -492,8 +492,9 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 	}))
 	resolver := &fakeDiscussService{
 		resolveResult: ResolveRunConfigResult{
-			RunConfig: baseConfig,
-			ModelID:   "model-1",
+			RunConfig:              baseConfig,
+			ModelID:                "model-1",
+			ContextBudgetMaxTokens: 128000,
 		},
 		inlineFn: func(_ context.Context, _ string, _ []timeline.ImageAttachmentRef) []sdk.ImagePart {
 			return []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}}
@@ -508,6 +509,11 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 			Role:                 "user",
 			Content:              "<summary>\ncovered history\n</summary>",
 			CompactionArtifactID: "artifact-1",
+		},
+		{
+			Role:       "assistant",
+			Content:    "tool call fallback",
+			RawContent: json.RawMessage(`[{"type":"tool-call","toolCallId":"call-1","toolName":"lookup","input":{"query":"answer"}}]`),
 		},
 		{
 			Role:       "tool",
@@ -540,6 +546,7 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 		"discuss.message.002",
 		"discuss.message.003",
 		"discuss.message.004",
+		"discuss.message.005",
 	}
 	for i, wantID := range wantIDs {
 		if frags[i+1].ID != wantID {
@@ -565,6 +572,10 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 	}
 	if rendered.System != baseConfig.System {
 		t.Fatalf("System = %q, want %q", rendered.System, baseConfig.System)
+	}
+	if rendered.ContextManifest.BudgetPlan == nil ||
+		rendered.ContextManifest.BudgetPlan.CurrentRequestCost <= 0 {
+		t.Fatalf("budget plan = %#v, want a non-zero discuss current-request reserve", rendered.ContextManifest.BudgetPlan)
 	}
 	wantMessages := append([]sdk.Message(nil), agent.lastConfig.Messages...)
 	wantMessages = append(wantMessages, sdk.UserMessage(baseConfig.ContextHookText))

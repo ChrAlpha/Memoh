@@ -141,6 +141,14 @@ func TestDiscussCollector_ComposedMessagesAreAuthoritative(t *testing.T) {
 		t.Fatalf("summary policy = kind %q slot %q cache %q trust %q overflow %q",
 			summary.Kind, summary.Slot, summary.CacheClass, summary.Trust, summary.Budget.Overflow)
 	}
+	current := frags[len(frags)-1]
+	if current.Kind != contextfrag.KindCurrentUserMessage ||
+		current.Slot != contextfrag.SlotHistory ||
+		current.Trust != contextfrag.TrustUser ||
+		current.Budget.Overflow != contextfrag.OverflowKeep {
+		t.Fatalf("current request policy = kind %q slot %q trust %q overflow %q",
+			current.Kind, current.Slot, current.Trust, current.Budget.Overflow)
+	}
 
 	want := legacyContextMessagesToSDK(composed)
 	want[len(want)-1].Content = append(want[len(want)-1].Content, image)

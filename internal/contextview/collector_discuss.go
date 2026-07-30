@@ -57,8 +57,9 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 	var frags []contextfrag.ContextFrag
 	if cfg.ComposedMessages != nil {
 		frags = make([]contextfrag.ContextFrag, 0, len(cfg.ComposedMessages)+1)
+		currentUserIndex := latestComposedUserMessageIndex(cfg.ComposedMessages)
 		for i, message := range cfg.ComposedMessages {
-			frags = append(frags, discussComposedMessageFrag(message, i, req.Scope))
+			frags = append(frags, discussComposedMessageFrag(message, i, i == currentUserIndex, req.Scope))
 		}
 	} else {
 		entries := sortedDiscussSourceEntries(cfg.RC, cfg.TRs)
@@ -100,7 +101,17 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 	return frags, nil
 }
 
-func discussComposedMessageFrag(message pipeline.ContextMessage, index int, scope contextfrag.Scope) contextfrag.ContextFrag {
+func latestComposedUserMessageIndex(messages []pipeline.ContextMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].CompactionArtifactID == "" &&
+			discussContextMessageToSDK(messages[i]).Role == sdk.MessageRoleUser {
+			return i
+		}
+	}
+	return -1
+}
+
+func discussComposedMessageFrag(message pipeline.ContextMessage, index int, currentUser bool, scope contextfrag.Scope) contextfrag.ContextFrag {
 	msg := discussContextMessageToSDK(message)
 	input := contextfrag.MessageFragInput{
 		ID:         fmt.Sprintf("discuss.message.%03d", index),
@@ -122,6 +133,12 @@ func discussComposedMessageFrag(message pipeline.ContextMessage, index int, scop
 		input.Priority = 10
 		input.CacheClass = contextfrag.CacheDynamic
 		input.Trust = contextfrag.TrustSystem
+		input.Budget = contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep}
+	} else if currentUser {
+		// Keep the history slot so rendering preserves the authoritative
+		// composed order; kind and overflow carry current-request semantics.
+		input.Kind = contextfrag.KindCurrentUserMessage
+		input.Trust = contextfrag.TrustUser
 		input.Budget = contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep}
 	}
 	return contextfrag.MessageFrag(input)
