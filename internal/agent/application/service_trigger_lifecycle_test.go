@@ -1,0 +1,390 @@
+package application
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"strconv"
+	"sync"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	sdk "github.com/memohai/twilight-ai/sdk"
+
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
+	"github.com/memohai/memoh/internal/apperror"
+	"github.com/memohai/memoh/internal/contextview"
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	"github.com/memohai/memoh/internal/heartbeat"
+	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/settings"
+)
+
+const (
+	triggerLifecycleModelID        = "00000000-0000-4000-8000-000000000901"
+	triggerLifecycleProviderID     = "00000000-0000-4000-8000-000000000902"
+	triggerLifecyclePromptMarker   = "PRIVATE_TRIGGER_PROMPT_MARKER"
+	triggerLifecycleResponseMarker = "PRIVATE_TRIGGER_RESPONSE_MARKER"
+)
+
+type triggerLifecycleQueries struct {
+	modelSelectionFakeQueries
+	modelID string
+}
+
+func (q *triggerLifecycleQueries) GetSettingsByBotID(
+	_ context.Context,
+	botID pgtype.UUID,
+) (sqlc.GetSettingsByBotIDRow, error) {
+	return sqlc.GetSettingsByBotIDRow{
+		BotID:             botID,
+		Language:          "auto",
+		ReasoningEffort:   "medium",
+		HeartbeatInterval: 30,
+		CompactionRatio:   80,
+		ChatModelID:       flowTestUUID(q.modelID),
+	}, nil
+}
+
+type triggerLifecycleProvider struct {
+	mu     sync.Mutex
+	calls  int
+	params sdk.GenerateParams
+}
+
+func (*triggerLifecycleProvider) Name() string { return "trigger-lifecycle" }
+
+func (*triggerLifecycleProvider) ListModels(context.Context) ([]sdk.Model, error) { return nil, nil }
+
+func (*triggerLifecycleProvider) Test(context.Context) *sdk.ProviderTestResult {
+	return &sdk.ProviderTestResult{Status: sdk.ProviderStatusOK}
+}
+
+func (*triggerLifecycleProvider) TestModel(context.Context, string) (*sdk.ModelTestResult, error) {
+	return &sdk.ModelTestResult{Supported: true}, nil
+}
+
+func (p *triggerLifecycleProvider) DoGenerate(
+	_ context.Context,
+	params sdk.GenerateParams,
+) (*sdk.GenerateResult, error) {
+	p.mu.Lock()
+	p.calls++
+	p.params = params
+	p.mu.Unlock()
+	return &sdk.GenerateResult{
+		Text:         "HEARTBEAT_OK " + triggerLifecycleResponseMarker,
+		FinishReason: sdk.FinishReasonStop,
+		Messages: []sdk.Message{
+			sdk.AssistantMessage("HEARTBEAT_OK " + triggerLifecycleResponseMarker),
+		},
+	}, nil
+}
+
+func (*triggerLifecycleProvider) DoStream(
+	context.Context,
+	sdk.GenerateParams,
+) (*sdk.StreamResult, error) {
+	return nil, errors.New("unexpected streaming call")
+}
+
+func (p *triggerLifecycleProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+type triggerLifecycleFixture struct {
+	service    *Service
+	runtime    *lifecycleSubagentRuntime
+	lifecycles *recordingContextLifecycleQueries
+	messages   *recordingMessageService
+	provider   *triggerLifecycleProvider
+}
+
+func newTriggerLifecycleFixture(
+	t *testing.T,
+	runID string,
+	contextWindow int,
+	lifecycles *recordingContextLifecycleQueries,
+	mutate func(*agentpkg.RunConfig),
+) triggerLifecycleFixture {
+	t.Helper()
+
+	providerRow := modelSelectionProviderRow(
+		t,
+		triggerLifecycleProviderID,
+		string(models.ClientTypeOpenAICompletions),
+		true,
+	)
+	modelRow := modelSelectionModelRow(
+		t,
+		triggerLifecycleModelID,
+		"trigger-lifecycle-model",
+		providerRow.ID,
+		models.ModelTypeChat,
+		true,
+	)
+	modelRow.Config = []byte(`{"context_window":` + strconv.Itoa(contextWindow) + `}`)
+	queries := &triggerLifecycleQueries{
+		modelSelectionFakeQueries: modelSelectionFakeQueries{
+			models:   map[string]sqlc.Model{modelRow.ModelID: modelRow},
+			provider: providerRow,
+		},
+		modelID: triggerLifecycleModelID,
+	}
+	provider := &triggerLifecycleProvider{}
+	logger := slog.New(slog.DiscardHandler)
+	applier := func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
+		if mutate != nil {
+			mutate(&cfg)
+		}
+		out, err := contextview.ApplyProviderRunConfig(ctx, logger, cfg)
+		if err != nil {
+			return out, err
+		}
+		model := *out.Model
+		model.Provider = provider
+		out.Model = &model
+		return out, nil
+	}
+	messages := &recordingMessageService{}
+	runtime := &lifecycleSubagentRuntime{runID: runID}
+	service := &Service{
+		agent:             agentpkg.New(agentpkg.Deps{Logger: logger, ContextViewApplier: applier}),
+		modelsService:     models.NewService(logger, queries),
+		queries:           queries,
+		contextLifecycles: lifecycles,
+		messageService:    messages,
+		settingsService:   settings.NewService(logger, queries, nil, nil),
+		sessionRuntime:    runtime,
+		clockLocation:     nil,
+		logger:            logger,
+	}
+	return triggerLifecycleFixture{
+		service:    service,
+		runtime:    runtime,
+		lifecycles: lifecycles,
+		messages:   messages,
+		provider:   provider,
+	}
+}
+
+func (f triggerLifecycleFixture) trigger(t *testing.T) (heartbeat.TriggerResult, error) {
+	t.Helper()
+	return f.service.TriggerHeartbeat(
+		context.Background(),
+		lifecycleTestBotID,
+		heartbeat.TriggerPayload{
+			BotID:           lifecycleTestBotID,
+			Interval:        30,
+			SessionID:       lifecycleTestSessionID,
+			LastHeartbeatAt: triggerLifecyclePromptMarker,
+		},
+		"",
+	)
+}
+
+func assertTriggerLifecycleRow(
+	t *testing.T,
+	lifecycles *recordingContextLifecycleQueries,
+	runID, status, errorCode string,
+) contextfrag.LifecycleSnapshot {
+	t.Helper()
+	if len(lifecycles.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(lifecycles.params))
+	}
+	row := lifecycles.params[0]
+	if got := pgUUIDString(row.RunID); got != runID {
+		t.Fatalf("context lifecycle run ID = %q, want admitted run ID %q", got, runID)
+	}
+	if row.Status != status {
+		t.Fatalf("context lifecycle status = %q, want %q", row.Status, status)
+	}
+	if row.ErrorCode.String != errorCode || row.ErrorCode.Valid != (errorCode != "") {
+		t.Fatalf("context lifecycle error code = %#v, want %q", row.ErrorCode, errorCode)
+	}
+	for _, privateText := range []string{
+		triggerLifecyclePromptMarker,
+		triggerLifecycleResponseMarker,
+		"HEARTBEAT_OK",
+	} {
+		if bytes.Contains(row.Snapshot, []byte(privateText)) {
+			t.Fatalf("content-light snapshot leaked %q: %s", privateText, row.Snapshot)
+		}
+	}
+	var snapshot contextfrag.LifecycleSnapshot
+	if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode lifecycle snapshot: %v", err)
+	}
+	if snapshot.Version != 1 {
+		t.Fatalf("snapshot version = %d, want 1", snapshot.Version)
+	}
+	return snapshot
+}
+
+func TestTriggerHeartbeatPersistsCompletedLifecycleForAdmittedRun(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000911"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		128000,
+		&recordingContextLifecycleQueries{},
+		nil,
+	)
+
+	result, err := fixture.trigger(t)
+	if err != nil {
+		t.Fatalf("TriggerHeartbeat() error = %v", err)
+	}
+	if result.Status != "ok" {
+		t.Fatalf("TriggerHeartbeat() status = %q, want ok", result.Status)
+	}
+	if fixture.provider.callCount() != 1 {
+		t.Fatalf("provider calls = %d, want 1", fixture.provider.callCount())
+	}
+	assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusCompleted,
+		"",
+	)
+	if len(fixture.messages.persisted) == 0 {
+		t.Fatal("successful admitted heartbeat did not persist its round")
+	}
+	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].handle.RunID != admittedRunID {
+		t.Fatalf("runtime finishes = %#v, want one finish for admitted run %q", fixture.runtime.finishes, admittedRunID)
+	}
+}
+
+func TestTriggerHeartbeatProviderBudgetFailurePersistsFailedBudgetWithoutAssistant(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000912"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		1,
+		&recordingContextLifecycleQueries{},
+		nil,
+	)
+
+	_, err := fixture.trigger(t)
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("TriggerHeartbeat() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
+	}
+	if fixture.provider.callCount() != 0 {
+		t.Fatalf("provider calls = %d, want 0 after provider-budget rejection", fixture.provider.callCount())
+	}
+	if len(fixture.messages.persisted) != 0 {
+		t.Fatalf("persisted messages = %#v, want none after provider-budget rejection", fixture.messages.persisted)
+	}
+	snapshot := assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusFailedBudget,
+		string(apperror.CodeContextBudgetUnsatisfied),
+	)
+	if snapshot.BudgetPlan == nil || snapshot.BudgetPlan.Window != 1 {
+		t.Fatalf("budget plan = %#v, want active provider plan with window 1", snapshot.BudgetPlan)
+	}
+	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextBudgetFailure) {
+		t.Fatalf("lifecycle mutations = %#v, want provider-budget failure", snapshot.Mutations)
+	}
+}
+
+func TestTriggerHeartbeatContextViewFallbackPersistsFallbackAndReachesProvider(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000913"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		128000,
+		&recordingContextLifecycleQueries{},
+		func(cfg *agentpkg.RunConfig) {
+			duplicate := func(role sdk.MessageRole, text string) contextfrag.ContextFrag {
+				return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+					ID:      "forced-duplicate",
+					Message: sdk.Message{Role: role, Content: []sdk.MessagePart{sdk.TextPart{Text: text}}},
+					Kind:    contextfrag.KindConversationEvent,
+					Slot:    contextfrag.SlotHistory,
+					Source:  contextfrag.SourceRunConfig,
+					Scope:   cfg.ContextScope,
+				})
+			}
+			cfg.ContextSourceFrags = append(
+				cfg.ContextSourceFrags,
+				duplicate(sdk.MessageRoleUser, "first"),
+				duplicate(sdk.MessageRoleAssistant, "second"),
+			)
+		},
+	)
+
+	result, err := fixture.trigger(t)
+	if err != nil {
+		t.Fatalf("TriggerHeartbeat() error = %v", err)
+	}
+	if result.Status != "ok" {
+		t.Fatalf("TriggerHeartbeat() status = %q, want ok", result.Status)
+	}
+	if fixture.provider.callCount() != 1 {
+		t.Fatalf("provider calls = %d, want fallback payload to reach provider once", fixture.provider.callCount())
+	}
+	snapshot := assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusFallback,
+		"",
+	)
+	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextViewFallback) {
+		t.Fatalf("lifecycle mutations = %#v, want context-view fallback", snapshot.Mutations)
+	}
+}
+
+func TestTriggerHeartbeatLifecycleStoreFailureDoesNotFailSuccessfulTrigger(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000914"
+	storeErr := errors.New("context lifecycle store unavailable")
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		128000,
+		&recordingContextLifecycleQueries{err: storeErr},
+		nil,
+	)
+
+	result, err := fixture.trigger(t)
+	if err != nil {
+		t.Fatalf("TriggerHeartbeat() error = %v, want nil despite lifecycle store failure", err)
+	}
+	if result.Status != "ok" {
+		t.Fatalf("TriggerHeartbeat() status = %q, want ok", result.Status)
+	}
+	if fixture.provider.callCount() != 1 {
+		t.Fatalf("provider calls = %d, want 1", fixture.provider.callCount())
+	}
+	assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusCompleted,
+		"",
+	)
+	if got := fixture.service.contextLifecyclePersistenceErrors.Load(); got != 1 {
+		t.Fatalf("lifecycle persistence error count = %d, want 1", got)
+	}
+}
+
+func hasLifecycleMutation(
+	snapshot contextfrag.LifecycleSnapshot,
+	kind contextfrag.MutationKind,
+) bool {
+	for _, mutation := range snapshot.Mutations {
+		if mutation.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
