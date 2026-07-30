@@ -29,7 +29,7 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 
 	result, err := s.agent.Generate(ctx, rc)
 	if err != nil {
-		return nil, err
+		return spawnFailureResult(rc), err
 	}
 
 	spawnResult := &tools.SpawnResult{
@@ -45,6 +45,7 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 	messages := cfg.Messages
+	var currentUserMessageIndex *int
 	if cfg.Query != "" {
 		now := time.Now().UTC()
 		if cfg.Identity.TimezoneLocation != nil {
@@ -54,6 +55,8 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 			Role:    sdk.MessageRoleUser,
 			Content: []sdk.MessagePart{sdk.TextPart{Text: "Current time: " + now.Format(time.RFC3339) + "\n" + cfg.Query}},
 		})
+		index := len(messages) - 1
+		currentUserMessageIndex = &index
 	}
 
 	identity := SessionContext{
@@ -82,25 +85,26 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		})
 	}
 	rc := RunConfig{
-		Model:                     cfg.Model,
-		CurrentModelUUID:          cfg.ModelUUID,
-		CurrentModelID:            cfg.ModelID,
-		CurrentModelProvider:      cfg.ModelProvider,
-		System:                    cfg.System,
-		Query:                     cfg.Query,
-		ContextQueryMaterialized:  cfg.Query != "",
-		SessionType:               cfg.SessionType,
-		Messages:                  messages,
-		ReasoningEffort:           cfg.ReasoningEffort,
-		PromptCacheTTL:            cfg.PromptCacheTTL,
-		ChatCompletionsCompat:     cfg.ChatCompletionsCompat,
-		SupportsImageInput:        cfg.SupportsImageInput,
-		SupportsToolCall:          cfg.SupportsToolCall,
-		Identity:                  identity,
-		Skills:                    skills,
-		BackgroundManager:         cfg.BackgroundManager,
-		ContextBudgetMaxTokens:    cfg.ContextBudgetMaxTokens,
-		ContextToolExchangePolicy: cfg.ContextToolExchangePolicy,
+		Model:                          cfg.Model,
+		CurrentModelUUID:               cfg.ModelUUID,
+		CurrentModelID:                 cfg.ModelID,
+		CurrentModelProvider:           cfg.ModelProvider,
+		System:                         cfg.System,
+		Query:                          cfg.Query,
+		ContextQueryMaterialized:       cfg.Query != "",
+		ContextCurrentUserMessageIndex: currentUserMessageIndex,
+		SessionType:                    cfg.SessionType,
+		Messages:                       messages,
+		ReasoningEffort:                cfg.ReasoningEffort,
+		PromptCacheTTL:                 cfg.PromptCacheTTL,
+		ChatCompletionsCompat:          cfg.ChatCompletionsCompat,
+		SupportsImageInput:             cfg.SupportsImageInput,
+		SupportsToolCall:               cfg.SupportsToolCall,
+		Identity:                       identity,
+		Skills:                         skills,
+		BackgroundManager:              cfg.BackgroundManager,
+		ContextBudgetMaxTokens:         cfg.ContextBudgetMaxTokens,
+		ContextToolExchangePolicy:      cfg.ContextToolExchangePolicy,
 		ContextScope: contextfrag.Scope{
 			BotID:             identity.BotID,
 			ChatID:            identity.ChatID,
@@ -143,15 +147,20 @@ func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 		query = ""
 	}
 	frags := contextfrag.CompileFrags(contextfrag.CompileInput{
-		Scope:    rc.ContextScope,
-		Messages: rc.Messages,
-		Query:    query,
+		Scope:                   rc.ContextScope,
+		Messages:                rc.Messages,
+		CurrentUserMessageIndex: rc.ContextCurrentUserMessageIndex,
+		Query:                   query,
 	})
 
 	history := make([]contextfrag.ContextFrag, 0, len(frags))
+	current := make([]contextfrag.ContextFrag, 0, 1)
 	for _, frag := range frags {
-		if frag.Slot == contextfrag.SlotHistory {
+		switch frag.Slot {
+		case contextfrag.SlotHistory:
 			history = append(history, frag)
+		case contextfrag.SlotCurrentUser:
+			current = append(current, frag)
 		}
 	}
 	for i := range history {
@@ -161,7 +170,10 @@ func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 	}
 	history = contextfrag.RepairToolClosureFrags(history, rc.ContextScope, contextfrag.CollectorRunConfigFields)
 
-	return append(sectionFrags, history...)
+	combined := make([]contextfrag.ContextFrag, 0, len(sectionFrags)+len(history)+len(current))
+	combined = append(combined, sectionFrags...)
+	combined = append(combined, history...)
+	return append(combined, current...)
 }
 
 // GenerateWithWatchdog runs the agent in streaming mode, touching the
@@ -208,7 +220,7 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		return nil, ctx.Err()
 	}
 	if streamErr != nil {
-		return nil, streamErr
+		return spawnFailureResult(rc), streamErr
 	}
 
 	spawnResult := &tools.SpawnResult{
@@ -220,6 +232,17 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		spawnResult.ContextLifecycle = &snapshot
 	}
 	return spawnResult, nil
+}
+
+func spawnFailureResult(rc RunConfig) *tools.SpawnResult {
+	if rc.ContextLifecycle == nil {
+		return nil
+	}
+	snapshot, ok := rc.ContextLifecycle.Snapshot()
+	if !ok {
+		return nil
+	}
+	return &tools.SpawnResult{ContextLifecycle: &snapshot}
 }
 
 // SpawnSystemPrompt returns the system prompt for a given session type.

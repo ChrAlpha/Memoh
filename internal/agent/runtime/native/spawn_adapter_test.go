@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -121,8 +122,8 @@ func TestSpawnSystemPromptOmitsCurrentTime(t *testing.T) {
 // plus history), instead of leaving it empty and falling back to the legacy
 // reverse-parse of cfg.System inside contextview.ApplyProviderRunConfig. The
 // query is pre-materialized into Messages by runConfigFromSpawnRunConfig
-// before frags are built, so it must ride as a trailing history fragment, not
-// as a second, separate KindCurrentUserMessage fragment.
+// before frags are built, so it must ride as the one trailing current-user
+// fragment, not as a second, separate query fragment.
 func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}
@@ -159,6 +160,7 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 	}
 	seenSections := make(map[string]bool, len(wantSections))
 	var historyMessages []sdk.Message
+	var currentMessages []sdk.Message
 	for _, frag := range frags {
 		if kind, ok := wantSections[frag.ID]; ok {
 			seenSections[frag.ID] = true
@@ -166,12 +168,17 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 				t.Fatalf("section %s = {Kind:%s Slot:%s}, want {Kind:%s Slot:system}", frag.ID, frag.Kind, frag.Slot, kind)
 			}
 		}
-		if frag.Kind == contextfrag.KindCurrentUserMessage {
-			t.Fatalf("spawn's pre-materialized query must not also produce a KindCurrentUserMessage fragment: %#v", frag)
-		}
 		if frag.Slot == contextfrag.SlotHistory {
 			if msg := frag.Parts[0].Message; msg != nil {
 				historyMessages = append(historyMessages, *msg)
+			}
+		}
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			if frag.Kind != contextfrag.KindCurrentUserMessage {
+				t.Fatalf("current-user frag kind = %q, want %q: %#v", frag.Kind, contextfrag.KindCurrentUserMessage, frag)
+			}
+			if msg := frag.Parts[0].Message; msg != nil {
+				currentMessages = append(currentMessages, *msg)
 			}
 		}
 	}
@@ -180,8 +187,8 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 			t.Fatalf("missing expected system section %q in %#v", id, frags)
 		}
 	}
-	if len(historyMessages) != 3 {
-		t.Fatalf("history messages = %d, want 3 (2 given + the materialized query), got %#v", len(historyMessages), historyMessages)
+	if len(historyMessages) != 2 {
+		t.Fatalf("history messages = %d, want the 2 given messages, got %#v", len(historyMessages), historyMessages)
 	}
 	if text := textOfMessage(historyMessages[0]); text != "earlier question" {
 		t.Fatalf("history[0] = %q, want %q", text, "earlier question")
@@ -189,9 +196,12 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 	if text := textOfMessage(historyMessages[1]); text != "earlier answer" {
 		t.Fatalf("history[1] = %q, want %q", text, "earlier answer")
 	}
-	last := textOfMessage(historyMessages[2])
-	if !strings.HasPrefix(last, "Current time: ") || !strings.HasSuffix(last, "do the task") {
-		t.Fatalf("history[2] (materialized query) = %q, want a %q-prefixed message ending in the query", last, "Current time: ")
+	if len(currentMessages) != 1 {
+		t.Fatalf("current-user messages = %d, want the one materialized query, got %#v", len(currentMessages), currentMessages)
+	}
+	current := textOfMessage(currentMessages[0])
+	if !strings.HasPrefix(current, "Current time: ") || !strings.HasSuffix(current, "do the task") {
+		t.Fatalf("current-user materialized query = %q, want a %q-prefixed message ending in the query", current, "Current time: ")
 	}
 }
 
@@ -203,6 +213,8 @@ func TestSpawnAdapterBuildsFragmentsFirstContextSourceFrags(t *testing.T) {
 // index). contextfrag.CompileFrags does not set Budget at all, so the
 // fragments-first path must mark it explicitly or a budget-constrained
 // subagent run could silently trim history that never gets trimmed today.
+// The appended query is a SlotCurrentUser fragment and must not be counted as
+// or pinned through the history path.
 func TestSpawnAdapterHistoryFragsPinnedAgainstOverflow(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}
@@ -225,7 +237,12 @@ func TestSpawnAdapterHistoryFragsPinnedAgainstOverflow(t *testing.T) {
 
 	_, seen := recorder.snapshot()
 	historyCount := 0
+	currentCount := 0
 	for _, frag := range seen.ContextSourceFrags {
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			currentCount++
+			continue
+		}
 		if frag.Slot != contextfrag.SlotHistory {
 			continue
 		}
@@ -235,8 +252,11 @@ func TestSpawnAdapterHistoryFragsPinnedAgainstOverflow(t *testing.T) {
 				frag.ID, frag.Budget.Overflow, contextfrag.OverflowKeep)
 		}
 	}
-	if historyCount != 4 { // m1, m2, m3 + the materialized query turn
-		t.Fatalf("history frag count = %d, want 4", historyCount)
+	if historyCount != 3 {
+		t.Fatalf("history frag count = %d, want 3", historyCount)
+	}
+	if currentCount != 1 {
+		t.Fatalf("current-user frag count = %d, want 1 materialized query", currentCount)
 	}
 }
 
@@ -394,10 +414,13 @@ func TestSpawnAdapterGenerateWithWatchdogPopulatesContextLifecycle(t *testing.T)
 func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
 	t.Parallel()
 
+	plan := contextfrag.ContextBudgetPlan{
+		Window:           4096,
+		OutputReserve:    8192,
+		ActualSystemCost: 123,
+	}
 	a := New(Deps{
-		ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-			return cfg, contextfrag.ErrBudgetUnsatisfied
-		},
+		ContextViewApplier: failingBudgetApplier(plan, contextfrag.ErrBudgetUnsatisfied),
 	})
 	adapter := NewSpawnAdapter(a)
 
@@ -410,10 +433,46 @@ func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
 		Query: "do the task",
 	}, func() {})
 
-	if result != nil {
-		t.Fatalf("GenerateWithWatchdog result = %#v, want nil", result)
+	if result == nil || result.ContextLifecycle == nil {
+		t.Fatalf("GenerateWithWatchdog result = %#v, want failure lifecycle audit", result)
+	}
+	if got := result.ContextLifecycle.BudgetPlan; got == nil || got.ActualSystemCost != plan.ActualSystemCost {
+		t.Fatalf("failure lifecycle budget plan = %#v, want ActualSystemCost %d", got, plan.ActualSystemCost)
 	}
 	if err == nil || err.Error() != publicBudgetUnsatisfiedError {
 		t.Fatalf("GenerateWithWatchdog error = %v, want public context-budget failure", err)
+	}
+}
+
+func TestSpawnAdapterGenerateFailureCarriesContextLifecycle(t *testing.T) {
+	t.Parallel()
+
+	plan := contextfrag.ContextBudgetPlan{
+		Window:           4096,
+		OutputReserve:    8192,
+		ActualSystemCost: 321,
+	}
+	a := New(Deps{
+		ContextViewApplier: failingBudgetApplier(plan, contextfrag.ErrBudgetUnsatisfied),
+	})
+	adapter := NewSpawnAdapter(a)
+
+	result, err := adapter.Generate(context.Background(), tools.SpawnRunConfig{
+		Model: &sdk.Model{
+			ID:       "spawn-generate-preflight-error",
+			Provider: &preflightCountingProvider{},
+			Type:     sdk.ModelTypeChat,
+		},
+		Query: "do the task",
+	})
+
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("Generate error = %v, want ErrBudgetUnsatisfied", err)
+	}
+	if result == nil || result.ContextLifecycle == nil {
+		t.Fatalf("Generate result = %#v, want failure lifecycle audit", result)
+	}
+	if got := result.ContextLifecycle.BudgetPlan; got == nil || got.ActualSystemCost != plan.ActualSystemCost {
+		t.Fatalf("failure lifecycle budget plan = %#v, want ActualSystemCost %d", got, plan.ActualSystemCost)
 	}
 }
