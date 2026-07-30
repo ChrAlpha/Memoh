@@ -49,7 +49,7 @@ func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (Ch
 	return req, nil
 }
 
-func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eventName string) string {
+func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eventName string) hooks.Result {
 	res, err := s.runBaseHook(ctx, cfg.BotID, cfg.SessionID, cfg.ChatID, eventName, func(req *hooks.Request) {
 		req.Turn = map[string]any{
 			"session_type":  cfg.SessionType,
@@ -59,9 +59,9 @@ func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eve
 	})
 	if err != nil {
 		s.logHookWarn(eventName, cfg.BotID, cfg.SessionID, err)
-		return ""
+		return hooks.Result{}
 	}
-	return strings.TrimSpace(res.AppendContext)
+	return res
 }
 
 type agentRunConfigView struct {

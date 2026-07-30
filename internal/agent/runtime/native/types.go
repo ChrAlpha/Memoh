@@ -124,6 +124,7 @@ type RunConfig struct {
 	// view selects, places and renders from them and the legacy
 	// System/Messages fields exist only as render outputs and fallback.
 	ContextSourceFrags       []contextfrag.ContextFrag
+	ContextSourceWarnings    []contextfrag.ValidationWarning
 	ContextFrags             []contextfrag.ContextFrag
 	ContextManifest          contextfrag.Manifest
 	ContextToolDefs          []contextfrag.ToolDefAccounting

@@ -1276,13 +1276,14 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
 	memoryHookContext := strings.TrimSpace(cfg.ContextMemoryHookText)
 	cfg.ContextMemoryHookText = ""
-	beforePromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
 	}, hooks.EventBeforePromptBuild)
+	beforePromptContext := strings.TrimSpace(beforePromptResult.AppendContext)
 	var files []native.SystemFile
 	limits := native.DefaultLimits()
 	if s.agent != nil {
@@ -1324,14 +1325,17 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	if beforePromptContext != "" {
 		promptHookTexts = append(promptHookTexts, formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext))
 	}
-	afterPromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptObservedTexts := append([]string(nil), promptHookTexts...)
+	beforePromptObservedTexts = append(beforePromptObservedTexts, hookSystemSectionTexts(beforePromptResult)...)
+	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  afterPromptHookSystemBytes(cfg.System, promptHookTexts),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, beforePromptObservedTexts),
 	}, hooks.EventAfterPromptBuild)
+	afterPromptContext := strings.TrimSpace(afterPromptResult.AppendContext)
 	if afterPromptContext != "" {
 		promptHookTexts = append(promptHookTexts, formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext))
 	}
@@ -1348,9 +1352,15 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	// above) and merge with the remaining collectors, rather than reverse-
 	// parsing the flat cfg.System string. The legacy System/Messages fields
 	// remain only as fallback and for whatever else still reads cfg.System.
+	hookBuild := buildHookSystemSections([]promptHookOutput{
+		{Event: hooks.EventBeforePromptBuild, Result: beforePromptResult},
+		{Event: hooks.EventAfterPromptBuild, Result: afterPromptResult},
+	}, cfg.ContextScope)
 	frags := native.SystemSectionFrags(native.GenerateSystemSections(systemParams), cfg.ContextScope)
+	frags = append(frags, hookBuild.Frags...)
 	frags = append(frags, contextview.CollectNonSystemProviderSourceFrags(ctx, cfg)...)
 	cfg.ContextSourceFrags = frags
+	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg
 }
 
