@@ -1,7 +1,10 @@
 package contextview
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
+	"strconv"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -21,6 +24,9 @@ const (
 
 	systemBudgetDropReason = "system_budget"
 	systemBudgetMarkerID   = "system.budget_notice"
+
+	systemBudgetMarkerMaxBytes   = 512
+	systemBudgetMarkerIDMaxBytes = 80
 )
 
 func defaultOutputReserveForWindow(window int) int {
@@ -274,14 +280,12 @@ func systemBudgetSelection(
 }
 
 func systemBudgetMarkerFrag(droppedIDs []string, scope contextfrag.Scope) contextfrag.ContextFrag {
-	text := "[System Notice] Some system sections were omitted to fit the context window: " +
-		strings.Join(droppedIDs, ", ") + "."
 	frag := contextfrag.TextFrag(contextfrag.TextFragInput{
 		ID:            systemBudgetMarkerID,
 		Kind:          contextfrag.KindSystemPolicy,
 		Role:          sdk.MessageRoleSystem,
 		Slot:          contextfrag.SlotSystem,
-		Text:          text,
+		Text:          systemBudgetMarkerText(droppedIDs),
 		Priority:      int(^uint(0) >> 1),
 		RetentionTier: contextfrag.RetentionRequired,
 		CacheClass:    contextfrag.CacheDynamic,
@@ -293,6 +297,81 @@ func systemBudgetMarkerFrag(droppedIDs []string, scope contextfrag.Scope) contex
 		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 	})
 	return contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{frag})[0]
+}
+
+func systemBudgetMarkerText(droppedIDs []string) string {
+	const prefix = "[System Notice] Some system sections were omitted to fit the context window: "
+	if len(droppedIDs) == 0 {
+		return prefix + "details unavailable."
+	}
+	var listed []string
+	for i, id := range droppedIDs {
+		displayID := systemBudgetMarkerDisplayID(id)
+		candidateIDs := displayID
+		if len(listed) > 0 {
+			candidateIDs = strings.Join(listed, ", ") + ", " + displayID
+		}
+		candidate := prefix + candidateIDs + systemBudgetMarkerTail(len(droppedIDs)-i-1)
+		if len(candidate) > systemBudgetMarkerMaxBytes {
+			break
+		}
+		listed = append(listed, displayID)
+	}
+	if len(listed) == 0 {
+		return prefix + strconv.Itoa(len(droppedIDs)) + " section IDs not shown."
+	}
+	return prefix + strings.Join(listed, ", ") + systemBudgetMarkerTail(len(droppedIDs)-len(listed))
+}
+
+func systemBudgetMarkerTail(omitted int) string {
+	if omitted <= 0 {
+		return "."
+	}
+	return ", ... (+" + strconv.Itoa(omitted) + " more)."
+}
+
+func systemBudgetMarkerDisplayID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "unnamed"
+	}
+	var token strings.Builder
+	token.Grow(min(len(raw), systemBudgetMarkerIDMaxBytes))
+	changed := false
+	for i := 0; i < len(raw); i++ {
+		value := raw[i]
+		if !systemBudgetMarkerIDByte(value) {
+			value = '-'
+			changed = true
+		}
+		if token.Len() < systemBudgetMarkerIDMaxBytes {
+			token.WriteByte(value)
+		} else {
+			changed = true
+		}
+	}
+	value := token.String()
+	if !changed {
+		return value
+	}
+	sum := sha256.Sum256([]byte(raw))
+	suffix := hex.EncodeToString(sum[:4])
+	prefixLimit := systemBudgetMarkerIDMaxBytes - len(suffix) - 1
+	if len(value) > prefixLimit {
+		value = value[:prefixLimit]
+	}
+	value = strings.TrimRight(value, "-._:")
+	if value == "" {
+		value = "section"
+	}
+	return value + "-" + suffix
+}
+
+func systemBudgetMarkerIDByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') ||
+		value == '-' || value == '_' || value == '.' || value == ':'
 }
 
 func appendSystemBudgetDrops(result SelectionResult, dropped []contextfrag.ContextFrag) SelectionResult {
