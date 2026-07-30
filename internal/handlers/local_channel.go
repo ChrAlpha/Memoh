@@ -1338,13 +1338,21 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 	ref := wsTurn(msg.InvocationID, sessionID).withRun(runID)
 
 	controller := h.sessionRuntimeController()
-	if controller == nil || sessionID == "" {
+	if sessionID == "" || h.agentService == nil && controller == nil {
 		if controlID != "" {
 			sendWSControlAck(writer, ref, "abort", controlID, false, "")
 		}
 		return
 	}
-	applied, err := controller.AbortControl(ctx, botID, sessionID, runID, controlID)
+	var (
+		applied bool
+		err     error
+	)
+	if h.agentService != nil {
+		applied, err = h.agentService.AbortRuntimeRun(ctx, botID, sessionID, runID, controlID)
+	} else {
+		applied, err = controller.AbortControl(ctx, botID, sessionID, runID, controlID)
+	}
 	if err != nil {
 		h.logger.Warn("route ws abort failed",
 			slog.Any("error", err),

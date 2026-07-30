@@ -25,6 +25,7 @@ const (
 	contextLifecycleStatusFailedBudget   = "failed_budget"
 	contextLifecycleStatusFailedProvider = "failed_provider"
 	contextLifecycleStatusFallback       = "fallback"
+	contextLifecycleStatusAborted        = "aborted"
 	contextLifecycleWriteTimeout         = 10 * time.Second
 )
 
@@ -32,6 +33,7 @@ type contextLifecycleStore interface {
 	CreateContextLifecycle(context.Context, sqlc.CreateContextLifecycleParams) (sqlc.ContextLifecycle, error)
 	GetContextLifecycleByRunID(context.Context, pgtype.UUID) (sqlc.ContextLifecycle, error)
 	GetLatestAssistantContextLifecycleMetadataByRunID(context.Context, pgtype.UUID) ([]byte, error)
+	UpsertAbortedContextLifecycle(context.Context, sqlc.UpsertAbortedContextLifecycleParams) (sqlc.ContextLifecycle, error)
 }
 
 func (s *Service) contextLifecycleTerminal(ctx context.Context, cfg native.RunConfig) func(error) {
@@ -155,7 +157,7 @@ func (s *Service) persistContextLifecycleSnapshot(
 		ErrorCode: code,
 		Snapshot:  raw,
 	})
-	if err != nil {
+	if err != nil && !db.IsUniqueViolation(err) {
 		s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
 	}
 }
@@ -182,6 +184,9 @@ func classifyContextLifecycleTerminal(snapshot contextfrag.LifecycleSnapshot, ca
 		default:
 			return contextLifecycleStatusFailedBudget, string(apperror.CodeContextBudgetUnsatisfied)
 		}
+	}
+	if errors.Is(cause, context.Canceled) {
+		return contextLifecycleStatusAborted, ""
 	}
 	if cause != nil {
 		return contextLifecycleStatusFailedProvider, string(apperror.CodeOf(cause))

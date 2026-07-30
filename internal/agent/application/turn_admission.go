@@ -42,6 +42,7 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 	}
 	s.sessionRuntime = manager
 	s.decisionRuntime = manager
+	s.abortRuntime = manager
 	s.publishTurnEvent = func(ctx context.Context, handle sessionruntime.RunHandle, event native.StreamEvent) error {
 		_, err := manager.HandleAgentEvent(ctx, handle, event)
 		return err

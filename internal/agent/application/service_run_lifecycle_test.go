@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -17,6 +20,7 @@ import (
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/apperror"
+	"github.com/memohai/memoh/internal/db"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 )
@@ -62,12 +66,24 @@ func (r *lifecycleSubagentRuntime) FinishRun(
 
 type recordingContextLifecycleQueries struct {
 	dbstore.Queries
-	params      []sqlc.CreateContextLifecycleParams
-	err         error
-	existing    *sqlc.ContextLifecycle
-	getErr      error
-	metadata    []byte
-	metadataErr error
+	params          []sqlc.CreateContextLifecycleParams
+	err             error
+	existing        *sqlc.ContextLifecycle
+	existingAfter   int
+	getCalls        int
+	getErr          error
+	metadata        []byte
+	metadataErr     error
+	pendingApproval *sqlc.ToolApprovalRequest
+	pendingInput    *sqlc.UserInputRequest
+	pendingUntil    int
+	pendingReads    int
+	sessionRun      sqlc.SessionRun
+	sessionRunErr   error
+	upsertMu        sync.Mutex
+	upsertParams    []sqlc.UpsertAbortedContextLifecycleParams
+	upsertErr       error
+	upsertCh        chan struct{}
 }
 
 func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
@@ -82,10 +98,11 @@ func (q *recordingContextLifecycleQueries) GetContextLifecycleByRunID(
 	_ context.Context,
 	_ pgtype.UUID,
 ) (sqlc.ContextLifecycle, error) {
+	q.getCalls++
 	if q.getErr != nil {
 		return sqlc.ContextLifecycle{}, q.getErr
 	}
-	if q.existing == nil {
+	if q.existing == nil || q.existingAfter > 0 && q.getCalls < q.existingAfter {
 		return sqlc.ContextLifecycle{}, pgx.ErrNoRows
 	}
 	return *q.existing, nil
@@ -102,6 +119,77 @@ func (q *recordingContextLifecycleQueries) GetLatestAssistantContextLifecycleMet
 		return nil, pgx.ErrNoRows
 	}
 	return q.metadata, nil
+}
+
+func (q *recordingContextLifecycleQueries) GetSessionRun(
+	_ context.Context,
+	_ pgtype.UUID,
+) (sqlc.SessionRun, error) {
+	if q.sessionRunErr != nil {
+		return sqlc.SessionRun{}, q.sessionRunErr
+	}
+	return q.sessionRun, nil
+}
+
+func (q *recordingContextLifecycleQueries) GetPendingToolApprovalByRun(
+	_ context.Context,
+	_ pgtype.UUID,
+) (sqlc.ToolApprovalRequest, error) {
+	q.pendingReads++
+	if q.pendingUntil > 0 && q.pendingReads > q.pendingUntil {
+		return sqlc.ToolApprovalRequest{}, pgx.ErrNoRows
+	}
+	if q.pendingApproval == nil {
+		return sqlc.ToolApprovalRequest{}, pgx.ErrNoRows
+	}
+	return *q.pendingApproval, nil
+}
+
+func (q *recordingContextLifecycleQueries) GetPendingUserInputByRun(
+	_ context.Context,
+	_ pgtype.UUID,
+) (sqlc.UserInputRequest, error) {
+	if q.pendingInput == nil {
+		return sqlc.UserInputRequest{}, pgx.ErrNoRows
+	}
+	return *q.pendingInput, nil
+}
+
+func (q *recordingContextLifecycleQueries) UpsertAbortedContextLifecycle(
+	_ context.Context,
+	arg sqlc.UpsertAbortedContextLifecycleParams,
+) (sqlc.ContextLifecycle, error) {
+	q.upsertMu.Lock()
+	q.upsertParams = append(q.upsertParams, arg)
+	q.upsertMu.Unlock()
+	if q.upsertCh != nil {
+		select {
+		case q.upsertCh <- struct{}{}:
+		default:
+		}
+	}
+	return sqlc.ContextLifecycle{}, q.upsertErr
+}
+
+func (q *recordingContextLifecycleQueries) abortedUpserts() []sqlc.UpsertAbortedContextLifecycleParams {
+	q.upsertMu.Lock()
+	defer q.upsertMu.Unlock()
+	return append([]sqlc.UpsertAbortedContextLifecycleParams(nil), q.upsertParams...)
+}
+
+type recordingAbortRuntime struct {
+	applied bool
+	err     error
+}
+
+func (r *recordingAbortRuntime) AbortControl(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+) (bool, error) {
+	return r.applied, r.err
 }
 
 func lifecycleTestRunConfig(t *testing.T, runID string, mutations ...contextfrag.MutationRecord) native.RunConfig {
@@ -180,6 +268,21 @@ func TestContextLifecycleTerminalClassifiesTerminalState(t *testing.T) {
 			name:   "provider failure",
 			cause:  errors.New("private upstream failure"),
 			status: contextLifecycleStatusFailedProvider,
+		},
+		{
+			name:   "aborted",
+			cause:  context.Canceled,
+			status: contextLifecycleStatusAborted,
+		},
+		{
+			name: "budget failure outranks cancellation",
+			mutations: []contextfrag.MutationRecord{{
+				Kind:   contextfrag.MutationContextBudgetFailure,
+				Detail: "protected_context_overflow",
+			}},
+			cause:     context.Canceled,
+			status:    contextLifecycleStatusFailedBudget,
+			errorCode: string(apperror.CodeContextProtectedOverflow),
 		},
 	}
 
@@ -325,8 +428,8 @@ func TestCanceledSubagentPersistsFailedLifecycleAndFinishesAborted(t *testing.T)
 	if len(queries.params) != 1 {
 		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
 	}
-	if got := queries.params[0].Status; got != contextLifecycleStatusFailedProvider {
-		t.Fatalf("lifecycle status = %q, want %q", got, contextLifecycleStatusFailedProvider)
+	if got := queries.params[0].Status; got != contextLifecycleStatusAborted {
+		t.Fatalf("lifecycle status = %q, want %q", got, contextLifecycleStatusAborted)
 	}
 	if len(runtime.finishes) != 1 {
 		t.Fatalf("FinishRun calls = %d, want 1", len(runtime.finishes))
@@ -336,6 +439,215 @@ func TestCanceledSubagentPersistsFailedLifecycleAndFinishesAborted(t *testing.T)
 	}
 	if got := runtime.finishes[0].message; got != "" {
 		t.Fatalf("FinishRun message = %q, want empty deliberate-cancel cause", got)
+	}
+}
+
+func TestAbortRuntimeRunReconcilesDurableAbortedLifecycle(t *testing.T) {
+	cfg := lifecycleTestRunConfig(t, lifecycleTestRunID)
+	snapshot, ok := cfg.ContextLifecycle.Snapshot()
+	if !ok {
+		t.Fatal("test lifecycle snapshot is unavailable")
+	}
+	metadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: snapshot,
+	})
+	if err != nil {
+		t.Fatalf("marshal lifecycle metadata: %v", err)
+	}
+	runUUID, err := db.ParseUUID(lifecycleTestRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	botUUID, err := db.ParseUUID(lifecycleTestBotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionUUID, err := db.ParseUUID(lifecycleTestSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name             string
+		upsertErr        error
+		wantFailureCount uint64
+	}{
+		{name: "writes aborted lifecycle"},
+		{name: "store error does not change abort acknowledgement", upsertErr: errors.New("database unavailable"), wantFailureCount: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queries := &recordingContextLifecycleQueries{
+				metadata:        metadata,
+				pendingApproval: &sqlc.ToolApprovalRequest{},
+				sessionRun: sqlc.SessionRun{
+					RunID:     runUUID,
+					BotID:     botUUID,
+					SessionID: sessionUUID,
+					State:     "aborted",
+				},
+				upsertErr: tt.upsertErr,
+				upsertCh:  make(chan struct{}, 1),
+			}
+			service := &Service{
+				queries:           queries,
+				contextLifecycles: queries,
+				abortRuntime:      &recordingAbortRuntime{applied: true},
+			}
+
+			applied, err := service.AbortRuntimeRun(
+				context.Background(),
+				lifecycleTestBotID,
+				lifecycleTestSessionID,
+				lifecycleTestRunID,
+				"abort-control-1",
+			)
+			if err != nil || !applied {
+				t.Fatalf("AbortRuntimeRun() = (%t, %v), want (true, nil)", applied, err)
+			}
+			select {
+			case <-queries.upsertCh:
+			case <-time.After(time.Second):
+				t.Fatal("aborted lifecycle reconciliation did not run")
+			}
+			upserts := queries.abortedUpserts()
+			if len(upserts) != 1 {
+				t.Fatalf("aborted lifecycle upserts = %d, want 1", len(upserts))
+			}
+			if got := pgUUIDString(upserts[0].RunID); got != lifecycleTestRunID {
+				t.Fatalf("aborted lifecycle run ID = %q, want %q", got, lifecycleTestRunID)
+			}
+			deadline := time.Now().Add(time.Second)
+			for service.contextLifecyclePersistenceErrors.Load() != tt.wantFailureCount && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if got := service.contextLifecyclePersistenceErrors.Load(); got != tt.wantFailureCount {
+				t.Fatalf("persistence error count = %d, want %d", got, tt.wantFailureCount)
+			}
+		})
+	}
+}
+
+func TestAbortReconciliationPrefersResumedRunSnapshotOverPausedMetadata(t *testing.T) {
+	runUUID, err := db.ParseUUID(lifecycleTestRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	botUUID, err := db.ParseUUID(lifecycleTestBotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionUUID, err := db.ParseUUID(lifecycleTestSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMetadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: contextfrag.LifecycleSnapshot{Version: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalSnapshot, err := json.Marshal(contextfrag.LifecycleSnapshot{Version: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := &recordingContextLifecycleQueries{
+		existing:      &sqlc.ContextLifecycle{Snapshot: finalSnapshot},
+		existingAfter: 2,
+		metadata:      staleMetadata,
+		sessionRun: sqlc.SessionRun{
+			RunID:     runUUID,
+			BotID:     botUUID,
+			SessionID: sessionUUID,
+			State:     "aborted",
+		},
+		upsertCh: make(chan struct{}, 1),
+	}
+	service := &Service{
+		queries:           queries,
+		contextLifecycles: queries,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	service.reconcileAbortedContextLifecycle(
+		ctx,
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+
+	upserts := queries.abortedUpserts()
+	if len(upserts) != 1 {
+		t.Fatalf("aborted lifecycle upserts = %d, want 1", len(upserts))
+	}
+	if !bytes.Equal(upserts[0].Snapshot, finalSnapshot) {
+		t.Fatalf("aborted lifecycle snapshot = %s, want resumed snapshot %s", upserts[0].Snapshot, finalSnapshot)
+	}
+	if bytes.Contains(upserts[0].Snapshot, []byte(`"version":1`)) {
+		t.Fatalf("aborted lifecycle used stale paused metadata: %s", upserts[0].Snapshot)
+	}
+}
+
+func TestAbortReconciliationRechecksPendingDecisionBeforeMetadataFallback(t *testing.T) {
+	runUUID, err := db.ParseUUID(lifecycleTestRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	botUUID, err := db.ParseUUID(lifecycleTestBotID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionUUID, err := db.ParseUUID(lifecycleTestSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMetadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: contextfrag.LifecycleSnapshot{Version: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalSnapshot, err := json.Marshal(contextfrag.LifecycleSnapshot{Version: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := &recordingContextLifecycleQueries{
+		existing:        &sqlc.ContextLifecycle{Snapshot: finalSnapshot},
+		existingAfter:   4,
+		metadata:        staleMetadata,
+		pendingApproval: &sqlc.ToolApprovalRequest{},
+		pendingUntil:    1,
+		sessionRun: sqlc.SessionRun{
+			RunID:     runUUID,
+			BotID:     botUUID,
+			SessionID: sessionUUID,
+			State:     "aborted",
+		},
+	}
+	service := &Service{
+		queries:           queries,
+		contextLifecycles: queries,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	service.reconcileAbortedContextLifecycle(
+		ctx,
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+
+	upserts := queries.abortedUpserts()
+	if len(upserts) != 1 {
+		t.Fatalf("aborted lifecycle upserts = %d, want 1", len(upserts))
+	}
+	if !bytes.Equal(upserts[0].Snapshot, finalSnapshot) {
+		t.Fatalf("aborted lifecycle snapshot = %s, want resumed snapshot %s", upserts[0].Snapshot, finalSnapshot)
+	}
+	if elapsedReads := queries.pendingReads; elapsedReads < 2 {
+		t.Fatalf("pending decision reads = %d, want a recheck", elapsedReads)
 	}
 }
 
@@ -350,6 +662,22 @@ func TestContextLifecycleStoreErrorIsCountedAndNotReturned(t *testing.T) {
 
 	if got := service.contextLifecyclePersistenceErrors.Load(); got != 1 {
 		t.Fatalf("persistence error count = %d, want 1", got)
+	}
+}
+
+func TestContextLifecycleDuplicateAfterAbortUpsertIsIdempotent(t *testing.T) {
+	queries := &recordingContextLifecycleQueries{
+		err: &pgconn.PgError{Code: "23505", ConstraintName: "context_lifecycles_pkey"},
+	}
+	service := &Service{contextLifecycles: queries}
+
+	service.contextLifecycleTerminal(
+		context.Background(),
+		lifecycleTestRunConfig(t, lifecycleTestRunID),
+	)(nil)
+
+	if got := service.contextLifecyclePersistenceErrors.Load(); got != 0 {
+		t.Fatalf("persistence error count = %d, want 0 for idempotent duplicate", got)
 	}
 }
 

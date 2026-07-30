@@ -138,6 +138,7 @@ type Service struct {
 	allowedTeam                       string
 	sessionRuntime                    turnAdmitter
 	decisionRuntime                   *sessionruntime.Manager
+	abortRuntime                      runtimeAbortController
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	turnHooks                         *turnRuntimeHooks
 	contextLifecyclePersistenceErrors atomic.Uint64
