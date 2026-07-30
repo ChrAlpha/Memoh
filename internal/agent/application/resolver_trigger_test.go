@@ -72,12 +72,12 @@ type viewRecorder struct {
 	out agentpkg.RunConfig
 }
 
-func (v *viewRecorder) apply(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+func (v *viewRecorder) apply(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
 	out := contextview.ApplyProviderRunConfig(ctx, slog.Default(), cfg)
 	v.mu.Lock()
 	v.out = out
 	v.mu.Unlock()
-	return out
+	return out, nil
 }
 
 func (v *viewRecorder) snapshot() agentpkg.RunConfig {

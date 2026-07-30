@@ -24,12 +24,12 @@ type resumeContextBudgetApplier struct {
 	provider sdk.Provider
 }
 
-func (a *resumeContextBudgetApplier) apply(_ context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+func (a *resumeContextBudgetApplier) apply(_ context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
 	a.mu.Lock()
 	a.captured = cfg.ContextBudgetMaxTokens
 	a.mu.Unlock()
 	cfg.Model = &sdk.Model{ID: "resume-context-budget-model", Provider: a.provider, Type: sdk.ModelTypeChat}
-	return cfg.RefreshContextFrag()
+	return cfg.RefreshContextFrag(), nil
 }
 
 func (a *resumeContextBudgetApplier) snapshot() int {

@@ -69,11 +69,28 @@ func (a *Agent) LoopReselectMode() LoopReselectMode {
 // applyContextView routes the run config through the injected context view
 // applier so selection, placement and the cache plan cover the final provider
 // input. Without an applier the legacy compile path keeps the frag view fresh.
-func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) RunConfig {
+func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig, error) {
 	if a != nil && a.contextViewApplier != nil {
 		return a.contextViewApplier(ctx, cfg)
 	}
-	return cfg.RefreshContextFrag()
+	return cfg.RefreshContextFrag(), nil
+}
+
+const (
+	publicProtectedContextOverflowError = "Required instructions exceed the model context budget."
+	publicBudgetUnsatisfiedError        = "The model context window is too small for this request."
+	publicContextPreparationError       = "The model context could not be prepared."
+)
+
+func publicContextViewError(err error) string {
+	switch {
+	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
+		return publicProtectedContextOverflowError
+	case errors.Is(err, contextfrag.ErrBudgetUnsatisfied):
+		return publicBudgetUnsatisfiedError
+	default:
+		return publicContextPreparationError
+	}
 }
 
 // BridgeProvider returns the underlying bridge provider (workspace manager).
@@ -214,7 +231,14 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
-	cfg = a.applyContextView(streamCtx, cfg)
+	var contextViewErr error
+	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
+	if contextViewErr != nil {
+		turnError = publicContextViewError(contextViewErr)
+		a.logger.Warn("context view preflight failed", slog.Any("error", contextViewErr))
+		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
+		return
+	}
 	if readMediaState != nil {
 		readMediaState.ledger = cfg.ContextMutations
 	}
@@ -835,7 +859,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
-	cfg = a.applyContextView(genCtx, cfg)
+	var contextViewErr error
+	cfg, contextViewErr = a.applyContextView(genCtx, cfg)
+	if contextViewErr != nil {
+		return nil, contextViewErr
+	}
 	if readMediaState != nil {
 		readMediaState.ledger = cfg.ContextMutations
 	}

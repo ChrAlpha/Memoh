@@ -13,7 +13,7 @@ import (
 // context view pipeline. It runs after tool usage is appended to the system
 // prompt and before generate options are built, so the selection, placement
 // and cache plan cover the exact provider input.
-type ContextViewApplier func(context.Context, RunConfig) RunConfig
+type ContextViewApplier func(context.Context, RunConfig) (RunConfig, error)
 
 const (
 	DefaultToolOutputMaxBytes  = 64 * 1024

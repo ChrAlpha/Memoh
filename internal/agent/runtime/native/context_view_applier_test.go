@@ -1,7 +1,11 @@
 package native
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +24,7 @@ type applierRecorder struct {
 }
 
 func (r *applierRecorder) applier() ContextViewApplier {
-	return func(_ context.Context, cfg RunConfig) RunConfig {
+	return func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.calls++
@@ -28,7 +32,7 @@ func (r *applierRecorder) applier() ContextViewApplier {
 		if r.system != "" {
 			cfg.System = r.system
 		}
-		return cfg
+		return cfg, nil
 	}
 }
 
@@ -131,6 +135,181 @@ func (*streamStopProvider) DoStream(_ context.Context, _ sdk.GenerateParams) (*s
 	return &sdk.StreamResult{Stream: ch}, nil
 }
 
+type preflightCountingProvider struct {
+	mu            sync.Mutex
+	generateCalls int
+	streamCalls   int
+}
+
+func (*preflightCountingProvider) Name() string { return "preflight-counting" }
+
+func (*preflightCountingProvider) ListModels(context.Context) ([]sdk.Model, error) {
+	return nil, nil
+}
+
+func (*preflightCountingProvider) Test(context.Context) *sdk.ProviderTestResult {
+	return &sdk.ProviderTestResult{Status: sdk.ProviderStatusOK}
+}
+
+func (*preflightCountingProvider) TestModel(context.Context, string) (*sdk.ModelTestResult, error) {
+	return &sdk.ModelTestResult{Supported: true}, nil
+}
+
+func (p *preflightCountingProvider) DoGenerate(context.Context, sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	p.mu.Lock()
+	p.generateCalls++
+	p.mu.Unlock()
+	return &sdk.GenerateResult{Text: "unexpected", FinishReason: sdk.FinishReasonStop}, nil
+}
+
+func (p *preflightCountingProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+	p.mu.Lock()
+	p.streamCalls++
+	p.mu.Unlock()
+	return nil, errors.New("unexpected provider stream call")
+}
+
+func (p *preflightCountingProvider) calls() (generate, stream int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.generateCalls, p.streamCalls
+}
+
+func failingBudgetApplier(plan contextfrag.ContextBudgetPlan, err error) ContextViewApplier {
+	return func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		manifest := contextfrag.Manifest{
+			View:       contextfrag.ViewRunConfigPreProvider,
+			BudgetPlan: &plan,
+		}
+		cfg.ContextManifest = manifest
+		if cfg.ContextLifecycle != nil {
+			cfg.ContextLifecycle.SetManifest(manifest)
+		}
+		return cfg, err
+	}
+}
+
+func TestPublicContextViewErrorUsesStableSafeText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "wrapped protected overflow",
+			err:  fmt.Errorf("%w: private protected cost", contextfrag.ErrProtectedContextOverflow),
+			want: publicProtectedContextOverflowError,
+		},
+		{
+			name: "wrapped unsatisfied budget",
+			err:  fmt.Errorf("%w: private window arithmetic", contextfrag.ErrBudgetUnsatisfied),
+			want: publicBudgetUnsatisfiedError,
+		},
+		{
+			name: "unknown internal error",
+			err:  errors.New("private collector failure"),
+			want: publicContextPreparationError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := publicContextViewError(tt.err)
+			if got != tt.want {
+				t.Fatalf("publicContextViewError() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, tt.err.Error()) {
+				t.Fatalf("publicContextViewError() leaked private diagnostic %q", got)
+			}
+		})
+	}
+}
+
+func TestGenerateContextViewBudgetErrorStopsBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	const privateDiagnostic = "required prompt cost 930 exceeds system budget 256"
+	applierErr := fmt.Errorf("%w: %s", contextfrag.ErrProtectedContextOverflow, privateDiagnostic)
+	plan := contextfrag.ContextBudgetPlan{Window: 1024, SystemBudget: 256, ActualSystemCost: 930}
+	holder := contextfrag.NewLifecycleHolder()
+	provider := &preflightCountingProvider{}
+	a := New(Deps{ContextViewApplier: failingBudgetApplier(plan, applierErr)})
+
+	result, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "generate-preflight-error",
+			Provider: provider,
+			Type:     sdk.ModelTypeChat,
+		},
+		ContextLifecycle: holder,
+	})
+	if result != nil {
+		t.Fatalf("Generate result = %#v, want nil", result)
+	}
+	if !errors.Is(err, applierErr) {
+		t.Fatalf("Generate error = %v, want original typed error %v", err, applierErr)
+	}
+	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		t.Fatalf("Generate error %v does not preserve ErrProtectedContextOverflow identity", err)
+	}
+	if generateCalls, streamCalls := provider.calls(); generateCalls != 0 || streamCalls != 0 {
+		t.Fatalf("provider calls = generate %d stream %d, want zero", generateCalls, streamCalls)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.ActualSystemCost != plan.ActualSystemCost {
+		t.Fatalf("partial context lifecycle not retained after Generate failure: %#v", snapshot)
+	}
+}
+
+func TestStreamContextViewBudgetErrorIsPublicAndStopsBeforeProvider(t *testing.T) {
+	t.Parallel()
+
+	const privateDiagnostic = "window=31 output_reserve=8192"
+	applierErr := fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, privateDiagnostic)
+	plan := contextfrag.ContextBudgetPlan{Window: 31, OutputReserve: 8192}
+	holder := contextfrag.NewLifecycleHolder()
+	provider := &preflightCountingProvider{}
+	var logs bytes.Buffer
+	a := New(Deps{
+		ContextViewApplier: failingBudgetApplier(plan, applierErr),
+		Logger:             slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	var errorEvents []StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "stream-preflight-error",
+			Provider: provider,
+			Type:     sdk.ModelTypeChat,
+		},
+		ContextLifecycle: holder,
+	}) {
+		if event.Type == EventError {
+			errorEvents = append(errorEvents, event)
+		}
+	}
+	if len(errorEvents) != 1 {
+		t.Fatalf("EventError count = %d, want exactly 1: %#v", len(errorEvents), errorEvents)
+	}
+	if got := errorEvents[0].Error; got != publicBudgetUnsatisfiedError {
+		t.Fatalf("public EventError = %q, want fixed safe text %q", got, publicBudgetUnsatisfiedError)
+	}
+	if strings.Contains(errorEvents[0].Error, privateDiagnostic) {
+		t.Fatalf("public EventError leaked private diagnostic: %q", errorEvents[0].Error)
+	}
+	if generateCalls, streamCalls := provider.calls(); generateCalls != 0 || streamCalls != 0 {
+		t.Fatalf("provider calls = generate %d stream %d, want zero", generateCalls, streamCalls)
+	}
+	if !strings.Contains(logs.String(), privateDiagnostic) {
+		t.Fatalf("private diagnostic missing from structured log: %q", logs.String())
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.OutputReserve != plan.OutputReserve {
+		t.Fatalf("partial context lifecycle not retained after Stream failure: %#v", snapshot)
+	}
+}
+
 func TestStreamAppliesContextViewAfterToolUsage(t *testing.T) {
 	t.Parallel()
 	recorder := &applierRecorder{}
@@ -195,11 +374,11 @@ func TestGenerateWritesFinalInputHashToManifestLedger(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageRecordingProvider{}
 	ledger := contextfrag.NewMutationLedger()
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		manifest := contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, Mutations: ledger}
 		cfg.ContextManifest = manifest
 		cfg.ContextMutations = ledger
-		return cfg
+		return cfg, nil
 	}})
 
 	if _, err := a.Generate(context.Background(), RunConfig{
@@ -230,7 +409,7 @@ func TestGeneratePublishesCacheComparatorPrefixHashAndCacheUsage(t *testing.T) {
 	}}
 	holder := contextfrag.NewLifecycleHolder()
 	ledger := contextfrag.NewMutationLedger()
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		plan := contextfrag.CachePlan{StablePrefixHash: "fragment-prefix", StableMessageCount: 1}
 		manifest := contextfrag.Manifest{
 			View:      contextfrag.ViewRunConfigPreProvider,
@@ -243,7 +422,7 @@ func TestGeneratePublishesCacheComparatorPrefixHashAndCacheUsage(t *testing.T) {
 		if cfg.ContextLifecycle != nil {
 			cfg.ContextLifecycle.SetManifest(manifest)
 		}
-		return cfg
+		return cfg, nil
 	}})
 
 	if _, err := a.Generate(context.Background(), RunConfig{
@@ -362,7 +541,7 @@ func TestGenerateComparesPrefixCacheAcrossModelSwitch(t *testing.T) {
 	}
 }
 
-func growingPrefixApplier(_ context.Context, cfg RunConfig) RunConfig {
+func growingPrefixApplier(_ context.Context, cfg RunConfig) (RunConfig, error) {
 	stable := len(cfg.Messages)
 	if stable > 0 {
 		stable-- // newest message is the volatile/unstable tail
@@ -376,7 +555,7 @@ func growingPrefixApplier(_ context.Context, cfg RunConfig) RunConfig {
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
-	return cfg
+	return cfg, nil
 }
 
 func TestGenerateRecognizesPrefixPreservingGrowthAsHit(t *testing.T) {
@@ -517,7 +696,7 @@ func TestGenerateSkipsPrefixComparisonForSubagents(t *testing.T) {
 	}
 }
 
-func contextViewStubApplier(_ context.Context, cfg RunConfig) RunConfig {
+func contextViewStubApplier(_ context.Context, cfg RunConfig) (RunConfig, error) {
 	plan := contextfrag.CachePlan{StablePrefixHash: "fragment-prefix", StableMessageCount: 0}
 	ledger := contextfrag.NewMutationLedger()
 	manifest := contextfrag.Manifest{
@@ -531,7 +710,7 @@ func contextViewStubApplier(_ context.Context, cfg RunConfig) RunConfig {
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
-	return cfg
+	return cfg, nil
 }
 
 func TestGenerateFragsFirstHandsToolUsageToView(t *testing.T) {
