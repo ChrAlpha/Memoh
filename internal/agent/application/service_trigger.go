@@ -84,8 +84,12 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	}, now)
 	cfg = attachCurrentTurnPrompt(cfg, schedulePrompt)
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		return schedule.TriggerResult{}, err
 	}
@@ -170,8 +174,12 @@ func (s *Service) TriggerHeartbeat(ctx context.Context, botID string, payload he
 	heartbeatPrompt := agentpkg.GenerateHeartbeatPrompt(payload.Interval, checklist, now, payload.LastHeartbeatAt)
 	cfg = attachCurrentTurnPrompt(cfg, heartbeatPrompt)
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		return heartbeat.TriggerResult{}, err
 	}

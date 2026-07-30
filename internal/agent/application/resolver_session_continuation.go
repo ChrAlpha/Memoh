@@ -3,9 +3,11 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	"github.com/memohai/memoh/internal/models"
 )
 
@@ -50,6 +52,14 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 	if err != nil {
 		return err
 	}
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	var lifecycleDeferred bool
+	defer func() {
+		if !lifecycleDeferred {
+			terminal(lifecycleCause)
+		}
+	}()
 
 	chatReq := ChatRequest{
 		RunID:                   cfg.RunID,
@@ -67,12 +77,25 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 	stream := s.agent.Stream(ctx, cfg)
 	stored := false
 	for event := range stream {
+		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
+			lifecycleCause = eventErr
+		}
+		if event.Type == native.EventAgentAbort {
+			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+			if !lifecycleDeferred && lifecycleCause == nil {
+				lifecycleCause = errors.New("agent run aborted")
+			}
+		}
 		data, err := json.Marshal(event)
 		if err != nil {
 			continue
 		}
 		if !stored && event.IsTerminal() && len(event.Messages) > 0 {
 			if snap, ok := extractTerminalSnapshot(data); ok {
+				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
+				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
+					lifecycleCause = errors.New("agent run aborted")
+				}
 				if storeErr := s.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
 					chatReq,
@@ -88,6 +111,9 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 			select {
 			case eventCh <- json.RawMessage(data):
 			case <-ctx.Done():
+				if lifecycleCause == nil {
+					lifecycleCause = context.Cause(ctx)
+				}
 				return ctx.Err()
 			}
 		}

@@ -189,19 +189,37 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		injectImagePartsIntoLastUserMessage(runConfig.Messages, imageParts)
 	}
 	runConfig = runConfig.RefreshContextFrag()
+	terminal := s.contextLifecycleTerminal(ctx, runConfig)
+	var lifecycleCause error
+	var lifecycleDeferred bool
+	defer func() {
+		if !lifecycleDeferred {
+			terminal(lifecycleCause)
+		}
+	}()
 
 	eventCh := s.streamDiscussAgent(ctx, runConfig)
 
 	var finalMessages json.RawMessage
 	for event := range eventCh {
+		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
+			lifecycleCause = eventErr
+		}
 		if event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort {
 			finalMessages = event.Messages
+			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+			if event.Type == native.EventAgentAbort && !lifecycleDeferred && lifecycleCause == nil {
+				lifecycleCause = errors.New("agent run aborted")
+			}
 		}
 		payload, marshalErr := json.Marshal(event)
 		if marshalErr != nil {
 			continue
 		}
 		if !h.emit(string(event.Type), payload) {
+			if lifecycleCause == nil {
+				lifecycleCause = context.Cause(ctx)
+			}
 			return
 		}
 	}

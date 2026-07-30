@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -101,6 +102,7 @@ type Service struct {
 	agent              *native.Agent
 	modelsService      *models.Service
 	queries            dbstore.Queries
+	contextLifecycles  contextLifecycleStore
 	memoryRegistry     *memprovider.Registry
 	messageService     messagepkg.Service
 	settingsService    *settings.Service
@@ -126,17 +128,18 @@ type Service struct {
 	acpPromptHubs      map[string]*acpActivePromptHub
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
-	sessionCompactionMu sync.Mutex
-	sessionCompactions  map[string]*sessionCompactionGate
-	timeout             time.Duration
-	memorySearchTimeout time.Duration
-	clockLocation       *time.Location
-	logger              *slog.Logger
-	allowedTeam         string
-	sessionRuntime      turnAdmitter
-	decisionRuntime     *sessionruntime.Manager
-	turnHooks           *turnRuntimeHooks
+	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
+	sessionCompactionMu               sync.Mutex
+	sessionCompactions                map[string]*sessionCompactionGate
+	timeout                           time.Duration
+	memorySearchTimeout               time.Duration
+	clockLocation                     *time.Location
+	logger                            *slog.Logger
+	allowedTeam                       string
+	sessionRuntime                    turnAdmitter
+	decisionRuntime                   *sessionruntime.Manager
+	turnHooks                         *turnRuntimeHooks
+	contextLifecyclePersistenceErrors atomic.Uint64
 }
 
 // NewService creates an application service backed by the native agent.
@@ -180,6 +183,7 @@ func NewService(
 		agent:               a,
 		modelsService:       modelsService,
 		queries:             queries,
+		contextLifecycles:   queries,
 		messageService:      messageService,
 		settingsService:     settingsService,
 		accountService:      accountService,
@@ -648,13 +652,18 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, err
 	}
 	req.Query = rc.query
+	req.RunID = rc.runConfig.RunID
 
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		return ChatResponse{}, err
 	}
