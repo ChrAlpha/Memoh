@@ -310,21 +310,22 @@ type Part struct {
 
 // ContextFrag is the typed context fragment abstraction.
 type ContextFrag struct {
-	ID            string          `json:"id"`
-	Ref           ContextRef      `json:"ref,omitempty"`
-	Kind          Kind            `json:"kind"`
-	Role          sdk.MessageRole `json:"role,omitempty"`
-	Slot          Slot            `json:"slot"`
-	Priority      int             `json:"priority,omitempty"`
-	RetentionTier RetentionTier   `json:"retention_tier,omitempty"`
-	DropPriority  DropPriority    `json:"drop_priority,omitempty"`
-	CacheClass    CacheClass      `json:"cache_class,omitempty"`
-	Trust         TrustLevel      `json:"trust,omitempty"`
-	Scope         Scope           `json:"scope,omitempty"`
-	Budget        BudgetPolicy    `json:"budget,omitempty"`
-	Render        RenderPolicy    `json:"render,omitempty"`
-	Provenance    Provenance      `json:"provenance,omitempty"`
-	TokenEstimate int             `json:"token_estimate,omitempty"`
+	ID                 string          `json:"id"`
+	Ref                ContextRef      `json:"ref,omitempty"`
+	Kind               Kind            `json:"kind"`
+	Role               sdk.MessageRole `json:"role,omitempty"`
+	Slot               Slot            `json:"slot"`
+	Priority           int             `json:"priority,omitempty"`
+	RetentionTier      RetentionTier   `json:"retention_tier,omitempty"`
+	DropPriority       DropPriority    `json:"drop_priority,omitempty"`
+	RequiredCapability string          `json:"required_capability,omitempty"`
+	CacheClass         CacheClass      `json:"cache_class,omitempty"`
+	Trust              TrustLevel      `json:"trust,omitempty"`
+	Scope              Scope           `json:"scope,omitempty"`
+	Budget             BudgetPolicy    `json:"budget,omitempty"`
+	Render             RenderPolicy    `json:"render,omitempty"`
+	Provenance         Provenance      `json:"provenance,omitempty"`
+	TokenEstimate      int             `json:"token_estimate,omitempty"`
 	// ConflictKey groups fragments that are alternatives of one another: the
 	// selector keeps only the highest-precedence member (closest scope, then
 	// trust, then latest collected) and drops the rest.

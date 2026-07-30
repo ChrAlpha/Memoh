@@ -197,42 +197,44 @@ func systemTextFrag(id string, kind Kind, text string, priority int, cacheClass 
 
 // TextFragInput describes a text fragment to construct.
 type TextFragInput struct {
-	ID            string
-	Kind          Kind
-	Role          sdk.MessageRole
-	Slot          Slot
-	Text          string
-	Priority      int
-	RetentionTier RetentionTier
-	DropPriority  DropPriority
-	CacheClass    CacheClass
-	Trust         TrustLevel
-	Scope         Scope
-	Source        string
-	SourceID      string
-	Collector     string
-	Index         int
-	Render        RenderPolicy
-	Budget        BudgetPolicy
-	ConflictKey   string
+	ID                 string
+	Kind               Kind
+	Role               sdk.MessageRole
+	Slot               Slot
+	Text               string
+	Priority           int
+	RetentionTier      RetentionTier
+	DropPriority       DropPriority
+	RequiredCapability string
+	CacheClass         CacheClass
+	Trust              TrustLevel
+	Scope              Scope
+	Source             string
+	SourceID           string
+	Collector          string
+	Index              int
+	Render             RenderPolicy
+	Budget             BudgetPolicy
+	ConflictKey        string
 }
 
 // TextFrag creates a text-backed fragment.
 func TextFrag(input TextFragInput) ContextFrag {
 	return ContextFrag{
-		ID:            strings.TrimSpace(input.ID),
-		Kind:          input.Kind,
-		Role:          input.Role,
-		Slot:          input.Slot,
-		Priority:      input.Priority,
-		RetentionTier: input.RetentionTier,
-		DropPriority:  input.DropPriority,
-		CacheClass:    input.CacheClass,
-		Trust:         input.Trust,
-		Scope:         normalizeScope(input.Scope),
-		Budget:        input.Budget,
-		Render:        input.Render,
-		ConflictKey:   input.ConflictKey,
+		ID:                 strings.TrimSpace(input.ID),
+		Kind:               input.Kind,
+		Role:               input.Role,
+		Slot:               input.Slot,
+		Priority:           input.Priority,
+		RetentionTier:      input.RetentionTier,
+		DropPriority:       input.DropPriority,
+		RequiredCapability: strings.TrimSpace(input.RequiredCapability),
+		CacheClass:         input.CacheClass,
+		Trust:              input.Trust,
+		Scope:              normalizeScope(input.Scope),
+		Budget:             input.Budget,
+		Render:             input.Render,
+		ConflictKey:        input.ConflictKey,
 		Provenance: Provenance{
 			Source:    strings.TrimSpace(input.Source),
 			SourceID:  strings.TrimSpace(input.SourceID),

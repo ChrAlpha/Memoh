@@ -136,6 +136,32 @@ func TestCanonicalFragmentHashIncludesRetentionPolicy(t *testing.T) {
 	}
 }
 
+func TestCanonicalFragmentHashIncludesRequiredCapability(t *testing.T) {
+	t.Parallel()
+
+	base := TextFrag(TextFragInput{
+		ID:                 "system.skills.header",
+		Kind:               KindSkillsCatalog,
+		Slot:               SlotSystem,
+		Text:               "skills",
+		RequiredCapability: "use_skill",
+	})
+	changed := base
+	changed.RequiredCapability = "other_tool"
+
+	baseHash, err := CanonicalFragmentHash(base)
+	if err != nil {
+		t.Fatalf("canonical base hash: %v", err)
+	}
+	changedHash, err := CanonicalFragmentHash(changed)
+	if err != nil {
+		t.Fatalf("canonical changed hash: %v", err)
+	}
+	if changedHash.Value == baseHash.Value {
+		t.Fatal("canonical hash must change with required capability")
+	}
+}
+
 func TestDropPriorityHigherValuesDropFirst(t *testing.T) {
 	t.Parallel()
 

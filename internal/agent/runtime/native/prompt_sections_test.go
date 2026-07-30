@@ -419,12 +419,13 @@ func TestSystemSectionFragsPreservesRetentionBudgetPolicy(t *testing.T) {
 	t.Parallel()
 
 	section := SystemSection{
-		ID:            "system.test",
-		Kind:          contextfrag.KindSystemPrompt,
-		Priority:      25,
-		Text:          "test",
-		RetentionTier: contextfrag.RetentionPreferred,
-		DropPriority:  40,
+		ID:                 "system.test",
+		Kind:               contextfrag.KindSystemPrompt,
+		Priority:           25,
+		Text:               "test",
+		RetentionTier:      contextfrag.RetentionPreferred,
+		DropPriority:       40,
+		RequiredCapability: "test_tool",
 		Budget: contextfrag.BudgetPolicy{
 			MaxChars: 128,
 			Overflow: contextfrag.OverflowTrim,
@@ -436,10 +437,42 @@ func TestSystemSectionFragsPreservesRetentionBudgetPolicy(t *testing.T) {
 		t.Fatalf("frags = %d, want 1", len(frags))
 	}
 	frag := frags[0]
-	if frag.RetentionTier != section.RetentionTier || frag.DropPriority != section.DropPriority || frag.Budget != section.Budget {
-		t.Fatalf("frag policy = %+v/%d/%+v, want %+v/%d/%+v",
-			frag.RetentionTier, frag.DropPriority, frag.Budget,
-			section.RetentionTier, section.DropPriority, section.Budget)
+	if frag.RetentionTier != section.RetentionTier ||
+		frag.DropPriority != section.DropPriority ||
+		frag.RequiredCapability != section.RequiredCapability ||
+		frag.Budget != section.Budget {
+		t.Fatalf("frag policy = %+v/%d/%q/%+v, want %+v/%d/%q/%+v",
+			frag.RetentionTier, frag.DropPriority, frag.RequiredCapability, frag.Budget,
+			section.RetentionTier, section.DropPriority, section.RequiredCapability, section.Budget)
+	}
+}
+
+func TestGenerateSystemSectionsSkillsRequireUseSkillCapability(t *testing.T) {
+	t.Parallel()
+
+	sections := GenerateSystemSections(SystemPromptParams{
+		SessionType: sessionmode.Chat,
+		Skills: []SkillEntry{
+			{Name: "alpha", Description: "first"},
+			{Name: "技能", Description: "第二"},
+		},
+	})
+
+	skillSections := 0
+	for _, section := range sections {
+		if section.ID == "system.skills.header" || strings.HasPrefix(section.ID, "system.skill.") {
+			skillSections++
+			if section.RequiredCapability != "use_skill" {
+				t.Fatalf("%s required capability = %q, want use_skill", section.ID, section.RequiredCapability)
+			}
+			continue
+		}
+		if section.RequiredCapability != "" {
+			t.Fatalf("%s unexpectedly requires capability %q", section.ID, section.RequiredCapability)
+		}
+	}
+	if skillSections != 3 {
+		t.Fatalf("skill sections = %d, want header + 2 items", skillSections)
 	}
 }
 

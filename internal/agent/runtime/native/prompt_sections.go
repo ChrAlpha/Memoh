@@ -11,18 +11,20 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
+	tools "github.com/memohai/memoh/internal/agent/tool"
 )
 
 // SystemSection is one typed, priority-ordered piece of the system prompt.
 type SystemSection struct {
-	ID            string
-	Kind          contextfrag.Kind
-	Priority      int
-	RetentionTier contextfrag.RetentionTier
-	DropPriority  contextfrag.DropPriority
-	Budget        contextfrag.BudgetPolicy
-	Render        contextfrag.RenderPolicy
-	Text          string
+	ID                 string
+	Kind               contextfrag.Kind
+	Priority           int
+	RetentionTier      contextfrag.RetentionTier
+	DropPriority       contextfrag.DropPriority
+	RequiredCapability string
+	Budget             contextfrag.BudgetPolicy
+	Render             contextfrag.RenderPolicy
+	Text               string
 }
 
 const (
@@ -36,6 +38,8 @@ const (
 	sectionIDWorkspaceFile    = "system.workspace_file"
 	sectionIDFallback         = "system.prompt.fallback"
 )
+
+var skillRequiredCapability = tools.ToolUseSkill().String()
 
 const (
 	priorityIntro                 = 10
@@ -100,14 +104,16 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 		sections = append(sections, SystemSection{
 			ID: sectionIDSkills + ".header", Kind: contextfrag.KindSkillsCatalog, Priority: prioritySkills,
 			RetentionTier: contextfrag.RetentionOptional, Text: buildSkillsHeader(len(items)),
-			Render: groupedSystemRender(sectionIDSkills, "\n"),
+			RequiredCapability: skillRequiredCapability,
+			Render:             groupedSystemRender(sectionIDSkills, "\n"),
 		})
 		for _, item := range items {
 			sections = append(sections, SystemSection{
 				ID:   sectionIDSkill + "." + item.ID,
 				Kind: contextfrag.KindSkillsCatalog, Priority: prioritySkills,
 				RetentionTier: contextfrag.RetentionOptional, Text: item.Text,
-				Render: groupedSystemRender(sectionIDSkills, "\n"),
+				RequiredCapability: skillRequiredCapability,
+				Render:             groupedSystemRender(sectionIDSkills, "\n"),
 			})
 		}
 	}
@@ -212,21 +218,22 @@ func SystemSectionFrags(sections []SystemSection, scope contextfrag.Scope) []con
 			renderPolicy.Format = contextfrag.RenderMarkdown
 		}
 		frags = append(frags, contextfrag.TextFrag(contextfrag.TextFragInput{
-			ID:            section.ID,
-			Kind:          section.Kind,
-			Role:          sdk.MessageRoleSystem,
-			Slot:          contextfrag.SlotSystem,
-			Text:          section.Text,
-			Priority:      section.Priority,
-			RetentionTier: section.RetentionTier,
-			DropPriority:  section.DropPriority,
-			CacheClass:    contextfrag.CacheStable,
-			Trust:         contextfrag.TrustSystem,
-			Scope:         scope,
-			Source:        contextfrag.SourceRunConfig,
-			Collector:     "system_sections",
-			Render:        renderPolicy,
-			Budget:        section.Budget,
+			ID:                 section.ID,
+			Kind:               section.Kind,
+			Role:               sdk.MessageRoleSystem,
+			Slot:               contextfrag.SlotSystem,
+			Text:               section.Text,
+			Priority:           section.Priority,
+			RetentionTier:      section.RetentionTier,
+			DropPriority:       section.DropPriority,
+			RequiredCapability: section.RequiredCapability,
+			CacheClass:         contextfrag.CacheStable,
+			Trust:              contextfrag.TrustSystem,
+			Scope:              scope,
+			Source:             contextfrag.SourceRunConfig,
+			Collector:          "system_sections",
+			Render:             renderPolicy,
+			Budget:             section.Budget,
 		}))
 	}
 	return frags
