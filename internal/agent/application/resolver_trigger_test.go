@@ -73,11 +73,11 @@ type viewRecorder struct {
 }
 
 func (v *viewRecorder) apply(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-	out := contextview.ApplyProviderRunConfig(ctx, slog.Default(), cfg)
+	out, err := contextview.ApplyProviderRunConfig(ctx, slog.Default(), cfg)
 	v.mu.Lock()
 	v.out = out
 	v.mu.Unlock()
-	return out, nil
+	return out, err
 }
 
 func (v *viewRecorder) snapshot() agentpkg.RunConfig {

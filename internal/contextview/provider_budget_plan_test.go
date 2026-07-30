@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -168,9 +169,15 @@ func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *test
 		ContextBudgetMaxTokens: DefaultOutputReserveTokens + 80 + 120 + 500,
 	}
 
-	out, err := applyProviderRunConfig(context.Background(), nil, cfg)
+	disabled := cfg
+	disabled.ContextBudgetMaxTokens = 0
+	legacyOut, err := ApplyProviderRunConfig(context.Background(), nil, disabled)
 	if err != nil {
-		t.Fatalf("applyProviderRunConfig() error = %v", err)
+		t.Fatalf("plan-disabled ApplyProviderRunConfig() error = %v", err)
+	}
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
 	}
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil {
@@ -185,6 +192,12 @@ func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *test
 	if len(out.Messages) != 2 {
 		t.Fatalf("messages = %#v, want history and current request", out.Messages)
 	}
+	if out.System != legacyOut.System ||
+		out.Query != legacyOut.Query ||
+		!reflect.DeepEqual(out.Messages, legacyOut.Messages) ||
+		!reflect.DeepEqual(out.InlineImages, legacyOut.InlineImages) {
+		t.Fatalf("active no-pressure payload diverged:\nactive=%#v\nlegacy=%#v", out, legacyOut)
+	}
 }
 
 func TestApplyProviderRunConfigWithBudgetErrorKeepsAuditWithoutFallback(t *testing.T) {
@@ -198,15 +211,18 @@ func TestApplyProviderRunConfigWithBudgetErrorKeepsAuditWithoutFallback(t *testi
 		ContextLifecycle:       holder,
 	}
 
-	out, err := applyProviderRunConfig(context.Background(), nil, cfg)
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
 	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("applyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
 	}
 	if out.ContextManifest.BudgetPlan == nil {
 		t.Fatal("budget failure lost the numeric plan")
 	}
-	if out.ContextManifest.Mutations == nil || len(out.ContextManifest.Mutations.Records()) != 0 {
-		t.Fatalf("budget failure mutations = %#v, want no legacy fallback record", out.ContextManifest.Mutations)
+	records := out.ContextManifest.Mutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
+		records[0].Detail != "budget_unsatisfied" {
+		t.Fatalf("budget failure mutations = %#v, want one stable failure record", records)
 	}
 	if out.System != cfg.System || len(out.Messages) != 0 {
 		t.Fatalf("budget failure changed provider payload: system=%q messages=%#v", out.System, out.Messages)
@@ -235,9 +251,9 @@ func TestApplyProviderRunConfigProtectedOverflowKeepsSelectionAudit(t *testing.T
 		ContextBudgetMaxTokens: DefaultOutputReserveTokens + 300,
 	}
 
-	out, err := applyProviderRunConfig(context.Background(), nil, cfg)
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
 	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("applyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrProtectedContextOverflow)
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrProtectedContextOverflow)
 	}
 	if out.ContextManifest.BudgetPlan == nil || out.ContextManifest.BudgetPlan.ActualSystemCost != 1000 {
 		t.Fatalf("budget plan = %#v, want audited actual system cost 1000", out.ContextManifest.BudgetPlan)
@@ -245,8 +261,11 @@ func TestApplyProviderRunConfigProtectedOverflowKeepsSelectionAudit(t *testing.T
 	if len(out.ContextManifest.SelectionDecisions) == 0 {
 		t.Fatal("protected overflow lost selection decisions")
 	}
-	if out.ContextManifest.Mutations == nil || len(out.ContextManifest.Mutations.Records()) != 0 {
-		t.Fatalf("protected overflow recorded a fallback: %#v", out.ContextManifest.Mutations)
+	records := out.ContextManifest.Mutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
+		records[0].Detail != "protected_context_overflow" {
+		t.Fatalf("protected overflow records = %#v, want one stable failure record", records)
 	}
 }
 
@@ -285,5 +304,31 @@ func TestProviderSelectorReservesHistoryTrimNoticeWithinPlan(t *testing.T) {
 	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 	if noticeCost > plan.HistoryBudget {
 		t.Fatalf("notice cost %d exceeds history budget %d", noticeCost, plan.HistoryBudget)
+	}
+}
+
+func TestApplyProviderRunConfigInternalBuildErrorStillFallsBack(t *testing.T) {
+	t.Parallel()
+
+	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
+	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
+	cfg := agentpkg.RunConfig{
+		System:             "legacy system",
+		Messages:           []sdk.Message{sdk.UserMessage("legacy message")},
+		ContextSourceFrags: []contextfrag.ContextFrag{first, second},
+	}
+
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want ordinary build fallback", err)
+	}
+	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, cfg.Messages) {
+		t.Fatalf("fallback payload = system %q messages %#v, want legacy payload", out.System, out.Messages)
+	}
+	records := out.ContextMutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextViewFallback ||
+		records[0].Detail != "build_error" {
+		t.Fatalf("fallback records = %#v, want one build_error context fallback", records)
 	}
 }

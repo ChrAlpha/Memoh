@@ -107,7 +107,7 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	}
 
 	got := resolver.prepareRunConfig(context.Background(), cfg)
-	got = contextview.ApplyProviderRunConfig(context.Background(), nil, got)
+	got = applyProviderRunConfigForTest(t, got)
 
 	if got.ContextManifest.Counts.Images != 1 {
 		t.Fatalf("manifest image count = %d, want the image counted exactly once: %#v", got.ContextManifest.Counts.Images, got.ContextManifest.Items)
@@ -246,12 +246,12 @@ func TestPrepareRunConfigFragsFirstMatchesLegacyReverseParse(t *testing.T) {
 
 	got1 := resolver.prepareRunConfig(context.Background(), baseCfg)
 	got1.ContextToolUsage = "## Tool usage\n\nUSE_TOOLS"
-	rendered1 := contextview.ApplyProviderRunConfig(context.Background(), nil, got1)
+	rendered1 := applyProviderRunConfigForTest(t, got1)
 
 	got2 := resolver.prepareRunConfig(context.Background(), baseCfg)
 	got2.ContextSourceFrags = contextview.CollectProviderSourceFrags(context.Background(), got2)
 	got2.ContextToolUsage = "## Tool usage\n\nUSE_TOOLS"
-	rendered2 := contextview.ApplyProviderRunConfig(context.Background(), nil, got2)
+	rendered2 := applyProviderRunConfigForTest(t, got2)
 
 	if rendered1.System != rendered2.System {
 		t.Fatalf("frags-first System diverges from legacy reverse-parse System:\ngot:  %q\nwant: %q", rendered1.System, rendered2.System)

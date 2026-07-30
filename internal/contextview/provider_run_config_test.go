@@ -17,7 +17,7 @@ func applyProviderRunConfigOK(
 	logger *slog.Logger,
 	cfg agentpkg.RunConfig,
 ) agentpkg.RunConfig {
-	out, err := applyProviderRunConfig(ctx, logger, cfg)
+	out, err := ApplyProviderRunConfig(ctx, logger, cfg)
 	if err != nil {
 		panic(err)
 	}

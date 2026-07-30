@@ -14,14 +14,15 @@ import (
 type MutationKind string
 
 const (
-	MutationBeforeModelCallHook MutationKind = "before_model_call_hook"
-	MutationBackgroundSummary   MutationKind = "background_summary"
-	MutationMidTaskPrune        MutationKind = "mid_task_prune"
-	MutationLoopStepReselection MutationKind = "loop_step_reselection"
-	MutationInjectedMessage     MutationKind = "injected_message"
-	MutationContextViewFallback MutationKind = "context_view_fallback"
-	MutationReadMedia           MutationKind = "read_media"
-	MutationMidStreamRetry      MutationKind = "mid_stream_retry"
+	MutationBeforeModelCallHook  MutationKind = "before_model_call_hook"
+	MutationBackgroundSummary    MutationKind = "background_summary"
+	MutationMidTaskPrune         MutationKind = "mid_task_prune"
+	MutationLoopStepReselection  MutationKind = "loop_step_reselection"
+	MutationInjectedMessage      MutationKind = "injected_message"
+	MutationContextViewFallback  MutationKind = "context_view_fallback"
+	MutationContextBudgetFailure MutationKind = "context_budget_failure"
+	MutationReadMedia            MutationKind = "read_media"
+	MutationMidStreamRetry       MutationKind = "mid_stream_retry"
 )
 
 // MutationRecord is one ledger entry describing a post-render mutation.

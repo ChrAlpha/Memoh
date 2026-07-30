@@ -18,7 +18,7 @@ import (
 // injected applier hook.
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
 	return func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-		return applyProviderRunConfig(ctx, logger, cfg)
+		return ApplyProviderRunConfig(ctx, logger, cfg)
 	}
 }
 
@@ -141,12 +141,7 @@ func resolveRecentProtectTokens(override *int) int {
 // are the authoritative input (fragments-first); otherwise the collectors
 // derive them from the materialized legacy fields. Selection, placement and
 // the SDK render then produce System/Messages as outputs.
-func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
-	out, _ := applyProviderRunConfig(ctx, logger, cfg)
-	return out
-}
-
-func applyProviderRunConfig(
+func ApplyProviderRunConfig(
 	ctx context.Context,
 	logger *slog.Logger,
 	cfg agentpkg.RunConfig,
@@ -216,15 +211,17 @@ func applyProviderRunConfig(
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
+	if budgetErr != nil {
+		recordContextBudgetFailure(ledger, budgetErr)
+		return providerBudgetAuditConfig(cfg, view, ledger), budgetErr
+	}
 	if err != nil {
 		if isContextBudgetError(err) {
+			recordContextBudgetFailure(ledger, err)
 			return providerBudgetAuditConfig(cfg, view, ledger), err
 		}
 		return providerViewFallback(logger, cfg, ledger, "build_error",
 			"context view build failed; using legacy assembly", err), nil
-	}
-	if budgetErr != nil {
-		return providerBudgetAuditConfig(cfg, view, ledger), budgetErr
 	}
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
@@ -332,6 +329,14 @@ func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 func isContextBudgetError(err error) bool {
 	return errors.Is(err, contextfrag.ErrProtectedContextOverflow) ||
 		errors.Is(err, contextfrag.ErrBudgetUnsatisfied)
+}
+
+func recordContextBudgetFailure(ledger *contextfrag.MutationLedger, err error) {
+	reason := "budget_unsatisfied"
+	if errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		reason = "protected_context_overflow"
+	}
+	ledger.Record(contextfrag.MutationContextBudgetFailure, reason)
 }
 
 func providerBudgetAuditConfig(

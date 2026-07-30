@@ -17,6 +17,15 @@ import (
 
 func intPtr(v int) *int { return &v }
 
+func applyProviderRunConfigForTest(t *testing.T, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	t.Helper()
+	out, err := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+	}
+	return out
+}
+
 func trimRecord(msg ModelMessage, mutate func(*historyfrag.HistoryRecord)) historyfrag.HistoryRecord {
 	return historyRecord("trim-row", msg, mutate)
 }
@@ -422,7 +431,7 @@ func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) 
 		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
-	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigForTest(t, cfg)
 	return got.Messages
 }
 
@@ -608,7 +617,7 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1"},
 	}
-	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigForTest(t, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %v, want [notice memory request]", rolesOf(got.Messages))
