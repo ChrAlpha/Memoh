@@ -150,7 +150,16 @@ func ApplyProviderRunConfig(
 	var registry CollectorRegistry
 	if len(cfg.ContextSourceFrags) > 0 {
 		frags := append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
-		if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" {
+		if len(cfg.ContextToolUsageFrags) > 0 {
+			filtered := frags[:0]
+			for _, frag := range frags {
+				if frag.Kind != contextfrag.KindToolUsage {
+					filtered = append(filtered, frag)
+				}
+			}
+			frags = filtered
+			frags = append(frags, cfg.ContextToolUsageFrags...)
+		} else if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" {
 			frags = append(frags, ToolUsageFrag(usage, cfg.ContextScope))
 		}
 		registry = NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})

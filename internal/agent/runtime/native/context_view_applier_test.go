@@ -75,6 +75,11 @@ func TestGenerateAppliesContextViewAfterToolUsage(t *testing.T) {
 	if !strings.Contains(seen.ContextToolUsage, usageMarker) {
 		t.Fatalf("applier saw ContextToolUsage %q, want it to contain %q", seen.ContextToolUsage, usageMarker)
 	}
+	if len(seen.ContextToolUsageFrags) != 2 ||
+		seen.ContextToolUsageFrags[0].ID != "system.tool_usage.header" ||
+		seen.ContextToolUsageFrags[1].ID != "system.tool_usage.fake_tool" {
+		t.Fatalf("applier saw structured tool usage %+v, want header and provider item", seen.ContextToolUsageFrags)
+	}
 	if !strings.Contains(seen.System, usageMarker) {
 		t.Fatalf("applier must see the tool-usage-augmented system, got %q", seen.System)
 	}

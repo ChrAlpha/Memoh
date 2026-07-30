@@ -133,6 +133,7 @@ type RunConfig struct {
 	// materialized in Messages, as on the pipeline path.
 	ContextCurrentUserMessageIndex *int
 	ContextToolUsage               string
+	ContextToolUsageFrags          []contextfrag.ContextFrag
 	ContextDynamicMutators         []contextfrag.DynamicMutator
 	ContextBudgetMaxTokens         int
 	// ContextRecentProtectTokens overrides the recent-protection window the

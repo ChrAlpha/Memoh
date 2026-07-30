@@ -132,7 +132,11 @@ func TestFragsFirstDedupesAgentToolUsage(t *testing.T) {
 			usageFrags++
 		}
 	}
-	if usageFrags != 1 {
-		t.Fatalf("tool usage frags = %d, want exactly one after conflict resolution", usageFrags)
+	if usageFrags != len(cfg.ContextToolUsageFrags) {
+		t.Fatalf(
+			"tool usage frags = %d, want %d structured fragments after replacing stale usage",
+			usageFrags,
+			len(cfg.ContextToolUsageFrags),
+		)
 	}
 }

@@ -60,9 +60,42 @@ func fragsFirstFixture() agentpkg.RunConfig {
 				Collector:  "current_user",
 			}),
 		},
-		ContextToolUsage: "## Tool usage\n\nUSE_TOOLS",
-		ContextScope:     contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
+		ContextToolUsage: "## Tool usage\n\nUSE_TOOLS\n\nUNICODE 用法",
+		ContextToolUsageFrags: []contextfrag.ContextFrag{
+			toolUsageTestFrag("system.tool_usage.header", "## Tool usage", "zeta_tool", 0),
+			toolUsageTestFrag("system.tool_usage.zeta_tool", "USE_TOOLS", "zeta_tool", 1),
+			toolUsageTestFrag("system.tool_usage.alpha_tool", "UNICODE 用法", "alpha_tool", 2),
+		},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{
+			{Name: "zeta_tool"},
+			{Name: "alpha_tool"},
+		},
+		ContextScope: contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
+}
+
+func toolUsageTestFrag(id, text, capability string, index int) contextfrag.ContextFrag {
+	return contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:                 id,
+		Kind:               contextfrag.KindToolUsage,
+		Role:               sdk.MessageRoleSystem,
+		Slot:               contextfrag.SlotSystem,
+		Text:               text,
+		Priority:           45,
+		RetentionTier:      contextfrag.RetentionPreferred,
+		RequiredCapability: capability,
+		CacheClass:         contextfrag.CacheStable,
+		Trust:              contextfrag.TrustSystem,
+		Scope:              contextfrag.Scope{BotID: "bot-1"},
+		Source:             contextfrag.SourceAgentToolUsage,
+		Collector:          "assemble_tools",
+		Index:              index,
+		Render: contextfrag.RenderPolicy{
+			Format:      contextfrag.RenderMarkdown,
+			GroupID:     "system.tool_usage",
+			GroupJoiner: "\n\n",
+		},
+	})
 }
 
 func TestApplyProviderRunConfigFragsFirst(t *testing.T) {
@@ -70,7 +103,7 @@ func TestApplyProviderRunConfigFragsFirst(t *testing.T) {
 
 	got := applyProviderRunConfigOK(context.Background(), nil, fragsFirstFixture())
 
-	wantSystem := "base system\n\n## Tool usage\n\nUSE_TOOLS\n\n## Workspace instruction files\n\nworkspace text"
+	wantSystem := "base system\n\n## Tool usage\n\nUSE_TOOLS\n\nUNICODE 用法\n\n## Workspace instruction files\n\nworkspace text"
 	if got.System != wantSystem {
 		t.Fatalf("system = %q, want tool usage between prompt and workspace:\n%q", got.System, wantSystem)
 	}
@@ -89,14 +122,24 @@ func TestApplyProviderRunConfigFragsFirst(t *testing.T) {
 	if !ok || last.Text != "current question" {
 		t.Fatalf("last message = %#v, want the current question", got.Messages[2].Content)
 	}
-	var toolUsageSelected bool
+	var toolUsageIDs []string
 	for _, frag := range got.ContextFrags {
 		if frag.Kind == contextfrag.KindToolUsage {
-			toolUsageSelected = true
+			toolUsageIDs = append(toolUsageIDs, frag.ID)
 		}
 	}
-	if !toolUsageSelected {
-		t.Fatal("tool usage must join the selection as its own fragment")
+	wantToolUsageIDs := []string{
+		"system.tool_usage.header",
+		"system.tool_usage.zeta_tool",
+		"system.tool_usage.alpha_tool",
+	}
+	if len(toolUsageIDs) != len(wantToolUsageIDs) {
+		t.Fatalf("tool usage IDs = %v, want %v", toolUsageIDs, wantToolUsageIDs)
+	}
+	for i := range wantToolUsageIDs {
+		if toolUsageIDs[i] != wantToolUsageIDs[i] {
+			t.Fatalf("tool usage IDs = %v, want %v", toolUsageIDs, wantToolUsageIDs)
+		}
 	}
 	if len(got.ContextManifest.Items) == 0 || got.ContextManifest.CachePlan == nil {
 		t.Fatal("fragment-first run must produce the full lifecycle manifest")

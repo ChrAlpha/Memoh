@@ -32,7 +32,7 @@ func TestAssembleToolsAccountsToolDefinitions(t *testing.T) {
 		staticMCPProvider{staticToolProvider: staticToolProvider{tools: []sdk.Tool{mcpTool}}},
 	)
 
-	_, _, defs, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
+	_, _, _, defs, err := a.assembleTools(context.Background(), RunConfig{}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
