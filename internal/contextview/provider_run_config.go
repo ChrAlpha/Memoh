@@ -213,12 +213,12 @@ func ApplyProviderRunConfig(
 	})
 	if budgetErr != nil {
 		recordContextBudgetFailure(ledger, budgetErr)
-		return providerBudgetAuditConfig(cfg, view, ledger), budgetErr
+		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
 	}
 	if err != nil {
 		if isContextBudgetError(err) {
 			recordContextBudgetFailure(ledger, err)
-			return providerBudgetAuditConfig(cfg, view, ledger), err
+			return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
 		}
 		return providerViewFallback(logger, cfg, ledger, "build_error",
 			"context view build failed; using legacy assembly", err), nil
@@ -258,7 +258,7 @@ func providerContextBudgetPlan(
 	ctx context.Context,
 	cfg agentpkg.RunConfig,
 ) (*contextfrag.ContextBudgetPlan, error) {
-	if cfg.ContextBudgetMaxTokens <= 0 ||
+	if cfg.ContextBudgetMaxTokens == 0 ||
 		strings.EqualFold(strings.TrimSpace(cfg.SessionType), sessionmode.Discuss) {
 		return nil, nil
 	}
@@ -343,8 +343,24 @@ func providerBudgetAuditConfig(
 	cfg agentpkg.RunConfig,
 	view *ContextView,
 	ledger *contextfrag.MutationLedger,
+	budgetPlan *contextfrag.ContextBudgetPlan,
 ) agentpkg.RunConfig {
 	if view == nil {
+		manifest := contextfrag.BuildManifest(nil)
+		manifest.View = contextfrag.ViewRunConfigPreProvider
+		manifest.DynamicMutators = normalizeDynamicMutators(cfg.ContextDynamicMutators)
+		if budgetPlan != nil {
+			plan := *budgetPlan
+			manifest.BudgetPlan = &plan
+		}
+		manifest.Mutations = ledger
+		manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+
+		cfg.ContextManifest = manifest
+		cfg.ContextMutations = ledger
+		if cfg.ContextLifecycle != nil {
+			cfg.ContextLifecycle.SetManifest(manifest)
+		}
 		return cfg
 	}
 	cachePlan := cachePlanFromPlacement(view.Placement)
