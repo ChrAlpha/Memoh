@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,9 @@ import (
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/bots"
 	session "github.com/memohai/memoh/internal/chat/thread"
+	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/settings"
 )
 
 const testACPUserInputOwnerID = "owner-user"
@@ -327,15 +331,56 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	}
 }
 
+type blockingResumeTextProvider struct {
+	resumeTextProvider
+	started chan struct{}
+	release <-chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingResumeTextProvider) DoStream(
+	ctx context.Context,
+	params sdk.GenerateParams,
+) (*sdk.StreamResult, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return p.resumeTextProvider.DoStream(ctx, params)
+}
+
 func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	t.Parallel()
 
 	const (
-		botID     = "bot-1"
-		sessionID = "session-1"
-		runID     = "run-1"
-		inputID   = "input-1"
+		botID      = lifecycleTestBotID
+		sessionID  = lifecycleTestSessionID
+		runID      = lifecycleTestRunID
+		inputID    = "input-1"
+		modelID    = "00000000-0000-0000-0000-000000000521"
+		providerID = "00000000-0000-0000-0000-000000000522"
 	)
+	providerRow := modelSelectionProviderRow(t, providerID, "openai-completions", true)
+	modelRow := modelSelectionModelRow(t, modelID, "gpt-runtime-user-input", providerRow.ID, models.ModelTypeChat, true)
+	modelRow.Config = []byte(`{"context_window":128000}`)
+	queries := &modelSelectionFakeQueries{
+		models:   map[string]sqlc.Model{modelRow.ModelID: modelRow},
+		provider: providerRow,
+	}
+	releaseContinuation := make(chan struct{})
+	continuationStarted := make(chan struct{})
+	provider := &blockingResumeTextProvider{
+		started: continuationStarted,
+		release: releaseContinuation,
+	}
+	applier := &resumeContextBudgetApplier{provider: provider}
+	lifecycles := &recordingContextLifecycleQueries{}
+	messages := &recordingMessageService{}
+	resolved := chatResolvedRequest()
+	resolved.BotID = botID
+	resolved.SessionID = sessionID
 	fake := &fakeUserInputService{
 		target: userinput.Request{
 			ID:         inputID,
@@ -345,25 +390,20 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 			ToolName:   userinput.ToolNameAskUser,
 			Status:     userinput.StatusPending,
 		},
-		resolved: chatResolvedRequest(),
+		resolved: resolved,
 	}
-	releaseContinuation := make(chan struct{})
-	continuationStarted := make(chan struct{})
-	var continuationStartedOnce sync.Once
 	resolver := &Service{
-		userInput: fake,
-		continueUserInputFn: func(ctx context.Context, _ userinput.Request, _ UserInputResponseInput, _ sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
-			continuationStartedOnce.Do(func() { close(continuationStarted) })
-			select {
-			case <-releaseContinuation:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if err := sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAgentStart}); err != nil {
-				return err
-			}
-			return sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAgentEnd})
-		},
+		agent: native.New(native.Deps{ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
+			cfg.Messages = []sdk.Message{sdk.UserMessage("continue")}
+			return applier.apply(ctx, cfg)
+		}}),
+		userInput:         fake,
+		modelsService:     models.NewService(slog.New(slog.DiscardHandler), queries),
+		queries:           queries,
+		settingsService:   settings.NewService(slog.New(slog.DiscardHandler), &acpContextBudgetSettingsQueries{chatModelID: modelID}, nil, nil),
+		messageService:    messages,
+		contextLifecycles: lifecycles,
+		logger:            slog.New(slog.DiscardHandler),
 	}
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-1",
@@ -458,6 +498,9 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 		t.Fatal("continuation started before the deferred producer finished persistence")
 	case <-time.After(25 * time.Millisecond):
 	}
+	if len(lifecycles.params) != 0 {
+		t.Fatalf("parked lifecycle writes = %d, want 0", len(lifecycles.params))
+	}
 	if err := manager.FinishRun(context.Background(), handle, "", ""); err != nil {
 		t.Fatalf("park deferred producer: %v", err)
 	}
@@ -465,6 +508,9 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	case <-continuationStarted:
 	case <-time.After(time.Second):
 		t.Fatal("continuation did not start after the deferred producer finished")
+	}
+	if len(lifecycles.params) != 0 {
+		t.Fatalf("in-flight continuation lifecycle writes = %d, want 0", len(lifecycles.params))
 	}
 	close(releaseContinuation)
 	deadline := time.Now().Add(time.Second)
@@ -480,6 +526,15 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 			t.Fatalf("resumed run did not complete: %#v", snapshot.CurrentRunView)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if len(lifecycles.params) != 1 {
+		t.Fatalf("terminal lifecycle writes = %d, want exactly 1", len(lifecycles.params))
+	}
+	if got := pgUUIDString(lifecycles.params[0].RunID); got != runID {
+		t.Fatalf("terminal lifecycle RunID = %q, want admitted RunID %q", got, runID)
+	}
+	if got := lifecycles.params[0].Status; got != contextLifecycleStatusCompleted {
+		t.Fatalf("terminal lifecycle status = %q, want %q", got, contextLifecycleStatusCompleted)
 	}
 }
 
