@@ -41,6 +41,7 @@ func (s *Service) startDiscussTurn(runCtx context.Context, cmd turn.StartTurnCom
 		return nil, errors.New("turn: discuss runtime not configured")
 	}
 	h := newDiscussHandle(runCtx, cmd, cancel, admission.RunID, s.turnRunFinisher(runCtx, admission))
+	h.publishAgentEvent = s.turnAgentEventPublisher(admission.Handle)
 	go s.pumpDiscuss(runCtx, cmd, h)
 	return h, nil
 }
@@ -191,18 +192,31 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	runConfig = runConfig.RefreshContextFrag()
 	terminal := s.contextLifecycleTerminal(ctx, runConfig)
 	var lifecycleCause error
-	defer func() { terminal(lifecycleCause) }()
+	var lifecycleDeferred bool
+	defer func() {
+		if !lifecycleDeferred {
+			terminal(lifecycleCause)
+		}
+	}()
 
 	eventCh := s.streamDiscussAgent(ctx, runConfig)
 
 	var finalMessages json.RawMessage
 	for event := range eventCh {
+		if h.publishAgentEvent != nil {
+			if publishErr := h.publishAgentEvent(ctx, event); publishErr != nil {
+				lifecycleCause = publishErr
+				h.emitErr(publishErr)
+				return
+			}
+		}
 		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
 			lifecycleCause = eventErr
 		}
 		if event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort {
 			finalMessages = event.Messages
-			if event.Type == native.EventAgentAbort && strings.TrimSpace(event.ApprovalID) == "" && lifecycleCause == nil {
+			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+			if event.Type == native.EventAgentAbort && !lifecycleDeferred && lifecycleCause == nil {
 				lifecycleCause = errors.New("agent run aborted")
 			}
 		}
@@ -288,6 +302,7 @@ func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand,
 		BotID:                   cmd.BotID,
 		ChatID:                  cmd.BotID,
 		ThreadID:                cmd.ThreadID,
+		RunID:                   h.id,
 		RouteID:                 cmd.RouteID,
 		SourceChannelIdentityID: cmd.SourceChannelIdentityID,
 		CurrentChannel:          cmd.CurrentChannel,

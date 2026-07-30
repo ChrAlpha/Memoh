@@ -174,7 +174,12 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		cfg = s.prepareRunConfig(streamCtx, cfg)
 		terminal := s.contextLifecycleTerminal(streamCtx, cfg)
 		var agentStreamErr error
-		defer func() { terminal(agentStreamErr) }()
+		var lifecycleDeferred bool
+		defer func() {
+			if !lifecycleDeferred {
+				terminal(agentStreamErr)
+			}
+		}()
 
 		// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.
 		idleCtx, idleCancel := withIdleTimeout(streamCtx)
@@ -209,7 +214,8 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				)
 			}
 			if event.Type == native.EventAgentAbort {
-				if strings.TrimSpace(event.ApprovalID) == "" && agentStreamErr == nil {
+				lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+				if !lifecycleDeferred && agentStreamErr == nil {
 					agentStreamErr = errors.New("agent run aborted")
 				}
 			}
@@ -226,7 +232,8 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					snap.visibleOutput = hasVisibleOutput
 					lastSnapshot = snap
 					hasSnapshot = true
-					if snap.aborted && strings.TrimSpace(event.ApprovalID) == "" && snap.deferredToolID == "" && agentStreamErr == nil {
+					lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
+					if snap.aborted && !lifecycleDeferred && agentStreamErr == nil {
 						agentStreamErr = errors.New("agent run aborted")
 					}
 					if !stored && !runOwnershipLost(streamCtx) {
