@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -229,13 +230,13 @@ func (s *Service) RunConfig(ctx context.Context, cfg Config, req Request, runner
 		return result, nil
 	}
 	result.Metadata = map[string]any{"hook_sources": hookSourceSummaries(matches)}
-	for _, hook := range matches {
+	for hookOrder, hook := range matches {
 		hookReq := req
 		hookReq.Version = 1
 		hookReq.HookName = hook.Name
 		for _, action := range hook.Actions {
 			actionResult, err := s.runAction(ctx, cfg, hookReq, action, hook.source, runner)
-			annotateActionResult(&actionResult, hook)
+			annotateActionResult(&actionResult, hook, hookOrder)
 			result.ActionResults = append(result.ActionResults, actionResult)
 			result.ActionsRun++
 			if err != nil {
@@ -405,10 +406,11 @@ func applyActionOutput(result *ActionResult, stdout string, maxOutputBytes int) 
 		return
 	}
 	var output struct {
-		Decision      string         `json:"decision"`
-		Reason        string         `json:"reason"`
-		AppendContext string         `json:"append_context"`
-		Metadata      map[string]any `json:"metadata"`
+		Decision            string          `json:"decision"`
+		Reason              string          `json:"reason"`
+		AppendContext       string          `json:"append_context"`
+		AppendSystemSection json.RawMessage `json:"append_system_section"`
+		Metadata            map[string]any  `json:"metadata"`
 	}
 	if err := json.Unmarshal([]byte(raw), &output); err != nil {
 		result.Decision = DecisionAllow
@@ -438,6 +440,11 @@ func applyActionOutput(result *ActionResult, stdout string, maxOutputBytes int) 
 		result.appendContextRaw = output.AppendContext
 		result.Metadata["append_context"] = limitHookOutputText(output.AppendContext, maxOutputBytes)
 	}
+	if len(output.AppendSystemSection) > 0 {
+		sections, warnings := parseAppendSystemSections(output.AppendSystemSection, maxOutputBytes)
+		result.AppendSystemSections = append(result.AppendSystemSections, sections...)
+		result.Warnings = append(result.Warnings, warnings...)
+	}
 }
 
 func applyToolOutput(result *ActionResult, output any, maxOutputBytes int) {
@@ -462,6 +469,11 @@ func applyToolOutput(result *ActionResult, output any, maxOutputBytes int) {
 	if appendContext, _ := m["append_context"].(string); appendContext != "" {
 		result.appendContextRaw = appendContext
 		result.Metadata = map[string]any{"append_context": limitHookOutputText(appendContext, maxOutputBytes)}
+	}
+	if value, ok := m["append_system_section"]; ok {
+		sections, warnings := parseAppendSystemSections(value, maxOutputBytes)
+		result.AppendSystemSections = append(result.AppendSystemSections, sections...)
+		result.Warnings = append(result.Warnings, warnings...)
 	}
 }
 
@@ -488,6 +500,17 @@ func mergeDecision(result *Result, actionResult ActionResult, maxOutputBytes int
 		result.appendContextRaw += appendContext
 		result.AppendContext = limitHookOutputText(result.appendContextRaw, firstPositive(result.appendContextLimit, maxOutputBytes))
 	}
+	sectionOffset := len(result.AppendSystemSections)
+	for i := range actionResult.AppendSystemSections {
+		actionResult.AppendSystemSections[i].sectionOrder = sectionOffset + i
+	}
+	for i := range actionResult.Warnings {
+		if actionResult.Warnings[i].sectionOrder >= 0 {
+			actionResult.Warnings[i].sectionOrder += sectionOffset
+		}
+	}
+	result.AppendSystemSections = append(result.AppendSystemSections, actionResult.AppendSystemSections...)
+	result.Warnings = append(result.Warnings, actionResult.Warnings...)
 	switch decision {
 	case DecisionDeny:
 		result.Decision = DecisionDeny
@@ -506,6 +529,131 @@ func mergeDecision(result *Result, actionResult ActionResult, maxOutputBytes int
 		if result.Decision == "" {
 			result.Decision = DecisionAllow
 		}
+	}
+}
+
+func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOutput, []OutputWarning) {
+	data, err := appendSystemSectionJSON(value)
+	if err != nil {
+		return nil, []OutputWarning{invalidAppendSystemSectionWarning()}
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return nil, []OutputWarning{invalidAppendSystemSectionWarning()}
+	}
+
+	var entries []json.RawMessage
+	switch data[0] {
+	case '{':
+		entries = []json.RawMessage{data}
+	case '[':
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return nil, []OutputWarning{invalidAppendSystemSectionWarning()}
+		}
+	default:
+		return nil, []OutputWarning{invalidAppendSystemSectionWarning()}
+	}
+
+	sections := make([]SystemSectionOutput, 0, len(entries))
+	warnings := make([]OutputWarning, 0)
+	remainingBytes := maxOutputBytes
+	for _, entry := range entries {
+		var raw struct {
+			ID        string `json:"id"`
+			Text      string `json:"text"`
+			Retention string `json:"retention"`
+			Cache     string `json:"cache"`
+		}
+		entry = bytes.TrimSpace(entry)
+		if len(entry) == 0 || entry[0] != '{' || json.Unmarshal(entry, &raw) != nil {
+			warnings = append(warnings, invalidAppendSystemSectionWarning())
+			continue
+		}
+
+		if strings.TrimSpace(raw.Text) == "" {
+			warnings = append(warnings, invalidAppendSystemSectionWarning())
+			continue
+		}
+		retention := SystemSectionRetention(strings.ToLower(strings.TrimSpace(raw.Retention)))
+		clampedRequired := false
+		switch retention {
+		case "":
+			retention = SystemSectionRetentionOptional
+		case SystemSectionRetentionOptional, SystemSectionRetentionPreferred:
+		case "required":
+			retention = SystemSectionRetentionPreferred
+			clampedRequired = true
+		default:
+			warnings = append(warnings, invalidAppendSystemSectionWarning())
+			continue
+		}
+		cache := SystemSectionCache(strings.ToLower(strings.TrimSpace(raw.Cache)))
+		switch cache {
+		case "":
+			cache = SystemSectionCacheDynamic
+		case SystemSectionCacheDynamic, SystemSectionCacheStable:
+		default:
+			warnings = append(warnings, invalidAppendSystemSectionWarning())
+			continue
+		}
+
+		textLimit := maxOutputBytes
+		if maxOutputBytes > 0 {
+			if remainingBytes <= 0 {
+				warnings = append(warnings, appendSystemSectionOutputLimitedWarning(strings.TrimSpace(raw.ID)))
+				continue
+			}
+			textLimit = remainingBytes
+		}
+		text := limitHookOutputText(raw.Text, textLimit)
+		if text == "" {
+			warnings = append(warnings, appendSystemSectionOutputLimitedWarning(strings.TrimSpace(raw.ID)))
+			continue
+		}
+		section := SystemSectionOutput{
+			ID:           strings.TrimSpace(raw.ID),
+			Text:         text,
+			Retention:    retention,
+			Cache:        cache,
+			sectionOrder: len(sections),
+		}
+		sections = append(sections, section)
+		if maxOutputBytes > 0 {
+			remainingBytes -= len(text)
+		}
+		if clampedRequired {
+			warnings = append(warnings, OutputWarning{
+				Code:         WarningSystemSectionRequiredClamped,
+				Message:      "hook system section retention was clamped from required to preferred",
+				SectionID:    section.ID,
+				sectionOrder: section.sectionOrder,
+			})
+		}
+	}
+	return sections, warnings
+}
+
+func appendSystemSectionJSON(value any) ([]byte, error) {
+	if raw, ok := value.(json.RawMessage); ok {
+		return raw, nil
+	}
+	return json.Marshal(value)
+}
+
+func appendSystemSectionOutputLimitedWarning(sectionID string) OutputWarning {
+	return OutputWarning{
+		Code:         WarningAppendSystemSectionOutputLimited,
+		Message:      "append_system_section text was limited by max_output_bytes",
+		SectionID:    sectionID,
+		sectionOrder: -1,
+	}
+}
+
+func invalidAppendSystemSectionWarning() OutputWarning {
+	return OutputWarning{
+		Code:         WarningInvalidAppendSystemSection,
+		Message:      "append_system_section must contain an object or array of objects with valid text and policy fields",
+		sectionOrder: -1,
 	}
 }
 
@@ -605,7 +753,7 @@ func hookSourceSummaries(hooks []Hook) []map[string]any {
 	return out
 }
 
-func annotateActionResult(result *ActionResult, hook Hook) {
+func annotateActionResult(result *ActionResult, hook Hook, hookOrder int) {
 	if result == nil {
 		return
 	}
@@ -615,6 +763,14 @@ func annotateActionResult(result *ActionResult, hook Hook) {
 	source := normalizeHookSource(hook.source)
 	result.Metadata["hook_name"] = hook.Name
 	result.Metadata["hook_source_kind"] = source.Kind
+	for i := range result.AppendSystemSections {
+		result.AppendSystemSections[i].HookName = hook.Name
+		result.AppendSystemSections[i].hookOrder = hookOrder
+	}
+	for i := range result.Warnings {
+		result.Warnings[i].HookName = hook.Name
+		result.Warnings[i].hookOrder = hookOrder
+	}
 	if source.Kind == sourceKindPlugin {
 		result.Metadata["plugin_id"] = source.PluginID
 		result.Metadata["plugin_dir"] = source.PluginDir
