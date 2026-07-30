@@ -12,6 +12,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	tools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/apperror"
 )
 
 // currentTimeLine extracts the "Current time: ..." line a materialized spawn
@@ -439,7 +440,11 @@ func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
 	if got := result.ContextLifecycle.BudgetPlan; got == nil || got.ActualSystemCost != plan.ActualSystemCost {
 		t.Fatalf("failure lifecycle budget plan = %#v, want ActualSystemCost %d", got, plan.ActualSystemCost)
 	}
-	if err == nil || err.Error() != publicBudgetUnsatisfiedError {
+	definition, ok := apperror.Lookup(apperror.CodeContextBudgetUnsatisfied)
+	if !ok {
+		t.Fatal("budget error missing from public catalog")
+	}
+	if err == nil || err.Error() != definition.Detail {
 		t.Fatalf("GenerateWithWatchdog error = %v, want public context-budget failure", err)
 	}
 }

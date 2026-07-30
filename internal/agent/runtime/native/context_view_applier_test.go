@@ -14,6 +14,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	tools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/apperror"
 )
 
 type applierRecorder struct {
@@ -189,23 +190,26 @@ func failingBudgetApplier(plan contextfrag.ContextBudgetPlan, err error) Context
 	}
 }
 
-func TestPublicContextViewErrorUsesStableSafeText(t *testing.T) {
+func TestContextViewStreamErrorUsesStablePublicContract(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		err  error
+		code apperror.Code
 		want string
 	}{
 		{
 			name: "wrapped protected overflow",
 			err:  fmt.Errorf("%w: private protected cost", contextfrag.ErrProtectedContextOverflow),
-			want: publicProtectedContextOverflowError,
+			code: apperror.CodeContextProtectedOverflow,
+			want: "Required context exceeds the model context budget.",
 		},
 		{
 			name: "wrapped unsatisfied budget",
 			err:  fmt.Errorf("%w: private window arithmetic", contextfrag.ErrBudgetUnsatisfied),
-			want: publicBudgetUnsatisfiedError,
+			code: apperror.CodeContextBudgetUnsatisfied,
+			want: "The model context window is too small for this request.",
 		},
 		{
 			name: "unknown internal error",
@@ -215,12 +219,18 @@ func TestPublicContextViewErrorUsesStableSafeText(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := publicContextViewError(tt.err)
-			if got != tt.want {
-				t.Fatalf("publicContextViewError() = %q, want %q", got, tt.want)
+			got := contextViewStreamError(tt.err)
+			if got.Type != EventError {
+				t.Fatalf("event type = %q, want %q", got.Type, EventError)
 			}
-			if strings.Contains(got, tt.err.Error()) {
-				t.Fatalf("publicContextViewError() leaked private diagnostic %q", got)
+			if got.Code != string(tt.code) {
+				t.Fatalf("event code = %q, want %q", got.Code, tt.code)
+			}
+			if got.Error != tt.want {
+				t.Fatalf("event error = %q, want %q", got.Error, tt.want)
+			}
+			if strings.Contains(got.Error, tt.err.Error()) {
+				t.Fatalf("contextViewStreamError() leaked private diagnostic %q", got.Error)
 			}
 		})
 	}
@@ -292,8 +302,15 @@ func TestStreamContextViewBudgetErrorIsPublicAndStopsBeforeProvider(t *testing.T
 	if len(errorEvents) != 1 {
 		t.Fatalf("EventError count = %d, want exactly 1: %#v", len(errorEvents), errorEvents)
 	}
-	if got := errorEvents[0].Error; got != publicBudgetUnsatisfiedError {
-		t.Fatalf("public EventError = %q, want fixed safe text %q", got, publicBudgetUnsatisfiedError)
+	definition, ok := apperror.Lookup(apperror.CodeContextBudgetUnsatisfied)
+	if !ok {
+		t.Fatal("budget error missing from public catalog")
+	}
+	if got := errorEvents[0].Error; got != definition.Detail {
+		t.Fatalf("public EventError = %q, want catalog detail %q", got, definition.Detail)
+	}
+	if got := errorEvents[0].Code; got != string(apperror.CodeContextBudgetUnsatisfied) {
+		t.Fatalf("public EventError code = %q, want %q", got, apperror.CodeContextBudgetUnsatisfied)
 	}
 	if strings.Contains(errorEvents[0].Error, privateDiagnostic) {
 		t.Fatalf("public EventError leaked private diagnostic: %q", errorEvents[0].Error)

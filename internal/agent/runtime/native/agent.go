@@ -18,6 +18,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	tools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -76,20 +77,26 @@ func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig,
 	return cfg.RefreshContextFrag(), nil
 }
 
-const (
-	publicProtectedContextOverflowError = "Required instructions exceed the model context budget."
-	publicBudgetUnsatisfiedError        = "The model context window is too small for this request."
-	publicContextPreparationError       = "The model context could not be prepared."
-)
+const publicContextPreparationError = "The model context could not be prepared."
 
-func publicContextViewError(err error) string {
+func contextViewStreamError(err error) StreamEvent {
+	var code apperror.Code
 	switch {
 	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
-		return publicProtectedContextOverflowError
+		code = apperror.CodeContextProtectedOverflow
 	case errors.Is(err, contextfrag.ErrBudgetUnsatisfied):
-		return publicBudgetUnsatisfiedError
+		code = apperror.CodeContextBudgetUnsatisfied
 	default:
-		return publicContextPreparationError
+		return StreamEvent{Type: EventError, Error: publicContextPreparationError}
+	}
+	public, ok := apperror.PublicFrom(apperror.New(code, nil), "")
+	if !ok {
+		return StreamEvent{Type: EventError, Error: publicContextPreparationError}
+	}
+	return StreamEvent{
+		Type:  EventError,
+		Code:  string(public.Code),
+		Error: public.Detail,
 	}
 }
 
@@ -234,9 +241,10 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	var contextViewErr error
 	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
 	if contextViewErr != nil {
-		turnError = publicContextViewError(contextViewErr)
+		publicError := contextViewStreamError(contextViewErr)
+		turnError = publicError.Error
 		a.logger.Warn("context view preflight failed", slog.Any("error", contextViewErr))
-		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
+		sendEvent(ctx, ch, publicError)
 		return
 	}
 	if readMediaState != nil {
