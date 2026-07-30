@@ -1,6 +1,7 @@
 -- name: ListRecentAssistantMessagesBySession :many
 SELECT
   id,
+  run_id,
   role,
   metadata,
   created_at
@@ -86,6 +87,7 @@ LIMIT 1;
 SELECT
   run_id,
   status,
+  error_code,
   created_at,
   snapshot
 FROM context_lifecycles

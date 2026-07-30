@@ -185,7 +185,7 @@ func (h *SessionInfoHandler) GetSessionInfo(c echo.Context) error {
 	}); err != nil {
 		h.logger.Warn("load latest context snapshot failed", slog.Any("error", err))
 	} else {
-		breakdown, toolDefs = latestContextComposition(lifecycleTurnsFromRows(rows, 1))
+		breakdown, toolDefs = latestContextComposition(legacyLifecycleTurnsFromRows(rows, 1))
 	}
 
 	resp := SessionInfoResponse{

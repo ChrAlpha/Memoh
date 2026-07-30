@@ -11,7 +11,7 @@ func TestLatestContextCompositionUsesNewestTurn(t *testing.T) {
 	t.Parallel()
 
 	latest := ContextLifecycleTurn{
-		MessageID: "m2",
+		RunID:     "r2",
 		CreatedAt: time.Now(),
 		Snapshot: contextfrag.LifecycleSnapshot{
 			Breakdown: []contextfrag.KindBreakdown{
@@ -25,7 +25,7 @@ func TestLatestContextCompositionUsesNewestTurn(t *testing.T) {
 			},
 		},
 	}
-	older := ContextLifecycleTurn{MessageID: "m1", Snapshot: contextfrag.LifecycleSnapshot{
+	older := ContextLifecycleTurn{RunID: "r1", Snapshot: contextfrag.LifecycleSnapshot{
 		Breakdown: []contextfrag.KindBreakdown{{Kind: contextfrag.KindSystemPrompt, Fragments: 1, TokenEstimate: 1}},
 	}}
 

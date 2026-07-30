@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -8,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -28,7 +32,9 @@ type ContextLifecycleResponse struct {
 
 // ContextLifecycleTurn is one persisted lifecycle snapshot, newest first.
 type ContextLifecycleTurn struct {
-	MessageID string                        `json:"message_id"`
+	RunID     string                        `json:"run_id"`
+	Status    string                        `json:"status"`
+	ErrorCode string                        `json:"error_code,omitempty"`
 	CreatedAt time.Time                     `json:"created_at"`
 	Snapshot  contextfrag.LifecycleSnapshot `json:"snapshot"`
 }
@@ -56,15 +62,15 @@ type ContextLifecycleAggregates struct {
 // the previous turn's. Tools sit first in the provider cache order, so any
 // entry here invalidates every cached prefix behind it.
 type ToolRosterChange struct {
-	MessageID string   `json:"message_id"`
-	Added     []string `json:"added,omitempty"`
-	Removed   []string `json:"removed,omitempty"`
-	Resized   []string `json:"resized,omitempty"`
+	RunID   string   `json:"run_id"`
+	Added   []string `json:"added,omitempty"`
+	Removed []string `json:"removed,omitempty"`
+	Resized []string `json:"resized,omitempty"`
 }
 
 // GetSessionContextLifecycle godoc
 // @Summary Get session context lifecycle
-// @Description List the persisted context lifecycle snapshots (selection, cache plan, mutations, cache attribution) for a chat session with aggregated cache and drop statistics
+// @Description List run-keyed context lifecycle snapshots (selection, cache plan, mutations, cache attribution) for a chat session with aggregated cache and drop statistics; pre-run-table sessions fall back to legacy assistant metadata
 // @Tags sessions
 // @Param bot_id path string true "Bot ID"
 // @Param session_id path string true "Session ID"
@@ -128,16 +134,12 @@ func (h *SessionInfoHandler) GetSessionContextLifecycle(c echo.Context) error {
 	}
 
 	limit := contextLifecycleLimit(c)
-	rows, err := h.queries.ListRecentAssistantMessagesBySession(ctx, sqlc.ListRecentAssistantMessagesBySessionParams{
-		SessionID: pgSessionID,
-		MaxCount:  int32(limit), //nolint:gosec // G115: limit is bounded to contextLifecycleMaxLimit
-	})
+	turns, err := loadContextLifecycleTurns(ctx, h.queries, pgSessionID, limit)
 	if err != nil {
-		h.logger.Error("list session messages failed", slog.Any("error", err))
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load session messages")
+		h.logger.Error("load session context lifecycle failed", slog.Any("error", err))
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load context lifecycle")
 	}
 
-	turns := lifecycleTurnsFromRows(rows, limit)
 	return c.JSON(http.StatusOK, ContextLifecycleResponse{
 		Turns:      turns,
 		Aggregates: aggregateContextLifecycle(turns),
@@ -157,9 +159,75 @@ func contextLifecycleLimit(c echo.Context) int {
 	return limit
 }
 
-// lifecycleTurnsFromRows extracts persisted lifecycle snapshots from
+type contextLifecycleQueries interface {
+	ListRecentContextLifecyclesBySession(
+		context.Context,
+		sqlc.ListRecentContextLifecyclesBySessionParams,
+	) ([]sqlc.ListRecentContextLifecyclesBySessionRow, error)
+	ListRecentAssistantMessagesBySession(
+		context.Context,
+		sqlc.ListRecentAssistantMessagesBySessionParams,
+	) ([]sqlc.ListRecentAssistantMessagesBySessionRow, error)
+}
+
+func loadContextLifecycleTurns(
+	ctx context.Context,
+	queries contextLifecycleQueries,
+	sessionID pgtype.UUID,
+	limit int,
+) ([]ContextLifecycleTurn, error) {
+	rows, err := queries.ListRecentContextLifecyclesBySession(ctx, sqlc.ListRecentContextLifecyclesBySessionParams{
+		SessionID: sessionID,
+		MaxCount:  int32(limit), //nolint:gosec // G115: limit is bounded to contextLifecycleMaxLimit
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list run lifecycles: %w", err)
+	}
+	if len(rows) > 0 {
+		return lifecycleTurnsFromRunRows(rows, limit)
+	}
+
+	legacyRows, err := queries.ListRecentAssistantMessagesBySession(ctx, sqlc.ListRecentAssistantMessagesBySessionParams{
+		SessionID: sessionID,
+		MaxCount:  int32(limit), //nolint:gosec // G115: limit is bounded to contextLifecycleMaxLimit
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list legacy assistant lifecycles: %w", err)
+	}
+	return legacyLifecycleTurnsFromRows(legacyRows, limit), nil
+}
+
+func lifecycleTurnsFromRunRows(
+	rows []sqlc.ListRecentContextLifecyclesBySessionRow,
+	limit int,
+) ([]ContextLifecycleTurn, error) {
+	turns := make([]ContextLifecycleTurn, 0, min(len(rows), limit))
+	for _, row := range rows {
+		if len(turns) >= limit {
+			break
+		}
+		var snapshot contextfrag.LifecycleSnapshot
+		if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
+			return nil, fmt.Errorf("decode lifecycle snapshot for run %s: %w", row.RunID.String(), err)
+		}
+		errorCode := ""
+		if row.ErrorCode.Valid {
+			errorCode = row.ErrorCode.String
+		}
+		turns = append(turns, ContextLifecycleTurn{
+			RunID:     row.RunID.String(),
+			Status:    row.Status,
+			ErrorCode: errorCode,
+			CreatedAt: row.CreatedAt.Time,
+			Snapshot:  snapshot,
+		})
+	}
+	return turns, nil
+}
+
+// legacyLifecycleTurnsFromRows extracts pre-run-table lifecycle snapshots from
 // assistant message metadata, newest first, bounded by limit.
-func lifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessionRow, limit int) []ContextLifecycleTurn {
+func legacyLifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessionRow, limit int) []ContextLifecycleTurn {
 	turns := make([]ContextLifecycleTurn, 0, limit)
 	for _, row := range rows {
 		if len(turns) >= limit {
@@ -170,7 +238,8 @@ func lifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessionRow,
 			continue
 		}
 		turns = append(turns, ContextLifecycleTurn{
-			MessageID: row.ID.String(),
+			RunID:     row.RunID.String(),
+			Status:    "completed",
 			CreatedAt: row.CreatedAt.Time,
 			Snapshot:  snapshot,
 		})
@@ -274,7 +343,7 @@ func toolRosterChurn(turns []ContextLifecycleTurn) (int, []ToolRosterChange) {
 		if len(change.Added) == 0 && len(change.Removed) == 0 && len(change.Resized) == 0 {
 			continue
 		}
-		change.MessageID = current.MessageID
+		change.RunID = current.RunID
 		changes++
 		if len(details) < toolRosterChangeDetailCap {
 			details = append(details, change)

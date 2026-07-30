@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +13,164 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
-func lifecycleRow(t *testing.T, role string, at time.Time, snapshot *contextfrag.LifecycleSnapshot) sqlc.ListRecentAssistantMessagesBySessionRow {
+type contextLifecycleQueryStub struct {
+	lifecycleRows   []sqlc.ListRecentContextLifecyclesBySessionRow
+	lifecycleErr    error
+	lifecycleParams []sqlc.ListRecentContextLifecyclesBySessionParams
+	legacyRows      []sqlc.ListRecentAssistantMessagesBySessionRow
+	legacyErr       error
+	legacyParams    []sqlc.ListRecentAssistantMessagesBySessionParams
+}
+
+func (q *contextLifecycleQueryStub) ListRecentContextLifecyclesBySession(
+	_ context.Context,
+	arg sqlc.ListRecentContextLifecyclesBySessionParams,
+) ([]sqlc.ListRecentContextLifecyclesBySessionRow, error) {
+	q.lifecycleParams = append(q.lifecycleParams, arg)
+	return q.lifecycleRows, q.lifecycleErr
+}
+
+func (q *contextLifecycleQueryStub) ListRecentAssistantMessagesBySession(
+	_ context.Context,
+	arg sqlc.ListRecentAssistantMessagesBySessionParams,
+) ([]sqlc.ListRecentAssistantMessagesBySessionRow, error) {
+	q.legacyParams = append(q.legacyParams, arg)
+	return q.legacyRows, q.legacyErr
+}
+
+func lifecycleSnapshotJSON(t *testing.T, snapshot contextfrag.LifecycleSnapshot) []byte {
+	t.Helper()
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal lifecycle snapshot: %v", err)
+	}
+	return raw
+}
+
+func TestLoadContextLifecycleTurnsPrefersRunRowsWithoutAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	runID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	sessionID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	createdAt := time.Unix(1000, 0).UTC()
+	queries := &contextLifecycleQueryStub{
+		lifecycleRows: []sqlc.ListRecentContextLifecyclesBySessionRow{{
+			RunID:     runID,
+			Status:    "failed_budget",
+			ErrorCode: pgtype.Text{String: "context.budget_unsatisfied", Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
+			Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
+				Version:        1,
+				FinalInputHash: "failed-before-assistant",
+			}),
+		}},
+	}
+
+	turns, err := loadContextLifecycleTurns(context.Background(), queries, sessionID, 7)
+	if err != nil {
+		t.Fatalf("load context lifecycle turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turns = %d, want failed run without an assistant message", len(turns))
+	}
+	turn := turns[0]
+	if turn.RunID != runID.String() || turn.Status != "failed_budget" ||
+		turn.ErrorCode != "context.budget_unsatisfied" || !turn.CreatedAt.Equal(createdAt) {
+		t.Fatalf("turn = %#v, want run-keyed failed_budget lifecycle", turn)
+	}
+	if turn.Snapshot.FinalInputHash != "failed-before-assistant" {
+		t.Fatalf("snapshot = %#v, want persisted run snapshot", turn.Snapshot)
+	}
+	if len(queries.legacyParams) != 0 {
+		t.Fatalf("legacy query calls = %d, want 0 when run rows exist", len(queries.legacyParams))
+	}
+	if len(queries.lifecycleParams) != 1 || queries.lifecycleParams[0].MaxCount != 7 {
+		t.Fatalf("run query params = %#v, want one call with limit 7", queries.lifecycleParams)
+	}
+}
+
+func TestLoadContextLifecycleTurnsPreservesRunOrderingAndLimit(t *testing.T) {
+	t.Parallel()
+
+	rows := make([]sqlc.ListRecentContextLifecyclesBySessionRow, 0, 3)
+	for i := byte(1); i <= 3; i++ {
+		rows = append(rows, sqlc.ListRecentContextLifecyclesBySessionRow{
+			RunID:     pgtype.UUID{Bytes: [16]byte{i}, Valid: true},
+			Status:    "completed",
+			CreatedAt: pgtype.Timestamptz{Time: time.Unix(int64(100-i), 0).UTC(), Valid: true},
+			Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
+				Version:        1,
+				FinalInputHash: string(rune('a' + i - 1)),
+			}),
+		})
+	}
+	queries := &contextLifecycleQueryStub{lifecycleRows: rows}
+
+	turns, err := loadContextLifecycleTurns(
+		context.Background(),
+		queries,
+		pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+		2,
+	)
+	if err != nil {
+		t.Fatalf("load context lifecycle turns: %v", err)
+	}
+	if len(turns) != 2 || turns[0].Snapshot.FinalInputHash != "a" || turns[1].Snapshot.FinalInputHash != "b" {
+		t.Fatalf("turns = %#v, want query order bounded to two rows", turns)
+	}
+}
+
+func TestLoadContextLifecycleTurnsFallsBackOnlyWhenRunRowsDoNotExist(t *testing.T) {
+	t.Parallel()
+
+	runID := pgtype.UUID{Bytes: [16]byte{4}, Valid: true}
+	createdAt := time.Unix(1000, 0).UTC()
+	queries := &contextLifecycleQueryStub{
+		legacyRows: []sqlc.ListRecentAssistantMessagesBySessionRow{
+			lifecycleRow(t, runID, createdAt, &contextfrag.LifecycleSnapshot{
+				Version:        1,
+				FinalInputHash: "legacy",
+			}),
+		},
+	}
+
+	turns, err := loadContextLifecycleTurns(
+		context.Background(),
+		queries,
+		pgtype.UUID{Bytes: [16]byte{5}, Valid: true},
+		1,
+	)
+	if err != nil {
+		t.Fatalf("load context lifecycle turns: %v", err)
+	}
+	if len(turns) != 1 || turns[0].RunID != runID.String() || turns[0].Status != "completed" ||
+		turns[0].Snapshot.FinalInputHash != "legacy" {
+		t.Fatalf("turns = %#v, want legacy assistant metadata fallback", turns)
+	}
+	if len(queries.lifecycleParams) != 1 || len(queries.legacyParams) != 1 {
+		t.Fatalf("query calls = run:%d legacy:%d, want one each", len(queries.lifecycleParams), len(queries.legacyParams))
+	}
+}
+
+func TestLoadContextLifecycleTurnsDoesNotMaskRunQueryFailure(t *testing.T) {
+	t.Parallel()
+
+	queries := &contextLifecycleQueryStub{lifecycleErr: errors.New("run store unavailable")}
+	_, err := loadContextLifecycleTurns(
+		context.Background(),
+		queries,
+		pgtype.UUID{Bytes: [16]byte{6}, Valid: true},
+		1,
+	)
+	if err == nil {
+		t.Fatal("expected run-table query failure")
+	}
+	if len(queries.legacyParams) != 0 {
+		t.Fatalf("legacy query calls = %d, want no fallback on query failure", len(queries.legacyParams))
+	}
+}
+
+func lifecycleRow(t *testing.T, runID pgtype.UUID, at time.Time, snapshot *contextfrag.LifecycleSnapshot) sqlc.ListRecentAssistantMessagesBySessionRow {
 	t.Helper()
 	metadata := map[string]any{}
 	if snapshot != nil {
@@ -23,23 +182,24 @@ func lifecycleRow(t *testing.T, role string, at time.Time, snapshot *contextfrag
 	}
 	return sqlc.ListRecentAssistantMessagesBySessionRow{
 		ID:        pgtype.UUID{Bytes: [16]byte{byte(at.Unix() % 256)}, Valid: true}, //nolint:gosec // test fixture
-		Role:      role,
+		RunID:     runID,
+		Role:      "assistant",
 		Metadata:  raw,
 		CreatedAt: pgtype.Timestamptz{Time: at, Valid: true},
 	}
 }
 
-func TestLifecycleTurnsFromRowsFiltersAndOrders(t *testing.T) {
+func TestLegacyLifecycleTurnsFromRowsFiltersAndOrders(t *testing.T) {
 	t.Parallel()
 
 	base := time.Unix(1000, 0).UTC()
 	rows := []sqlc.ListRecentAssistantMessagesBySessionRow{
-		lifecycleRow(t, "assistant", base.Add(3*time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-2"}),
-		lifecycleRow(t, "assistant", base.Add(2*time.Minute), nil),
-		lifecycleRow(t, "assistant", base.Add(time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-1"}),
+		lifecycleRow(t, pgtype.UUID{Bytes: [16]byte{3}, Valid: true}, base.Add(3*time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-2"}),
+		lifecycleRow(t, pgtype.UUID{Bytes: [16]byte{2}, Valid: true}, base.Add(2*time.Minute), nil),
+		lifecycleRow(t, pgtype.UUID{Bytes: [16]byte{1}, Valid: true}, base.Add(time.Minute), &contextfrag.LifecycleSnapshot{Version: 1, FinalInputHash: "turn-1"}),
 	}
 
-	turns := lifecycleTurnsFromRows(rows, 10)
+	turns := legacyLifecycleTurnsFromRows(rows, 10)
 	if len(turns) != 2 {
 		t.Fatalf("turns = %d, want 2 (rows with a lifecycle snapshot only)", len(turns))
 	}
@@ -47,18 +207,18 @@ func TestLifecycleTurnsFromRowsFiltersAndOrders(t *testing.T) {
 		t.Fatalf("turns must be newest-first: %q then %q", turns[0].Snapshot.FinalInputHash, turns[1].Snapshot.FinalInputHash)
 	}
 
-	limited := lifecycleTurnsFromRows(rows, 1)
+	limited := legacyLifecycleTurnsFromRows(rows, 1)
 	if len(limited) != 1 || limited[0].Snapshot.FinalInputHash != "turn-2" {
 		t.Fatalf("limit must keep the newest turns: %#v", limited)
 	}
 }
 
-func TestLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *testing.T) {
+func TestLegacyLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *testing.T) {
 	t.Parallel()
 
 	base := time.Unix(1000, 0).UTC()
 	rows := []sqlc.ListRecentAssistantMessagesBySessionRow{
-		lifecycleRow(t, "assistant", base.Add(time.Minute), &contextfrag.LifecycleSnapshot{
+		lifecycleRow(t, pgtype.UUID{Bytes: [16]byte{2}, Valid: true}, base.Add(time.Minute), &contextfrag.LifecycleSnapshot{
 			Version: 1,
 			MemoryRecall: &contextfrag.MemoryRecallTrace{
 				ProviderID: "provider-1",
@@ -69,13 +229,13 @@ func TestLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *testing.T
 				},
 			},
 		}),
-		lifecycleRow(t, "assistant", base, &contextfrag.LifecycleSnapshot{
+		lifecycleRow(t, pgtype.UUID{Bytes: [16]byte{1}, Valid: true}, base, &contextfrag.LifecycleSnapshot{
 			Version:        1,
 			FinalInputHash: "legacy-snapshot",
 		}),
 	}
 
-	turns := lifecycleTurnsFromRows(rows, 10)
+	turns := legacyLifecycleTurnsFromRows(rows, 10)
 	if len(turns) != 2 {
 		t.Fatalf("turns = %d, want memory and legacy snapshots", len(turns))
 	}

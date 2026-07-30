@@ -176,6 +176,16 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 	if !ok || !reflect.DeepEqual(pausedSnapshot, snapshot) {
 		t.Fatalf("paused lifecycle snapshot = %#v, %t; want %#v", pausedSnapshot, ok, snapshot)
 	}
+	legacyRecent, err := queries.ListRecentAssistantMessagesBySession(ctx, sqlc.ListRecentAssistantMessagesBySessionParams{
+		SessionID: parsedSessionID,
+		MaxCount:  1,
+	})
+	if err != nil {
+		t.Fatalf("list legacy assistant lifecycles: %v", err)
+	}
+	if len(legacyRecent) != 1 || legacyRecent[0].RunID != parsedPausedRunID {
+		t.Fatalf("legacy assistant lifecycles = %#v, want run association %s", legacyRecent, pausedRunID)
+	}
 
 	recent, err := queries.ListRecentContextLifecyclesBySession(ctx, sqlc.ListRecentContextLifecyclesBySessionParams{
 		SessionID: parsedSessionID,
@@ -184,7 +194,8 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 	if err != nil {
 		t.Fatalf("list context lifecycles: %v", err)
 	}
-	if len(recent) != 1 || recent[0].RunID != parsedRunID || recent[0].Status != "failed_budget" {
+	if len(recent) != 1 || recent[0].RunID != parsedRunID || recent[0].Status != "failed_budget" ||
+		!recent[0].ErrorCode.Valid || recent[0].ErrorCode.String != "context_budget_unsatisfied" {
 		t.Fatalf("recent context lifecycles = %#v, want one failed_budget row for %s", recent, runID)
 	}
 

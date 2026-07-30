@@ -107,6 +107,7 @@ func (q *Queries) GetLatestAssistantContextLifecycleMetadataByRunID(ctx context.
 const listRecentAssistantMessagesBySession = `-- name: ListRecentAssistantMessagesBySession :many
 SELECT
   id,
+  run_id,
   role,
   metadata,
   created_at
@@ -125,6 +126,7 @@ type ListRecentAssistantMessagesBySessionParams struct {
 
 type ListRecentAssistantMessagesBySessionRow struct {
 	ID        pgtype.UUID        `json:"id"`
+	RunID     pgtype.UUID        `json:"run_id"`
 	Role      string             `json:"role"`
 	Metadata  []byte             `json:"metadata"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
@@ -141,6 +143,7 @@ func (q *Queries) ListRecentAssistantMessagesBySession(ctx context.Context, arg 
 		var i ListRecentAssistantMessagesBySessionRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.RunID,
 			&i.Role,
 			&i.Metadata,
 			&i.CreatedAt,
@@ -159,6 +162,7 @@ const listRecentContextLifecyclesBySession = `-- name: ListRecentContextLifecycl
 SELECT
   run_id,
   status,
+  error_code,
   created_at,
   snapshot
 FROM context_lifecycles
@@ -176,6 +180,7 @@ type ListRecentContextLifecyclesBySessionParams struct {
 type ListRecentContextLifecyclesBySessionRow struct {
 	RunID     pgtype.UUID        `json:"run_id"`
 	Status    string             `json:"status"`
+	ErrorCode pgtype.Text        `json:"error_code"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	Snapshot  []byte             `json:"snapshot"`
 }
@@ -192,6 +197,7 @@ func (q *Queries) ListRecentContextLifecyclesBySession(ctx context.Context, arg 
 		if err := rows.Scan(
 			&i.RunID,
 			&i.Status,
+			&i.ErrorCode,
 			&i.CreatedAt,
 			&i.Snapshot,
 		); err != nil {

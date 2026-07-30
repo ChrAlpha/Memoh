@@ -6,7 +6,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
-func metricTurn(messageID string, outcome string, readTokens, expected int, toolDefs []contextfrag.ToolDefAccounting) ContextLifecycleTurn {
+func metricTurn(runID string, outcome string, readTokens, expected int, toolDefs []contextfrag.ToolDefAccounting) ContextLifecycleTurn {
 	snapshot := contextfrag.LifecycleSnapshot{
 		CacheReadTokens:           readTokens,
 		StablePrefixTokenEstimate: expected,
@@ -15,7 +15,7 @@ func metricTurn(messageID string, outcome string, readTokens, expected int, tool
 	if outcome != "" {
 		snapshot.CacheComparison = &contextfrag.CacheComparison{Outcome: outcome}
 	}
-	return ContextLifecycleTurn{MessageID: messageID, Snapshot: snapshot}
+	return ContextLifecycleTurn{RunID: runID, Snapshot: snapshot}
 }
 
 func TestAggregateContextLifecycleCacheEfficiency(t *testing.T) {
@@ -63,11 +63,11 @@ func TestAggregateContextLifecycleToolRosterChurn(t *testing.T) {
 		t.Fatalf("roster details = %+v, want 2 entries", agg.ToolRosterChangeDetails)
 	}
 	newest := agg.ToolRosterChangeDetails[0]
-	if newest.MessageID != "m3" || len(newest.Added) != 1 || newest.Added[0] != "mcp/confluence_read" || len(newest.Removed) != 1 {
+	if newest.RunID != "m3" || len(newest.Added) != 1 || newest.Added[0] != "mcp/confluence_read" || len(newest.Removed) != 1 {
 		t.Fatalf("newest change = %+v, want jira_search swapped for confluence_read", newest)
 	}
 	older := agg.ToolRosterChangeDetails[1]
-	if older.MessageID != "m2" || len(older.Resized) != 1 || older.Resized[0] != "mcp/jira_search" {
+	if older.RunID != "m2" || len(older.Resized) != 1 || older.Resized[0] != "mcp/jira_search" {
 		t.Fatalf("older change = %+v, want jira_search resized", older)
 	}
 }
