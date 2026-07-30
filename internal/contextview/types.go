@@ -19,6 +19,9 @@ type SourceSpec struct {
 
 type BudgetEnvelope struct {
 	MaxTokens int
+	// Plan activates unified provider-envelope budgeting. Nil preserves the
+	// legacy history-only MaxTokens semantics, including step reselection.
+	Plan *contextfrag.ContextBudgetPlan
 	// RecentProtectTokens bands the newest droppable history within this many
 	// estimated tokens to drop last: everything older drops first, tier by
 	// tier. The window is not harder than the budget itself — under budgets

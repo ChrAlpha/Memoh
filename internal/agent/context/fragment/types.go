@@ -3,6 +3,7 @@
 package contextfrag
 
 import (
+	"errors"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -172,6 +173,11 @@ const (
 	RetentionOptional    RetentionTier = "optional"
 )
 
+var (
+	ErrProtectedContextOverflow = errors.New("protected context exceeds its budget")
+	ErrBudgetUnsatisfied        = errors.New("context budget reserves exceed the available window")
+)
+
 // DropPriority orders fragments within one retention tier. Higher values drop
 // before lower values, so lower values survive longer under budget pressure.
 type DropPriority int
@@ -331,7 +337,9 @@ type Manifest struct {
 	TrustBreakdown     []TrustBreakdown    `json:"trust_breakdown,omitempty"`
 	ToolDefs           []ToolDefAccounting `json:"tool_defs,omitempty"`
 	Items              []ManifestItem      `json:"items,omitempty"`
+	SelectionDecisions []SelectionDecision `json:"selection_decisions,omitempty"`
 	Selection          *SelectionTrace     `json:"selection,omitempty"`
+	BudgetPlan         *ContextBudgetPlan  `json:"budget_plan,omitempty"`
 	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
 	Mutations          *MutationLedger     `json:"mutations,omitempty"`
 }
@@ -395,10 +403,47 @@ type ToolDefAccounting struct {
 	TokenEstimate int    `json:"token_estimate"`
 }
 
+// ContextBudgetPlan records the numeric input-envelope allocation used for one
+// provider-bound turn. Raw prompt content never enters this accounting view.
+type ContextBudgetPlan struct {
+	Window             int `json:"window"`
+	OutputReserve      int `json:"output_reserve"`
+	ToolDefsCost       int `json:"tool_defs_cost"`
+	CurrentRequestCost int `json:"current_request_cost"`
+	SystemBudget       int `json:"system_budget"`
+	ActualSystemCost   int `json:"actual_system_cost"`
+	HistoryBudget      int `json:"history_budget"`
+}
+
 type SelectionTrace struct {
 	Selected    int            `json:"selected"`
 	Dropped     int            `json:"dropped"`
 	DropReasons map[string]int `json:"drop_reasons,omitempty"`
+}
+
+type SelectionDecisionKind string
+
+const (
+	DecisionSelected SelectionDecisionKind = "selected"
+	DecisionTrimmed  SelectionDecisionKind = "trimmed"
+	DecisionDropped  SelectionDecisionKind = "dropped"
+)
+
+// SelectionDecision is the content-light per-fragment audit trail for
+// selection. It identifies sources and costs without retaining prompt text.
+type SelectionDecision struct {
+	ID            string                `json:"id"`
+	Ref           ContextRef            `json:"ref,omitempty"`
+	Slot          Slot                  `json:"slot"`
+	Source        string                `json:"source,omitempty"`
+	SourceID      string                `json:"source_id,omitempty"`
+	Decision      SelectionDecisionKind `json:"decision"`
+	Reason        string                `json:"reason,omitempty"`
+	TokenEstimate int                   `json:"token_estimate,omitempty"`
+	TextBytes     int                   `json:"text_bytes,omitempty"`
+	ImageCount    int                   `json:"image_count,omitempty"`
+	CacheClass    CacheClass            `json:"cache_class,omitempty"`
+	RetentionTier RetentionTier         `json:"retention_tier,omitempty"`
 }
 
 // ManifestItem is one non-sensitive fragment entry.

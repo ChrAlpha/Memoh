@@ -39,6 +39,9 @@ type Selector interface {
 type SelectionResult struct {
 	Selected []contextfrag.ContextFrag
 	Dropped  []contextfrag.ContextFrag
+	// FatalError stops rendering while allowing Builder to return the partial,
+	// content-light selection audit accumulated before the failure.
+	FatalError error
 	// TrimNotice reports that budget trimming dropped history and the builder
 	// must splice the trim notice into Selected at TrimNoticeIndex.
 	TrimNotice      bool

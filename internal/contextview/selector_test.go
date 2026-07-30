@@ -204,7 +204,10 @@ func TestFragmentSelector_DeterministicSameInputSameOutput(t *testing.T) {
 	first := selectCompactionFrags(frags)
 	second := selectCompactionFrags(frags)
 
-	if !reflect.DeepEqual(first, second) {
+	if first.FatalError != nil || second.FatalError != nil ||
+		!reflect.DeepEqual(first.Selected, second.Selected) ||
+		!reflect.DeepEqual(first.Dropped, second.Dropped) ||
+		!reflect.DeepEqual(first.Summary, second.Summary) {
 		t.Fatalf("Select() not deterministic:\nfirst=%#v\nsecond=%#v", first, second)
 	}
 }

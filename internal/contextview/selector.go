@@ -59,6 +59,21 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	if isRetentionIntent(profile.Intent) {
 		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(frags, profile)
 	}
+	var systemBudgetDropped []contextfrag.ContextFrag
+	var systemBudgetErr error
+	frags, systemBudgetDropped, systemBudgetErr = enforceSystemBudget(frags, profile, budget.Plan)
+	if systemBudgetErr != nil {
+		tagged := tagFragments(frags, profile)
+		result := selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
+		result = finishSelection(result, nil, nil, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+		result = appendSystemBudgetDrops(result, systemBudgetDropped)
+		result.FatalError = systemBudgetErr
+		return result
+	}
+	if budget.Plan != nil &&
+		(profile.Intent == contextfrag.IntentRunConfigPreProvider || profile.Intent == contextfrag.IntentDiscussReply) {
+		budget.MaxTokens = budget.Plan.HistoryBudget
+	}
 	var exchangeDropped []contextfrag.ContextFrag
 	var exchangeEdits []contextfrag.ContextEditTrace
 	if isRetentionIntent(profile.Intent) {
@@ -74,14 +89,17 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 					result.TrimNotice = true
 					result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
 				}
-				return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+				result = finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+				return appendSystemBudgetDrops(result, systemBudgetDropped)
 			}
 		}
 		result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
-		return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+		result = finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+		return appendSystemBudgetDrops(result, systemBudgetDropped)
 	}
 	result = selectCompactionCandidatesWindowed(frags, profile, budget.Compaction)
-	return finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+	result = finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+	return appendSystemBudgetDrops(result, systemBudgetDropped)
 }
 
 func finishSelection(result SelectionResult, exchangeDropped []contextfrag.ContextFrag, exchangeEdits []contextfrag.ContextEditTrace, fragBudgetDropped []fragBudgetDrop, fragBudgetEdits []contextfrag.ContextEditTrace, fragBudgetWarnings []contextfrag.ValidationWarning, gated []contextfrag.ContextFrag, profile IntentProfile, superseded []conflictLoser) SelectionResult {

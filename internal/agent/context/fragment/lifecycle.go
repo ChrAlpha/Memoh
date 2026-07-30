@@ -63,6 +63,7 @@ func cloneLifecycleManifest(manifest Manifest) Manifest {
 	out.Breakdown = append([]KindBreakdown(nil), manifest.Breakdown...)
 	out.TrustBreakdown = append([]TrustBreakdown(nil), manifest.TrustBreakdown...)
 	out.ToolDefs = append([]ToolDefAccounting(nil), manifest.ToolDefs...)
+	out.SelectionDecisions = append([]SelectionDecision(nil), manifest.SelectionDecisions...)
 	if manifest.Selection != nil {
 		selection := *manifest.Selection
 		if manifest.Selection.DropReasons != nil {
@@ -72,6 +73,10 @@ func cloneLifecycleManifest(manifest Manifest) Manifest {
 			}
 		}
 		out.Selection = &selection
+	}
+	if manifest.BudgetPlan != nil {
+		budgetPlan := *manifest.BudgetPlan
+		out.BudgetPlan = &budgetPlan
 	}
 	if manifest.CachePlan != nil {
 		cachePlan := *manifest.CachePlan
@@ -105,6 +110,7 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		Breakdown:                   append([]KindBreakdown(nil), manifest.Breakdown...),
 		TrustBreakdown:              append([]TrustBreakdown(nil), manifest.TrustBreakdown...),
 		ToolDefs:                    append([]ToolDefAccounting(nil), manifest.ToolDefs...),
+		SelectionDecisions:          append([]SelectionDecision(nil), manifest.SelectionDecisions...),
 		Selection:                   selectionSnapshot(manifest.Selection),
 		CacheComparatorPrefixHash:   "",
 		DecoratedProviderPrefixHash: "",
@@ -112,6 +118,10 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		CacheWriteTokens:            0,
 		StablePrefixHash:            "",
 		StableMessageCount:          0,
+	}
+	if manifest.BudgetPlan != nil {
+		plan := *manifest.BudgetPlan
+		snapshot.BudgetPlan = &plan
 	}
 	if manifest.CachePlan != nil {
 		snapshot.StablePrefixHash = manifest.CachePlan.StablePrefixHash
@@ -143,7 +153,9 @@ type LifecycleSnapshot struct {
 	Breakdown                   []KindBreakdown     `json:"breakdown,omitempty"`
 	TrustBreakdown              []TrustBreakdown    `json:"trust_breakdown,omitempty"`
 	ToolDefs                    []ToolDefAccounting `json:"tool_defs,omitempty"`
+	SelectionDecisions          []SelectionDecision `json:"selection_decisions,omitempty"`
 	Selection                   SelectionTrace      `json:"selection"`
+	BudgetPlan                  *ContextBudgetPlan  `json:"budget_plan,omitempty"`
 	StablePrefixHash            string              `json:"stable_prefix_hash,omitempty"`
 	StableMessageCount          int                 `json:"stable_message_count,omitempty"`
 	StablePrefixTokenEstimate   int                 `json:"stable_prefix_token_estimate,omitempty"`
