@@ -140,11 +140,17 @@ func (p contextBudgetGuardProvider) DoGenerate(ctx context.Context, params sdk.G
 	if err := contextStepBudgetError(ctx); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return p.Provider.DoGenerate(ctx, params)
 }
 
 func (p contextBudgetGuardProvider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
 	if err := contextStepBudgetError(ctx); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return p.Provider.DoStream(ctx, params)

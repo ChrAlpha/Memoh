@@ -91,6 +91,29 @@ func (m *atomicMockProvider) DoStream(ctx context.Context, params sdk.GeneratePa
 	return &sdk.StreamResult{Stream: ch}, nil
 }
 
+func TestContextBudgetGuardProviderNeverDelegatesCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	provider := &atomicMockProvider{
+		handler: func(int, sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			return &sdk.GenerateResult{FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+	guarded := contextBudgetGuardProvider{Provider: provider}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := guarded.DoGenerate(ctx, sdk.GenerateParams{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DoGenerate() error = %v, want context canceled", err)
+	}
+	if _, err := guarded.DoStream(ctx, sdk.GenerateParams{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DoStream() error = %v, want context canceled", err)
+	}
+	if got := provider.calls.Load(); got != 0 {
+		t.Fatalf("underlying provider calls = %d, want 0 for canceled context", got)
+	}
+}
+
 func TestAgentGenerateStopsOnTerminalTextLoopAbort(t *testing.T) {
 	t.Parallel()
 
