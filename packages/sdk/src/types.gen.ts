@@ -1046,6 +1046,8 @@ export type ContextfragContentRange = {
 export type ContextfragContextBudgetPlan = {
     actual_system_cost?: number;
     current_request_cost?: number;
+    estimator?: string;
+    estimator_safety_factor_percent?: number;
     history_budget?: number;
     output_reserve?: number;
     system_budget?: number;

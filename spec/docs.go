@@ -16469,6 +16469,12 @@ const docTemplate = `{
                 "current_request_cost": {
                     "type": "integer"
                 },
+                "estimator": {
+                    "type": "string"
+                },
+                "estimator_safety_factor_percent": {
+                    "type": "integer"
+                },
                 "history_budget": {
                     "type": "integer"
                 },
