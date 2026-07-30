@@ -376,7 +376,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 		release: releaseContinuation,
 	}
 	applier := &resumeContextBudgetApplier{provider: provider}
-	lifecycles := &recordingContextLifecycleQueries{}
+	lifecycles := &recordingContextLifecycleQueries{createdCh: make(chan struct{}, 1)}
 	messages := &recordingMessageService{}
 	resolved := chatResolvedRequest()
 	resolved.BotID = botID
@@ -526,6 +526,11 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 			t.Fatalf("resumed run did not complete: %#v", snapshot.CurrentRunView)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-lifecycles.createdCh:
+	case <-time.After(time.Second):
+		t.Fatal("completed continuation did not persist its context lifecycle")
 	}
 	if len(lifecycles.params) != 1 {
 		t.Fatalf("terminal lifecycle writes = %d, want exactly 1", len(lifecycles.params))

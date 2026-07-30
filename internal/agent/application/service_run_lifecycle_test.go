@@ -32,9 +32,10 @@ const (
 )
 
 type lifecycleSubagentRuntime struct {
-	runID    string
-	cancel   context.CancelFunc
-	finishes []recordedFinish
+	runID     string
+	cancel    context.CancelFunc
+	finishes  []recordedFinish
+	finishErr error
 }
 
 func (r *lifecycleSubagentRuntime) Admit(_ context.Context, input sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
@@ -61,12 +62,13 @@ func (r *lifecycleSubagentRuntime) FinishRun(
 		status:  status,
 		message: message,
 	})
-	return nil
+	return r.finishErr
 }
 
 type recordingContextLifecycleQueries struct {
 	dbstore.Queries
 	params          []sqlc.CreateContextLifecycleParams
+	createdCh       chan struct{}
 	err             error
 	existing        *sqlc.ContextLifecycle
 	existingAfter   int
@@ -93,6 +95,12 @@ func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
 	arg sqlc.CreateContextLifecycleParams,
 ) (sqlc.ContextLifecycle, error) {
 	q.params = append(q.params, arg)
+	if q.createdCh != nil {
+		select {
+		case q.createdCh <- struct{}{}:
+		default:
+		}
+	}
 	if q.err != nil {
 		return sqlc.ContextLifecycle{}, q.err
 	}
@@ -377,6 +385,96 @@ func TestContextLifecycleTerminalHeartbeatUsesAdmittedRunID(t *testing.T) {
 	}
 	if got := pgUUIDString(queries.params[0].RunID); got != admittedHeartbeatRunID {
 		t.Fatalf("heartbeat run ID = %q, want admitted ID %q", got, admittedHeartbeatRunID)
+	}
+}
+
+func TestTurnRunFinisherFallbackRespectsTerminalOwnership(t *testing.T) {
+	runUUID, botUUID, sessionUUID, err := parseContextLifecycleIDs(
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := sessionruntime.Admission{
+		RunID:   lifecycleTestRunID,
+		Started: true,
+		Handle: sessionruntime.RunHandle{
+			RunID:        lifecycleTestRunID,
+			BotID:        lifecycleTestBotID,
+			SessionID:    lifecycleTestSessionID,
+			FencingToken: 1,
+		},
+	}
+	tests := []struct {
+		name          string
+		status        string
+		cause         error
+		finishErr     error
+		existing      *sqlc.ContextLifecycle
+		wantCreates   int
+		wantGets      int
+		wantLifecycle string
+	}{
+		{
+			name:          "pre-context failure",
+			status:        sessionruntime.RunStatusErrored,
+			cause:         errors.New("resolve failed"),
+			wantCreates:   1,
+			wantGets:      1,
+			wantLifecycle: contextLifecycleStatusFailedProvider,
+		},
+		{
+			name:        "decision pause",
+			wantGets:    0,
+			wantCreates: 0,
+		},
+		{
+			name:      "ownership lost",
+			status:    sessionruntime.RunStatusAborted,
+			finishErr: sessionruntime.ErrRunOwnershipLost,
+		},
+		{
+			name:   "authoritative row already exists",
+			status: sessionruntime.RunStatusErrored,
+			cause:  errors.New("late stream error"),
+			existing: &sqlc.ContextLifecycle{
+				RunID:     runUUID,
+				BotID:     botUUID,
+				SessionID: sessionUUID,
+				Status:    contextLifecycleStatusFailedProvider,
+			},
+			wantGets: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := &lifecycleSubagentRuntime{
+				runID:     lifecycleTestRunID,
+				finishErr: tt.finishErr,
+			}
+			lifecycles := &recordingContextLifecycleQueries{existing: tt.existing}
+			service := &Service{
+				sessionRuntime:    runtime,
+				contextLifecycles: lifecycles,
+			}
+
+			service.turnRunFinisher(context.Background(), admission)(tt.status, tt.cause)
+
+			if len(runtime.finishes) != 1 {
+				t.Fatalf("FinishRun calls = %d, want 1", len(runtime.finishes))
+			}
+			if lifecycles.getCalls != tt.wantGets {
+				t.Fatalf("GetContextLifecycle calls = %d, want %d", lifecycles.getCalls, tt.wantGets)
+			}
+			if len(lifecycles.params) != tt.wantCreates {
+				t.Fatalf("CreateContextLifecycle calls = %d, want %d", len(lifecycles.params), tt.wantCreates)
+			}
+			if tt.wantCreates > 0 && lifecycles.params[0].Status != tt.wantLifecycle {
+				t.Fatalf("context lifecycle status = %q, want %q", lifecycles.params[0].Status, tt.wantLifecycle)
+			}
+		})
 	}
 }
 
