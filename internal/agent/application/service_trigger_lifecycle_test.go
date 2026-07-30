@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -17,6 +18,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
+	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -56,9 +58,12 @@ func (q *triggerLifecycleQueries) GetSettingsByBotID(
 }
 
 type triggerLifecycleProvider struct {
-	mu     sync.Mutex
-	calls  int
-	params sdk.GenerateParams
+	mu            sync.Mutex
+	calls         int
+	params        sdk.GenerateParams
+	nonClosing    bool
+	streamOnce    sync.Once
+	streamStarted chan struct{}
 }
 
 func (*triggerLifecycleProvider) Name() string { return "trigger-lifecycle" }
@@ -90,10 +95,18 @@ func (p *triggerLifecycleProvider) DoGenerate(
 	}, nil
 }
 
-func (*triggerLifecycleProvider) DoStream(
+func (p *triggerLifecycleProvider) DoStream(
 	context.Context,
 	sdk.GenerateParams,
 ) (*sdk.StreamResult, error) {
+	if p.nonClosing {
+		p.streamOnce.Do(func() {
+			if p.streamStarted != nil {
+				close(p.streamStarted)
+			}
+		})
+		return &sdk.StreamResult{Stream: make(chan sdk.StreamPart)}, nil
+	}
 	return nil, errors.New("unexpected streaming call")
 }
 
@@ -319,6 +332,60 @@ func TestDirectChatWithoutAdmissionMintsAndPersistsRunID(t *testing.T) {
 		contextLifecycleStatusCompleted,
 		"",
 	)
+}
+
+func TestAdmittedChatCancellationPersistsAbortedLifecycle(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000917"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		128000,
+		&recordingContextLifecycleQueries{unique: true},
+		nil,
+	)
+	fixture.provider.nonClosing = true
+	fixture.provider.streamStarted = make(chan struct{})
+
+	handle, err := fixture.service.StartTurn(
+		context.Background(),
+		turn.StartTurnCommand{
+			SchemaVersion:        1,
+			TeamID:               "round5-team",
+			Mode:                 turn.ModeChat,
+			BotID:                lifecycleTestBotID,
+			ChatID:               lifecycleTestBotID,
+			ThreadID:             lifecycleTestSessionID,
+			Query:                triggerLifecyclePromptMarker,
+			UserMessagePersisted: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	select {
+	case <-fixture.provider.streamStarted:
+	case <-time.After(time.Second):
+		t.Fatal("admitted chat did not reach the streaming provider")
+	}
+	handle.Cancel()
+	for range handle.Events() {
+	}
+	for range handle.Errs() {
+	}
+
+	assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusAborted,
+		"",
+	)
+	if len(fixture.runtime.finishes) != 1 {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.finishes)
+	}
+	if got := fixture.runtime.finishes[0].status; got != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finish status = %q, want %q", got, sessionruntime.RunStatusAborted)
+	}
 }
 
 func TestTriggerHeartbeatProviderBudgetFailurePersistsFailedBudgetWithoutAssistant(t *testing.T) {

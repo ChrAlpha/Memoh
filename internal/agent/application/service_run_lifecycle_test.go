@@ -67,6 +67,8 @@ func (r *lifecycleSubagentRuntime) FinishRun(
 
 type recordingContextLifecycleQueries struct {
 	dbstore.Queries
+	createMu        sync.Mutex
+	unique          bool
 	params          []sqlc.CreateContextLifecycleParams
 	createdCh       chan struct{}
 	err             error
@@ -94,6 +96,13 @@ func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
 	_ context.Context,
 	arg sqlc.CreateContextLifecycleParams,
 ) (sqlc.ContextLifecycle, error) {
+	if q.unique {
+		q.createMu.Lock()
+		defer q.createMu.Unlock()
+		if q.existing != nil {
+			return sqlc.ContextLifecycle{}, &pgconn.PgError{Code: "23505"}
+		}
+	}
 	q.params = append(q.params, arg)
 	if q.createdCh != nil {
 		select {
@@ -122,6 +131,10 @@ func (q *recordingContextLifecycleQueries) GetContextLifecycleByRunID(
 	_ context.Context,
 	_ pgtype.UUID,
 ) (sqlc.ContextLifecycle, error) {
+	if q.unique {
+		q.createMu.Lock()
+		defer q.createMu.Unlock()
+	}
 	q.getCalls++
 	if q.getErr != nil {
 		return sqlc.ContextLifecycle{}, q.getErr

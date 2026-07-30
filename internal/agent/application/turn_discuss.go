@@ -219,7 +219,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			finalMessages = event.Messages
 			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
 			if event.Type == native.EventAgentAbort && !lifecycleDeferred && lifecycleCause == nil {
-				lifecycleCause = errors.New("agent run aborted")
+				lifecycleCause = agentAbortCause(ctx)
 			}
 		}
 		payload, marshalErr := json.Marshal(event)

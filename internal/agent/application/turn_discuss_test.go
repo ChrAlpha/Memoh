@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
@@ -29,6 +31,24 @@ func (f *fakeAgentStreamer) Stream(_ context.Context, cfg native.RunConfig) <-ch
 		Messages: json.RawMessage(`[{"role":"assistant","content":"done"}]`),
 	}
 	close(ch)
+	return ch
+}
+
+type cancelDiscussAgentStreamer struct {
+	once    sync.Once
+	started chan struct{}
+}
+
+func (f *cancelDiscussAgentStreamer) Stream(ctx context.Context, _ native.RunConfig) <-chan native.StreamEvent {
+	ch := make(chan native.StreamEvent, 1)
+	f.once.Do(func() {
+		close(f.started)
+	})
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+		ch <- native.StreamEvent{Type: native.EventAgentAbort}
+	}()
 	return ch
 }
 
@@ -176,6 +196,53 @@ func TestDiscussUsesAdmittedRunIDInNativeConfig(t *testing.T) {
 	}
 	if got := agent.lastConfig.RunID; got != h.RunID() {
 		t.Fatalf("native RunID = %q, want admitted run ID %q", got, h.RunID())
+	}
+}
+
+func TestAdmittedDiscussCancellationPersistsAbortedLifecycle(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000918"
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.BuildManifest(nil))
+	agent := &cancelDiscussAgentStreamer{started: make(chan struct{})}
+	resolver := &fakeDiscussService{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: native.RunConfig{ContextLifecycle: holder},
+			ModelID:   "model-1",
+		},
+	}
+	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	lifecycles := &recordingContextLifecycleQueries{}
+	service.sessionRuntime = runtime
+	service.contextLifecycles = lifecycles
+	cmd := discussCommand()
+	cmd.BotID = lifecycleTestBotID
+	cmd.ThreadID = lifecycleTestSessionID
+
+	handle, err := service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	select {
+	case <-agent.started:
+	case <-time.After(time.Second):
+		t.Fatal("admitted discuss did not reach the streaming agent")
+	}
+	handle.Cancel()
+	drainDiscuss(t, handle)
+
+	assertTriggerLifecycleRow(
+		t,
+		lifecycles,
+		admittedRunID,
+		contextLifecycleStatusAborted,
+		"",
+	)
+	if len(runtime.finishes) != 1 {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", runtime.finishes)
+	}
+	if got := runtime.finishes[0].status; got != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finish status = %q, want %q", got, sessionruntime.RunStatusAborted)
 	}
 }
 

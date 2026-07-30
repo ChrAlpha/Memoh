@@ -67,6 +67,15 @@ func agentStreamEventError(event native.StreamEvent) error {
 	return errors.New(detail)
 }
 
+func agentAbortCause(ctx context.Context) error {
+	if ctx != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
+	return errors.New("agent run aborted")
+}
+
 // extractTerminalSnapshot decodes a terminal stream event payload into the
 // raw SDK messages plus auxiliary metadata. Returns ok=false when the event
 // has no usable messages.
@@ -216,7 +225,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 			if event.Type == native.EventAgentAbort {
 				lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
 				if !lifecycleDeferred && agentStreamErr == nil {
-					agentStreamErr = errors.New("agent run aborted")
+					agentStreamErr = agentAbortCause(streamCtx)
 				}
 			}
 			if hasVisibleAgentStreamOutput(event) {
@@ -234,7 +243,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					hasSnapshot = true
 					lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
 					if snap.aborted && !lifecycleDeferred && agentStreamErr == nil {
-						agentStreamErr = errors.New("agent run aborted")
+						agentStreamErr = agentAbortCause(streamCtx)
 					}
 					if !stored && !runOwnershipLost(streamCtx) {
 						// Use WithoutCancel so persistence still succeeds even
@@ -473,7 +482,7 @@ func (s *Service) streamChatWSResultWithHooks(
 		if event.Type == native.EventAgentAbort {
 			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
 			if !lifecycleDeferred && lifecycleCause == nil {
-				lifecycleCause = errors.New("agent run aborted")
+				lifecycleCause = agentAbortCause(streamCtx)
 			}
 		}
 		if hasVisibleAgentStreamOutput(event) {
@@ -492,7 +501,7 @@ func (s *Service) streamChatWSResultWithHooks(
 				hasSnapshot = true
 				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
 				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
-					lifecycleCause = errors.New("agent run aborted")
+					lifecycleCause = agentAbortCause(streamCtx)
 				}
 				if !stored && !runOwnershipLost(ctx) {
 					persisted, storeErr := s.persistTerminalSnapshotResult(context.WithoutCancel(ctx), req, rc, snap)

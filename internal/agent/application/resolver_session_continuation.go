@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -99,7 +98,7 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 		if event.Type == native.EventAgentAbort {
 			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
 			if !lifecycleDeferred && lifecycleCause == nil {
-				lifecycleCause = errors.New("agent run aborted")
+				lifecycleCause = agentAbortCause(ctx)
 			}
 		}
 		data, err := json.Marshal(event)
@@ -110,7 +109,7 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 			if snap, ok := extractTerminalSnapshot(data); ok {
 				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
 				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
-					lifecycleCause = errors.New("agent run aborted")
+					lifecycleCause = agentAbortCause(ctx)
 				}
 				if storeErr := s.persistTerminalSnapshot(
 					context.WithoutCancel(ctx),
