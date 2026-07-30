@@ -128,7 +128,7 @@ func capabilitySafeFallbackConfig(
 ) agentpkg.RunConfig {
 	normalized := contextfrag.NormalizeContextRefs(sourceFrags)
 	kept, gated := filterUnavailableCapabilities(normalized, available)
-	cfg.System = renderSystemOnly(kept)
+	cfg.System = renderSystemOnly(withoutHookSystemSections(kept))
 	cfg.ContextToolUsage = ""
 	cfg.ContextToolUsageFrags = nil
 	cfg.ContextFrags = nonSystemFrags(cfg.ContextFrags)
@@ -146,6 +146,17 @@ func capabilitySafeFallbackConfig(
 		)
 	}
 	return cfg
+}
+
+func withoutHookSystemSections(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	out := make([]contextfrag.ContextFrag, 0, len(frags))
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotSystem && frag.Kind == contextfrag.KindHookContext {
+			continue
+		}
+		out = append(out, frag)
+	}
+	return out
 }
 
 func renderSystemOnly(frags []contextfrag.ContextFrag) string {

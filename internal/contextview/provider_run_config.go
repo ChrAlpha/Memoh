@@ -260,6 +260,7 @@ func ApplyProviderRunConfig(
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = cfg.ContextToolDefs
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.System = payload.System
 	cfg.Messages = materializeRenderedQuery(payload, cfg.ContextQueryMaterialized)
@@ -379,6 +380,7 @@ func providerBudgetAuditConfig(
 		}
 		manifest.Mutations = ledger
 		manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+		appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 		cfg.ContextManifest = manifest
 		cfg.ContextMutations = ledger
@@ -394,6 +396,7 @@ func providerBudgetAuditConfig(
 	manifest.CachePlan = &cachePlan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = cfg.ContextToolDefs
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
@@ -455,6 +458,7 @@ func providerViewFallback(
 	ledger.Record(contextfrag.MutationContextViewFallback, reason)
 	manifest := out.ContextManifest
 	manifest.Mutations = ledger
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 	if manifest.CachePlan == nil {
 		plan := contextfrag.CachePlan{}
 		manifest.CachePlan = &plan
@@ -465,6 +469,16 @@ func providerViewFallback(
 		out.ContextLifecycle.SetManifest(manifest)
 	}
 	return out
+}
+
+func appendContextSourceWarnings(
+	manifest *contextfrag.Manifest,
+	warnings []contextfrag.ValidationWarning,
+) {
+	if manifest == nil || len(warnings) == 0 {
+		return
+	}
+	manifest.ValidationWarnings = append(manifest.ValidationWarnings, warnings...)
 }
 
 func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Manifest) {

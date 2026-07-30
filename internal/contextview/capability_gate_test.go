@@ -118,8 +118,27 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 
 	cfg := capabilityGateFixture()
 	cfg.Messages = []sdk.Message{sdk.UserMessage("legacy message")}
+	currentUserIndex := 0
+	cfg.ContextCurrentUserMessageIndex = &currentUserIndex
+	cfg.ContextHookText = "turn-only hook"
+	hookSystem := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{
+		hookSystemTestFrag(
+			"system.hook.policy",
+			"workspace system hook",
+			contextfrag.RetentionPreferred,
+			contextfrag.CacheDynamic,
+			contextfrag.TrustWorkspace,
+			80,
+			cfg.ContextScope,
+		),
+	})[0]
+	cfg.ContextSourceWarnings = []contextfrag.ValidationWarning{{
+		Code: "hook_system_section_required_clamped",
+		Ref:  hookSystem.Ref,
+	}}
 	cfg.ContextSourceFrags = append(
 		cfg.ContextSourceFrags,
+		hookSystem,
 		contextfrag.MessageFrag(contextfrag.MessageFragInput{
 			ID:        "duplicate",
 			Message:   sdk.UserMessage("first"),
@@ -142,11 +161,15 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ApplyProviderRunConfig error = %v, want ordinary fallback", err)
 	}
-	if got.System != "base system" || strings.Contains(got.System, "alpha") {
-		t.Fatalf("fallback system = %q, want capability-filtered base system", got.System)
+	if got.System != "base system" ||
+		strings.Contains(got.System, "alpha") ||
+		strings.Contains(got.System, "workspace system hook") {
+		t.Fatalf("fallback system = %q, want capability-filtered base without hook system sections", got.System)
 	}
-	if len(got.Messages) != 1 || messageText(t, got.Messages[0]) != "legacy message" {
-		t.Fatalf("fallback messages = %#v, want legacy message", got.Messages)
+	if len(got.Messages) != 2 ||
+		messageText(t, got.Messages[0]) != "turn-only hook" ||
+		messageText(t, got.Messages[1]) != "legacy message" {
+		t.Fatalf("fallback messages = %#v, want turn-only hook preserved before legacy message", got.Messages)
 	}
 	records := got.ContextMutations.Records()
 	if len(records) != 2 ||
@@ -172,6 +195,13 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 			"fallback selected count = %d, want actual rendered fragment count %d",
 			got.ContextManifest.Selection.Selected,
 			len(got.ContextFrags),
+		)
+	}
+	if !hasValidationWarning(got.ContextManifest.ValidationWarnings, cfg.ContextSourceWarnings[0]) {
+		t.Fatalf(
+			"fallback warnings = %#v, want hook source warning %#v",
+			got.ContextManifest.ValidationWarnings,
+			cfg.ContextSourceWarnings[0],
 		)
 	}
 }
