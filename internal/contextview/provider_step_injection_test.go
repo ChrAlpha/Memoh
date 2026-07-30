@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,9 @@ func TestProviderStepBudgetEnvelopeNeverCarriesTurnStartPlan(t *testing.T) {
 	}
 	if envelope.MaxTokens != 123 {
 		t.Fatalf("step MaxTokens = %d, want suffix budget 123", envelope.MaxTokens)
+	}
+	if !envelope.EnforceProtectedBudget {
+		t.Fatal("step envelope must include protected suffix content in its hard allowance")
 	}
 }
 
@@ -195,9 +199,7 @@ func TestStepReselectionDropsBulkyImagePayloadsUnderBudgetPressure(t *testing.T)
 			Parts: []contextfrag.Part{{Type: contextfrag.PartSDKMessage, SDKMessage: &msg}},
 		})
 	}
-	// Budget bounds droppable content; allow headroom for the must-keep
-	// injected text and the trim notice.
-	if loopEstimate > budget+200 {
+	if loopEstimate > budget {
 		t.Fatalf("loop span estimate = %d tokens, want within budget %d", loopEstimate, budget)
 	}
 }
@@ -226,7 +228,9 @@ func TestStepReselectionBackgroundSummaryDoesNotShiftRecentAnchor(t *testing.T) 
 		Scope:               contextfrag.Scope{BotID: "bot-1"},
 		InitialMessageCount: len(prefix),
 		Messages:            messages,
-		BudgetMaxTokens:     200,
+		// The injected request, its following tool work, the background
+		// summary, and the trim notice are protected; older cycles must yield.
+		BudgetMaxTokens: 700,
 	})
 	if selection.Messages == nil || selection.Dropped == 0 {
 		t.Fatalf("budget pressure must drop loop span content: %+v", selection)
@@ -264,5 +268,27 @@ func TestStepReselectionKeepsInjectedUserMessagesUnderBudgetPressure(t *testing.
 	}
 	if !selectionHasUserText(selection.Messages, "second injected instruction") {
 		t.Fatal("newest injected user message must survive step budget pressure")
+	}
+}
+
+func TestStepReselectionFailsClosedWhenProtectedSuffixExceedsBudget(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage("task")}
+	messages := append([]sdk.Message(nil), prefix...)
+	messages = append(messages, sdk.UserMessage(strings.Repeat("protected injected context ", 200)))
+
+	selection := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:               contextfrag.Scope{BotID: "bot-1"},
+		InitialMessageCount: len(prefix),
+		Messages:            messages,
+		BudgetMaxTokens:     20,
+	})
+
+	if !errors.Is(selection.FatalError, contextfrag.ErrProtectedContextOverflow) {
+		t.Fatalf("step selection error = %v, want %v", selection.FatalError, contextfrag.ErrProtectedContextOverflow)
+	}
+	if selection.Messages != nil {
+		t.Fatalf("fatal step selection returned provider messages: %#v", selection.Messages)
 	}
 }

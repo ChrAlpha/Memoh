@@ -178,7 +178,9 @@ func TestProviderStepReselectorPreservesPrefixAndDropsLoopSpan(t *testing.T) {
 		Scope:               contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"},
 		InitialMessageCount: len(prefix),
 		Messages:            messages,
-		BudgetMaxTokens:     1,
+		// Leave room for the newest protected tool closure and the required
+		// trim notice while forcing the bulky older closure out.
+		BudgetMaxTokens: 100,
 	})
 
 	if result.Dropped != 2 {

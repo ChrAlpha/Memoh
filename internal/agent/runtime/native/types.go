@@ -87,6 +87,7 @@ type ContextStepSelectionResult struct {
 	Dropped     int
 	Truncated   int
 	DropReasons map[string]int
+	FatalError  error
 }
 
 type ContextStepReselector func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult
@@ -149,6 +150,7 @@ type RunConfig struct {
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
 	ContextStepReselector        ContextStepReselector
+	contextStepFailure           func(error)
 	SessionType                  string
 	LiveToolStream               bool
 	CanRequestUserInput          bool

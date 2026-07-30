@@ -13,6 +13,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agenttools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/apperror"
 )
 
 type staticToolProvider struct {
@@ -45,7 +46,12 @@ func (*atomicMockProvider) TestModel(context.Context, string) (*sdk.ModelTestRes
 	return &sdk.ModelTestResult{Supported: true, Message: "supported"}, nil
 }
 
-func (m *atomicMockProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (m *atomicMockProvider) DoGenerate(ctx context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	call := int(m.calls.Add(1))
 	return m.handler(call, params)
 }
@@ -353,6 +359,120 @@ func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.
 	legacyDoubleCounted := remainingStepBudget(plan.Window-toolCost, &firstParams, len(firstParams.Messages))
 	if expectedBudget == legacyDoubleCounted {
 		t.Fatalf("test setup does not distinguish active plan allowance %d from legacy double-counted allowance %d", expectedBudget, legacyDoubleCounted)
+	}
+}
+
+func TestAgentGenerateFailsClosedOnProtectedStepOverflow(t *testing.T) {
+	t.Parallel()
+
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call != 1 {
+				t.Fatalf("provider call = %d, want no call after protected overflow", call)
+			}
+			return &sdk.GenerateResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-step-overflow",
+					ToolName:   "lookup",
+					Input:      map[string]any{"q": "one"},
+				}},
+			}, nil
+		},
+	}
+	ledger := contextfrag.NewMutationLedger()
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		return cfg, nil
+	}})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return map[string]any{"answer": "ok"}, nil
+			},
+		}}},
+	})
+
+	_, err := a.Generate(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("task")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: ledger,
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			return ContextStepSelectionResult{FatalError: contextfrag.ErrProtectedContextOverflow}
+		},
+	})
+	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrProtectedContextOverflow)
+	}
+	if got := modelProvider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	records := ledger.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
+		records[0].Detail != "protected_context_overflow" {
+		t.Fatalf("budget failure mutations = %#v, want one protected-overflow record", records)
+	}
+}
+
+func TestAgentStreamFailsClosedOnProtectedStepOverflow(t *testing.T) {
+	t.Parallel()
+
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			if call != 1 {
+				t.Fatalf("provider call = %d, want no call after protected overflow", call)
+			}
+			return &sdk.GenerateResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-stream-step-overflow",
+					ToolName:   "lookup",
+					Input:      map[string]any{"q": "one"},
+				}},
+			}, nil
+		},
+	}
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		return cfg, nil
+	}})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		staticToolProvider{tools: []sdk.Tool{{
+			Name:       "lookup",
+			Parameters: &jsonschema.Schema{Type: "object"},
+			Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+				return map[string]any{"answer": "ok"}, nil
+			},
+		}}},
+	})
+
+	var errorEvents []StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("task")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextMutations: contextfrag.NewMutationLedger(),
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			return ContextStepSelectionResult{FatalError: contextfrag.ErrProtectedContextOverflow}
+		},
+	}) {
+		if event.Type == EventError {
+			errorEvents = append(errorEvents, event)
+		}
+	}
+
+	if got := modelProvider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
+	}
+	if len(errorEvents) != 1 {
+		t.Fatalf("error events = %#v, want exactly one", errorEvents)
+	}
+	if errorEvents[0].Code != string(apperror.CodeContextProtectedOverflow) {
+		t.Fatalf("error code = %q, want %q", errorEvents[0].Code, apperror.CodeContextProtectedOverflow)
 	}
 }
 

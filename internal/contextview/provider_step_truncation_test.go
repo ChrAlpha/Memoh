@@ -113,7 +113,9 @@ func TestStepReselectionBudgetDropsKeepToolClosuresAtomic(t *testing.T) {
 		Scope:               contextfrag.Scope{BotID: "bot-1"},
 		InitialMessageCount: len(prefix),
 		Messages:            messages,
-		BudgetMaxTokens:     200,
+		// Leave room for the protected newest closure and trim notice while
+		// forcing older closures out as atomic units.
+		BudgetMaxTokens: 400,
 	})
 	if selection.Messages == nil || selection.Dropped == 0 {
 		t.Fatalf("budget pressure must drop loop span content: %+v", selection)

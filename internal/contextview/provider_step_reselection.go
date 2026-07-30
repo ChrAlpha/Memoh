@@ -15,8 +15,9 @@ import (
 // reselection and resolve-time selection share one envelope shape.
 func providerStepBudgetEnvelope(input agentpkg.ContextStepSelectionInput) BudgetEnvelope {
 	return BudgetEnvelope{
-		MaxTokens:           input.BudgetMaxTokens,
-		RecentProtectTokens: resolveRecentProtectTokens(input.RecentProtectTokens),
+		MaxTokens:              input.BudgetMaxTokens,
+		EnforceProtectedBudget: input.BudgetMaxTokens > 0,
+		RecentProtectTokens:    resolveRecentProtectTokens(input.RecentProtectTokens),
 	}
 }
 
@@ -44,6 +45,9 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 
 	selector := &FragmentSelector{}
 	selection := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), providerStepBudgetEnvelope(input))
+	if selection.FatalError != nil {
+		return agentpkg.ContextStepSelectionResult{FatalError: selection.FatalError}
+	}
 
 	selected := selectedProviderStepFrags(selection, input.Scope)
 	truncated := 0

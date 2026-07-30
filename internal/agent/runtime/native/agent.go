@@ -100,6 +100,38 @@ func contextViewStreamError(err error) StreamEvent {
 	}
 }
 
+func installContextStepFailureHandler(cfg *RunConfig, cancel context.CancelCauseFunc) {
+	if cfg == nil {
+		return
+	}
+	var once sync.Once
+	cfg.contextStepFailure = func(err error) {
+		if err == nil {
+			return
+		}
+		once.Do(func() {
+			reason := "budget_unsatisfied"
+			if errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+				reason = "protected_context_overflow"
+			}
+			cfg.ContextMutations.Record(contextfrag.MutationContextBudgetFailure, reason)
+			cancel(err)
+		})
+	}
+}
+
+func contextStepBudgetError(ctx context.Context) error {
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, contextfrag.ErrProtectedContextOverflow):
+		return contextfrag.ErrProtectedContextOverflow
+	case errors.Is(cause, contextfrag.ErrBudgetUnsatisfied):
+		return contextfrag.ErrBudgetUnsatisfied
+	default:
+		return nil
+	}
+}
+
 // BridgeProvider returns the underlying bridge provider (workspace manager).
 func (a *Agent) BridgeProvider() bridge.Provider {
 	return a.bridgeProvider
@@ -351,6 +383,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()
 	}
+	installContextStepFailureHandler(&cfg, cancel)
 	opts := a.buildGenerateOptions(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
 
@@ -595,6 +628,10 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 
 		case *sdk.ErrorPart:
+			if contextStepBudgetError(streamCtx) != nil {
+				aborted = true
+				break
+			}
 			errMsg := p.Error.Error()
 			if isAskUserArgumentParseError(errMsg) {
 				continue
@@ -629,6 +666,13 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		if aborted {
 			break
 		}
+	}
+
+	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
+		publicError := contextViewStreamError(stepErr)
+		turnError = publicError.Error
+		sendEvent(ctx, ch, publicError)
+		aborted = true
 	}
 
 	if aborted && !streamClosed {
@@ -907,6 +951,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if a == nil || a.contextViewApplier == nil {
 		cfg = cfg.RefreshContextFrag()
 	}
+	installContextStepFailureHandler(&cfg, cancel)
 	opts := a.buildGenerateOptions(genCtx, cfg, sdkTools, approvalTools, prepareStep)
 	opts = append(opts, a.onStepOption(genCtx, cfg, func(step *sdk.StepResult) *sdk.GenerateParams {
 		if cfg.LoopDetection.Enabled {
@@ -928,6 +973,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}))
 
 	genResult, err := a.client.GenerateTextResult(genCtx, opts...)
+	if stepErr := contextStepBudgetError(genCtx); stepErr != nil {
+		return nil, stepErr
+	}
 	if err != nil {
 		if loopErr := detectGenerateLoopAbort(genCtx, err); loopErr != nil {
 			return nil, loopErr
@@ -1085,6 +1133,12 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			// snapshot recorded in buildGenerateOptions above).
 			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
 			switch {
+			case selection.FatalError != nil:
+				p.Messages = append([]sdk.Message(nil), p.Messages[:initialProviderMessageCount]...)
+				cfg.ContextMutations.AppendStepSnapshot(snapshot)
+				if cfg.contextStepFailure != nil {
+					cfg.contextStepFailure(selection.FatalError)
+				}
 			case loopReselectMode == LoopReselectShadow:
 				// Shadow never applies the selection: the snapshot carries the
 				// reselector's would-be verdict and the provider input stays
@@ -1869,6 +1923,10 @@ func (a *Agent) runMidStreamRetry(
 					aborted = true
 				}
 			case *sdk.ErrorPart:
+				if contextStepBudgetError(streamCtx) != nil {
+					aborted = true
+					break
+				}
 				errMsg := rp.Error.Error()
 				if isAskUserArgumentParseError(errMsg) {
 					continue
