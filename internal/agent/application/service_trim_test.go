@@ -419,7 +419,7 @@ func TestStripToolMessages_PreservesAskUserInteraction(t *testing.T) {
 // history plus per-message estimates to the selection engine.
 func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) []sdk.Message {
 	t.Helper()
-	window, scale := activeProviderHistoryWindow(budget)
+	inputBudget, scale := activeProviderHistoryInputBudget(budget)
 	estimates := make([]int, len(history))
 	for i := range history {
 		estimates[i] = estimateMessageTokens(history[i]) * scale
@@ -430,7 +430,7 @@ func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) 
 				continue
 			}
 			for _, estimate := range estimates[i:] {
-				window += estimate
+				inputBudget += estimate
 			}
 			break
 		}
@@ -439,14 +439,28 @@ func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) 
 		Messages:                     modelMessagesToSDKMessages(history),
 		ContextHistoryTokenEstimates: estimates,
 		ContextTrimmableMessages:     len(history),
-		ContextBudgetMaxTokens:       window,
+		ContextBudgetMaxTokens:       providerContextWindowForDefaultOutputReserve(inputBudget),
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
 	got := applyProviderRunConfigForTest(t, cfg)
 	return got.Messages
 }
 
-func activeProviderHistoryWindow(legacyBudget int) (window, scale int) {
+func providerContextWindowForDefaultOutputReserve(inputBudget int) int {
+	if inputBudget <= 0 {
+		return 0
+	}
+	window := inputBudget
+	for {
+		resolved := inputBudget + min(contextview.DefaultOutputReserveTokens, window/4)
+		if resolved == window {
+			return window
+		}
+		window = resolved
+	}
+}
+
+func activeProviderHistoryInputBudget(legacyBudget int) (inputBudget, scale int) {
 	if legacyBudget <= 0 {
 		return 0, 1
 	}
@@ -455,7 +469,7 @@ func activeProviderHistoryWindow(legacyBudget int) (window, scale int) {
 		scale = (contextview.MinimumSystemBudgetTokens + legacyBudget - 1) / legacyBudget
 	}
 	noticeCost := contextfrag.ResolveFragTokens(contextview.TrimNoticeFrag(contextfrag.Scope{}))
-	return contextview.DefaultOutputReserveTokens + legacyBudget*scale + noticeCost, scale
+	return legacyBudget*scale + noticeCost, scale
 }
 
 func rolesOf(messages []sdk.Message) []string {
@@ -613,7 +627,7 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		{Role: "user", Content: newTextContent(long)},
 		{Role: "assistant", Content: newTextContent(long)},
 	}
-	window, scale := activeProviderHistoryWindow(1)
+	inputBudget, scale := activeProviderHistoryInputBudget(1)
 	estimates := make([]int, len(history))
 	for i := range history {
 		estimates[i] = estimateMessageTokens(history[i]) * scale
@@ -625,14 +639,14 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		Messages:                     messages,
 		ContextHistoryTokenEstimates: estimates,
 		ContextTrimmableMessages:     len(history),
-		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1"},
 	}
 	for _, frag := range contextview.CollectNonSystemProviderSourceFrags(context.Background(), cfg) {
 		if frag.Slot == contextfrag.SlotHistory && frag.Budget.Overflow == contextfrag.OverflowKeep {
-			cfg.ContextBudgetMaxTokens += contextfrag.ResolveFragTokens(frag)
+			inputBudget += contextfrag.ResolveFragTokens(frag)
 		}
 	}
+	cfg.ContextBudgetMaxTokens = providerContextWindowForDefaultOutputReserve(inputBudget)
 	got := applyProviderRunConfigForTest(t, cfg)
 
 	if len(got.Messages) != 3 {

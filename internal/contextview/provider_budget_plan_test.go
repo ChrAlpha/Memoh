@@ -13,7 +13,21 @@ import (
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 )
 
-func activeHistoryWindow(legacyBudget int) (window, scale int) {
+func contextWindowForDefaultOutputReserve(inputBudget int) int {
+	if inputBudget <= 0 {
+		return 0
+	}
+	window := inputBudget
+	for {
+		resolved := inputBudget + min(DefaultOutputReserveTokens, window/4)
+		if resolved == window {
+			return window
+		}
+		window = resolved
+	}
+}
+
+func activeHistoryInputBudget(legacyBudget int) (inputBudget, scale int) {
 	if legacyBudget <= 0 {
 		return 0, 1
 	}
@@ -22,11 +36,11 @@ func activeHistoryWindow(legacyBudget int) (window, scale int) {
 		scale = (MinimumSystemBudgetTokens + legacyBudget - 1) / legacyBudget
 	}
 	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
-	return DefaultOutputReserveTokens + legacyBudget*scale + noticeCost, scale
+	return legacyBudget*scale + noticeCost, scale
 }
 
 func activateHistoryBudget(cfg *agentpkg.RunConfig, legacyBudget int) {
-	window, scale := activeHistoryWindow(legacyBudget)
+	inputBudget, scale := activeHistoryInputBudget(legacyBudget)
 	for i := range cfg.ContextHistoryTokenEstimates {
 		cfg.ContextHistoryTokenEstimates[i] *= scale
 	}
@@ -38,7 +52,7 @@ func activateHistoryBudget(cfg *agentpkg.RunConfig, legacyBudget int) {
 		frags = CollectNonSystemProviderSourceFrags(context.Background(), *cfg)
 	}
 	tagged := tagFragments(frags, (&FragmentSelector{}).ProfileFor(contextfrag.IntentRunConfigPreProvider))
-	window += protectedHistoryTokenCost(tagged)
+	inputBudget += protectedHistoryTokenCost(tagged)
 	currentRequestCost, err := providerCurrentRequestCost(context.Background(), *cfg)
 	if err != nil {
 		panic(err)
@@ -47,7 +61,8 @@ func activateHistoryBudget(cfg *agentpkg.RunConfig, legacyBudget int) {
 	for _, def := range cfg.ContextToolDefs {
 		toolDefsCost += def.TokenEstimate
 	}
-	cfg.ContextBudgetMaxTokens = window + currentRequestCost + toolDefsCost
+	inputBudget += currentRequestCost + toolDefsCost
+	cfg.ContextBudgetMaxTokens = contextWindowForDefaultOutputReserve(inputBudget)
 }
 
 func TestProviderContextBudgetPlanAccountsForSourceCurrentRequestAndTools(t *testing.T) {
@@ -92,16 +107,134 @@ func TestProviderContextBudgetPlanAccountsForSourceCurrentRequestAndTools(t *tes
 		t.Fatal("providerContextBudgetPlan() = nil, want active plan")
 	}
 	wantCurrent := 120 + contextfrag.EstimateImageTokens
+	const wantReserve = 5000
 	if plan.Window != 20000 ||
-		plan.OutputReserve != DefaultOutputReserveTokens ||
+		plan.OutputReserve != wantReserve ||
 		plan.ToolDefsCost != 300 ||
 		plan.CurrentRequestCost != wantCurrent {
 		t.Fatalf("plan = %#v, want window/output/tools/current = 20000/%d/300/%d",
-			plan, DefaultOutputReserveTokens, wantCurrent)
+			plan, wantReserve, wantCurrent)
 	}
-	wantSystem := 20000 - DefaultOutputReserveTokens - 300 - wantCurrent
+	wantSystem := 20000 - wantReserve - 300 - wantCurrent
 	if plan.SystemBudget != wantSystem {
 		t.Fatalf("SystemBudget = %d, want %d", plan.SystemBudget, wantSystem)
+	}
+}
+
+func TestApplyProviderRunConfigSmallWindowUsesScaledOutputReserve(t *testing.T) {
+	t.Parallel()
+
+	history := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            "history",
+		Message:       sdk.UserMessage("old context"),
+		Kind:          contextfrag.KindConversationEvent,
+		Slot:          contextfrag.SlotHistory,
+		TokenEstimate: 100,
+	})
+	current := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:    "current",
+		Kind:  contextfrag.KindCurrentUserMessage,
+		Role:  sdk.MessageRoleUser,
+		Slot:  contextfrag.SlotCurrentUser,
+		Text:  "current request",
+		Trust: contextfrag.TrustUser,
+	})
+	current.TokenEstimate = 120
+	holder := contextfrag.NewLifecycleHolder()
+	cfg := agentpkg.RunConfig{
+		ContextSourceFrags: []contextfrag.ContextFrag{history, current},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{
+			{Name: "tool", TokenEstimate: 100},
+		},
+		ContextBudgetMaxTokens: 8192,
+		ContextLifecycle:       holder,
+	}
+
+	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want small-window turn to proceed", err)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil {
+		t.Fatal("small-window turn lost its active budget plan")
+	}
+	if plan.OutputReserve != 2048 ||
+		plan.ToolDefsCost != 100 ||
+		plan.CurrentRequestCost != 120 ||
+		plan.SystemBudget != 5924 {
+		t.Fatalf("budget plan = %#v, want reserve/tools/current/system = 2048/100/120/5924", plan)
+	}
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages = %#v, want history and current request", out.Messages)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.OutputReserve != 2048 {
+		t.Fatalf("lifecycle snapshot = %#v, %v; want resolved reserve 2048", snapshot, ok)
+	}
+}
+
+func TestProviderContextBudgetPlanDefaultOutputReserveCrossover(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		window      int
+		wantReserve int
+	}{
+		{name: "below", window: 32767, wantReserve: 8191},
+		{name: "at", window: 32768, wantReserve: DefaultOutputReserveTokens},
+		{name: "above", window: 32769, wantReserve: DefaultOutputReserveTokens},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{
+				ContextBudgetMaxTokens: tt.window,
+			})
+			if err != nil {
+				t.Fatalf("providerContextBudgetPlan() error = %v", err)
+			}
+			if plan == nil ||
+				plan.OutputReserve != tt.wantReserve ||
+				plan.SystemBudget != tt.window-tt.wantReserve {
+				t.Fatalf("plan = %#v, want reserve/system = %d/%d",
+					plan, tt.wantReserve, tt.window-tt.wantReserve)
+			}
+		})
+	}
+}
+
+func TestProviderContextBudgetPlanRejectsGenuinelyImpossibleSmallWindow(t *testing.T) {
+	t.Parallel()
+
+	current := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:    "current",
+		Kind:  contextfrag.KindCurrentUserMessage,
+		Role:  sdk.MessageRoleUser,
+		Slot:  contextfrag.SlotCurrentUser,
+		Text:  "oversized current request",
+		Trust: contextfrag.TrustUser,
+	})
+	current.TokenEstimate = 6000
+	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{
+		ContextBudgetMaxTokens: 8192,
+		ContextSourceFrags:     []contextfrag.ContextFrag{current},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{
+			{Name: "tool", TokenEstimate: 100},
+		},
+	})
+
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("providerContextBudgetPlan() error = %v, want ErrBudgetUnsatisfied", err)
+	}
+	if plan == nil ||
+		plan.OutputReserve != 2048 ||
+		plan.ToolDefsCost != 100 ||
+		plan.CurrentRequestCost != 6000 ||
+		plan.SystemBudget != MinimumSystemBudgetTokens {
+		t.Fatalf("plan = %#v, want resolved reserve and unchanged actual costs", plan)
 	}
 }
 
@@ -202,7 +335,7 @@ func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *test
 		ContextToolDefs: []contextfrag.ToolDefAccounting{
 			{Name: "tool", TokenEstimate: 80},
 		},
-		ContextBudgetMaxTokens: DefaultOutputReserveTokens + 80 + 120 + 500,
+		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(80 + 120 + 500),
 	}
 
 	disabled := cfg
@@ -328,7 +461,7 @@ func TestApplyProviderRunConfigProtectedOverflowKeepsSelectionAudit(t *testing.T
 	required.TokenEstimate = 1000
 	cfg := agentpkg.RunConfig{
 		ContextSourceFrags:     []contextfrag.ContextFrag{required},
-		ContextBudgetMaxTokens: DefaultOutputReserveTokens + 300,
+		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(300),
 	}
 
 	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)

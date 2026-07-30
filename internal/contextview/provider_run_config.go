@@ -272,7 +272,7 @@ func providerContextBudgetPlan(
 	}
 	return ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
-		DefaultOutputReserveTokens,
+		defaultOutputReserveForWindow(cfg.ContextBudgetMaxTokens),
 		toolDefsCost,
 		currentRequestCost,
 	)
