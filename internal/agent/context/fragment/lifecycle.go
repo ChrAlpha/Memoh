@@ -26,10 +26,11 @@ func LifecycleSnapshotFromMetadata(raw []byte) (LifecycleSnapshot, bool) {
 const maxMemoryRecallTraceRefs = 32
 
 type LifecycleHolder struct {
-	mu       sync.Mutex
-	manifest Manifest
-	memory   *MemoryRecallTrace
-	set      bool
+	mu                 sync.Mutex
+	manifest           Manifest
+	memory             *MemoryRecallTrace
+	assistantMessageID string
+	set                bool
 }
 
 func (h *LifecycleHolder) SetMemoryRecall(trace MemoryRecallTrace) {
@@ -45,6 +46,19 @@ func (h *LifecycleHolder) SetMemoryRecall(trace MemoryRecallTrace) {
 
 func NewLifecycleHolder() *LifecycleHolder {
 	return &LifecycleHolder{}
+}
+
+func (h *LifecycleHolder) SetAssistantMessageID(messageID string) {
+	if h == nil {
+		return
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return
+	}
+	h.mu.Lock()
+	h.assistantMessageID = messageID
+	h.mu.Unlock()
 }
 
 func (h *LifecycleHolder) SetManifest(manifest Manifest) {
@@ -92,6 +106,7 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 	h.mu.Lock()
 	manifest := h.manifest
 	memory := cloneMemoryRecallTrace(h.memory)
+	assistantMessageID := h.assistantMessageID
 	ok := h.set
 	h.mu.Unlock()
 	if !ok {
@@ -99,6 +114,7 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 	}
 	snapshot := BuildLifecycleSnapshot(manifest)
 	snapshot.MemoryRecall = memory
+	snapshot.AssistantMessageID = assistantMessageID
 	return snapshot, true
 }
 
@@ -172,6 +188,7 @@ type LifecycleSnapshot struct {
 	LoopSelectionMode           string              `json:"loop_selection_mode,omitempty"`
 	Steps                       []StepSnapshot      `json:"steps,omitempty"`
 	MemoryRecall                *MemoryRecallTrace  `json:"memory_recall,omitempty"`
+	AssistantMessageID          string              `json:"assistant_message_id,omitempty"`
 }
 
 type MemoryRecallTrace struct {

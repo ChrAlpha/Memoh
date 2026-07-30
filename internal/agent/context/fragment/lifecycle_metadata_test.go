@@ -41,3 +41,19 @@ func TestLifecycleSnapshotFromMetadataAbsent(t *testing.T) {
 		t.Fatal("invalid JSON must not parse")
 	}
 }
+
+func TestLifecycleHolderTracksPersistedAssistantAssociation(t *testing.T) {
+	t.Parallel()
+
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{View: ViewRunConfigPreProvider})
+	holder.SetAssistantMessageID(" assistant-message-1 ")
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("expected lifecycle snapshot")
+	}
+	if snapshot.AssistantMessageID != "assistant-message-1" {
+		t.Fatalf("assistant message id = %q, want assistant-message-1", snapshot.AssistantMessageID)
+	}
+}

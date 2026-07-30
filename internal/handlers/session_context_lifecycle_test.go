@@ -4,22 +4,41 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/labstack/echo/v4"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	"github.com/memohai/memoh/internal/bots"
+	session "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/memohai/memoh/internal/db/store"
 )
 
 type contextLifecycleQueryStub struct {
+	dbstore.Queries
+	bot             sqlc.GetBotByIDRow
+	session         sqlc.BotSession
 	lifecycleRows   []sqlc.ListRecentContextLifecyclesBySessionRow
 	lifecycleErr    error
 	lifecycleParams []sqlc.ListRecentContextLifecyclesBySessionParams
 	legacyRows      []sqlc.ListRecentAssistantMessagesBySessionRow
 	legacyErr       error
 	legacyParams    []sqlc.ListRecentAssistantMessagesBySessionParams
+}
+
+func (q *contextLifecycleQueryStub) GetBotByID(_ context.Context, _ pgtype.UUID) (sqlc.GetBotByIDRow, error) {
+	return q.bot, nil
+}
+
+func (q *contextLifecycleQueryStub) GetSessionByID(_ context.Context, _ pgtype.UUID) (sqlc.BotSession, error) {
+	return q.session, nil
 }
 
 func (q *contextLifecycleQueryStub) ListRecentContextLifecyclesBySession(
@@ -45,6 +64,104 @@ func lifecycleSnapshotJSON(t *testing.T, snapshot contextfrag.LifecycleSnapshot)
 		t.Fatalf("marshal lifecycle snapshot: %v", err)
 	}
 	return raw
+}
+
+func TestGetSessionContextLifecycleReturnsFailedRunWithoutAssistantMessage(t *testing.T) {
+	t.Parallel()
+
+	const (
+		botID                = "11111111-1111-1111-1111-111111111111"
+		sessionID            = "22222222-2222-2222-2222-222222222222"
+		failedRunID          = "33333333-3333-3333-3333-333333333333"
+		completedRunID       = "44444444-4444-4444-4444-444444444444"
+		assistantMessageID   = "55555555-5555-5555-5555-555555555555"
+		budgetErrorCode      = "context.budget_unsatisfied"
+		failedFinalInputHash = "failed-before-assistant"
+	)
+	createdAt := time.Unix(1000, 0).UTC()
+	queries := &contextLifecycleQueryStub{
+		bot: testBotRow(botID, map[string]any{}),
+		session: sqlc.BotSession{
+			ID:          testUUID(sessionID),
+			BotID:       testUUID(botID),
+			Type:        session.TypeChat,
+			SessionMode: session.TypeChat,
+			RuntimeType: session.RuntimeModel,
+		},
+		lifecycleRows: []sqlc.ListRecentContextLifecyclesBySessionRow{
+			{
+				RunID:     testUUID(failedRunID),
+				Status:    "failed_budget",
+				ErrorCode: pgtype.Text{String: budgetErrorCode, Valid: true},
+				CreatedAt: pgtype.Timestamptz{Time: createdAt.Add(time.Minute), Valid: true},
+				Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
+					Version:        1,
+					FinalInputHash: failedFinalInputHash,
+				}),
+			},
+			{
+				RunID:     testUUID(completedRunID),
+				Status:    "completed",
+				CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
+				Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
+					Version:            1,
+					AssistantMessageID: assistantMessageID,
+				}),
+			},
+		},
+	}
+	handler := NewSessionInfoHandler(
+		slog.New(slog.DiscardHandler),
+		queries,
+		bots.NewService(nil, queries),
+		newTestAdminAccountService("admin"),
+		nil,
+		nil,
+	)
+
+	e := echo.New()
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/bots/"+botID+"/sessions/"+sessionID+"/context-lifecycle?limit=2",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	ctx := testAuthContext(e, req, rec, "user-1")
+	ctx.SetPath("/bots/:bot_id/sessions/:session_id/context-lifecycle")
+	ctx.SetParamNames("bot_id", "session_id")
+	ctx.SetParamValues(botID, sessionID)
+
+	if err := handler.GetSessionContextLifecycle(ctx); err != nil {
+		t.Fatalf("GetSessionContextLifecycle() error = %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var response ContextLifecycleResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Turns) != 2 {
+		t.Fatalf("turns = %d, want 2", len(response.Turns))
+	}
+	failed := response.Turns[0]
+	if failed.RunID != failedRunID || failed.Status != "failed_budget" || failed.ErrorCode != budgetErrorCode ||
+		failed.Snapshot.FinalInputHash != failedFinalInputHash || failed.AssistantMessageID != "" {
+		t.Fatalf("failed run response = %#v", failed)
+	}
+	completed := response.Turns[1]
+	if completed.RunID != completedRunID || completed.AssistantMessageID != assistantMessageID {
+		t.Fatalf("completed run response = %#v, want assistant association", completed)
+	}
+	if strings.Contains(rec.Body.String(), `"message_id"`) {
+		t.Fatalf("response must not use assistant messages as lifecycle identity: %s", rec.Body.String())
+	}
+	if len(queries.legacyParams) != 0 {
+		t.Fatalf("legacy query calls = %d, want 0", len(queries.legacyParams))
+	}
+	if len(queries.lifecycleParams) != 1 || queries.lifecycleParams[0].MaxCount != 2 {
+		t.Fatalf("run query params = %#v, want limit 2", queries.lifecycleParams)
+	}
 }
 
 func TestLoadContextLifecycleTurnsPrefersRunRowsWithoutAssistantMessage(t *testing.T) {
@@ -143,8 +260,8 @@ func TestLoadContextLifecycleTurnsFallsBackOnlyWhenRunRowsDoNotExist(t *testing.
 	if err != nil {
 		t.Fatalf("load context lifecycle turns: %v", err)
 	}
-	if len(turns) != 1 || turns[0].RunID != runID.String() || turns[0].Status != "completed" ||
-		turns[0].Snapshot.FinalInputHash != "legacy" {
+	if len(turns) != 1 || turns[0].RunID != runID.String() || turns[0].Status != "" ||
+		turns[0].AssistantMessageID == "" || turns[0].Snapshot.FinalInputHash != "legacy" {
 		t.Fatalf("turns = %#v, want legacy assistant metadata fallback", turns)
 	}
 	if len(queries.lifecycleParams) != 1 || len(queries.legacyParams) != 1 {

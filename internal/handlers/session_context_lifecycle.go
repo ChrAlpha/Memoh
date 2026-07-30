@@ -32,11 +32,12 @@ type ContextLifecycleResponse struct {
 
 // ContextLifecycleTurn is one persisted lifecycle snapshot, newest first.
 type ContextLifecycleTurn struct {
-	RunID     string                        `json:"run_id"`
-	Status    string                        `json:"status"`
-	ErrorCode string                        `json:"error_code,omitempty"`
-	CreatedAt time.Time                     `json:"created_at"`
-	Snapshot  contextfrag.LifecycleSnapshot `json:"snapshot"`
+	RunID              string                        `json:"run_id"`
+	Status             string                        `json:"status,omitempty"`
+	ErrorCode          string                        `json:"error_code,omitempty"`
+	AssistantMessageID string                        `json:"assistant_message_id,omitempty"`
+	CreatedAt          time.Time                     `json:"created_at"`
+	Snapshot           contextfrag.LifecycleSnapshot `json:"snapshot"`
 }
 
 type ContextLifecycleAggregates struct {
@@ -215,11 +216,12 @@ func lifecycleTurnsFromRunRows(
 			errorCode = row.ErrorCode.String
 		}
 		turns = append(turns, ContextLifecycleTurn{
-			RunID:     row.RunID.String(),
-			Status:    row.Status,
-			ErrorCode: errorCode,
-			CreatedAt: row.CreatedAt.Time,
-			Snapshot:  snapshot,
+			RunID:              row.RunID.String(),
+			Status:             row.Status,
+			ErrorCode:          errorCode,
+			AssistantMessageID: snapshot.AssistantMessageID,
+			CreatedAt:          row.CreatedAt.Time,
+			Snapshot:           snapshot,
 		})
 	}
 	return turns, nil
@@ -238,10 +240,10 @@ func legacyLifecycleTurnsFromRows(rows []sqlc.ListRecentAssistantMessagesBySessi
 			continue
 		}
 		turns = append(turns, ContextLifecycleTurn{
-			RunID:     row.RunID.String(),
-			Status:    "completed",
-			CreatedAt: row.CreatedAt.Time,
-			Snapshot:  snapshot,
+			RunID:              row.RunID.String(),
+			AssistantMessageID: row.ID.String(),
+			CreatedAt:          row.CreatedAt.Time,
+			Snapshot:           snapshot,
 		})
 	}
 	return turns

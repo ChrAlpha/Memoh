@@ -272,6 +272,26 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 	if convergedAborted.CreatedAt != insertedAborted.CreatedAt {
 		t.Fatalf("authoritative snapshot update changed created_at = %#v, want %#v", convergedAborted.CreatedAt, insertedAborted.CreatedAt)
 	}
+	if _, err := conn.Exec(ctx, `
+UPDATE context_lifecycles
+SET created_at = CASE run_id
+  WHEN $1 THEN '2026-01-01T00:00:00Z'::timestamptz
+  WHEN $2 THEN '2026-01-02T00:00:00Z'::timestamptz
+END
+WHERE run_id IN ($1, $2)
+`, parsedRunID, parsedAbortedRunID); err != nil {
+		t.Fatalf("set lifecycle ordering fixtures: %v", err)
+	}
+	limitedRecent, err := queries.ListRecentContextLifecyclesBySession(ctx, sqlc.ListRecentContextLifecyclesBySessionParams{
+		SessionID: parsedSessionID,
+		MaxCount:  1,
+	})
+	if err != nil {
+		t.Fatalf("list limited context lifecycles: %v", err)
+	}
+	if len(limitedRecent) != 1 || limitedRecent[0].RunID != parsedAbortedRunID {
+		t.Fatalf("limited context lifecycles = %#v, want newest run %s", limitedRecent, abortedRunID)
+	}
 
 	const teamTwo = "00000000-0000-0000-0000-0000000000f2"
 	if _, err := pool.Exec(ctx, `INSERT INTO teams (id, slug) VALUES ($1, 'context-lifecycle-team-two')`, teamTwo); err != nil {

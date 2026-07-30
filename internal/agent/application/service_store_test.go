@@ -259,6 +259,13 @@ func TestStoreRoundPersistsContextLifecycleMetadataOnAssistant(t *testing.T) {
 	if strings.Contains(string(raw), `"items"`) {
 		t.Fatalf("lifecycle metadata must use condensed snapshot: %s", raw)
 	}
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("expected lifecycle holder snapshot after persistence")
+	}
+	if snapshot.AssistantMessageID != "message-id" {
+		t.Fatalf("assistant message id = %q, want persisted assistant association", snapshot.AssistantMessageID)
+	}
 }
 
 func TestStoreRoundLogsWhenContextLifecycleMissing(t *testing.T) {

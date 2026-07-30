@@ -65,6 +65,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	opts = opts.withContextLifecycleMetadata(s.logger, req, filtered)
 
 	persisted := s.storeMessages(ctx, req, filtered, modelID, opts)
+	opts.ContextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
 		go s.storeMemory(context.WithoutCancel(ctx), req, filtered)
 	}
@@ -158,6 +159,15 @@ func lastAssistantMessageIndex(messages []ModelMessage) int {
 		}
 	}
 	return -1
+}
+
+func lastPersistedAssistantMessageID(messages []messagepkg.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
+			return strings.TrimSpace(messages[i].ID)
+		}
+	}
+	return ""
 }
 
 func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {
