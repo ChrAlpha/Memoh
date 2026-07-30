@@ -222,7 +222,7 @@ func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
 	}
 }
 
-func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
+func TestSystemBudgetActualCostShrinksHistoryBudgetAndChargesProtectedHistory(t *testing.T) {
 	t.Parallel()
 
 	frags := []contextfrag.ContextFrag{
@@ -241,7 +241,7 @@ func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 	plan := &contextfrag.ContextBudgetPlan{
 		Window:       1000,
-		SystemBudget: 150 + noticeCost + 1,
+		SystemBudget: 150 + 40 + noticeCost + 1,
 	}
 	withPlan := selector.Select(frags, profile, BudgetEnvelope{
 		MaxTokens:           200,
@@ -252,10 +252,36 @@ func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 		t.Fatalf("Select() error = %v", withPlan.FatalError)
 	}
 	if got := fragIDs(withPlan.Dropped); !reflect.DeepEqual(got, []string{"old"}) {
-		t.Fatalf("dropped = %v, want old history after system leaves 50 tokens", got)
+		t.Fatalf("dropped = %v, want old history after protected history and notice consume the allowance", got)
 	}
-	if plan.HistoryBudget != noticeCost+1 {
-		t.Fatalf("history budget = %d, want notice cost plus one token %d", plan.HistoryBudget, noticeCost+1)
+	if plan.HistoryBudget != 40+noticeCost+1 {
+		t.Fatalf("history budget = %d, want protected history plus notice and one token %d", plan.HistoryBudget, 40+noticeCost+1)
+	}
+}
+
+func TestHistoryBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
+	t.Parallel()
+
+	protected := historyBudgetTestFrag("latest", 40)
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: 39,
+	}
+	selector := &FragmentSelector{}
+	result := selector.Select(
+		[]contextfrag.ContextFrag{protected},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
+		t.Fatalf("Select() error = %v, want ErrProtectedContextOverflow", result.FatalError)
+	}
+	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{"latest"}) {
+		t.Fatalf("selected = %v, want protected history retained for audit", got)
+	}
+	if len(result.Dropped) != 0 {
+		t.Fatalf("dropped = %v, want no protected history drop", fragIDs(result.Dropped))
 	}
 }
 

@@ -83,18 +83,31 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	if profile.Intent != contextfrag.IntentCompactionCandidates {
 		tagged := tagFragments(frags, profile)
 		if isRetentionIntent(profile.Intent) {
-			if drops, dropReasons := budgetTrimDrops(tagged, budget.MaxTokens, budget.RecentProtectTokens); len(drops) > 0 {
+			historyBudget := budget.MaxTokens
+			trimDrops := budgetTrimDrops
+			if budget.Plan != nil {
+				protectedCost := protectedHistoryTokenCost(tagged)
+				if protectedCost > historyBudget {
+					result = selectionResultFromTagged(tagged, allSelectedIndexes(tagged))
+					result.FatalError = contextfrag.ErrProtectedContextOverflow
+					result = finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
+					return appendSystemBudgetDrops(result, systemBudgetDropped)
+				}
+				historyBudget -= protectedCost
+				trimDrops = budgetTrimDropsEnabled
+			}
+			if drops, dropReasons := trimDrops(tagged, historyBudget, budget.RecentProtectTokens); len(drops) > 0 {
 				if budget.Plan != nil && hasSpatialBudgetDrop(dropReasons) {
 					noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
-					if noticeCost >= budget.MaxTokens {
+					if noticeCost > historyBudget {
 						result = selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
 						result.FatalError = contextfrag.ErrProtectedContextOverflow
 						result = finishSelection(result, exchangeDropped, exchangeEdits, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings, gated, profile, superseded)
 						return appendSystemBudgetDrops(result, systemBudgetDropped)
 					}
-					drops, dropReasons = budgetTrimDrops(
+					drops, dropReasons = budgetTrimDropsEnabled(
 						tagged,
-						budget.MaxTokens-noticeCost,
+						historyBudget-noticeCost,
 						budget.RecentProtectTokens,
 					)
 				}

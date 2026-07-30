@@ -243,19 +243,31 @@ func fragToolResultCallIDs(frag contextfrag.ContextFrag) []string {
 //     competing band: it can never buy a passive unit survival over a
 //     directed one.
 //
-// Each spatial drop happens only while the droppable total still exceeds the
-// budget — the fit check is the sole budget-dependent point. A larger budget
-// stops earlier along the same sequence, so it always keeps a superset of
+// Each spatial drop happens only while the droppable total still exceeds its
+// allowance — the fit check is the sole budget-dependent point. A larger
+// allowance stops earlier along the same sequence, so it always keeps a superset of
 // what a smaller budget keeps, and dropping the whole sequence always reaches
 // the budget because only droppable tokens are counted.
 //
 // Priority never enters retention: it only orders rendering. The budget
-// counts droppable tokens only, mirroring the legacy trimMessagesByTokens
-// accounting; when the droppable total fits, nothing drops and the output is
+// passed here is the allowance left for droppable tokens. The legacy path
+// passes its whole history budget, preserving trimMessagesByTokens accounting.
+// An active unified plan first deducts protected history and the required trim
+// notice. When the droppable total fits, nothing drops and the output is
 // byte-identical to the unbudgeted path.
 func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (map[int]bool, map[int]string) {
 	if maxTokens <= 0 {
 		return nil, nil
+	}
+	return budgetTrimDropsEnabled(tagged, maxTokens, recentProtectTokens)
+}
+
+// budgetTrimDropsEnabled applies an active budget even when no tokens remain
+// for droppable history. The legacy zero value still disables budgeting via
+// budgetTrimDrops.
+func budgetTrimDropsEnabled(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (map[int]bool, map[int]string) {
+	if maxTokens < 0 {
+		maxTokens = 0
 	}
 	units := buildBudgetUnits(tagged)
 
@@ -315,6 +327,29 @@ func budgetTrimDrops(tagged []TaggedFrag, maxTokens, recentProtectTokens int) (m
 		dropTier(inside, tier, budgetDropReasonRecentWindow)
 	}
 	return drops, reasons
+}
+
+// protectedHistoryTokenCost charges every protected non-system/non-current
+// fragment to the unified history budget. Unit protection is atomic: when a
+// protected tool-call/result member makes the whole closure non-droppable,
+// every history member of that closure is charged.
+func protectedHistoryTokenCost(tagged []TaggedFrag) int {
+	units := buildBudgetUnits(tagged)
+	total := 0
+	for i := range units {
+		unit := &units[i]
+		if unit.droppable {
+			continue
+		}
+		for _, idx := range unit.indexes {
+			frag := tagged[idx].Frag
+			if frag.Slot == contextfrag.SlotSystem || frag.Slot == contextfrag.SlotCurrentUser {
+				continue
+			}
+			total += fragTokenEstimate(frag)
+		}
+	}
+	return total
 }
 
 // hasSpatialBudgetDrop reports whether any drop reason came from budget

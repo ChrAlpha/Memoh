@@ -424,6 +424,17 @@ func budgetTrimViaContextView(t *testing.T, history []ModelMessage, budget int) 
 	for i := range history {
 		estimates[i] = estimateMessageTokens(history[i]) * scale
 	}
+	if budget > 0 {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role != "user" {
+				continue
+			}
+			for _, estimate := range estimates[i:] {
+				window += estimate
+			}
+			break
+		}
+	}
 	cfg := agentpkg.RunConfig{
 		Messages:                     modelMessagesToSDKMessages(history),
 		ContextHistoryTokenEstimates: estimates,
@@ -616,6 +627,11 @@ func TestBudgetTrim_PinnedTailNeverTrimmed(t *testing.T) {
 		ContextTrimmableMessages:     len(history),
 		ContextBudgetMaxTokens:       window,
 		ContextScope:                 contextfrag.Scope{BotID: "bot-1"},
+	}
+	for _, frag := range contextview.CollectNonSystemProviderSourceFrags(context.Background(), cfg) {
+		if frag.Slot == contextfrag.SlotHistory && frag.Budget.Overflow == contextfrag.OverflowKeep {
+			cfg.ContextBudgetMaxTokens += contextfrag.ResolveFragTokens(frag)
+		}
 	}
 	got := applyProviderRunConfigForTest(t, cfg)
 

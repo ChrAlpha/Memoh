@@ -33,6 +33,12 @@ func activateHistoryBudget(cfg *agentpkg.RunConfig, legacyBudget int) {
 	for i := range cfg.ContextSourceFrags {
 		cfg.ContextSourceFrags[i].TokenEstimate *= scale
 	}
+	frags := cfg.ContextSourceFrags
+	if len(frags) == 0 {
+		frags = CollectNonSystemProviderSourceFrags(context.Background(), *cfg)
+	}
+	tagged := tagFragments(frags, (&FragmentSelector{}).ProfileFor(contextfrag.IntentRunConfigPreProvider))
+	window += protectedHistoryTokenCost(tagged)
 	currentRequestCost, err := providerCurrentRequestCost(context.Background(), *cfg)
 	if err != nil {
 		panic(err)
