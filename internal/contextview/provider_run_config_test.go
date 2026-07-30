@@ -26,8 +26,9 @@ func applyProviderRunConfigOK(
 
 func providerRunConfigFixture() agentpkg.RunConfig {
 	return agentpkg.RunConfig{
-		System:   "base system",
-		Messages: []sdk.Message{sdk.UserMessage("hi")},
+		System:                 "base system",
+		Messages:               []sdk.Message{sdk.UserMessage("hi")},
+		ContextBudgetMaxTokens: 100000,
 		ContextScope: contextfrag.Scope{
 			BotID:     "bot-1",
 			SessionID: "session-1",

@@ -205,6 +205,10 @@ func ApplyProviderRunConfig(
 	}
 	ledger := contextfrag.NewMutationLedger()
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
+	if cfg.ContextBudgetMaxTokens == 0 {
+		ledger.Record(contextfrag.MutationContextBudgetDisabled, "missing_context_window")
+		warnMissingContextWindow(ctx, logger, cfg)
+	}
 	selector := Selector(&FragmentSelector{})
 	fallbackCfg := cfg
 	if fragsFirst && cfg.ContextToolDefsResolved {
@@ -291,7 +295,7 @@ func providerContextBudgetPlan(
 	}
 	toolDefsCost := 0
 	for _, def := range cfg.ContextToolDefs {
-		toolDefsCost += def.TokenEstimate
+		toolDefsCost += max(def.TokenEstimate, contextfrag.ProviderBudgetTokensFromBytes(def.Bytes))
 	}
 	return ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
@@ -344,7 +348,7 @@ func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 	for _, frag := range frags {
 		if frag.Slot == contextfrag.SlotCurrentUser ||
 			frag.Kind == contextfrag.KindCurrentUserMessage {
-			total += contextfrag.ResolveFragTokens(frag)
+			total += contextfrag.ResolveProviderBudgetFragTokens(frag)
 		}
 	}
 	return total
@@ -773,4 +777,20 @@ func warnProviderContextView(logger *slog.Logger, cfg agentpkg.RunConfig, msg st
 		attrs = append(attrs, slog.Any("error", err))
 	}
 	logger.Warn(msg, attrs...) //nolint:sloglint // caller-provided audit message
+}
+
+func warnMissingContextWindow(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg agentpkg.RunConfig,
+) {
+	if logger == nil {
+		return
+	}
+	logger.WarnContext(ctx, "context budget disabled: missing model context window",
+		slog.String("reason", "missing_context_window"),
+		slog.String("bot_id", cfg.ContextScope.BotID),
+		slog.String("session_id", cfg.ContextScope.SessionID),
+		slog.String("model_id", cfg.CurrentModelID),
+	)
 }

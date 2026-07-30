@@ -1,9 +1,13 @@
 package contextview
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -119,6 +123,44 @@ func TestProviderContextBudgetPlanAccountsForSourceCurrentRequestAndTools(t *tes
 	if plan.SystemBudget != wantSystem {
 		t.Fatalf("SystemBudget = %d, want %d", plan.SystemBudget, wantSystem)
 	}
+	if plan.Estimator != contextfrag.ProviderBudgetEstimator ||
+		plan.EstimatorSafetyFactorPercent != contextfrag.ProviderBudgetSafetyFactorPercent {
+		t.Fatalf("estimator contract = %q/%d, want %q/%d",
+			plan.Estimator,
+			plan.EstimatorSafetyFactorPercent,
+			contextfrag.ProviderBudgetEstimator,
+			contextfrag.ProviderBudgetSafetyFactorPercent,
+		)
+	}
+}
+
+func TestProviderContextBudgetPlanUsesConservativeByteCosts(t *testing.T) {
+	t.Parallel()
+
+	current := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:   "current",
+		Kind: contextfrag.KindCurrentUserMessage,
+		Role: sdk.MessageRoleUser,
+		Slot: contextfrag.SlotCurrentUser,
+		Text: "abcdefghijklmnop",
+	})
+	current.TokenEstimate = 1
+	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{
+		ContextBudgetMaxTokens: 10000,
+		ContextSourceFrags:     []contextfrag.ContextFrag{current},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{{
+			Name:          "short_schema",
+			Bytes:         16,
+			TokenEstimate: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("providerContextBudgetPlan() error = %v", err)
+	}
+	if plan.ToolDefsCost != 5 || plan.CurrentRequestCost != 5 {
+		t.Fatalf("provider costs = tools %d current %d, want conservative 5/5",
+			plan.ToolDefsCost, plan.CurrentRequestCost)
+	}
 }
 
 func TestApplyProviderRunConfigSmallWindowUsesScaledOutputReserve(t *testing.T) {
@@ -168,8 +210,12 @@ func TestApplyProviderRunConfigSmallWindowUsesScaledOutputReserve(t *testing.T) 
 		t.Fatalf("messages = %#v, want history and current request", out.Messages)
 	}
 	snapshot, ok := holder.Snapshot()
-	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.OutputReserve != 2048 {
-		t.Fatalf("lifecycle snapshot = %#v, %v; want resolved reserve 2048", snapshot, ok)
+	if !ok ||
+		snapshot.BudgetPlan == nil ||
+		snapshot.BudgetPlan.OutputReserve != 2048 ||
+		snapshot.BudgetPlan.Estimator != contextfrag.ProviderBudgetEstimator ||
+		snapshot.BudgetPlan.EstimatorSafetyFactorPercent != contextfrag.ProviderBudgetSafetyFactorPercent {
+		t.Fatalf("lifecycle snapshot = %#v, %v; want reserve and estimator contract", snapshot, ok)
 	}
 }
 
@@ -317,6 +363,64 @@ func TestProviderContextBudgetPlanDisabledWithoutWindow(t *testing.T) {
 	}
 	if plan != nil {
 		t.Fatalf("providerContextBudgetPlan() = %#v, want nil", plan)
+	}
+}
+
+func TestApplyProviderRunConfigAuditsMissingContextWindow(t *testing.T) {
+	t.Parallel()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	holder := contextfrag.NewLifecycleHolder()
+	cfg := agentpkg.RunConfig{
+		System:         "legacy system",
+		Messages:       []sdk.Message{sdk.AssistantMessage("legacy")},
+		Query:          "current",
+		CurrentModelID: "model-1",
+		ContextScope: contextfrag.Scope{
+			BotID:     "bot-1",
+			SessionID: "session-1",
+		},
+		ContextLifecycle: holder,
+	}
+
+	out, err := ApplyProviderRunConfig(context.Background(), logger, cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+	}
+	records := out.ContextMutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextBudgetDisabled ||
+		records[0].Detail != "missing_context_window" {
+		t.Fatalf("mutations = %#v, want exactly one missing-window audit", records)
+	}
+	if out.ContextManifest.BudgetPlan != nil {
+		t.Fatalf("budget plan = %#v, want disabled", out.ContextManifest.BudgetPlan)
+	}
+	wantMessages := []sdk.Message{sdk.AssistantMessage("legacy"), sdk.UserMessage("current")}
+	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, wantMessages) {
+		t.Fatalf("provider payload = system %q messages %#v, want legacy unbudgeted result", out.System, out.Messages)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || len(snapshot.Mutations) != 1 ||
+		snapshot.Mutations[0].Kind != contextfrag.MutationContextBudgetDisabled ||
+		snapshot.Mutations[0].Detail != "missing_context_window" {
+		t.Fatalf("lifecycle snapshot = %#v, %v; want missing-window audit", snapshot, ok)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("warning logs = %q, want exactly one record", logs.String())
+	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("warning log is not structured JSON: %v", err)
+	}
+	if record["level"] != "WARN" ||
+		record["bot_id"] != "bot-1" ||
+		record["session_id"] != "session-1" ||
+		record["model_id"] != "model-1" {
+		t.Fatalf("warning log = %#v, want WARN with bot/session/model attrs", record)
 	}
 }
 
@@ -581,9 +685,10 @@ func TestApplyProviderRunConfigInternalBuildErrorStillFallsBack(t *testing.T) {
 	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
 	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
 	cfg := agentpkg.RunConfig{
-		System:             "legacy system",
-		Messages:           []sdk.Message{sdk.UserMessage("legacy message")},
-		ContextSourceFrags: []contextfrag.ContextFrag{first, second},
+		System:                 "legacy system",
+		Messages:               []sdk.Message{sdk.UserMessage("legacy message")},
+		ContextSourceFrags:     []contextfrag.ContextFrag{first, second},
+		ContextBudgetMaxTokens: 100000,
 	}
 
 	out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)

@@ -136,7 +136,8 @@ func TestProviderUsesByteEstimatorForStaticSystemFragsWithoutTokenizer(t *testin
 				resolvedCost += len(frags) - 1
 			}
 			renderedPrompt := agentpkg.GenerateSystemPrompt(params)
-			renderedCost := contextfrag.TokensFromBytes(len(renderedPrompt))
+			renderedCost := ((len(renderedPrompt) + contextfrag.EstimateBytesPerToken - 1) /
+				contextfrag.EstimateBytesPerToken) * contextfrag.ProviderBudgetSafetyFactorPercent / 100
 			wantCost := max(resolvedCost, renderedCost)
 
 			out, err := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{

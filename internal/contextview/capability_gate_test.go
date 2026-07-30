@@ -243,6 +243,7 @@ func capabilityGateFixture() agentpkg.RunConfig {
 		System:                  contextfrag.Render(frags).System,
 		ContextSourceFrags:      frags,
 		ContextToolDefsResolved: true,
+		ContextBudgetMaxTokens:  100000,
 	}
 }
 

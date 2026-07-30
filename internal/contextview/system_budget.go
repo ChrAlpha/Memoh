@@ -41,10 +41,12 @@ func ComputeContextBudgetPlan(window, outputReserve, toolDefsCost, currentReques
 		return nil, nil
 	}
 	plan := &contextfrag.ContextBudgetPlan{
-		Window:             window,
-		OutputReserve:      outputReserve,
-		ToolDefsCost:       toolDefsCost,
-		CurrentRequestCost: currentRequestCost,
+		Estimator:                    contextfrag.ProviderBudgetEstimator,
+		EstimatorSafetyFactorPercent: contextfrag.ProviderBudgetSafetyFactorPercent,
+		Window:                       window,
+		OutputReserve:                outputReserve,
+		ToolDefsCost:                 toolDefsCost,
+		CurrentRequestCost:           currentRequestCost,
 	}
 	remaining := window - outputReserve - toolDefsCost - currentRequestCost
 	if window < 0 || outputReserve < 0 || toolDefsCost < 0 || currentRequestCost < 0 ||
@@ -204,7 +206,7 @@ func systemFragCost(frags []contextfrag.ContextFrag) int {
 	if count > 1 {
 		conservative += count - 1
 	}
-	if rendered := contextfrag.TokensFromBytes(renderedBytes); rendered > conservative {
+	if rendered := contextfrag.ProviderBudgetTokensFromBytes(renderedBytes); rendered > conservative {
 		return rendered
 	}
 	return conservative

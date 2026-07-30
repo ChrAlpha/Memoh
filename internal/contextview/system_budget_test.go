@@ -28,11 +28,13 @@ func TestComputeContextBudgetPlan(t *testing.T) {
 		t.Fatalf("ComputeContextBudgetPlan() error = %v", err)
 	}
 	want := &contextfrag.ContextBudgetPlan{
-		Window:             1000,
-		OutputReserve:      200,
-		ToolDefsCost:       100,
-		CurrentRequestCost: 50,
-		SystemBudget:       650,
+		Estimator:                    contextfrag.ProviderBudgetEstimator,
+		EstimatorSafetyFactorPercent: contextfrag.ProviderBudgetSafetyFactorPercent,
+		Window:                       1000,
+		OutputReserve:                200,
+		ToolDefsCost:                 100,
+		CurrentRequestCost:           50,
+		SystemBudget:                 650,
 	}
 	if !reflect.DeepEqual(plan, want) {
 		t.Fatalf("plan = %#v, want %#v", plan, want)
@@ -232,8 +234,8 @@ func TestSystemBudgetCostIncludesEveryRenderedFragmentBoundary(t *testing.T) {
 	if got := contextfrag.ResolveFragTokens(required) + contextfrag.ResolveFragTokens(optional); got != 256 {
 		t.Fatalf("per-fragment cost = %d, want floor-rounded 256", got)
 	}
-	if got := systemFragCost([]contextfrag.ContextFrag{required, optional}); got != 257 {
-		t.Fatalf("rendered system cost = %d, want 257 including the fragment boundary", got)
+	if got := systemFragCost([]contextfrag.ContextFrag{required, optional}); got != 322 {
+		t.Fatalf("rendered system cost = %d, want conservative provider cost 322", got)
 	}
 }
 
@@ -246,7 +248,7 @@ func TestSystemBudgetCostMatchesRenderedShortSections(t *testing.T) {
 	second.Parts[0].Text = "bbb"
 
 	rendered := "aaa\n\nbbb"
-	want := contextfrag.TokensFromBytes(len(rendered))
+	const want = 2
 	if got := systemFragCost([]contextfrag.ContextFrag{first, second}); got != want {
 		t.Fatalf("rendered system cost = %d, want %d for %q", got, want, rendered)
 	}
@@ -277,9 +279,9 @@ func TestSystemBudgetCostUsesRendererPriorityOrderForGroups(t *testing.T) {
 	}
 
 	payload := renderSDK(t, frags, placementFor(frags))
-	want := contextfrag.TokensFromBytes(len(payload.System))
-	if want != 8 {
-		t.Fatalf("fixture rendered cost = %d, want 8", want)
+	const want = 11
+	if len(payload.System) != 34 {
+		t.Fatalf("fixture rendered bytes = %d, want 34", len(payload.System))
 	}
 	if got := systemFragCost(frags); got != want {
 		t.Fatalf("system cost = %d, want renderer-ordered cost %d for %q", got, want, payload.System)
