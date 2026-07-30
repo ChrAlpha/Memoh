@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/apperror"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
 	"github.com/memohai/memoh/internal/contextview"
@@ -52,6 +54,21 @@ func (f *cancelDiscussAgentStreamer) Stream(ctx context.Context, _ native.RunCon
 		ch <- native.StreamEvent{Type: native.EventAgentAbort}
 	}()
 	return ch
+}
+
+type countingDiscussLifecycleProvider struct {
+	triggerLifecycleProvider
+}
+
+func (p *countingDiscussLifecycleProvider) DoStream(
+	_ context.Context,
+	params sdk.GenerateParams,
+) (*sdk.StreamResult, error) {
+	p.mu.Lock()
+	p.calls++
+	p.params = params
+	p.mu.Unlock()
+	return nil, errors.New("provider must not run after context budget rejection")
 }
 
 type fakeDiscussService struct {
@@ -260,6 +277,80 @@ func TestAdmittedDiscussCancellationPersistsAbortedLifecycle(t *testing.T) {
 	}
 	if got := runtime.finishes[0].status; got != sessionruntime.RunStatusAborted {
 		t.Fatalf("runtime finish status = %q, want %q", got, sessionruntime.RunStatusAborted)
+	}
+}
+
+func TestAdmittedDiscussBudgetFailurePersistsFailedBudgetLifecycle(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000919"
+	logger := slog.New(slog.DiscardHandler)
+	provider := &countingDiscussLifecycleProvider{}
+	holder := contextfrag.NewLifecycleHolder()
+	resolver := &fakeDiscussService{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: native.RunConfig{
+				Model: &sdk.Model{
+					ID:       "discuss-budget-model",
+					Type:     sdk.ModelTypeChat,
+					Provider: provider,
+				},
+				System:           "required discuss policy",
+				Identity:         native.SessionContext{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
+				ContextScope:     contextfrag.Scope{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
+				ContextLifecycle: holder,
+			},
+			ModelID:                "discuss-budget-model",
+			ContextBudgetMaxTokens: 1,
+		},
+	}
+	agent := native.New(native.Deps{
+		Logger:             logger,
+		ContextViewApplier: contextview.ProviderRunConfigApplier(logger),
+	})
+	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	lifecycles := &recordingContextLifecycleQueries{}
+	service.sessionRuntime = runtime
+	service.contextLifecycles = lifecycles
+	cmd := discussCommand()
+	cmd.BotID = lifecycleTestBotID
+	cmd.ThreadID = lifecycleTestSessionID
+
+	handle, err := service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	events := drainDiscuss(t, handle)
+
+	var publicError native.StreamEvent
+	for _, event := range events {
+		if event.Kind != string(native.EventError) {
+			continue
+		}
+		if err := json.Unmarshal(event.Payload, &publicError); err != nil {
+			t.Fatalf("decode discuss error event: %v", err)
+		}
+	}
+	if publicError.Code != string(apperror.CodeContextBudgetUnsatisfied) {
+		t.Fatalf("public error code = %q, want %q", publicError.Code, apperror.CodeContextBudgetUnsatisfied)
+	}
+	if provider.callCount() != 0 {
+		t.Fatalf("provider calls = %d, want 0 after provider-budget rejection", provider.callCount())
+	}
+	if resolver.storeCalls != 0 {
+		t.Fatalf("StoreRound calls = %d, want 0 after provider-budget rejection", resolver.storeCalls)
+	}
+	snapshot := assertTriggerLifecycleRow(
+		t,
+		lifecycles,
+		admittedRunID,
+		contextLifecycleStatusFailedBudget,
+		string(apperror.CodeContextBudgetUnsatisfied),
+	)
+	if snapshot.BudgetPlan == nil || snapshot.BudgetPlan.Window != 1 {
+		t.Fatalf("budget plan = %#v, want active provider plan with window 1", snapshot.BudgetPlan)
+	}
+	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextBudgetFailure) {
+		t.Fatalf("lifecycle mutations = %#v, want provider-budget failure", snapshot.Mutations)
 	}
 }
 
