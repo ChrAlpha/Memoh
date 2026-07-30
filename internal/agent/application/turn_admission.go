@@ -134,6 +134,15 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 	// still needs whatever scoping the caller's context carries.
 	writeCtx := context.WithoutCancel(ctx)
 	return func(status string, cause error) {
+		lifecycleCause := cause
+		if lifecycleCause == nil {
+			switch status {
+			case sessionruntime.RunStatusAborted:
+				lifecycleCause = context.Canceled
+			case sessionruntime.RunStatusErrored:
+				lifecycleCause = errors.New("run failed without a reported cause")
+			}
+		}
 		message := ""
 		if cause != nil {
 			message = string(apperror.CodeOf(cause))
@@ -142,17 +151,30 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 		defer cancel()
 		err := s.sessionRuntime.FinishRun(ctx, handle, status, message)
 		switch {
-		case err == nil || s.logger == nil:
+		case err == nil:
+			if cause != nil || status == sessionruntime.RunStatusErrored || status == sessionruntime.RunStatusAborted {
+				s.EnsureTerminalContextLifecycle(
+					writeCtx,
+					handle.RunID,
+					handle.BotID,
+					handle.SessionID,
+					lifecycleCause,
+				)
+			}
 		case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
 			// Expected, not a failure: this process was superseded mid-run, so the
 			// terminal write was refused and the reaper names the outcome instead.
-			s.logger.Warn("skip finishing turn run after ownership loss",
-				slog.String("run_id", handle.RunID))
+			if s.logger != nil {
+				s.logger.Warn("skip finishing turn run after ownership loss",
+					slog.String("run_id", handle.RunID))
+			}
 		default:
-			s.logger.Error("finish turn run failed",
-				slog.Any("error", err),
-				slog.String("run_id", handle.RunID),
-				slog.String("status", status))
+			if s.logger != nil {
+				s.logger.Error("finish turn run failed",
+					slog.Any("error", err),
+					slog.String("run_id", handle.RunID),
+					slog.String("status", status))
+			}
 		}
 	}
 }

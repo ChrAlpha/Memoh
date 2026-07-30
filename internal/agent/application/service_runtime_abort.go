@@ -131,6 +131,28 @@ func (s *Service) reconcileAbortedContextLifecycle(
 						s.upsertAbortedContextLifecycle(ctx, runID, botID, sessionID, runUUID, botUUID, sessionUUID, snapshot)
 						return
 					}
+					fallbackSnapshot, snapshotErr := json.Marshal(minimalContextLifecycleSnapshot())
+					if snapshotErr != nil {
+						s.recordContextLifecyclePersistenceError(
+							snapshotErr,
+							runID,
+							botID,
+							sessionID,
+							contextLifecycleStatusAborted,
+						)
+						return
+					}
+					s.upsertAbortedContextLifecycle(
+						ctx,
+						runID,
+						botID,
+						sessionID,
+						runUUID,
+						botUUID,
+						sessionUUID,
+						fallbackSnapshot,
+					)
+					return
 				}
 				pendingErr = errors.New("aborted run has no recoverable context lifecycle snapshot")
 			} else {

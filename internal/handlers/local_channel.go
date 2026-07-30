@@ -1307,12 +1307,22 @@ func (h *LocalChannelHandler) finishWSRun(ctx context.Context, admission wsRunAd
 		message = string(apperror.CodeOf(runErr))
 	}
 	switch err := h.sessionRuntime.FinishRun(ctx, admission.Handle, status, message); {
+	case err == nil:
+		if h.agentService != nil && runErr != nil && !errors.Is(runErr, context.Canceled) {
+			h.agentService.EnsureTerminalContextLifecycle(
+				ctx,
+				admission.RunID,
+				admission.Handle.BotID,
+				admission.Handle.SessionID,
+				runErr,
+			)
+		}
 	case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
 		// Expected, not a failure: this process was superseded mid-run, so the
 		// terminal write was refused and the reaper names the outcome instead.
 		h.logger.Warn("skip finishing runtime run after ownership loss",
 			slog.String("run_id", admission.RunID))
-	case err != nil:
+	default:
 		h.logger.Error("finish runtime run failed",
 			slog.Any("error", err),
 			slog.String("run_id", admission.RunID),

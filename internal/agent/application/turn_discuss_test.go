@@ -277,13 +277,20 @@ func TestDiscussACPUsesChatStreamer(t *testing.T) {
 }
 
 func TestDiscussACPSkipsWhenNotAddressed(t *testing.T) {
+	const admittedRunID = "88888888-8888-4888-8888-888888888888"
 	agent := &fakeAgentStreamer{}
 	runner := &fakeRunner{chunks: []string{`{"type":"agent_end"}`}}
 	resolver := &fakeDiscussService{
 		resolveResult: ResolveRunConfigResult{RuntimeType: sessionpkg.RuntimeACPAgent},
 	}
 	a := newDiscussTestService(runner, agent, resolver)
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	lifecycles := &recordingContextLifecycleQueries{}
+	a.sessionRuntime = runtime
+	a.contextLifecycles = lifecycles
 	cmd := discussCommand()
+	cmd.BotID = lifecycleTestBotID
+	cmd.ThreadID = lifecycleTestSessionID
 	cmd.DiscussAddressed = false
 
 	h, err := a.StartTurn(context.Background(), cmd)
@@ -303,6 +310,15 @@ func TestDiscussACPSkipsWhenNotAddressed(t *testing.T) {
 	}
 	if !sawSkip {
 		t.Fatal("expected skip marker event")
+	}
+	if len(lifecycles.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(lifecycles.params))
+	}
+	if got := pgUUIDString(lifecycles.params[0].RunID); got != admittedRunID {
+		t.Fatalf("context lifecycle run ID = %q, want admitted ID %q", got, admittedRunID)
+	}
+	if got := lifecycles.params[0].Status; got != contextLifecycleStatusCompleted {
+		t.Fatalf("context lifecycle status = %q, want %q", got, contextLifecycleStatusCompleted)
 	}
 }
 

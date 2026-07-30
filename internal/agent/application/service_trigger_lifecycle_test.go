@@ -15,6 +15,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/contextview"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
@@ -32,13 +33,17 @@ const (
 
 type triggerLifecycleQueries struct {
 	modelSelectionFakeQueries
-	modelID string
+	modelID     string
+	settingsErr error
 }
 
 func (q *triggerLifecycleQueries) GetSettingsByBotID(
 	_ context.Context,
 	botID pgtype.UUID,
 ) (sqlc.GetSettingsByBotIDRow, error) {
+	if q.settingsErr != nil {
+		return sqlc.GetSettingsByBotIDRow{}, q.settingsErr
+	}
 	return sqlc.GetSettingsByBotIDRow{
 		BotID:             botID,
 		Language:          "auto",
@@ -103,6 +108,7 @@ type triggerLifecycleFixture struct {
 	lifecycles *recordingContextLifecycleQueries
 	messages   *recordingMessageService
 	provider   *triggerLifecycleProvider
+	queries    *triggerLifecycleQueries
 }
 
 func newTriggerLifecycleFixture(
@@ -170,6 +176,7 @@ func newTriggerLifecycleFixture(
 		lifecycles: lifecycles,
 		messages:   messages,
 		provider:   provider,
+		queries:    queries,
 	}
 }
 
@@ -293,6 +300,43 @@ func TestTriggerHeartbeatProviderBudgetFailurePersistsFailedBudgetWithoutAssista
 	}
 	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextBudgetFailure) {
 		t.Fatalf("lifecycle mutations = %#v, want provider-budget failure", snapshot.Mutations)
+	}
+}
+
+func TestTriggerHeartbeatResolveFailurePersistsAdmittedMinimalLifecycle(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000915"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		admittedRunID,
+		128000,
+		&recordingContextLifecycleQueries{},
+		nil,
+	)
+	fixture.queries.settingsErr = errors.New("settings unavailable")
+
+	_, err := fixture.trigger(t)
+	if err == nil {
+		t.Fatal("TriggerHeartbeat() error = nil, want model-resolution failure")
+	}
+	if fixture.provider.callCount() != 0 {
+		t.Fatalf("provider calls = %d, want 0 after resolution failure", fixture.provider.callCount())
+	}
+	if len(fixture.messages.persisted) != 0 {
+		t.Fatalf("persisted messages = %#v, want none after resolution failure", fixture.messages.persisted)
+	}
+	snapshot := assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		admittedRunID,
+		contextLifecycleStatusFailedProvider,
+		string(apperror.CodeOf(err)),
+	)
+	if len(snapshot.Breakdown) != 0 || len(snapshot.Mutations) != 0 || snapshot.BudgetPlan != nil {
+		t.Fatalf("pre-context failure snapshot is not minimal: %#v", snapshot)
+	}
+	if len(fixture.runtime.finishes) != 1 ||
+		fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
 	}
 }
 

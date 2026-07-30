@@ -391,6 +391,8 @@ func (s *Service) continueRuntimeDecision(
 	}
 	if !lifecycleDeferred {
 		s.persistRuntimeDecisionLifecycle(ctx, command, runtimeLifecycle, nil)
+		s.finishRuntimeDecision(finishCtx, handle, nil)
+		return
 	}
 	_ = s.decisionRuntime.FinishRun(finishCtx, handle, "", "")
 }
@@ -424,7 +426,16 @@ func (s *Service) persistRuntimeDecisionLifecycle(
 
 func (s *Service) finishRuntimeDecision(ctx context.Context, handle sessionruntime.RunHandle, cause error) {
 	status, message := runtimeDecisionTerminal(cause)
-	_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, status, message)
+	finishCtx := context.WithoutCancel(ctx)
+	if err := s.decisionRuntime.FinishRun(finishCtx, handle, status, message); err == nil {
+		s.EnsureTerminalContextLifecycle(
+			finishCtx,
+			handle.RunID,
+			handle.BotID,
+			handle.SessionID,
+			cause,
+		)
+	}
 }
 
 func runtimeDecisionTerminal(cause error) (string, string) {

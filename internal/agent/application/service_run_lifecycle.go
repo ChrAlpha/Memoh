@@ -46,6 +46,64 @@ func (s *Service) contextLifecycleTerminal(ctx context.Context, cfg native.RunCo
 	}
 }
 
+func minimalContextLifecycleSnapshot() contextfrag.LifecycleSnapshot {
+	return contextfrag.BuildLifecycleSnapshot(contextfrag.BuildManifest(nil))
+}
+
+// EnsureTerminalContextLifecycle fills the terminal audit row when an admitted
+// run fails before native context assembly has produced a lifecycle holder.
+//
+// Normal terminal writers run synchronously before the durable run finisher and
+// therefore win. The read-before-create keeps this fallback from replacing
+// their authoritative snapshot, while a content-light empty manifest gives
+// pre-context failures the same run-keyed audit boundary without inventing
+// prompt content.
+func (s *Service) EnsureTerminalContextLifecycle(
+	ctx context.Context,
+	runID, botID, sessionID string,
+	cause error,
+) {
+	if s == nil || s.contextLifecycles == nil || runOwnershipLost(ctx) ||
+		errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
+		return
+	}
+	snapshot := minimalContextLifecycleSnapshot()
+	status, _ := classifyContextLifecycleTerminal(snapshot, cause)
+	runUUID, botUUID, sessionUUID, err := parseContextLifecycleIDs(runID, botID, sessionID)
+	if err != nil {
+		s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
+		return
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextLifecycleWriteTimeout)
+	defer cancel()
+	existing, err := s.contextLifecycles.GetContextLifecycleByRunID(readCtx, runUUID)
+	if err == nil {
+		if existing.BotID != botUUID || existing.SessionID != sessionUUID {
+			s.recordContextLifecyclePersistenceError(
+				errors.New("existing context lifecycle identity does not match terminal fallback"),
+				runID,
+				botID,
+				sessionID,
+				status,
+			)
+		}
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
+		return
+	}
+	s.persistContextLifecycleSnapshot(
+		ctx,
+		runID,
+		botID,
+		sessionID,
+		&snapshot,
+		cause,
+		false,
+	)
+}
+
 func (s *Service) persistRunContextLifecycle(ctx context.Context, cfg native.RunConfig, cause error) {
 	if cfg.ContextLifecycle == nil {
 		return

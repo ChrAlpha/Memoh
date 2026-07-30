@@ -142,7 +142,9 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 
 	if strings.TrimSpace(resolved.RuntimeType) == sessionpkg.RuntimeACPAgent {
 		if !cmd.DiscussAddressed {
-			h.emit(turn.DiscussEventSkipped, nil)
+			if h.emit(turn.DiscussEventSkipped, nil) && ctx.Err() == nil {
+				s.EnsureTerminalContextLifecycle(ctx, h.id, cmd.BotID, cmd.ThreadID, nil)
+			}
 			return
 		}
 		s.pumpDiscussACP(ctx, cmd, h)
@@ -296,6 +298,9 @@ func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand,
 	if strings.TrimSpace(prompt) == "" {
 		// No composable context: end without a skip marker so the caller
 		// does not advance its consumed cursor (pre-port semantics).
+		if ctx.Err() == nil {
+			s.EnsureTerminalContextLifecycle(ctx, h.id, cmd.BotID, cmd.ThreadID, nil)
+		}
 		return
 	}
 	chunks, errs := s.streamTurnChat(ctx, ChatRequest{

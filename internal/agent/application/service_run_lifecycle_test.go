@@ -93,7 +93,21 @@ func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
 	arg sqlc.CreateContextLifecycleParams,
 ) (sqlc.ContextLifecycle, error) {
 	q.params = append(q.params, arg)
-	return sqlc.ContextLifecycle{}, q.err
+	if q.err != nil {
+		return sqlc.ContextLifecycle{}, q.err
+	}
+	created := sqlc.ContextLifecycle{
+		RunID:     arg.RunID,
+		BotID:     arg.BotID,
+		SessionID: arg.SessionID,
+		Status:    arg.Status,
+		ErrorCode: arg.ErrorCode,
+		Snapshot:  append([]byte(nil), arg.Snapshot...),
+	}
+	if q.existing == nil {
+		q.existing = &created
+	}
+	return created, nil
 }
 
 func (q *recordingContextLifecycleQueries) GetContextLifecycleByRunID(
@@ -416,6 +430,149 @@ func TestSubagentTerminalPersistsFinalSnapshotBeforeFinishingRunExactlyOnce(t *t
 	}
 }
 
+func TestSubagentFailureBeforeContextAssemblyPersistsMinimalLifecycle(t *testing.T) {
+	const admittedRunID = "55555555-5555-4555-8555-555555555556"
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	queries := &recordingContextLifecycleQueries{}
+	service := &Service{
+		sessionRuntime:    runtime,
+		contextLifecycles: queries,
+	}
+	_, runID, terminal, err := service.AdmitSubagentRun(
+		context.Background(),
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		"subagent:pre-context-failure",
+		[]byte(`{"message":"work"}`),
+	)
+	if err != nil {
+		t.Fatalf("AdmitSubagentRun error: %v", err)
+	}
+	runErr := errors.New("resolve subagent model")
+	terminal(tools.SubagentTerminal{Cause: runErr})
+
+	if runID != admittedRunID {
+		t.Fatalf("run ID = %q, want admitted RunID %q", runID, admittedRunID)
+	}
+	if len(queries.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
+	}
+	row := queries.params[0]
+	if got := pgUUIDString(row.RunID); got != admittedRunID {
+		t.Fatalf("persisted RunID = %q, want %q", got, admittedRunID)
+	}
+	if row.Status != contextLifecycleStatusFailedProvider {
+		t.Fatalf("status = %q, want %q", row.Status, contextLifecycleStatusFailedProvider)
+	}
+	wantCode := string(apperror.CodeOf(runErr))
+	if row.ErrorCode.String != wantCode || row.ErrorCode.Valid != (wantCode != "") {
+		t.Fatalf("error code = %#v, want %q", row.ErrorCode, wantCode)
+	}
+	var snapshot contextfrag.LifecycleSnapshot
+	if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode lifecycle snapshot: %v", err)
+	}
+	if snapshot.Version != 1 || len(snapshot.Breakdown) != 0 || len(snapshot.Mutations) != 0 {
+		t.Fatalf("minimal lifecycle snapshot = %#v", snapshot)
+	}
+	if len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", runtime.finishes)
+	}
+}
+
+func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecycle(t *testing.T) {
+	tests := []struct {
+		name       string
+		cause      error
+		wantStatus string
+	}{
+		{
+			name:       "completed continuation",
+			wantStatus: contextLifecycleStatusCompleted,
+		},
+		{
+			name:       "failed continuation",
+			cause:      errors.New("resume failed before context assembly"),
+			wantStatus: contextLifecycleStatusFailedProvider,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := sessionruntime.NewManager(
+				sessionruntime.NewMemoryBackend(),
+				sessionruntime.Options{
+					OwnerID:       "round5-decision-owner",
+					StateTTL:      time.Minute,
+					OwnerLeaseTTL: time.Second,
+					CommandAckTTL: time.Second,
+				},
+			)
+			t.Cleanup(func() { _ = manager.Close() })
+			if err := manager.Start(context.Background()); err != nil {
+				t.Fatalf("start session runtime: %v", err)
+			}
+			if err := manager.StartRun(
+				context.Background(),
+				lifecycleTestBotID,
+				lifecycleTestSessionID,
+				lifecycleTestRunID,
+				make(chan struct{}, 1),
+				func() {},
+				nil,
+			); err != nil {
+				t.Fatalf("start runtime run: %v", err)
+			}
+			runtimeSnapshot, err := manager.Snapshot(
+				context.Background(),
+				lifecycleTestBotID,
+				lifecycleTestSessionID,
+			)
+			if err != nil || runtimeSnapshot.CurrentRunView == nil {
+				t.Fatalf("load runtime run: %#v, %v", runtimeSnapshot.CurrentRunView, err)
+			}
+			lifecycles := &recordingContextLifecycleQueries{}
+			service := &Service{
+				decisionRuntime:   manager,
+				contextLifecycles: lifecycles,
+			}
+
+			service.finishRuntimeDecision(
+				context.Background(),
+				sessionruntime.RunHandle{
+					BotID:      lifecycleTestBotID,
+					SessionID:  lifecycleTestSessionID,
+					RunID:      lifecycleTestRunID,
+					Generation: runtimeSnapshot.CurrentRunView.Generation,
+				},
+				tt.cause,
+			)
+
+			if len(lifecycles.params) != 1 {
+				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(lifecycles.params))
+			}
+			row := lifecycles.params[0]
+			if got := pgUUIDString(row.RunID); got != lifecycleTestRunID {
+				t.Fatalf("context lifecycle run ID = %q, want %q", got, lifecycleTestRunID)
+			}
+			if row.Status != tt.wantStatus {
+				t.Fatalf("context lifecycle status = %q, want %q", row.Status, tt.wantStatus)
+			}
+			if !bytes.Equal(row.Snapshot, mustMarshalMinimalLifecycle(t)) {
+				t.Fatalf("runtime decision fallback snapshot = %s, want minimal content-light snapshot", row.Snapshot)
+			}
+		})
+	}
+}
+
+func mustMarshalMinimalLifecycle(t *testing.T) []byte {
+	t.Helper()
+	raw, err := json.Marshal(minimalContextLifecycleSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func TestCanceledSubagentPersistsFailedLifecycleAndFinishesAborted(t *testing.T) {
 	const admittedRunID = "66666666-6666-4666-8666-666666666666"
 	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
@@ -472,6 +629,10 @@ func TestAbortRuntimeRunReconcilesDurableAbortedLifecycle(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("marshal lifecycle metadata: %v", err)
+	}
+	expectedSnapshot, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal lifecycle snapshot: %v", err)
 	}
 	runUUID, err := db.ParseUUID(lifecycleTestRunID)
 	if err != nil {
@@ -536,6 +697,9 @@ func TestAbortRuntimeRunReconcilesDurableAbortedLifecycle(t *testing.T) {
 			if got := pgUUIDString(upserts[0].RunID); got != lifecycleTestRunID {
 				t.Fatalf("aborted lifecycle run ID = %q, want %q", got, lifecycleTestRunID)
 			}
+			if !bytes.Equal(upserts[0].Snapshot, expectedSnapshot) {
+				t.Fatalf("reconciled snapshot = %s, want assistant metadata %s", upserts[0].Snapshot, expectedSnapshot)
+			}
 			deadline := time.Now().Add(time.Second)
 			for service.contextLifecyclePersistenceErrors.Load() != tt.wantFailureCount && time.Now().Before(deadline) {
 				time.Sleep(time.Millisecond)
@@ -544,6 +708,65 @@ func TestAbortRuntimeRunReconcilesDurableAbortedLifecycle(t *testing.T) {
 				t.Fatalf("persistence error count = %d, want %d", got, tt.wantFailureCount)
 			}
 		})
+	}
+}
+
+func TestAbortRuntimeRunWithoutContextPersistsMinimalLifecycle(t *testing.T) {
+	runUUID, botUUID, sessionUUID, err := parseContextLifecycleIDs(
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := &recordingContextLifecycleQueries{
+		sessionRun: sqlc.SessionRun{
+			RunID:     runUUID,
+			BotID:     botUUID,
+			SessionID: sessionUUID,
+			State:     "aborted",
+		},
+		upsertCh: make(chan struct{}, 1),
+	}
+	service := &Service{
+		queries:           queries,
+		contextLifecycles: queries,
+		abortRuntime:      &recordingAbortRuntime{applied: true},
+	}
+
+	applied, err := service.AbortRuntimeRun(
+		context.Background(),
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		lifecycleTestRunID,
+		"abort-before-context",
+	)
+	if err != nil || !applied {
+		t.Fatalf("AbortRuntimeRun() = (%t, %v), want (true, nil)", applied, err)
+	}
+	if len(queries.params) != 0 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 0 before durable abort reconciliation", len(queries.params))
+	}
+	select {
+	case <-queries.upsertCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("minimal aborted lifecycle was not reconciled")
+	}
+	upserts := queries.abortedUpserts()
+	if len(upserts) != 1 {
+		t.Fatalf("aborted lifecycle upserts = %d, want 1", len(upserts))
+	}
+	var snapshot contextfrag.LifecycleSnapshot
+	if err := json.Unmarshal(upserts[0].Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode minimal snapshot: %v", err)
+	}
+	minimalRaw, err := json.Marshal(minimalContextLifecycleSnapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(upserts[0].Snapshot, minimalRaw) || snapshot.Version != 1 {
+		t.Fatalf("early abort snapshot = %#v, want content-light minimal version 1", snapshot)
 	}
 }
 
