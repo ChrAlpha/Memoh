@@ -12,7 +12,6 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/agent/sessionmode"
 )
 
 // ProviderRunConfigApplier adapts ApplyProviderRunConfig to the agent's
@@ -205,10 +204,6 @@ func ApplyProviderRunConfig(
 		}
 	}
 	ledger := contextfrag.NewMutationLedger()
-	if cfg.ContextBudgetMaxTokens != 0 &&
-		strings.EqualFold(strings.TrimSpace(cfg.SessionType), sessionmode.Discuss) {
-		ledger.Record(contextfrag.MutationContextBudgetDisabled, "discuss_flat_reverse_parse")
-	}
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
 	selector := Selector(&FragmentSelector{})
 	fallbackCfg := cfg
@@ -287,8 +282,7 @@ func providerContextBudgetPlan(
 	ctx context.Context,
 	cfg agentpkg.RunConfig,
 ) (*contextfrag.ContextBudgetPlan, error) {
-	if cfg.ContextBudgetMaxTokens == 0 ||
-		strings.EqualFold(strings.TrimSpace(cfg.SessionType), sessionmode.Discuss) {
+	if cfg.ContextBudgetMaxTokens == 0 {
 		return nil, nil
 	}
 	currentRequestCost, err := providerCurrentRequestCost(ctx, cfg)

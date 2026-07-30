@@ -167,6 +167,26 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 					sectionsRendered.Messages, legacyRendered.Messages)
 			}
 
+			budgetedSectionsRendered := applyProviderRunConfigOK(context.Background(), nil,
+				agentpkg.RunConfig{
+					SessionType:            sessionmode.Discuss,
+					ContextSourceFrags:     sectionsFrags,
+					ContextScope:           scope,
+					ContextToolUsage:       toolUsage,
+					ContextBudgetMaxTokens: 128000,
+				})
+			if budgetedSectionsRendered.ContextManifest.BudgetPlan == nil {
+				t.Fatal("budgeted discuss sections did not produce an active plan")
+			}
+			if budgetedSectionsRendered.System != legacyRendered.System {
+				t.Fatalf("budgeted sections System diverges from legacy System:\ngot:  %q\nwant: %q",
+					budgetedSectionsRendered.System, legacyRendered.System)
+			}
+			if !reflect.DeepEqual(budgetedSectionsRendered.Messages, legacyRendered.Messages) {
+				t.Fatalf("budgeted sections messages diverge:\ngot:  %#v\nwant: %#v",
+					budgetedSectionsRendered.Messages, legacyRendered.Messages)
+			}
+
 			// The discuss ACP prompt excludes system content by design:
 			// providing SystemFrags must not leak system sections into it.
 			sectionsPrompt, err := builder.BuildDiscussACPPrompt(context.Background(), scope, sectionsInput)

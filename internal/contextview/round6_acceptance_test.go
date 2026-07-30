@@ -20,7 +20,7 @@ var round6NativeModes = []string{
 	sessionmode.Subagent,
 }
 
-func TestNativeModeSystemBudgetPressureAndDiscussException(t *testing.T) {
+func TestNativeModeSystemBudgetPressure(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range round6NativeModes {
@@ -41,33 +41,9 @@ func TestNativeModeSystemBudgetPressureAndDiscussException(t *testing.T) {
 				ContextToolUsage:       usage,
 				ContextBudgetMaxTokens: window,
 			}
-			if mode == sessionmode.Discuss {
-				cfg.ContextSourceFrags = nil
-				cfg.System = agentpkg.GenerateSystemPrompt(agentpkg.SystemPromptParams{
-					SessionType: mode,
-					Timezone:    "UTC",
-				}) + "\n\n" + usage
-			}
 			out, err := ApplyProviderRunConfig(context.Background(), nil, cfg)
 			if err != nil {
 				t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-			}
-
-			if mode == sessionmode.Discuss {
-				if out.ContextManifest.BudgetPlan != nil {
-					t.Fatalf("discuss budget plan = %#v, want disabled", out.ContextManifest.BudgetPlan)
-				}
-				if !hasFragID(out.ContextFrags, "system.tool_usage") ||
-					hasFragID(out.ContextFrags, systemBudgetMarkerID) {
-					t.Fatalf("discuss selected IDs = %v, want unpruned tool usage and no marker", fragIDs(out.ContextFrags))
-				}
-				records := out.ContextManifest.Mutations.Records()
-				if len(records) != 1 ||
-					records[0].Kind != contextfrag.MutationContextBudgetDisabled ||
-					records[0].Detail != "discuss_flat_reverse_parse" {
-					t.Fatalf("discuss mutations = %#v, want visible plan-disabled exception", records)
-				}
-				return
 			}
 
 			plan := out.ContextManifest.BudgetPlan
@@ -94,7 +70,7 @@ func TestNativeModeSystemBudgetPressureAndDiscussException(t *testing.T) {
 	}
 }
 
-func TestNativeModeProtectedOverflowFailsClosedExceptDiscuss(t *testing.T) {
+func TestNativeModeProtectedOverflowFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	window := contextWindowForDefaultOutputReserve(MinimumSystemBudgetTokens)
@@ -105,22 +81,9 @@ func TestNativeModeProtectedOverflowFailsClosedExceptDiscuss(t *testing.T) {
 
 			out, err := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 				SessionType:            mode,
-				System:                 round6FlatSystemPrompt(mode),
 				ContextSourceFrags:     round6ProtectedOverflowSourceFrags(mode),
 				ContextBudgetMaxTokens: window,
 			})
-
-			if mode == sessionmode.Discuss {
-				if err != nil || out.ContextManifest.BudgetPlan != nil {
-					t.Fatalf("discuss error/plan = %v/%#v, want documented disabled exception", err, out.ContextManifest.BudgetPlan)
-				}
-				records := out.ContextManifest.Mutations.Records()
-				if len(records) != 1 ||
-					records[0].Kind != contextfrag.MutationContextBudgetDisabled {
-					t.Fatalf("discuss mutations = %#v, want plan-disabled exception", records)
-				}
-				return
-			}
 
 			if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
 				t.Fatalf("ApplyProviderRunConfig() error = %v, want ErrProtectedContextOverflow", err)
@@ -143,12 +106,7 @@ func TestNativeModeProtectedOverflowFailsClosedExceptDiscuss(t *testing.T) {
 func TestProviderUsesByteEstimatorForStaticSystemFragsWithoutTokenizer(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{
-		sessionmode.Chat,
-		sessionmode.Heartbeat,
-		sessionmode.Schedule,
-		sessionmode.Subagent,
-	} {
+	for _, mode := range round6NativeModes {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
@@ -427,20 +385,7 @@ func round6StaticSystemFrags(mode string, scope contextfrag.Scope) []contextfrag
 	}), scope)
 }
 
-func round6FlatSystemPrompt(mode string) string {
-	if mode != sessionmode.Discuss {
-		return ""
-	}
-	return agentpkg.GenerateSystemPrompt(agentpkg.SystemPromptParams{
-		SessionType: mode,
-		Timezone:    "UTC",
-	})
-}
-
 func round6ProtectedOverflowSourceFrags(mode string) []contextfrag.ContextFrag {
-	if mode == sessionmode.Discuss {
-		return nil
-	}
 	return round6StaticSystemFrags(mode, contextfrag.Scope{})
 }
 

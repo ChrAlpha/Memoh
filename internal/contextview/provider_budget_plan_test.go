@@ -264,20 +264,31 @@ func TestProviderContextBudgetPlanUsesLegacyMaterializedRequestSemantics(t *test
 	}
 }
 
-func TestProviderContextBudgetPlanDisabledWithoutWindowOrForDiscuss(t *testing.T) {
+func TestProviderContextBudgetPlanDisabledWithoutWindow(t *testing.T) {
 	t.Parallel()
 
-	for _, cfg := range []agentpkg.RunConfig{
-		{},
-		{ContextBudgetMaxTokens: 10000, SessionType: sessionmode.Discuss},
-	} {
-		plan, err := providerContextBudgetPlan(context.Background(), cfg)
-		if err != nil {
-			t.Fatalf("providerContextBudgetPlan(%#v) error = %v", cfg, err)
-		}
-		if plan != nil {
-			t.Fatalf("providerContextBudgetPlan(%#v) = %#v, want nil", cfg, plan)
-		}
+	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{})
+	if err != nil {
+		t.Fatalf("providerContextBudgetPlan() error = %v", err)
+	}
+	if plan != nil {
+		t.Fatalf("providerContextBudgetPlan() = %#v, want nil", plan)
+	}
+}
+
+func TestProviderContextBudgetPlanEnabledForDiscuss(t *testing.T) {
+	t.Parallel()
+
+	const window = 10000
+	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{
+		ContextBudgetMaxTokens: window,
+		SessionType:            sessionmode.Discuss,
+	})
+	if err != nil {
+		t.Fatalf("providerContextBudgetPlan() error = %v", err)
+	}
+	if plan == nil || plan.Window != window {
+		t.Fatalf("providerContextBudgetPlan() = %#v, want active discuss plan with window %d", plan, window)
 	}
 }
 
