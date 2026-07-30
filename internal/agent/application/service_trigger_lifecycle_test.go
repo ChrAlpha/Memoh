@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -266,6 +267,58 @@ func TestTriggerHeartbeatPersistsCompletedLifecycleForAdmittedRun(t *testing.T) 
 	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].handle.RunID != admittedRunID {
 		t.Fatalf("runtime finishes = %#v, want one finish for admitted run %q", fixture.runtime.finishes, admittedRunID)
 	}
+}
+
+func TestDirectChatWithoutAdmissionMintsAndPersistsRunID(t *testing.T) {
+	const unusedAdmissionRunID = "00000000-0000-4000-8000-000000000916"
+	fixture := newTriggerLifecycleFixture(
+		t,
+		unusedAdmissionRunID,
+		128000,
+		&recordingContextLifecycleQueries{},
+		nil,
+	)
+
+	response, err := fixture.service.Chat(
+		context.Background(),
+		ChatRequest{
+			BotID:                lifecycleTestBotID,
+			ChatID:               lifecycleTestBotID,
+			ThreadID:             lifecycleTestSessionID,
+			Query:                triggerLifecyclePromptMarker,
+			UserMessagePersisted: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if len(response.Messages) == 0 {
+		t.Fatal("Chat() returned no assistant message")
+	}
+	if fixture.provider.callCount() != 1 {
+		t.Fatalf("provider calls = %d, want 1", fixture.provider.callCount())
+	}
+	if len(fixture.runtime.finishes) != 0 {
+		t.Fatalf("direct Chat unexpectedly used durable admission: %#v", fixture.runtime.finishes)
+	}
+	if len(fixture.lifecycles.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(fixture.lifecycles.params))
+	}
+	row := fixture.lifecycles.params[0]
+	runID := pgUUIDString(row.RunID)
+	if _, err := uuid.Parse(runID); err != nil {
+		t.Fatalf("direct Chat run ID = %q, want minted UUID: %v", runID, err)
+	}
+	if runID == unusedAdmissionRunID {
+		t.Fatalf("direct Chat reused unrelated admission ID %q", runID)
+	}
+	assertTriggerLifecycleRow(
+		t,
+		fixture.lifecycles,
+		runID,
+		contextLifecycleStatusCompleted,
+		"",
+	)
 }
 
 func TestTriggerHeartbeatProviderBudgetFailurePersistsFailedBudgetWithoutAssistant(t *testing.T) {
