@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/memohai/twilight-ai/sdk"
+
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 )
 
@@ -64,6 +68,66 @@ func TestEnsureRequiredHistoryMessageMergesVisibleWindowInOrder(t *testing.T) {
 	}
 	if !got[1].Required {
 		t.Fatalf("required message was not marked")
+	}
+}
+
+func TestMarkRequiredHistoryMessageCurrentUsesExactSourceID(t *testing.T) {
+	t.Parallel()
+
+	cfg := native.RunConfig{
+		Messages: []sdk.Message{
+			sdk.UserMessage("retry this request"),
+			sdk.AssistantMessage("old answer"),
+			sdk.UserMessage("newer user message must remain history"),
+		},
+		ForkContextSourceMessageIDs: []string{"retry-user", "old-answer", "newer-user"},
+	}
+
+	markRequiredHistoryMessageCurrent(&cfg, "retry-user")
+
+	if cfg.ContextCurrentUserMessageIndex == nil || *cfg.ContextCurrentUserMessageIndex != 0 {
+		t.Fatalf("ContextCurrentUserMessageIndex = %#v, want exact retry source at index 0", cfg.ContextCurrentUserMessageIndex)
+	}
+}
+
+func TestRequiredHistoryMessageIsCurrentProviderFragmentAndBudgetCost(t *testing.T) {
+	t.Parallel()
+
+	const currentCost = 321
+	cfg := native.RunConfig{
+		Messages: []sdk.Message{
+			sdk.UserMessage("retry this request"),
+			sdk.AssistantMessage("old answer"),
+			sdk.UserMessage("newer user message must remain history"),
+		},
+		ForkContextSourceMessageIDs: []string{"retry-user", "old-answer", "newer-user"},
+		ContextHistoryTokenEstimates: []int{
+			currentCost,
+			40,
+			500,
+		},
+		ContextBudgetMaxTokens: 100_000,
+	}
+	markRequiredHistoryMessageCurrent(&cfg, "retry-user")
+	cfg = cfg.RefreshContextFrag()
+	cfg = (&Service{}).prepareRunConfig(context.Background(), cfg)
+
+	var currentFrags []contextfrag.ContextFrag
+	for _, frag := range cfg.ContextSourceFrags {
+		if frag.Slot == contextfrag.SlotCurrentUser {
+			currentFrags = append(currentFrags, frag)
+		}
+	}
+	if len(currentFrags) != 1 || currentFrags[0].ID != "message.000" {
+		t.Fatalf("current provider fragments = %#v, want only exact retry source message.000", currentFrags)
+	}
+
+	rendered := applyProviderRunConfigForTest(t, cfg)
+	if rendered.ContextManifest.BudgetPlan == nil {
+		t.Fatal("provider budget plan = nil, want active plan")
+	}
+	if got := rendered.ContextManifest.BudgetPlan.CurrentRequestCost; got != currentCost {
+		t.Fatalf("CurrentRequestCost = %d, want exact retry request estimate %d", got, currentCost)
 	}
 }
 

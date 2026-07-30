@@ -310,6 +310,28 @@ func contextBudgetFromChatModel(chatModel models.GetResponse) int {
 	return chatModel.Config.ContextBudgetMaxTokens()
 }
 
+func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID string) {
+	if cfg == nil {
+		return
+	}
+	cfg.ContextCurrentUserMessageIndex = nil
+	requiredMessageID = strings.TrimSpace(requiredMessageID)
+	if requiredMessageID == "" {
+		return
+	}
+	for index, sourceMessageID := range cfg.ForkContextSourceMessageIDs {
+		if strings.TrimSpace(sourceMessageID) != requiredMessageID {
+			continue
+		}
+		if index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser {
+			return
+		}
+		currentIndex := index
+		cfg.ContextCurrentUserMessageIndex = &currentIndex
+		return
+	}
+}
+
 // defaultToolExchangePolicy returns the application package's shared default
 // tool-exchange stripping policy.
 func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
@@ -520,6 +542,8 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	if usePipeline {
 		runCfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(runCfg.Messages)
+	} else if req.ReusePersistedUserMessage {
+		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
 	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
