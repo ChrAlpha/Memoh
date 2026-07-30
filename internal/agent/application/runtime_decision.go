@@ -409,6 +409,7 @@ func (s *Service) persistRuntimeDecisionLifecycle(
 			command.SessionID,
 			result.snapshot,
 			cause,
+			true,
 		)
 		return
 	}

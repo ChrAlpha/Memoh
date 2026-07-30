@@ -237,6 +237,26 @@ VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
 		insertedSnapshot["version"] != float64(999) {
 		t.Fatalf("inserted aborted lifecycle = %#v", insertedAborted)
 	}
+	authoritativeSnapshot := []byte(`{"version":1000}`)
+	convergedAborted, err := queries.UpdateAbortedContextLifecycleSnapshot(
+		ctx,
+		sqlc.UpdateAbortedContextLifecycleSnapshotParams{
+			Snapshot:  authoritativeSnapshot,
+			RunID:     parsedAbortedRunID,
+			BotID:     parsedBotID,
+			SessionID: parsedSessionID,
+		},
+	)
+	if err != nil {
+		t.Fatalf("replace recovered aborted snapshot: %v", err)
+	}
+	if convergedAborted.Status != "aborted" || convergedAborted.ErrorCode.Valid ||
+		!reflect.DeepEqual(convergedAborted.Snapshot, authoritativeSnapshot) {
+		t.Fatalf("converged aborted lifecycle = %#v", convergedAborted)
+	}
+	if convergedAborted.CreatedAt != insertedAborted.CreatedAt {
+		t.Fatalf("authoritative snapshot update changed created_at = %#v, want %#v", convergedAborted.CreatedAt, insertedAborted.CreatedAt)
+	}
 
 	const teamTwo = "00000000-0000-0000-0000-0000000000f2"
 	if _, err := pool.Exec(ctx, `INSERT INTO teams (id, slug) VALUES ($1, 'context-lifecycle-team-two')`, teamTwo); err != nil {

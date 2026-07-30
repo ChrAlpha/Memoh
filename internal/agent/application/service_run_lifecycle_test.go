@@ -84,6 +84,8 @@ type recordingContextLifecycleQueries struct {
 	upsertParams    []sqlc.UpsertAbortedContextLifecycleParams
 	upsertErr       error
 	upsertCh        chan struct{}
+	updateParams    []sqlc.UpdateAbortedContextLifecycleSnapshotParams
+	updateErr       error
 }
 
 func (q *recordingContextLifecycleQueries) CreateContextLifecycle(
@@ -169,6 +171,23 @@ func (q *recordingContextLifecycleQueries) UpsertAbortedContextLifecycle(
 		}
 	}
 	return sqlc.ContextLifecycle{}, q.upsertErr
+}
+
+func (q *recordingContextLifecycleQueries) UpdateAbortedContextLifecycleSnapshot(
+	_ context.Context,
+	arg sqlc.UpdateAbortedContextLifecycleSnapshotParams,
+) (sqlc.ContextLifecycle, error) {
+	q.updateParams = append(q.updateParams, arg)
+	if q.updateErr != nil {
+		return sqlc.ContextLifecycle{}, q.updateErr
+	}
+	if q.existing == nil || q.existing.Status != contextLifecycleStatusAborted {
+		return sqlc.ContextLifecycle{}, pgx.ErrNoRows
+	}
+	updated := *q.existing
+	updated.Snapshot = append([]byte(nil), arg.Snapshot...)
+	q.existing = &updated
+	return updated, nil
 }
 
 func (q *recordingContextLifecycleQueries) abortedUpserts() []sqlc.UpsertAbortedContextLifecycleParams {
@@ -665,9 +684,24 @@ func TestContextLifecycleStoreErrorIsCountedAndNotReturned(t *testing.T) {
 	}
 }
 
-func TestContextLifecycleDuplicateAfterAbortUpsertIsIdempotent(t *testing.T) {
+func TestAuthoritativeContextLifecycleReplacesRecoveredAbortedSnapshot(t *testing.T) {
+	runID, botID, sessionID, err := parseContextLifecycleIDs(
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	queries := &recordingContextLifecycleQueries{
 		err: &pgconn.PgError{Code: "23505", ConstraintName: "context_lifecycles_pkey"},
+		existing: &sqlc.ContextLifecycle{
+			RunID:     runID,
+			BotID:     botID,
+			SessionID: sessionID,
+			Status:    contextLifecycleStatusAborted,
+			Snapshot:  []byte(`{"version":1}`),
+		},
 	}
 	service := &Service{contextLifecycles: queries}
 
@@ -677,7 +711,66 @@ func TestContextLifecycleDuplicateAfterAbortUpsertIsIdempotent(t *testing.T) {
 	)(nil)
 
 	if got := service.contextLifecyclePersistenceErrors.Load(); got != 0 {
-		t.Fatalf("persistence error count = %d, want 0 for idempotent duplicate", got)
+		t.Fatalf("persistence error count = %d, want 0 for converged aborted row", got)
+	}
+	if len(queries.updateParams) != 1 {
+		t.Fatalf("aborted snapshot updates = %d, want 1", len(queries.updateParams))
+	}
+	if bytes.Equal(queries.updateParams[0].Snapshot, []byte(`{"version":1}`)) {
+		t.Fatalf("authoritative terminal kept recovered paused snapshot: %s", queries.updateParams[0].Snapshot)
+	}
+	if queries.existing.Status != contextLifecycleStatusAborted || queries.existing.ErrorCode.Valid {
+		t.Fatalf("converged lifecycle terminal = (%q, %#v), want aborted with no error code", queries.existing.Status, queries.existing.ErrorCode)
+	}
+}
+
+func TestRecoveredMetadataCannotReplaceAuthoritativeAbortedSnapshot(t *testing.T) {
+	cfg := lifecycleTestRunConfig(t, lifecycleTestRunID)
+	paused, ok := cfg.ContextLifecycle.Snapshot()
+	if !ok {
+		t.Fatal("test lifecycle snapshot is unavailable")
+	}
+	paused.Version = 1
+	metadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: paused,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, botID, sessionID, err := parseContextLifecycleIDs(
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authoritative := []byte(`{"version":2}`)
+	queries := &recordingContextLifecycleQueries{
+		existing: &sqlc.ContextLifecycle{
+			RunID:     runID,
+			BotID:     botID,
+			SessionID: sessionID,
+			Status:    contextLifecycleStatusAborted,
+			Snapshot:  authoritative,
+		},
+		metadata: metadata,
+	}
+	service := &Service{contextLifecycles: queries}
+
+	service.recoverContextLifecycleFromAssistantMetadata(
+		context.Background(),
+		lifecycleTestRunID,
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		errors.New("late recovery"),
+	)
+
+	if len(queries.params) != 0 || len(queries.updateParams) != 0 {
+		t.Fatalf("metadata recovery wrote over an existing authoritative snapshot: creates=%d updates=%d", len(queries.params), len(queries.updateParams))
+	}
+	if !bytes.Equal(queries.existing.Snapshot, authoritative) {
+		t.Fatalf("authoritative snapshot = %s, want %s", queries.existing.Snapshot, authoritative)
 	}
 }
 

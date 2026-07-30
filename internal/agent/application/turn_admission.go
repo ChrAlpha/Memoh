@@ -269,6 +269,7 @@ func (s *Service) AdmitSubagentRun(
 				threadID,
 				result.ContextLifecycle,
 				lifecycleCause,
+				true,
 			)
 			finish(result.Cause)
 		})

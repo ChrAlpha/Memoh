@@ -36,6 +36,16 @@ FROM context_lifecycles
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = sqlc.arg(run_id);
 
+-- name: UpdateAbortedContextLifecycleSnapshot :one
+UPDATE context_lifecycles
+SET snapshot = sqlc.arg(snapshot)
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = sqlc.arg(run_id)
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND status = 'aborted'
+RETURNING *;
+
 -- name: UpsertAbortedContextLifecycle :one
 INSERT INTO context_lifecycles (
   run_id,

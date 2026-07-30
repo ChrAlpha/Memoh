@@ -205,6 +205,45 @@ func (q *Queries) ListRecentContextLifecyclesBySession(ctx context.Context, arg 
 	return items, nil
 }
 
+const updateAbortedContextLifecycleSnapshot = `-- name: UpdateAbortedContextLifecycleSnapshot :one
+UPDATE context_lifecycles
+SET snapshot = $1
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = $2
+  AND bot_id = $3
+  AND session_id = $4
+  AND status = 'aborted'
+RETURNING run_id, team_id, bot_id, session_id, status, error_code, snapshot, created_at
+`
+
+type UpdateAbortedContextLifecycleSnapshotParams struct {
+	Snapshot  []byte      `json:"snapshot"`
+	RunID     pgtype.UUID `json:"run_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+func (q *Queries) UpdateAbortedContextLifecycleSnapshot(ctx context.Context, arg UpdateAbortedContextLifecycleSnapshotParams) (ContextLifecycle, error) {
+	row := q.db.QueryRow(ctx, updateAbortedContextLifecycleSnapshot,
+		arg.Snapshot,
+		arg.RunID,
+		arg.BotID,
+		arg.SessionID,
+	)
+	var i ContextLifecycle
+	err := row.Scan(
+		&i.RunID,
+		&i.TeamID,
+		&i.BotID,
+		&i.SessionID,
+		&i.Status,
+		&i.ErrorCode,
+		&i.Snapshot,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const upsertAbortedContextLifecycle = `-- name: UpsertAbortedContextLifecycle :one
 INSERT INTO context_lifecycles (
   run_id,

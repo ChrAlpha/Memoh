@@ -33,6 +33,7 @@ type contextLifecycleStore interface {
 	CreateContextLifecycle(context.Context, sqlc.CreateContextLifecycleParams) (sqlc.ContextLifecycle, error)
 	GetContextLifecycleByRunID(context.Context, pgtype.UUID) (sqlc.ContextLifecycle, error)
 	GetLatestAssistantContextLifecycleMetadataByRunID(context.Context, pgtype.UUID) ([]byte, error)
+	UpdateAbortedContextLifecycleSnapshot(context.Context, sqlc.UpdateAbortedContextLifecycleSnapshotParams) (sqlc.ContextLifecycle, error)
 	UpsertAbortedContextLifecycle(context.Context, sqlc.UpsertAbortedContextLifecycleParams) (sqlc.ContextLifecycle, error)
 }
 
@@ -60,6 +61,7 @@ func (s *Service) persistRunContextLifecycle(ctx context.Context, cfg native.Run
 		cfg.Identity.SessionID,
 		&snapshot,
 		cause,
+		true,
 	)
 }
 
@@ -119,7 +121,7 @@ func (s *Service) recoverContextLifecycleFromAssistantMetadata(
 		)
 		return
 	}
-	s.persistContextLifecycleSnapshot(ctx, runID, botID, sessionID, &snapshot, cause)
+	s.persistContextLifecycleSnapshot(ctx, runID, botID, sessionID, &snapshot, cause, false)
 }
 
 func (s *Service) persistContextLifecycleSnapshot(
@@ -127,6 +129,7 @@ func (s *Service) persistContextLifecycleSnapshot(
 	runID, botID, sessionID string,
 	snapshot *contextfrag.LifecycleSnapshot,
 	cause error,
+	authoritative bool,
 ) {
 	if s == nil || s.contextLifecycles == nil || snapshot == nil || runOwnershipLost(ctx) ||
 		errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
@@ -157,9 +160,40 @@ func (s *Service) persistContextLifecycleSnapshot(
 		ErrorCode: code,
 		Snapshot:  raw,
 	})
-	if err != nil && !db.IsUniqueViolation(err) {
-		s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
+	if err == nil {
+		return
 	}
+	if !db.IsUniqueViolation(err) {
+		s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
+		return
+	}
+	if !authoritative {
+		return
+	}
+	_, err = s.contextLifecycles.UpdateAbortedContextLifecycleSnapshot(
+		writeCtx,
+		sqlc.UpdateAbortedContextLifecycleSnapshotParams{
+			Snapshot:  raw,
+			RunID:     runUUID,
+			BotID:     botUUID,
+			SessionID: sessionUUID,
+		},
+	)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, getErr := s.contextLifecycles.GetContextLifecycleByRunID(writeCtx, runUUID)
+		if getErr == nil && existing.BotID == botUUID && existing.SessionID == sessionUUID {
+			return
+		}
+		if getErr != nil {
+			err = getErr
+		} else {
+			err = errors.New("existing context lifecycle identity does not match terminal write")
+		}
+	}
+	s.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, status)
 }
 
 func classifyContextLifecycleTerminal(snapshot contextfrag.LifecycleSnapshot, cause error) (string, string) {
