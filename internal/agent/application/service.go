@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/accounts"
@@ -338,6 +339,13 @@ func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
 	return contextfrag.DefaultToolExchangePolicy()
 }
 
+func runIDForChatRequest(admittedRunID string) string {
+	if runID := strings.TrimSpace(admittedRunID); runID != "" {
+		return runID
+	}
+	return uuid.NewString()
+}
+
 func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext, error) {
 	modelQuery := modelQueryText(req)
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
@@ -376,6 +384,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		)
 		return resolvedContext{}, err
 	}
+	runCfg.RunID = runIDForChatRequest(req.RunID)
 	memoryContext := s.loadMemoryContext(ctx, req)
 	if memoryContext.Trace != nil && runCfg.ContextLifecycle != nil {
 		runCfg.ContextLifecycle.SetMemoryRecall(*memoryContext.Trace)
