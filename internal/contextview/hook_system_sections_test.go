@@ -210,6 +210,57 @@ func TestProviderBudgetAuditCarriesHookSystemSourceWarnings(t *testing.T) {
 	}
 }
 
+func TestApplyProviderRunConfigRebindsHookWarningAfterTrim(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{BotID: "bot-1"}
+	base := hookSystemTestFrag(
+		"system.prompt",
+		"base",
+		contextfrag.RetentionRequired,
+		contextfrag.CacheStable,
+		contextfrag.TrustSystem,
+		20,
+		scope,
+	)
+	hook := hookSystemTestFrag(
+		"system.hook.policy.trimmed",
+		"甲乙丙丁戊己",
+		contextfrag.RetentionPreferred,
+		contextfrag.CacheDynamic,
+		contextfrag.TrustWorkspace,
+		80,
+		scope,
+	)
+	hook.Budget.MaxChars = 4
+	frags := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{base, hook})
+	sourceRef := frags[1].Ref
+	got := applyProviderRunConfigOK(context.Background(), nil, agentpkg.RunConfig{
+		System:             "base",
+		ContextScope:       scope,
+		ContextSourceFrags: frags,
+		ContextSourceWarnings: []contextfrag.ValidationWarning{{
+			Code: "hook_system_section_required_clamped",
+			Ref:  sourceRef,
+		}},
+	})
+
+	item := manifestItemByID(got.ContextManifest.Items, hook.ID)
+	if item == nil || item.Ref.ContentHash == sourceRef.ContentHash {
+		t.Fatalf("trimmed item = %#v, want recomputed content hash distinct from %#v", item, sourceRef)
+	}
+	for _, warning := range got.ContextManifest.ValidationWarnings {
+		if warning.Code != "hook_system_section_required_clamped" {
+			continue
+		}
+		if warning.Ref.ID != item.Ref.ID || warning.Ref.ContentHash != item.Ref.ContentHash {
+			t.Fatalf("trim warning ref = %#v, want final item ref %#v", warning.Ref, item.Ref)
+		}
+		return
+	}
+	t.Fatalf("validation warnings = %#v, want clamp warning", got.ContextManifest.ValidationWarnings)
+}
+
 func hookSystemTestFrag(
 	id, text string,
 	retention contextfrag.RetentionTier,

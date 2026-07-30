@@ -38,6 +38,8 @@ var emptyConfigFile = []byte("{\n  \"version\": 1,\n  \"enabled\": true,\n  \"ho
 const (
 	sourceKindUser   = "user"
 	sourceKindPlugin = "plugin"
+
+	maxAppendSystemSections = 16
 )
 
 func NewService(log *slog.Logger, provider bridge.Provider) *Service {
@@ -365,9 +367,9 @@ func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, actio
 		return res, err
 	}
 	if execResult != nil {
-		applyActionOutput(&res, execResult.Stdout, maxOutputBytes)
+		applyActionOutput(&res, execResult.Stdout, maxOutputBytes, cfg.Defaults.MaxOutputBytes)
 	} else {
-		applyActionOutput(&res, "", maxOutputBytes)
+		applyActionOutput(&res, "", maxOutputBytes, cfg.Defaults.MaxOutputBytes)
 	}
 	return res, nil
 }
@@ -396,12 +398,19 @@ func (*Service) runTool(ctx context.Context, cfg Config, _ Request, action HookA
 		res.Error = err.Error()
 		return res, err
 	}
-	applyToolOutput(&res, output, hookMaxOutputBytes(cfg, source))
+	applyToolOutput(&res, output, hookMaxOutputBytes(cfg, source), cfg.Defaults.MaxOutputBytes)
 	return res, nil
 }
 
-func applyActionOutput(result *ActionResult, stdout string, maxOutputBytes int) {
+func applyActionOutput(
+	result *ActionResult,
+	stdout string,
+	maxOutputBytes int,
+	appendSystemSectionLimits ...int,
+) {
 	result.appendContextLimit = maxOutputBytes
+	appendSystemSectionLimit := resolveAppendSystemSectionLimit(maxOutputBytes, appendSystemSectionLimits)
+	result.appendSystemLimit = appendSystemSectionLimit
 	raw := strings.TrimSpace(stdout)
 	if raw == "" {
 		result.Decision = DecisionAllow
@@ -443,14 +452,21 @@ func applyActionOutput(result *ActionResult, stdout string, maxOutputBytes int) 
 		result.Metadata["append_context"] = limitHookOutputText(output.AppendContext, maxOutputBytes)
 	}
 	if len(output.AppendSystemSection) > 0 {
-		sections, warnings := parseAppendSystemSections(output.AppendSystemSection, maxOutputBytes)
+		sections, warnings := parseAppendSystemSections(output.AppendSystemSection, appendSystemSectionLimit)
 		result.AppendSystemSections = append(result.AppendSystemSections, sections...)
 		result.Warnings = append(result.Warnings, warnings...)
 	}
 }
 
-func applyToolOutput(result *ActionResult, output any, maxOutputBytes int) {
+func applyToolOutput(
+	result *ActionResult,
+	output any,
+	maxOutputBytes int,
+	appendSystemSectionLimits ...int,
+) {
 	result.appendContextLimit = maxOutputBytes
+	appendSystemSectionLimit := resolveAppendSystemSectionLimit(maxOutputBytes, appendSystemSectionLimits)
+	result.appendSystemLimit = appendSystemSectionLimit
 	m, ok := output.(map[string]any)
 	if !ok {
 		raw, err := json.Marshal(output)
@@ -473,7 +489,7 @@ func applyToolOutput(result *ActionResult, output any, maxOutputBytes int) {
 		result.Metadata = map[string]any{"append_context": limitHookOutputText(appendContext, maxOutputBytes)}
 	}
 	if value, ok := m["append_system_section"]; ok {
-		sections, warnings := parseAppendSystemSections(value, maxOutputBytes)
+		sections, warnings := parseAppendSystemSections(value, appendSystemSectionLimit)
 		result.AppendSystemSections = append(result.AppendSystemSections, sections...)
 		result.Warnings = append(result.Warnings, warnings...)
 	}
@@ -502,7 +518,8 @@ func mergeDecision(result *Result, actionResult ActionResult, maxOutputBytes int
 		result.appendContextRaw += appendContext
 		result.AppendContext = limitHookOutputText(result.appendContextRaw, firstPositive(result.appendContextLimit, maxOutputBytes))
 	}
-	sectionOffset := len(result.AppendSystemSections)
+	sectionOffset := result.appendSystemOrder
+	result.appendSystemOrder += len(actionResult.AppendSystemSections)
 	for i := range actionResult.AppendSystemSections {
 		actionResult.AppendSystemSections[i].sectionOrder = sectionOffset + i
 	}
@@ -513,6 +530,14 @@ func mergeDecision(result *Result, actionResult ActionResult, maxOutputBytes int
 	}
 	result.AppendSystemSections = append(result.AppendSystemSections, actionResult.AppendSystemSections...)
 	result.Warnings = append(result.Warnings, actionResult.Warnings...)
+	if len(actionResult.AppendSystemSections) > 0 {
+		result.appendSystemLimit = minPositiveLimit(
+			result.appendSystemLimit,
+			maxOutputBytes,
+			actionResult.appendSystemLimit,
+		)
+		enforceAppendSystemSectionOutputLimit(result)
+	}
 	switch decision {
 	case DecisionDeny:
 		result.Decision = DecisionDeny
@@ -559,7 +584,11 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 	sections := make([]SystemSectionOutput, 0, len(entries))
 	warnings := make([]OutputWarning, 0)
 	remainingBytes := maxOutputBytes
-	for _, entry := range entries {
+	for entryIndex, entry := range entries {
+		if entryIndex >= maxAppendSystemSections {
+			warnings = append(warnings, appendSystemSectionOutputLimitedWarning(""))
+			break
+		}
 		var raw struct {
 			ID        string `json:"id"`
 			Text      string `json:"text"`
@@ -572,7 +601,8 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 			continue
 		}
 
-		if strings.TrimSpace(raw.Text) == "" {
+		rawText := strings.TrimSpace(raw.Text)
+		if rawText == "" {
 			warnings = append(warnings, invalidAppendSystemSectionWarning())
 			continue
 		}
@@ -607,7 +637,7 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 			}
 			textLimit = remainingBytes
 		}
-		text := limitHookOutputText(raw.Text, textLimit)
+		text := limitHookOutputText(rawText, textLimit)
 		if text == "" {
 			warnings = append(warnings, appendSystemSectionOutputLimitedWarning(strings.TrimSpace(raw.ID)))
 			continue
@@ -619,12 +649,21 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 			Cache:        cache,
 			sectionOrder: len(sections),
 		}
+		outputLimited := text != rawText
+		if outputLimited {
+			appendSystemSectionWarningCode(&section, WarningAppendSystemSectionOutputLimited)
+		}
 		if clampedRequired {
-			section.WarningCodes = []string{WarningSystemSectionRequiredClamped}
+			appendSystemSectionWarningCode(&section, WarningSystemSectionRequiredClamped)
 		}
 		sections = append(sections, section)
 		if maxOutputBytes > 0 {
 			remainingBytes -= len(text)
+		}
+		if outputLimited {
+			warning := appendSystemSectionOutputLimitedWarning(section.ID)
+			warning.sectionOrder = section.sectionOrder
+			warnings = append(warnings, warning)
 		}
 		if clampedRequired {
 			warnings = append(warnings, OutputWarning{
@@ -636,6 +675,60 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 		}
 	}
 	return sections, warnings
+}
+
+func enforceAppendSystemSectionOutputLimit(result *Result) {
+	if result == nil || result.appendSystemLimit <= 0 {
+		return
+	}
+	remaining := result.appendSystemLimit
+	kept := result.AppendSystemSections[:0]
+	for _, section := range result.AppendSystemSections {
+		if len(kept) >= maxAppendSystemSections || remaining <= 0 {
+			appendSystemSectionOutputWarning(result, section)
+			continue
+		}
+		text := limitHookOutputText(section.Text, remaining)
+		if text == "" {
+			appendSystemSectionOutputWarning(result, section)
+			continue
+		}
+		if text != section.Text {
+			section.Text = text
+			appendSystemSectionWarningCode(&section, WarningAppendSystemSectionOutputLimited)
+			appendSystemSectionOutputWarning(result, section)
+		}
+		kept = append(kept, section)
+		remaining -= len(text)
+	}
+	result.AppendSystemSections = kept
+}
+
+func appendSystemSectionOutputWarning(result *Result, section SystemSectionOutput) {
+	warning := appendSystemSectionOutputLimitedWarning(section.ID)
+	warning.HookName = section.HookName
+	warning.hookOrder = section.hookOrder
+	warning.sectionOrder = section.sectionOrder
+	for _, existing := range result.Warnings {
+		if existing.Code == warning.Code &&
+			existing.hookOrder == warning.hookOrder &&
+			existing.sectionOrder == warning.sectionOrder {
+			return
+		}
+	}
+	result.Warnings = append(result.Warnings, warning)
+}
+
+func appendSystemSectionWarningCode(section *SystemSectionOutput, code string) {
+	if section == nil || code == "" {
+		return
+	}
+	for _, existing := range section.WarningCodes {
+		if existing == code {
+			return
+		}
+	}
+	section.WarningCodes = append(section.WarningCodes, code)
 }
 
 func sortAppendSystemSections(sections []SystemSectionOutput) {
@@ -695,6 +788,13 @@ func hookMaxOutputBytes(cfg Config, source hookSource) int {
 		maxOutputBytes = source.MaxOutputBytes
 	}
 	return maxOutputBytes
+}
+
+func resolveAppendSystemSectionLimit(actionLimit int, globalLimits []int) int {
+	if len(globalLimits) == 0 {
+		return actionLimit
+	}
+	return minPositiveLimit(actionLimit, globalLimits[0])
 }
 
 func minPositiveLimit(values ...int) int {

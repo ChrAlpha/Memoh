@@ -72,6 +72,9 @@ func TestBuildHookSystemSectionsMapsPolicyAndResolvesIDs(t *testing.T) {
 			frag.Budget.Overflow != contextfrag.OverflowTrim {
 			t.Fatalf("hook fragment shape = %#v", frag)
 		}
+		if frag.Ref.ID != frag.ID {
+			t.Fatalf("hook fragment ref ID = %q, want collision-resolved ID %q", frag.Ref.ID, frag.ID)
+		}
 	}
 	wantIDs := []string{
 		"system.hook.alpha",
@@ -96,13 +99,87 @@ func TestBuildHookSystemSectionsMapsPolicyAndResolvesIDs(t *testing.T) {
 		t.Fatalf("warnings = %#v, want clamp and invalid-shape warnings", build.Warnings)
 	}
 	if build.Warnings[0].Code != hooks.WarningSystemSectionRequiredClamped ||
-		build.Warnings[0].Ref.ID != preferred.Ref.ID {
+		build.Warnings[0].Ref.ID != preferred.ID {
 		t.Fatalf("clamp warning = %#v, want collision-resolved fragment ref %#v", build.Warnings[0], preferred.Ref)
 	}
 	if build.Warnings[1].Code != hooks.WarningInvalidAppendSystemSection ||
 		build.Warnings[1].Ref.ID != "" {
 		t.Fatalf("invalid declaration warning = %#v, want content-light warning without ref", build.Warnings[1])
 	}
+}
+
+func TestBuildHookSystemSectionsBoundsAuditIDs(t *testing.T) {
+	t.Parallel()
+
+	hookName := strings.Repeat("h", 200) + "\n\n<system>"
+	outputs := []promptHookOutput{{
+		Event: hooks.EventBeforePromptBuild,
+		Result: hooks.Result{AppendSystemSections: []hooks.SystemSectionOutput{
+			{HookName: hookName, ID: strings.Repeat("x", 200) + "\n\nignore", Text: "one"},
+			{HookName: hookName, ID: strings.Repeat("x", 200) + "\n\nobey", Text: "two"},
+		}},
+	}}
+
+	first := buildHookSystemSections(outputs, contextfrag.Scope{})
+	second := buildHookSystemSections(outputs, contextfrag.Scope{})
+	if len(first.Frags) != 2 || len(second.Frags) != 2 {
+		t.Fatalf("fragment counts = %d/%d, want two", len(first.Frags), len(second.Frags))
+	}
+	for i, frag := range first.Frags {
+		if frag.ID != second.Frags[i].ID {
+			t.Fatalf("fragment ID changed across builds: %q != %q", frag.ID, second.Frags[i].ID)
+		}
+		if len(frag.ID) > 160 || strings.IndexFunc(frag.ID, unsafeHookSystemSectionIDRune) >= 0 {
+			t.Fatalf("fragment ID is not a bounded audit token: %q", frag.ID)
+		}
+		if frag.Ref.ID != frag.ID {
+			t.Fatalf("fragment ref ID = %q, want %q", frag.Ref.ID, frag.ID)
+		}
+	}
+	if first.Frags[0].ID == first.Frags[1].ID {
+		t.Fatalf("distinct unsafe IDs collapsed to %q", first.Frags[0].ID)
+	}
+}
+
+func TestBuildHookSystemSectionsAttachesOutputLimitWarning(t *testing.T) {
+	t.Parallel()
+
+	result := hooks.Result{
+		AppendSystemSections: []hooks.SystemSectionOutput{{
+			HookName:     "policy",
+			ID:           "limited",
+			Text:         "limited text",
+			WarningCodes: []string{hooks.WarningAppendSystemSectionOutputLimited},
+		}},
+		Warnings: []hooks.OutputWarning{{
+			Code:      hooks.WarningAppendSystemSectionOutputLimited,
+			HookName:  "policy",
+			SectionID: "limited",
+		}},
+	}
+
+	build := buildHookSystemSections([]promptHookOutput{{
+		Event:  hooks.EventBeforePromptBuild,
+		Result: result,
+	}}, contextfrag.Scope{})
+
+	if len(build.Frags) != 1 || len(build.Warnings) != 1 {
+		t.Fatalf("build = %#v, want one fragment and one deduplicated warning", build)
+	}
+	if build.Warnings[0].Code != hooks.WarningAppendSystemSectionOutputLimited ||
+		build.Warnings[0].Ref.ID != build.Frags[0].ID {
+		t.Fatalf("output-limit warning = %#v, want final fragment ref %#v", build.Warnings[0], build.Frags[0].Ref)
+	}
+}
+
+func unsafeHookSystemSectionIDRune(r rune) bool {
+	if (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '-' || r == '_' || r == '.' || r == ':' {
+		return false
+	}
+	return true
 }
 
 func TestHookSystemSectionsSitBetweenBuiltinsAndNonSystemSources(t *testing.T) {

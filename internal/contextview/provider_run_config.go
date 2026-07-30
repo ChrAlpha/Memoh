@@ -478,7 +478,35 @@ func appendContextSourceWarnings(
 	if manifest == nil || len(warnings) == 0 {
 		return
 	}
-	manifest.ValidationWarnings = append(manifest.ValidationWarnings, warnings...)
+	for _, warning := range warnings {
+		warning.Ref = finalContextSourceWarningRef(*manifest, warning.Ref)
+		manifest.ValidationWarnings = append(manifest.ValidationWarnings, warning)
+	}
+}
+
+func finalContextSourceWarningRef(
+	manifest contextfrag.Manifest,
+	ref contextfrag.ContextRef,
+) contextfrag.ContextRef {
+	if strings.TrimSpace(ref.ID) == "" {
+		return ref
+	}
+	for _, item := range manifest.Items {
+		if sameContextRefIdentity(item.Ref, ref) {
+			return item.Ref
+		}
+	}
+	for _, decision := range manifest.SelectionDecisions {
+		if sameContextRefIdentity(decision.Ref, ref) {
+			return decision.Ref
+		}
+	}
+	return ref
+}
+
+func sameContextRefIdentity(left, right contextfrag.ContextRef) bool {
+	return left.ID == right.ID &&
+		(left.Namespace == "" || right.Namespace == "" || left.Namespace == right.Namespace)
 }
 
 func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Manifest) {

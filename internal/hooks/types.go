@@ -236,6 +236,7 @@ type ActionResult struct {
 
 	appendContextRaw   string
 	appendContextLimit int
+	appendSystemLimit  int
 }
 
 type Result struct {
@@ -252,6 +253,8 @@ type Result struct {
 
 	appendContextRaw   string
 	appendContextLimit int
+	appendSystemLimit  int
+	appendSystemOrder  int
 }
 
 func ParseConfig(data []byte) (Config, error) {
