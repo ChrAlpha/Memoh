@@ -70,7 +70,7 @@ func TestApplyProviderRunConfigRendersHookContextBeforeQuery(t *testing.T) {
 		ContextHookText: "[Hook Context: before_prompt_build]\nextra guidance",
 		ContextScope:    contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want history + hook context + query: %#v", len(got.Messages), got.Messages)

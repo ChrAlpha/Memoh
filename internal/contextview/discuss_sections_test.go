@@ -154,9 +154,9 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 			}
 
 			const toolUsage = "## Tool usage\n\nuse tools wisely"
-			legacyRendered := ApplyProviderRunConfig(context.Background(), nil,
+			legacyRendered := applyProviderRunConfigOK(context.Background(), nil,
 				agentpkg.RunConfig{ContextSourceFrags: legacyFrags, ContextScope: scope, ContextToolUsage: toolUsage})
-			sectionsRendered := ApplyProviderRunConfig(context.Background(), nil,
+			sectionsRendered := applyProviderRunConfigOK(context.Background(), nil,
 				agentpkg.RunConfig{ContextSourceFrags: sectionsFrags, ContextScope: scope, ContextToolUsage: toolUsage})
 			if sectionsRendered.System != legacyRendered.System {
 				t.Fatalf("sections System diverges from reverse-parse System:\ngot:  %q\nwant: %q",

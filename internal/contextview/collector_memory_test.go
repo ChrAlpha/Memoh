@@ -75,7 +75,7 @@ func TestApplyProviderRunConfigRendersMemoryBeforeQuery(t *testing.T) {
 		ContextMemoryText: "remembered fact",
 		ContextScope:      contextfrag.Scope{BotID: "bot-1", SessionID: "s1"},
 	}
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 3 {
 		t.Fatalf("messages = %d, want history + memory + query", len(got.Messages))
@@ -96,7 +96,7 @@ func TestApplyProviderRunConfigRendersMemoryBeforeQuery(t *testing.T) {
 func TestApplyProviderRunConfigDropsOversizedMemoryBeforeCurrentQuery(t *testing.T) {
 	t.Parallel()
 
-	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	got := applyProviderRunConfigOK(context.Background(), nil, agentpkg.RunConfig{
 		System:            "system",
 		Query:             "current question",
 		ContextMemoryText: strings.Repeat("m", maxMemoryContextChars+1),

@@ -30,7 +30,7 @@ func TestApplyProviderContextViewMatchesLegacyAssembly(t *testing.T) {
 	}
 
 	legacy := cfg.RefreshContextFrag()
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if got.System != cfg.System {
 		t.Fatalf("System = %q, want unchanged %q", got.System, cfg.System)
@@ -73,7 +73,7 @@ func TestApplyProviderContextViewKeepsUnmaterializedQuery(t *testing.T) {
 	}
 
 	legacy := cfg.RefreshContextFrag()
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if got.Query != "live query" {
 		t.Fatalf("Query = %q, want untouched", got.Query)
@@ -111,7 +111,7 @@ func TestApplyProviderContextViewUsesContextBudget(t *testing.T) {
 	}
 	activateHistoryBudget(&cfg, 1)
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages = %d, want trim notice plus latest question", len(got.Messages))
@@ -150,7 +150,7 @@ func TestApplyProviderContextViewCountsImagesAgainstTokenBudget(t *testing.T) {
 	}
 	activateHistoryBudget(&cfg, MinimumSystemBudgetTokens)
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 2 {
 		t.Fatalf("messages = %d, want trim notice plus latest image message", len(got.Messages))
@@ -176,7 +176,7 @@ func TestApplyProviderContextViewPreservesDynamicMutators(t *testing.T) {
 		},
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	want := []contextfrag.DynamicMutator{
 		contextfrag.DynamicMutatorPromptCache,
@@ -220,7 +220,7 @@ func TestApplyProviderContextViewProducesCachePlan(t *testing.T) {
 		},
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if got.ContextCachePlan.StablePrefixHash == "" {
 		t.Fatal("cache plan should carry the stable prefix hash")
@@ -248,7 +248,7 @@ func TestApplyProviderContextViewStableMessageCountExcludesMemoryAndCurrent(t *t
 		},
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if got.ContextCachePlan.StableMessageCount != 3 {
 		t.Fatalf("stable message count = %d, want 3 (memory/current must stay cache-volatile)", got.ContextCachePlan.StableMessageCount)
@@ -270,7 +270,7 @@ func TestApplyProviderContextViewPlacesDynamicContextBeforeMaterializedCurrentUs
 		ContextHookText:                "workspace hook guidance",
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) != 4 {
 		t.Fatalf("messages = %#v, want history, memory, hook, then current user", got.Messages)
@@ -307,7 +307,7 @@ func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure
 		ContextRecentProtectTokens:     &zero,
 	}
 	activateHistoryBudget(&cfg, 100)
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if len(got.Messages) == 0 || messageText(t, got.Messages[len(got.Messages)-1]) != "pipeline current question" {
 		t.Fatalf("messages = %#v, materialized current user must survive as the trailing request", got.Messages)

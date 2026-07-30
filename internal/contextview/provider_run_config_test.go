@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -10,6 +11,18 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 )
+
+func applyProviderRunConfigOK(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg agentpkg.RunConfig,
+) agentpkg.RunConfig {
+	out, err := applyProviderRunConfig(ctx, logger, cfg)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
 
 func providerRunConfigFixture() agentpkg.RunConfig {
 	return agentpkg.RunConfig{
@@ -25,12 +38,12 @@ func providerRunConfigFixture() agentpkg.RunConfig {
 func TestApplyProviderRunConfigCachePlanCoversToolUsage(t *testing.T) {
 	t.Parallel()
 
-	base := ApplyProviderRunConfig(context.Background(), nil, providerRunConfigFixture())
+	base := applyProviderRunConfigOK(context.Background(), nil, providerRunConfigFixture())
 
 	withUsage := providerRunConfigFixture()
 	withUsage.System = "base system\n\n## Tool usage\n\nUSE_TOOLS_WISELY"
 	withUsage.ContextToolUsage = "USE_TOOLS_WISELY"
-	got := ApplyProviderRunConfig(context.Background(), nil, withUsage)
+	got := applyProviderRunConfigOK(context.Background(), nil, withUsage)
 
 	if base.ContextCachePlan.StablePrefixHash == "" || got.ContextCachePlan.StablePrefixHash == "" {
 		t.Fatal("both runs must produce a stable prefix hash")
@@ -53,7 +66,7 @@ func TestApplyProviderRunConfigCachePlanCoversToolUsage(t *testing.T) {
 func TestApplyProviderRunConfigProducesManifestAndLedger(t *testing.T) {
 	t.Parallel()
 
-	got := ApplyProviderRunConfig(context.Background(), nil, providerRunConfigFixture())
+	got := applyProviderRunConfigOK(context.Background(), nil, providerRunConfigFixture())
 	if len(got.ContextManifest.Items) == 0 {
 		t.Fatal("provider view must produce a manifest")
 	}
@@ -68,7 +81,7 @@ func TestApplyProviderRunConfigProducesManifestAndLedger(t *testing.T) {
 func TestApplyProviderRunConfigManifestCarriesLifecycle(t *testing.T) {
 	t.Parallel()
 
-	got := ApplyProviderRunConfig(context.Background(), nil, providerRunConfigFixture())
+	got := applyProviderRunConfigOK(context.Background(), nil, providerRunConfigFixture())
 
 	if got.ContextManifest.CachePlan == nil || *got.ContextManifest.CachePlan != got.ContextCachePlan {
 		t.Fatalf("manifest cache plan = %v, want the run cache plan %v", got.ContextManifest.CachePlan, got.ContextCachePlan)
@@ -94,7 +107,7 @@ func TestApplyProviderRunConfigPublishesLifecycleToHolder(t *testing.T) {
 	cfg := providerRunConfigFixture()
 	cfg.ContextLifecycle = holder
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 	got.ContextMutations.SetFinalInputHash("final-hash")
 
 	snapshot, ok := holder.Snapshot()

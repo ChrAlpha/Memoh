@@ -91,7 +91,7 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 		},
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 
 	if got.ContextCachePlan.StableMessageCount != 2 {
 		t.Fatalf("stable message count = %d, want 2", got.ContextCachePlan.StableMessageCount)
@@ -161,7 +161,7 @@ func TestApplyProviderRunConfigNonAnthropicUnaffected(t *testing.T) {
 		},
 	}
 
-	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	got := applyProviderRunConfigOK(context.Background(), nil, cfg)
 	if got.ContextCachePlan.StableMessageCount == 0 {
 		t.Fatal("test fixture must produce a non-zero stable message count")
 	}

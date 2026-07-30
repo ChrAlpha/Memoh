@@ -68,7 +68,7 @@ func fragsFirstFixture() agentpkg.RunConfig {
 func TestApplyProviderRunConfigFragsFirst(t *testing.T) {
 	t.Parallel()
 
-	got := ApplyProviderRunConfig(context.Background(), nil, fragsFirstFixture())
+	got := applyProviderRunConfigOK(context.Background(), nil, fragsFirstFixture())
 
 	wantSystem := "base system\n\n## Tool usage\n\nUSE_TOOLS\n\n## Workspace instruction files\n\nworkspace text"
 	if got.System != wantSystem {
