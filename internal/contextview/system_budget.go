@@ -150,22 +150,35 @@ func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
 }
 
 func systemFragCost(frags []contextfrag.ContextFrag) int {
-	total := 0
+	resolved := 0
+	renderedBytes := 0
 	count := 0
 	for _, frag := range frags {
-		if frag.Slot == contextfrag.SlotSystem {
-			total += contextfrag.ResolveFragTokens(frag)
-			count++
+		if frag.Slot != contextfrag.SlotSystem {
+			continue
 		}
+		if count > 0 {
+			renderedBytes += len("\n\n")
+		}
+		for _, part := range frag.Parts {
+			if part.Type == contextfrag.PartText {
+				renderedBytes += len(strings.TrimSpace(part.Text))
+			}
+		}
+		resolved += contextfrag.ResolveFragTokens(frag)
+		count++
 	}
-	// SDK rendering inserts "\n\n" between every pair of system fragments,
-	// including empty fragments. Count each non-empty boundary as one token so
-	// per-fragment integer flooring can never make the rendered system prompt
-	// look cheaper than its section structure.
+	// Preserve authoritative per-fragment estimates while also measuring the
+	// exact rendered byte stream. The latter closes integer-flooring gaps
+	// across short sections and their "\n\n" boundaries.
+	conservative := resolved
 	if count > 1 {
-		total += count - 1
+		conservative += count - 1
 	}
-	return total
+	if rendered := contextfrag.TokensFromBytes(renderedBytes); rendered > conservative {
+		return rendered
+	}
+	return conservative
 }
 
 func firstSystemScope(frags []contextfrag.ContextFrag) contextfrag.Scope {

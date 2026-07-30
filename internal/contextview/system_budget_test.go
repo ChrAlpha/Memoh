@@ -163,6 +163,21 @@ func TestSystemBudgetCostIncludesEveryRenderedFragmentBoundary(t *testing.T) {
 	}
 }
 
+func TestSystemBudgetCostMatchesRenderedShortSections(t *testing.T) {
+	t.Parallel()
+
+	first := systemBudgetTestFrag("first", contextfrag.RetentionRequired, 0, 10, 0, contextfrag.OverflowKeep)
+	first.Parts[0].Text = "aaa"
+	second := systemBudgetTestFrag("second", contextfrag.RetentionRequired, 0, 20, 0, contextfrag.OverflowKeep)
+	second.Parts[0].Text = "bbb"
+
+	rendered := "aaa\n\nbbb"
+	want := contextfrag.TokensFromBytes(len(rendered))
+	if got := systemFragCost([]contextfrag.ContextFrag{first, second}); got != want {
+		t.Fatalf("rendered system cost = %d, want %d for %q", got, want, rendered)
+	}
+}
+
 func TestSystemBudgetRecomputesCostAfterEveryDrop(t *testing.T) {
 	t.Parallel()
 
