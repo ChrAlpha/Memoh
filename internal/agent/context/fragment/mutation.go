@@ -76,6 +76,17 @@ const (
 	LoopSelectionSuffixOnlyShadow = "suffix_only_shadow"
 )
 
+// Provider-attempt reselection outcomes distinguish an applied decision from
+// the same decision observed under shadow mode. The empty value means no
+// reselector governed that attempt.
+const (
+	ReselectionOutcomeUnchanged  = "unchanged"
+	ReselectionOutcomeApplied    = "applied"
+	ReselectionOutcomeWouldApply = "would_apply"
+	ReselectionOutcomeFailed     = "failed"
+	ReselectionOutcomeWouldFail  = "would_fail"
+)
+
 // StepSnapshot is one prepare-step's provider-input hash-chain entry: the
 // hash of the payload actually sent after mid-task pruning/reselection ran
 // for that step, plus what that step's reselection (or fallback prune) did,
@@ -85,6 +96,7 @@ type StepSnapshot struct {
 	Attempt              int            `json:"attempt,omitempty"`
 	StepIndex            int            `json:"step_index"`
 	PostPrepareInputHash string         `json:"post_prepare_input_hash,omitempty"`
+	ReselectionOutcome   string         `json:"reselection_outcome,omitempty"`
 	ReselectionApplied   bool           `json:"reselection_applied,omitempty"`
 	Dropped              int            `json:"dropped,omitempty"`
 	Truncated            int            `json:"truncated,omitempty"`

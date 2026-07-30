@@ -157,6 +157,8 @@ type RunConfig struct {
 	ContextMutations             *contextfrag.MutationLedger
 	ContextLifecycle             *contextfrag.LifecycleHolder
 	ContextStepReselector        ContextStepReselector
+	initialProviderMessageCount  int
+	initialProviderPrefixSet     bool
 	contextStepFailure           func(error)
 	SessionType                  string
 	LiveToolStream               bool

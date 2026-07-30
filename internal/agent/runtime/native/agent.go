@@ -77,6 +77,15 @@ func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig,
 	return cfg.RefreshContextFrag(), nil
 }
 
+// captureProviderAttemptPrefix freezes the applier-rendered message boundary.
+// Later dynamic messages, including before_model_call output and retry
+// accumulation, remain governed suffix for every provider attempt.
+func captureProviderAttemptPrefix(cfg RunConfig) RunConfig {
+	cfg.initialProviderMessageCount = len(cfg.Messages)
+	cfg.initialProviderPrefixSet = true
+	return cfg
+}
+
 const publicContextPreparationError = "The model context could not be prepared."
 
 func contextViewStreamError(err error) StreamEvent {
@@ -315,6 +324,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, publicError)
 		return
 	}
+	cfg = captureProviderAttemptPrefix(cfg)
 	if readMediaState != nil {
 		readMediaState.ledger = cfg.ContextMutations
 	}
@@ -422,6 +432,13 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	installContextStepFailureHandler(&cfg, cancel)
 	opts := a.buildGenerateOptions(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
+	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
+		publicError := contextViewStreamError(stepErr)
+		turnError = publicError.Error
+		aborted = true
+		sendEvent(ctx, ch, publicError)
+		return
+	}
 
 	retryCfg := cfg.Retry
 	if retryCfg.MaxAttempts <= 0 {
@@ -955,6 +972,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if contextViewErr != nil {
 		return nil, contextViewErr
 	}
+	cfg = captureProviderAttemptPrefix(cfg)
 	if readMediaState != nil {
 		readMediaState.ledger = cfg.ContextMutations
 	}
@@ -1010,6 +1028,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		}
 		return nil
 	}))
+	if stepErr := contextStepBudgetError(genCtx); stepErr != nil {
+		return nil, stepErr
+	}
 
 	genResult, err := a.client.GenerateTextResult(genCtx, opts...)
 	if stepErr := contextStepBudgetError(genCtx); stepErr != nil {
@@ -1089,6 +1110,10 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	rawPrefixCount := clampStableMessageCount(cfg.ContextCachePlan.StableMessageCount, len(cfg.Messages))
 	a.recordPrefixCacheBoundary(cfg, cfg.System, cfg.Messages, tools, rawPrefixCount)
 	plan := contextCachePlanWithComparatorPrefix(cfg.ContextCachePlan, cfg.System, cfg.Messages, tools, rawPrefixCount)
+	providerAttemptPrefixCount := len(cfg.Messages)
+	if cfg.initialProviderPrefixSet {
+		providerAttemptPrefixCount = cfg.initialProviderMessageCount
+	}
 
 	system, messages, decoratedTools, systemPrepended, actualStableCount := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, tools,
@@ -1099,17 +1124,25 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	plan.StableMessageCount = actualStableCount
 	tools = decoratedTools
 	plan.DecoratedProviderPrefixHash = decoratedProviderPrefixHash(system, messages, tools, actualStableCount, systemPrepended)
-	initialProviderMessageCount := len(messages)
+	if systemPrepended {
+		providerAttemptPrefixCount++
+	}
+	initialProviderMessageCount := clampStableMessageCount(providerAttemptPrefixCount, len(messages))
 	publishContextCachePlan(cfg, plan)
-	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
-	cfg.ContextMutations.SetFinalInputHash(finalHash)
-	// The twilight SDK only invokes PrepareStep for model steps > 0 (step 0
-	// gets this decorated payload as-is), so step 0's own snapshot has to be
-	// recorded here rather than from within the PrepareStep closure below —
-	// otherwise step 0 has no snapshot and every later step's PrepareStep
-	// call is misattributed one model call ahead of the usage it pairs with.
-	cfg.ContextMutations.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: finalHash})
-	if cfg.ForkContext != nil {
+
+	var providerTools []sdk.Tool
+	if len(tools) > 0 && cfg.SupportsToolCall {
+		providerTools = tools
+	}
+	initialParams := prepareProviderAttempt(ctx, cfg, loopReselectMode, initialProviderMessageCount, 0, &sdk.GenerateParams{
+		System:   system,
+		Messages: messages,
+		Tools:    providerTools,
+	})
+	system = initialParams.System
+	messages = initialParams.Messages
+	providerTools = initialParams.Tools
+	if cfg.ForkContext != nil && contextStepBudgetError(ctx) == nil {
 		_ = cfg.ForkContext.Store(messages)
 	}
 	if cfg.BackgroundManager != nil {
@@ -1134,8 +1167,8 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		sdk.WithSystem(system),
 		sdk.WithMaxSteps(-1),
 	}
-	if len(tools) > 0 && cfg.SupportsToolCall {
-		opts = append(opts, sdk.WithTools(tools))
+	if len(providerTools) > 0 {
+		opts = append(opts, sdk.WithTools(providerTools))
 	}
 	approvalHandler := cfg.ToolApprovalHandler
 	if a != nil && a.hookService != nil {
@@ -1157,50 +1190,16 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			return nil
 		}
 		defer func() { prepareIndex++ }()
-		if cfg.ContextStepReselector != nil {
-			beforeMessages := append([]sdk.Message(nil), p.Messages...)
-			selection := cfg.ContextStepReselector(ctx, ContextStepSelectionInput{
-				Scope:                 cfg.ContextScope,
-				InitialMessageCount:   initialProviderMessageCount,
-				Messages:              p.Messages,
-				BudgetMaxTokens:       remainingStepBudget(stepReselectionAllowance(cfg), p, initialProviderMessageCount),
-				RecentProtectTokens:   cfg.ContextRecentProtectTokens,
-				KeepRecentToolResults: stepReselectKeepRecentToolResults,
-				MinMessages:           stepReselectMinMessages,
-			})
-			// PrepareStep call k feeds model call k+1's input (see the step-0
-			// snapshot recorded in buildGenerateOptions above).
-			snapshot := contextfrag.StepSnapshot{StepIndex: prepareIndex + 1}
-			switch {
-			case loopReselectMode == LoopReselectShadow:
-				// Shadow never applies the selection: the snapshot carries the
-				// reselector's would-be verdict and the provider input stays
-				// append-only.
-				snapshot.Dropped = selection.Dropped
-				snapshot.Truncated = selection.Truncated
-				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
-			case selection.FatalError != nil:
-				p.Messages = append([]sdk.Message(nil), p.Messages[:initialProviderMessageCount]...)
-				cfg.ContextMutations.AppendStepSnapshot(snapshot)
-				if cfg.contextStepFailure != nil {
-					cfg.contextStepFailure(selection.FatalError)
-				}
-				return p
-			case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, initialProviderMessageCount):
-				p.Messages = selection.Messages
-				snapshot.ReselectionApplied = true
-				snapshot.Dropped = selection.Dropped
-				snapshot.Truncated = selection.Truncated
-				snapshot.DropReasons = copyDropReasons(selection.DropReasons)
-				if selection.Dropped > 0 || selection.Truncated > 0 {
-					cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
-				}
-			}
-			recordPreparedProviderInputHash(cfg.ContextMutations, p, snapshot)
-			return p
-		}
-		recordPreparedProviderInputHash(cfg.ContextMutations, p, contextfrag.StepSnapshot{StepIndex: prepareIndex + 1})
-		return p
+		// PrepareStep call k feeds model call k+1's input; step 0 passed
+		// through the same attempt preflight above.
+		return prepareProviderAttempt(
+			ctx,
+			cfg,
+			loopReselectMode,
+			initialProviderMessageCount,
+			prepareIndex+1,
+			p,
+		)
 	}
 	opts = append(opts, sdk.WithPrepareStep(wrapPrepareStepWithForkSnapshot(stepPrepare, cfg.ForkContext)))
 
@@ -1312,6 +1311,85 @@ func tokenEstimateFromBytes(bytes int) int {
 	return contextfrag.TokensFromBytes(bytes)
 }
 
+// prepareProviderAttempt is the single governor for every native provider
+// call: initial step 0, each SDK PrepareStep, and retry step 0. Callers must
+// apply their dynamic mutations before entering this seam.
+func prepareProviderAttempt(
+	ctx context.Context,
+	cfg RunConfig,
+	mode LoopReselectMode,
+	prefixCount int,
+	stepIndex int,
+	params *sdk.GenerateParams,
+) *sdk.GenerateParams {
+	if params == nil {
+		return nil
+	}
+	prefixCount = clampStableMessageCount(prefixCount, len(params.Messages))
+	snapshot := contextfrag.StepSnapshot{StepIndex: stepIndex}
+	reselector := cfg.ContextStepReselector
+	mode = mode.Normalize()
+	if mode == LoopReselectOff {
+		reselector = nil
+	}
+	if reselector == nil || prefixCount >= len(params.Messages) {
+		recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+		return params
+	}
+
+	beforeMessages := append([]sdk.Message(nil), params.Messages...)
+	selection := reselector(ctx, ContextStepSelectionInput{
+		Scope:                 cfg.ContextScope,
+		InitialMessageCount:   prefixCount,
+		Messages:              params.Messages,
+		BudgetMaxTokens:       remainingStepBudget(stepReselectionAllowance(cfg), params, prefixCount),
+		RecentProtectTokens:   cfg.ContextRecentProtectTokens,
+		KeepRecentToolResults: stepReselectKeepRecentToolResults,
+		MinMessages:           stepReselectMinMessages,
+	})
+
+	if mode == LoopReselectShadow {
+		snapshot.Dropped = selection.Dropped
+		snapshot.Truncated = selection.Truncated
+		snapshot.DropReasons = copyDropReasons(selection.DropReasons)
+		switch {
+		case selection.FatalError != nil:
+			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeWouldFail
+		case selection.Messages != nil || selection.Dropped > 0 || selection.Truncated > 0:
+			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeWouldApply
+		default:
+			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
+		}
+		recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+		return params
+	}
+
+	switch {
+	case selection.FatalError != nil:
+		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
+		params.Messages = append([]sdk.Message(nil), params.Messages[:prefixCount]...)
+		cfg.ContextMutations.AppendStepSnapshot(snapshot)
+		if cfg.contextStepFailure != nil {
+			cfg.contextStepFailure(selection.FatalError)
+		}
+		return params
+	case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, prefixCount):
+		params.Messages = selection.Messages
+		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeApplied
+		snapshot.ReselectionApplied = true
+		snapshot.Dropped = selection.Dropped
+		snapshot.Truncated = selection.Truncated
+		snapshot.DropReasons = copyDropReasons(selection.DropReasons)
+		if selection.Dropped > 0 || selection.Truncated > 0 {
+			cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
+		}
+	default:
+		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
+	}
+	recordPreparedProviderInputHash(cfg.ContextMutations, params, snapshot)
+	return params
+}
+
 func recordPreparedProviderInputHash(ledger *contextfrag.MutationLedger, params *sdk.GenerateParams, snapshot contextfrag.StepSnapshot) {
 	if params == nil {
 		return
@@ -1335,6 +1413,9 @@ func copyDropReasons(reasons map[string]int) map[string]int {
 
 func stepReselectionAllowance(cfg RunConfig) int {
 	if plan := cfg.ContextManifest.BudgetPlan; plan != nil {
+		if plan.Window <= 0 {
+			return 0
+		}
 		allowance := plan.Window - plan.OutputReserve
 		if allowance < 1 {
 			return 1
@@ -1872,6 +1953,9 @@ func (a *Agent) runMidStreamRetry(
 		}
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
 		retryOpts = append(retryOpts, a.onStepOption(streamCtx, retryCfgCopy, nil))
+		if contextStepBudgetError(streamCtx) != nil {
+			return prevResult, true
+		}
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
 		if retryErr != nil {

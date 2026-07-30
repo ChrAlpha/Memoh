@@ -310,6 +310,7 @@ func TestMutationLedgerMarshalJSONIncludesStepsModelAndLoopSelectionMode(t *test
 	ledger.AppendStepSnapshot(StepSnapshot{
 		StepIndex:            0,
 		PostPrepareInputHash: "step-hash-0",
+		ReselectionOutcome:   ReselectionOutcomeApplied,
 		ReselectionApplied:   true,
 		Dropped:              3,
 		DropReasons:          map[string]int{"budget": 3},
@@ -324,7 +325,7 @@ func TestMutationLedgerMarshalJSONIncludesStepsModelAndLoopSelectionMode(t *test
 	for _, want := range []string{
 		"mid_task_prune", "truncated=2", "final-hash",
 		`"model":"claude-x"`, `"client_type":"anthropic-messages"`, `"loop_selection_mode":"suffix_only"`,
-		`"step_index":0`, "step-hash-0", `"reselection_applied":true`, `"dropped":3`, `"budget":3`,
+		`"step_index":0`, "step-hash-0", `"reselection_outcome":"applied"`, `"reselection_applied":true`, `"dropped":3`, `"budget":3`,
 		`"step_index":1`, "step-hash-1", `"attempt":1`, `"truncated":2`,
 	} {
 		if !strings.Contains(string(raw), want) {

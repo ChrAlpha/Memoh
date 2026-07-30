@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -100,6 +101,37 @@ func TestStepReselectionTruncationRespectsMinMessages(t *testing.T) {
 	})
 	if selection.Truncated != 0 {
 		t.Fatalf("below the message threshold nothing truncates, got %d", selection.Truncated)
+	}
+}
+
+func TestStepReselectionWindowZeroAppliesThresholdHygieneDeterministically(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage("task")}
+	messages := loopSpanWithToolCycles(prefix, 10, 1000)
+	input := agentpkg.ContextStepSelectionInput{
+		Scope:                 contextfrag.Scope{BotID: "bot-1"},
+		InitialMessageCount:   len(prefix),
+		Messages:              messages,
+		BudgetMaxTokens:       0,
+		KeepRecentToolResults: 4,
+		MinMessages:           20,
+	}
+
+	first := SelectProviderStepMessages(context.Background(), input)
+	second := SelectProviderStepMessages(context.Background(), input)
+	if first.FatalError != nil || first.Dropped != 0 {
+		t.Fatalf("window-zero selection enforced budget: %+v", first)
+	}
+	if first.Truncated != 6 {
+		t.Fatalf("truncated = %d, want six old results with newest four intact", first.Truncated)
+	}
+	if first.Messages == nil ||
+		first.Dropped != second.Dropped ||
+		first.Truncated != second.Truncated ||
+		!reflect.DeepEqual(first.DropReasons, second.DropReasons) ||
+		!reflect.DeepEqual(first.Messages, second.Messages) {
+		t.Fatalf("window-zero hygiene is not deterministic:\nfirst:  %#v\nsecond: %#v", first, second)
 	}
 }
 
