@@ -17,6 +17,8 @@ import (
 	"github.com/memohai/memoh/internal/agent/turn"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
+	"github.com/memohai/memoh/internal/contextview"
+	"github.com/memohai/memoh/internal/hooks"
 )
 
 type fakeAgentStreamer struct {
@@ -106,6 +108,21 @@ func drainDiscuss(t *testing.T, h turn.RunHandle) []turn.Event {
 	for range h.Errs() {
 	}
 	return events
+}
+
+func assertSDKMessagesEqual(t *testing.T, got, want []sdk.Message) {
+	t.Helper()
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal got messages: %v", err)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal wanted messages: %v", err)
+	}
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("messages = %s, want %s", gotJSON, wantJSON)
+	}
 }
 
 func discussCommand() turn.StartTurnCommand {
@@ -457,29 +474,51 @@ func TestDiscussPropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
 	}
 }
 
-// TestDiscussClearsStaleSourceFragsFromResolve proves that whatever
-// ContextSourceFrags ResolveRunConfig's prepareRunConfig call left on the
-// base RunConfig (built before the discuss turn had any Messages) gets
-// cleared, not shipped as-is. ApplyProviderRunConfig treats a non-empty
-// ContextSourceFrags as authoritative and ignores cfg.Messages entirely, so
-// leaking those pre-turn frags through would silently drop the whole
-// discuss conversation once the agent's ContextViewApplier is wired.
-func TestDiscussClearsStaleSourceFragsFromResolve(t *testing.T) {
+func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 	agent := &fakeAgentStreamer{}
-	staleFrag := contextfrag.TextFrag(contextfrag.TextFragInput{
-		ID:   "system.prompt",
-		Kind: contextfrag.KindSystemPrompt,
-		Text: "stale system-only frag built before discuss content existed",
-	})
+	baseConfig := native.RunConfig{
+		System:          "base system",
+		ContextHookText: "hook context",
+		ContextScope:    contextfrag.Scope{BotID: "bot-1", SessionID: "sess-1"},
+	}
+	baseConfig.ContextSourceFrags = contextview.CollectProviderSourceFrags(context.Background(), baseConfig)
+	baseConfig.ContextSourceFrags = append(baseConfig.ContextSourceFrags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:         "stale.message",
+		Message:    sdk.UserMessage("must not survive"),
+		Kind:       contextfrag.KindConversationEvent,
+		Slot:       contextfrag.SlotHistory,
+		CacheClass: contextfrag.CacheNever,
+		Trust:      contextfrag.TrustExternal,
+	}))
 	resolver := &fakeDiscussService{
 		resolveResult: ResolveRunConfigResult{
-			RunConfig: native.RunConfig{ContextSourceFrags: []contextfrag.ContextFrag{staleFrag}},
+			RunConfig: baseConfig,
 			ModelID:   "model-1",
+		},
+		inlineFn: func(_ context.Context, _ string, _ []timeline.ImageAttachmentRef) []sdk.ImagePart {
+			return []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}}
 		},
 	}
 	a := newDiscussTestService(&fakeRunner{}, agent, resolver)
+	cmd := discussCommand()
+	cmd.DiscussMessages = []turn.DiscussMessage{
+		{Role: "user", Content: "first user"},
+		{Role: "user", Content: "second user"},
+		{
+			Role:                 "user",
+			Content:              "<summary>\ncovered history\n</summary>",
+			CompactionArtifactID: "artifact-1",
+		},
+		{
+			Role:       "tool",
+			Content:    "debug fallback",
+			RawContent: json.RawMessage(`[{"type":"tool-result","toolCallId":"call-1","toolName":"lookup","result":{"answer":42}}]`),
+		},
+		{Role: "user", Content: "latest user"},
+	}
+	cmd.DiscussImageRefs = []turn.DiscussImageRef{{ContentHash: "image-1", Mime: "image/png"}}
 
-	h, err := a.StartTurn(context.Background(), discussCommand())
+	h, err := a.StartTurn(context.Background(), cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,8 +527,90 @@ func TestDiscussClearsStaleSourceFragsFromResolve(t *testing.T) {
 	if agent.lastConfig == nil {
 		t.Fatal("expected agent to be called")
 	}
-	if len(agent.lastConfig.ContextSourceFrags) != 0 {
-		t.Fatalf("ContextSourceFrags = %#v, want cleared so the provider view falls back to cfg.Messages", agent.lastConfig.ContextSourceFrags)
+	frags := agent.lastConfig.ContextSourceFrags
+	if len(frags) != len(cmd.DiscussMessages)+2 {
+		t.Fatalf("ContextSourceFrags = %d, want system + %d discuss + hook", len(frags), len(cmd.DiscussMessages))
+	}
+	if frags[0].Slot != contextfrag.SlotSystem {
+		t.Fatalf("first frag slot = %q, want system", frags[0].Slot)
+	}
+	wantIDs := []string{
+		"discuss.message.000",
+		"discuss.message.001",
+		"discuss.message.002",
+		"discuss.message.003",
+		"discuss.message.004",
+	}
+	for i, wantID := range wantIDs {
+		if frags[i+1].ID != wantID {
+			t.Fatalf("discuss frag %d ID = %q, want %q", i, frags[i+1].ID, wantID)
+		}
+	}
+	if last := frags[len(frags)-1]; last.Kind != contextfrag.KindHookContext || last.Slot != contextfrag.SlotAfterHistoryBeforeCurrent {
+		t.Fatalf("last frag = %q/%q, want hook after history", last.Kind, last.Slot)
+	}
+	for _, frag := range frags {
+		if frag.ID == "stale.message" {
+			t.Fatal("pre-compose history fragment survived the authoritative discuss carrier")
+		}
+	}
+
+	rendered, err := contextview.ApplyProviderRunConfig(
+		context.Background(),
+		slog.New(slog.DiscardHandler),
+		*agent.lastConfig,
+	)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+	}
+	if rendered.System != baseConfig.System {
+		t.Fatalf("System = %q, want %q", rendered.System, baseConfig.System)
+	}
+	wantMessages := append([]sdk.Message(nil), agent.lastConfig.Messages...)
+	wantMessages = append(wantMessages, sdk.UserMessage(baseConfig.ContextHookText))
+	assertSDKMessagesEqual(t, rendered.Messages, wantMessages)
+}
+
+func TestDiscussRetainsResolvedHookSystemSections(t *testing.T) {
+	agent := &fakeAgentStreamer{}
+	baseConfig := native.RunConfig{
+		System:       "base system",
+		ContextScope: contextfrag.Scope{BotID: "bot-1", SessionID: "sess-1"},
+	}
+	baseConfig.ContextSourceFrags = contextview.CollectProviderSourceFrags(context.Background(), baseConfig)
+	hookBuild := buildHookSystemSections([]promptHookOutput{{
+		Event: hooks.EventBeforePromptBuild,
+		Result: hooks.Result{AppendSystemSections: []hooks.SystemSectionOutput{{
+			HookName: "round-seven",
+			Text:     "hook system",
+		}}},
+	}}, baseConfig.ContextScope)
+	baseConfig.ContextSourceFrags = append(baseConfig.ContextSourceFrags, hookBuild.Frags...)
+	resolver := &fakeDiscussService{resolveResult: ResolveRunConfigResult{
+		RunConfig: baseConfig,
+		ModelID:   "model-1",
+	}}
+	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
+
+	handle, err := service.StartTurn(context.Background(), discussCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainDiscuss(t, handle)
+
+	if agent.lastConfig == nil {
+		t.Fatal("expected agent to be called")
+	}
+	rendered, err := contextview.ApplyProviderRunConfig(
+		context.Background(),
+		slog.New(slog.DiscardHandler),
+		*agent.lastConfig,
+	)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+	}
+	if rendered.System != "base system\n\nhook system" {
+		t.Fatalf("System = %q, want resolved hook system section", rendered.System)
 	}
 }
 

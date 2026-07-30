@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -96,6 +97,55 @@ func TestDiscussCollector_ConsecutiveRCAtomized(t *testing.T) {
 		sdk.UserMessage("two"),
 		sdk.UserMessage("three"),
 	})
+}
+
+func TestDiscussCollector_ComposedMessagesAreAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	composed := []pipeline.ContextMessage{
+		{Role: "user", Content: "first user"},
+		{Role: "user", Content: "second user"},
+		{
+			Role:                 "user",
+			Content:              "<summary>\ncovered history\n</summary>",
+			CompactionArtifactID: "artifact-1",
+		},
+		{
+			Role:       "tool",
+			Content:    "debug fallback",
+			RawContent: json.RawMessage(`[{"type":"tool-result","toolCallId":"call-1","toolName":"lookup","result":{"answer":42}}]`),
+		},
+		{Role: "user", Content: "latest user"},
+	}
+	image := sdk.ImagePart{Image: "data:image/png;base64,abc", MediaType: "image/png"}
+	frags := collectDiscussContext(t, DiscussContextConfig{
+		ComposedMessages: composed,
+		RC:               pipeline.RenderedContext{renderedTextSegment(1, "must not be recollected")},
+		CompactSummary:   "must not be wrapped again",
+		InlineImages:     []sdk.ImagePart{image},
+	})
+
+	assertDiscussIDs(t, frags, []string{
+		"discuss.message.000",
+		"discuss.message.001",
+		"discuss.message.002",
+		"discuss.message.003",
+		"discuss.message.004",
+	})
+	summary := frags[2]
+	if summary.Kind != contextfrag.KindConversationSummary ||
+		summary.Slot != contextfrag.SlotBeforeHistory ||
+		summary.CacheClass != contextfrag.CacheDynamic ||
+		summary.Trust != contextfrag.TrustSystem ||
+		summary.Budget.Overflow != contextfrag.OverflowKeep {
+		t.Fatalf("summary policy = kind %q slot %q cache %q trust %q overflow %q",
+			summary.Kind, summary.Slot, summary.CacheClass, summary.Trust, summary.Budget.Overflow)
+	}
+
+	want := legacyContextMessagesToSDK(composed)
+	want[len(want)-1].Content = append(want[len(want)-1].Content, image)
+	payload, _ := renderSDKPayload(t, frags, placementFor(frags))
+	assertMessagesEqual(t, payload.Messages, want)
 }
 
 func TestDiscussCollector_TRRoleMapping(t *testing.T) {

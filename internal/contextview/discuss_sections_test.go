@@ -13,18 +13,26 @@ import (
 )
 
 func discussSectionsInputFixture() DiscussContextInput {
+	rc := pipeline.RenderedContext{
+		renderedTextSegment(100, "first rc"),
+		renderedTextSegment(300, "second rc"),
+	}
+	trs := []pipeline.TurnResponseEntry{{
+		RequestedAtMs: 200,
+		Role:          "assistant",
+		Content:       "assistant turn",
+	}}
+	const summary = "older summary"
+	composed := pipeline.ComposeContextWithArtifacts(rc, trs, []pipeline.CompactionArtifact{{
+		ID:      "fixture-artifact",
+		Summary: summary,
+	}})
 	return DiscussContextInput{
-		RC: pipeline.RenderedContext{
-			renderedTextSegment(100, "first rc"),
-			renderedTextSegment(300, "second rc"),
-		},
-		TRs: []pipeline.TurnResponseEntry{{
-			RequestedAtMs: 200,
-			Role:          "assistant",
-			Content:       "assistant turn",
-		}},
-		CompactSummary: "older summary",
-		LateBinding:    "Only answer if mentioned.",
+		ComposedMessages: composed.Messages,
+		RC:               rc,
+		TRs:              trs,
+		CompactSummary:   summary,
+		LateBinding:      "Only answer if mentioned.",
 	}
 }
 

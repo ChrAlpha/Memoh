@@ -19,9 +19,13 @@ const (
 )
 
 type DiscussContextConfig struct {
-	RC             pipeline.RenderedContext
-	TRs            []pipeline.TurnResponseEntry
-	CompactSummary string
+	// ComposedMessages is the authoritative output of timeline composition
+	// when non-nil. The RC/TR fields remain for callers that still compose
+	// inside this collector.
+	ComposedMessages []pipeline.ContextMessage
+	RC               pipeline.RenderedContext
+	TRs              []pipeline.TurnResponseEntry
+	CompactSummary   string
 	// LateBinding is the per-turn participation instruction that used to be
 	// appended to the message stream after context assembly.
 	LateBinding string
@@ -42,39 +46,51 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 		return nil, err
 	}
 
-	if len(cfg.RC) == 0 && len(cfg.TRs) == 0 && cfg.CompactSummary == "" && strings.TrimSpace(cfg.LateBinding) == "" {
+	if cfg.ComposedMessages == nil &&
+		len(cfg.RC) == 0 &&
+		len(cfg.TRs) == 0 &&
+		cfg.CompactSummary == "" &&
+		strings.TrimSpace(cfg.LateBinding) == "" {
 		return nil, nil
 	}
 
-	entries := sortedDiscussSourceEntries(cfg.RC, cfg.TRs)
-	frags := make([]contextfrag.ContextFrag, 0, len(entries)+1)
-	if cfg.CompactSummary != "" {
-		frags = append(frags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
-			ID:         "discuss.summary",
-			Message:    sdk.UserMessage("<summary>\n" + cfg.CompactSummary + "\n</summary>"),
-			Kind:       contextfrag.KindConversationSummary,
-			Slot:       contextfrag.SlotBeforeHistory,
-			Priority:   10,
-			CacheClass: contextfrag.CacheDynamic,
-			Trust:      contextfrag.TrustSystem,
-			Scope:      req.Scope,
-			Source:     discussContextSource,
-			SourceID:   "summary",
-			Collector:  discussContextCollectorName,
-			Index:      -1,
-			Budget:     contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
-		}))
-	}
+	var frags []contextfrag.ContextFrag
+	if cfg.ComposedMessages != nil {
+		frags = make([]contextfrag.ContextFrag, 0, len(cfg.ComposedMessages)+1)
+		for i, message := range cfg.ComposedMessages {
+			frags = append(frags, discussComposedMessageFrag(message, i, req.Scope))
+		}
+	} else {
+		entries := sortedDiscussSourceEntries(cfg.RC, cfg.TRs)
+		frags = make([]contextfrag.ContextFrag, 0, len(entries)+1)
+		if cfg.CompactSummary != "" {
+			frags = append(frags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
+				ID:         "discuss.summary",
+				Message:    sdk.UserMessage("<summary>\n" + cfg.CompactSummary + "\n</summary>"),
+				Kind:       contextfrag.KindConversationSummary,
+				Slot:       contextfrag.SlotBeforeHistory,
+				Priority:   10,
+				CacheClass: contextfrag.CacheDynamic,
+				Trust:      contextfrag.TrustSystem,
+				Scope:      req.Scope,
+				Source:     discussContextSource,
+				SourceID:   "summary",
+				Collector:  discussContextCollectorName,
+				Index:      -1,
+				Budget:     contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+			}))
+		}
 
-	for _, entry := range entries {
-		switch entry.kind {
-		case "rc":
-			frag, ok := discussRCFrag(entry.rc, entry.index, req.Scope)
-			if ok {
-				frags = append(frags, frag)
+		for _, entry := range entries {
+			switch entry.kind {
+			case "rc":
+				frag, ok := discussRCFrag(entry.rc, entry.index, req.Scope)
+				if ok {
+					frags = append(frags, frag)
+				}
+			case "tr":
+				frags = append(frags, discussTRFrag(entry.tr, entry.index, req.Scope))
 			}
-		case "tr":
-			frags = append(frags, discussTRFrag(entry.tr, entry.index, req.Scope))
 		}
 	}
 	frags = injectDiscussImages(frags, cfg.InlineImages)
@@ -82,6 +98,33 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 		frags = append(frags, discussLateBindingFrag(lateBinding, req.Scope))
 	}
 	return frags, nil
+}
+
+func discussComposedMessageFrag(message pipeline.ContextMessage, index int, scope contextfrag.Scope) contextfrag.ContextFrag {
+	msg := discussContextMessageToSDK(message)
+	input := contextfrag.MessageFragInput{
+		ID:         fmt.Sprintf("discuss.message.%03d", index),
+		Message:    msg,
+		Kind:       contextfrag.KindConversationEvent,
+		Slot:       contextfrag.SlotHistory,
+		Priority:   contextfrag.PriorityForMessage(msg),
+		CacheClass: contextfrag.CacheNever,
+		Trust:      trustForDiscussRole(message.Role),
+		Scope:      scope,
+		Source:     discussContextSource,
+		SourceID:   fmt.Sprintf("message.%03d", index),
+		Collector:  discussContextCollectorName,
+		Index:      index,
+	}
+	if message.CompactionArtifactID != "" {
+		input.Kind = contextfrag.KindConversationSummary
+		input.Slot = contextfrag.SlotBeforeHistory
+		input.Priority = 10
+		input.CacheClass = contextfrag.CacheDynamic
+		input.Trust = contextfrag.TrustSystem
+		input.Budget = contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep}
+	}
+	return contextfrag.MessageFrag(input)
 }
 
 // injectDiscussImages mirrors the legacy inject-into-last-user-message

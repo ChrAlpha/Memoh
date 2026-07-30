@@ -165,7 +165,8 @@ type discussLegacyInput struct {
 func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	t.Helper()
 	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}
-	wantMessages := legacyDiscussMessages(input.rc, input.trs, input.summary)
+	composedMessages := composeDiscussMessages(input.rc, input.trs, input.summary)
+	wantMessages := legacyContextMessagesToSDK(composedMessages)
 
 	builder := NewBuilder(
 		NewMapCollectorRegistry(
@@ -182,9 +183,7 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 		Sources: []SourceSpec{
 			{Name: "system_prompt", Config: SystemPromptConfig{System: input.system}},
 			{Name: "discuss_context", Config: DiscussContextConfig{
-				RC:             input.rc,
-				TRs:            input.trs,
-				CompactSummary: input.summary,
+				ComposedMessages: composedMessages,
 			}},
 		},
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
@@ -203,19 +202,22 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	assertMessagesEqual(t, rendered.Messages, wantMessages)
 }
 
-func legacyDiscussMessages(rc pipeline.RenderedContext, trs []pipeline.TurnResponseEntry, summary string) []sdk.Message {
+func composeDiscussMessages(rc pipeline.RenderedContext, trs []pipeline.TurnResponseEntry, summary string) []pipeline.ContextMessage {
 	var artifacts []pipeline.CompactionArtifact
 	if strings.TrimSpace(summary) != "" {
 		artifacts = []pipeline.CompactionArtifact{{ID: "equivalence-artifact", Summary: summary}}
 	}
 	composed := pipeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
-		return nil
+		return make([]pipeline.ContextMessage, 0)
 	}
-	return legacyContextMessagesToSDK(composed.Messages)
+	return composed.Messages
 }
 
 func legacyContextMessagesToSDK(messages []pipeline.ContextMessage) []sdk.Message {
+	if len(messages) == 0 {
+		return nil
+	}
 	result := make([]sdk.Message, 0, len(messages))
 	for _, m := range messages {
 		if len(m.RawContent) > 0 {
@@ -262,11 +264,12 @@ func TestDiscussSDKContextBuilderMatchesLegacy(t *testing.T) {
 	}}
 
 	builder := &DiscussSDKContextBuilder{}
-	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{RC: rc, TRs: trs, CompactSummary: "older summary"})
+	composedMessages := composeDiscussMessages(rc, trs, "older summary")
+	got, err := builder.BuildDiscussSDKMessages(context.Background(), contextfrag.Scope{BotID: "bot-1"}, DiscussContextInput{ComposedMessages: composedMessages})
 	if err != nil {
 		t.Fatalf("BuildDiscussSDKMessages failed: %v", err)
 	}
 
-	want := legacyDiscussMessages(rc, trs, "older summary")
+	want := legacyContextMessagesToSDK(composedMessages)
 	assertMessagesEqual(t, got, want)
 }

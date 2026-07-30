@@ -25,17 +25,16 @@ type DiscussContextBuilder interface {
 	CollectDiscussSourceFrags(ctx context.Context, scope contextfrag.Scope, system string, input DiscussContextInput) ([]contextfrag.ContextFrag, error)
 }
 
-// DiscussContextInput carries every discuss source for one turn: the RC/TR
-// streams plus the late-binding instruction and freshly surfaced inline
-// images that previously were appended after context assembly. SystemFrags
-// carries the typed system prompt fragments already built by the resolver;
-// when present the builder uses them instead of reverse-parsing the flat
-// system string.
+// DiscussContextInput carries every discuss source for one turn. When
+// ComposedMessages is non-nil, it is the authoritative timeline composition;
+// otherwise the collector composes the legacy RC/TR inputs. SystemFrags
+// carries the typed system prompt fragments already built by the resolver.
 type DiscussContextInput struct {
-	RC             timeline.RenderedContext
-	TRs            []timeline.TurnResponseEntry
-	CompactSummary string
-	LateBinding    string
-	InlineImages   []sdk.ImagePart
-	SystemFrags    []contextfrag.ContextFrag
+	ComposedMessages []timeline.ContextMessage
+	RC               timeline.RenderedContext
+	TRs              []timeline.TurnResponseEntry
+	CompactSummary   string
+	LateBinding      string
+	InlineImages     []sdk.ImagePart
+	SystemFrags      []contextfrag.ContextFrag
 }
