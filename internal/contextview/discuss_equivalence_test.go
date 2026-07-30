@@ -197,6 +197,11 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	if err != nil {
 		t.Fatalf("typed ApplyProviderRunConfig() error: %v", err)
 	}
+	for _, mutation := range typedRendered.ContextManifest.Mutations.Records() {
+		if mutation.Kind == contextfrag.MutationContextViewFallback {
+			t.Fatalf("typed provider path fell back to the flat oracle: %+v", mutation)
+		}
+	}
 
 	if typedRendered.System != legacyRendered.System {
 		t.Fatalf("typed System = %q, want legacy %q", typedRendered.System, legacyRendered.System)
