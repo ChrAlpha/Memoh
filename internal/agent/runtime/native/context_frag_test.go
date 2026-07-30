@@ -188,6 +188,18 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 		CacheComparatorPrefixHash:  "rendered-hash",
 		CacheComparatorPrefixBytes: 128,
 	}
+	budgetPlan := contextfrag.ContextBudgetPlan{
+		Window:           16000,
+		OutputReserve:    4096,
+		SystemBudget:     8000,
+		ActualSystemCost: 2000,
+		HistoryBudget:    6000,
+	}
+	decisions := []contextfrag.SelectionDecision{{
+		ID:       "memory",
+		Decision: contextfrag.DecisionDropped,
+		Reason:   "system_budget",
+	}}
 	cfg := RunConfig{
 		System:           "base system",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -202,6 +214,8 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 					"can_drop": 1,
 				},
 			},
+			BudgetPlan:         &budgetPlan,
+			SelectionDecisions: decisions,
 		},
 	}
 
@@ -212,6 +226,14 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 	}
 	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.CacheComparatorPrefixHash != "rendered-hash" {
 		t.Fatalf("RefreshContextFrag cache plan = %#v, want previous cache plan", cfg.ContextManifest.CachePlan)
+	}
+	if cfg.ContextManifest.BudgetPlan == nil ||
+		cfg.ContextManifest.BudgetPlan.HistoryBudget != budgetPlan.HistoryBudget {
+		t.Fatalf("RefreshContextFrag budget plan = %#v, want previous budget plan", cfg.ContextManifest.BudgetPlan)
+	}
+	if len(cfg.ContextManifest.SelectionDecisions) != 1 ||
+		cfg.ContextManifest.SelectionDecisions[0].Reason != "system_budget" {
+		t.Fatalf("RefreshContextFrag decisions = %#v, want previous decisions", cfg.ContextManifest.SelectionDecisions)
 	}
 	snapshot, ok := holder.Snapshot()
 	if !ok {
@@ -228,6 +250,12 @@ func TestRefreshContextFragPreservesLifecycleAccounting(t *testing.T) {
 	}
 	if snapshot.Selection.DropReasons["can_drop"] != 1 {
 		t.Fatalf("snapshot selection = %#v, want preserved drop reason", snapshot.Selection)
+	}
+	if snapshot.BudgetPlan == nil || snapshot.BudgetPlan.HistoryBudget != budgetPlan.HistoryBudget {
+		t.Fatalf("snapshot budget plan = %#v, want preserved plan", snapshot.BudgetPlan)
+	}
+	if len(snapshot.SelectionDecisions) != 1 || snapshot.SelectionDecisions[0].Reason != "system_budget" {
+		t.Fatalf("snapshot decisions = %#v, want preserved decisions", snapshot.SelectionDecisions)
 	}
 }
 

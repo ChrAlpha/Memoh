@@ -91,32 +91,27 @@ func enforceSystemBudget(
 	droppedIndexes := make(map[int]bool, len(candidates))
 	dropped := make([]contextfrag.ContextFrag, 0, len(candidates))
 	droppedIDs := make([]string, 0, len(candidates))
-	remaining := total
 	for _, candidate := range candidates {
 		droppedIndexes[candidate.index] = true
 		dropped = append(dropped, candidate.frag)
 		droppedIDs = append(droppedIDs, candidate.frag.ID)
-		remaining -= contextfrag.ResolveFragTokens(candidate.frag)
 		marker := systemBudgetMarkerFrag(droppedIDs, firstSystemScope(frags))
-		actual := remaining + contextfrag.ResolveFragTokens(marker)
+		selected := systemBudgetSelection(frags, droppedIndexes, marker)
+		actual := systemFragCost(selected)
 		if actual <= plan.SystemBudget {
 			finishSystemBudgetPlan(plan, actual)
-			return systemBudgetSelection(frags, droppedIndexes, marker), dropped, nil
+			return selected, dropped, nil
 		}
 	}
 
 	var marker contextfrag.ContextFrag
-	actual := remaining
 	if len(droppedIDs) > 0 {
 		marker = systemBudgetMarkerFrag(droppedIDs, firstSystemScope(frags))
-		actual += contextfrag.ResolveFragTokens(marker)
 	}
-	finishSystemBudgetPlan(plan, actual)
 	selected := systemBudgetSelection(frags, droppedIndexes, marker)
-	if remaining > plan.SystemBudget {
-		return selected, dropped, contextfrag.ErrProtectedContextOverflow
-	}
-	return selected, dropped, contextfrag.ErrBudgetUnsatisfied
+	actual := systemFragCost(selected)
+	finishSystemBudgetPlan(plan, actual)
+	return selected, dropped, contextfrag.ErrProtectedContextOverflow
 }
 
 func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
@@ -129,10 +124,19 @@ func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
 
 func systemFragCost(frags []contextfrag.ContextFrag) int {
 	total := 0
+	count := 0
 	for _, frag := range frags {
 		if frag.Slot == contextfrag.SlotSystem {
 			total += contextfrag.ResolveFragTokens(frag)
+			count++
 		}
+	}
+	// SDK rendering inserts "\n\n" between every pair of system fragments,
+	// including empty fragments. Count each non-empty boundary as one token so
+	// per-fragment integer flooring can never make the rendered system prompt
+	// look cheaper than its section structure.
+	if count > 1 {
+		total += count - 1
 	}
 	return total
 }

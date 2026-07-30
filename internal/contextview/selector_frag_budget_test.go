@@ -67,6 +67,69 @@ func TestFragBudgetTrimsPureTextFragOverMaxChars(t *testing.T) {
 	}
 }
 
+func TestFragBudgetTrimRefreshesAuditHashWithinSameTokenBucket(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	source := textFrag(
+		"same-bucket",
+		contextfrag.SlotHistory,
+		contextfrag.KindConversationEvent,
+		sdk.MessageRoleAssistant,
+		"1234567",
+	)
+	source.Budget = contextfrag.BudgetPolicy{MaxChars: 6, Overflow: contextfrag.OverflowTrim}
+	source = contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{source})[0]
+
+	result := selector.Select(
+		[]contextfrag.ContextFrag{source},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{},
+	)
+	decisions := selectionDecisions([]contextfrag.ContextFrag{source}, result)
+
+	if len(decisions) != 1 || decisions[0].Decision != contextfrag.DecisionTrimmed {
+		t.Fatalf("selection decisions = %#v, want one trimmed decision", decisions)
+	}
+	if decisions[0].Ref.ContentHash == source.Ref.ContentHash {
+		t.Fatalf("trim retained stale content hash %q", decisions[0].Ref.ContentHash)
+	}
+	if got, want := decisions[0].TokenEstimate, contextfrag.ResolveFragTokens(result.Selected[0]); got != want {
+		t.Fatalf("decision token estimate = %d, want refreshed selected estimate %d", got, want)
+	}
+}
+
+func TestFragBudgetDropsOptionalSystemBeforeTierPass(t *testing.T) {
+	t.Parallel()
+
+	selector := &FragmentSelector{}
+	optional := textFrag(
+		"system.optional",
+		contextfrag.SlotSystem,
+		contextfrag.KindSystemPrompt,
+		sdk.MessageRoleSystem,
+		"oversized optional section",
+	)
+	optional.Trust = contextfrag.TrustSystem
+	optional.RetentionTier = contextfrag.RetentionOptional
+	optional.Budget = contextfrag.BudgetPolicy{MaxTokens: 1, Overflow: contextfrag.OverflowDrop}
+	plan := &contextfrag.ContextBudgetPlan{SystemBudget: 500}
+
+	result := selector.Select(
+		[]contextfrag.ContextFrag{optional},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if len(result.Selected) != 0 || len(result.Dropped) != 1 {
+		t.Fatalf("selection = %#v, want optional oversized system fragment dropped", result)
+	}
+	if len(result.Summary.DropReasons) != 1 ||
+		result.Summary.DropReasons[0].Reason != "frag_budget:max_tokens" {
+		t.Fatalf("drop reasons = %#v, want per-fragment budget reason", result.Summary.DropReasons)
+	}
+}
+
 func TestFragBudgetTrimRespectsMaxTokensBudgetIncludingMarker(t *testing.T) {
 	t.Parallel()
 

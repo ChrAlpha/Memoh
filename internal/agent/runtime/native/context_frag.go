@@ -74,6 +74,13 @@ func preserveLifecycleAccounting(previous, next contextfrag.Manifest) contextfra
 		}
 		next.Selection = &selection
 	}
+	if previous.BudgetPlan != nil && next.BudgetPlan == nil {
+		plan := *previous.BudgetPlan
+		next.BudgetPlan = &plan
+	}
+	if len(previous.SelectionDecisions) > 0 && len(next.SelectionDecisions) == 0 {
+		next.SelectionDecisions = append([]contextfrag.SelectionDecision(nil), previous.SelectionDecisions...)
+	}
 	return next
 }
 

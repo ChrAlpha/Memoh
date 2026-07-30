@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -70,8 +71,8 @@ func TestSystemBudgetNoPressurePreservesSelection(t *testing.T) {
 	if len(result.Dropped) != 0 {
 		t.Fatalf("dropped = %#v, want none", result.Dropped)
 	}
-	if plan.ActualSystemCost != 30 || plan.HistoryBudget != 70 {
-		t.Fatalf("plan after selection = %#v, want actual=30 history=70", plan)
+	if plan.ActualSystemCost != 31 || plan.HistoryBudget != 69 {
+		t.Fatalf("plan after selection = %#v, want actual=31 history=69", plan)
 	}
 	if hasFragID(result.Selected, systemBudgetMarkerID) {
 		t.Fatal("no-pressure selection must not add a marker")
@@ -100,7 +101,7 @@ func TestSystemBudgetDropsOptionalBeforePreferredInDeterministicOrder(t *testing
 	marker := systemBudgetMarkerFrag(wantDropped, contextfrag.Scope{})
 	plan := &contextfrag.ContextBudgetPlan{
 		Window:       1000,
-		SystemBudget: contextfrag.ResolveFragTokens(required) + contextfrag.ResolveFragTokens(marker),
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required, marker}),
 	}
 	selector := &FragmentSelector{}
 	result := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{Plan: plan})
@@ -141,8 +142,83 @@ func TestSystemBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
 	if len(result.Dropped) != 0 || hasFragID(result.Selected, systemBudgetMarkerID) {
 		t.Fatalf("protected overflow selected=%v dropped=%v, want no drop and no marker", fragIDs(result.Selected), fragIDs(result.Dropped))
 	}
-	if plan.ActualSystemCost != 200 {
-		t.Fatalf("actual protected cost = %d, want 200", plan.ActualSystemCost)
+	if plan.ActualSystemCost != 201 {
+		t.Fatalf("actual protected cost = %d, want 201", plan.ActualSystemCost)
+	}
+}
+
+func TestSystemBudgetCostIncludesEveryRenderedFragmentBoundary(t *testing.T) {
+	t.Parallel()
+
+	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 0, 10, 0, contextfrag.OverflowKeep)
+	required.Parts[0].Text = strings.Repeat("x", 1023)
+	optional := systemBudgetTestFrag("optional", contextfrag.RetentionOptional, 0, 20, 0, "")
+	optional.Parts[0].Text = "four"
+
+	if got := contextfrag.ResolveFragTokens(required) + contextfrag.ResolveFragTokens(optional); got != 256 {
+		t.Fatalf("per-fragment cost = %d, want floor-rounded 256", got)
+	}
+	if got := systemFragCost([]contextfrag.ContextFrag{required, optional}); got != 257 {
+		t.Fatalf("rendered system cost = %d, want 257 including the fragment boundary", got)
+	}
+}
+
+func TestSystemBudgetRecomputesCostAfterEveryDrop(t *testing.T) {
+	t.Parallel()
+
+	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
+	optionalFirst := systemBudgetTestFrag("optional-first", contextfrag.RetentionOptional, 100, 20, 2, "")
+	optionalSecond := systemBudgetTestFrag("optional-second", contextfrag.RetentionOptional, 100, 20, 1, "")
+	marker := systemBudgetMarkerFrag([]string{"optional-first", "optional-second"}, contextfrag.Scope{})
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required, marker}),
+	}
+	selector := &FragmentSelector{}
+	result := selector.Select(
+		[]contextfrag.ContextFrag{required, optionalFirst, optionalSecond},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if result.FatalError != nil {
+		t.Fatalf("Select() error = %v", result.FatalError)
+	}
+	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, []string{"optional-first", "optional-second"}) {
+		t.Fatalf("system-budget drop order = %v, want both optional sections", got)
+	}
+	if plan.ActualSystemCost != plan.SystemBudget {
+		t.Fatalf("actual system cost = %d, want exact-fit budget %d", plan.ActualSystemCost, plan.SystemBudget)
+	}
+}
+
+func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
+	t.Parallel()
+
+	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
+	optional := systemBudgetTestFrag("optional", contextfrag.RetentionOptional, 100, 20, 0, "")
+	plan := &contextfrag.ContextBudgetPlan{
+		Window:       1000,
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required}),
+	}
+	selector := &FragmentSelector{}
+	result := selector.Select(
+		[]contextfrag.ContextFrag{required, optional},
+		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
+		t.Fatalf("Select() error = %v, want ErrProtectedContextOverflow", result.FatalError)
+	}
+	if got := fragIDs(result.Dropped); !reflect.DeepEqual(got, []string{"optional"}) {
+		t.Fatalf("dropped = %v, want optional section", got)
+	}
+	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{"required", systemBudgetMarkerID}) {
+		t.Fatalf("selected = %v, want required section and required marker", got)
+	}
+	if plan.ActualSystemCost <= plan.SystemBudget {
+		t.Fatalf("actual system cost = %d, want marker overflow above budget %d", plan.ActualSystemCost, plan.SystemBudget)
 	}
 }
 
@@ -191,7 +267,7 @@ func TestBuilderReturnsBudgetErrorWithContentLightAudit(t *testing.T) {
 	marker := systemBudgetMarkerFrag([]string{"optional"}, contextfrag.Scope{})
 	plan := &contextfrag.ContextBudgetPlan{
 		Window:       1000,
-		SystemBudget: contextfrag.ResolveFragTokens(required) + contextfrag.ResolveFragTokens(marker),
+		SystemBudget: systemFragCost([]contextfrag.ContextFrag{required, marker}),
 	}
 	builder := NewBuilder(
 		NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: []contextfrag.ContextFrag{required, optional}}),

@@ -33,7 +33,7 @@ func enforceFragBudgets(frags []contextfrag.ContextFrag, profile IntentProfile) 
 				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_tool_closure", Ref: frag.Ref})
 				continue
 			}
-			if isMustKeepFrag(frag, profile) {
+			if isMustKeepFrag(frag, profile) && !droppableSystemBudgetFrag(frag) {
 				kept = append(kept, frag)
 				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_must_keep", Ref: frag.Ref})
 				continue
@@ -153,7 +153,17 @@ func trimFragText(frag contextfrag.ContextFrag) (contextfrag.ContextFrag, bool) 
 		return frag, false
 	}
 	frag.Parts = parts
-	return frag, true
+	frag.TokenEstimate = 0
+	frag.Ref.ContentHash = ""
+	frag.Ref.HashAlgo = ""
+	frag.Ref.HashScope = ""
+	return contextfrag.WithContextRef(frag, frag.Ref), true
+}
+
+func droppableSystemBudgetFrag(frag contextfrag.ContextFrag) bool {
+	return frag.Slot == contextfrag.SlotSystem &&
+		(frag.RetentionTier == contextfrag.RetentionOptional ||
+			frag.RetentionTier == contextfrag.RetentionPreferred)
 }
 
 // fragTrimLimit returns the char-dimension (rune) and token-dimension (byte)
