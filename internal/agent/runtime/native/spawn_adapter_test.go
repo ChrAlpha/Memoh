@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -14,6 +15,27 @@ import (
 	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/apperror"
 )
+
+func TestSpawnRunConfigPreservesAdmittedRunID(t *testing.T) {
+	t.Parallel()
+
+	const admittedRunID = "77777777-7777-4777-8777-777777777777"
+	cfg := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{RunID: admittedRunID})
+
+	if cfg.RunID != admittedRunID {
+		t.Fatalf("RunID = %q, want admitted RunID %q", cfg.RunID, admittedRunID)
+	}
+}
+
+func TestSpawnRunConfigMintsRunIDForDirectCaller(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{})
+
+	if _, err := uuid.Parse(cfg.RunID); err != nil {
+		t.Fatalf("RunID = %q, want minted UUID: %v", cfg.RunID, err)
+	}
+}
 
 // currentTimeLine extracts the "Current time: ..." line a materialized spawn
 // query must be prefixed with, failing the test if the prefix is missing.

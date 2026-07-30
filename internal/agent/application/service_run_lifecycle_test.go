@@ -11,6 +11,8 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
+	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -21,6 +23,37 @@ const (
 	lifecycleTestBotID     = "22222222-2222-4222-8222-222222222222"
 	lifecycleTestSessionID = "33333333-3333-4333-8333-333333333333"
 )
+
+type lifecycleSubagentRuntime struct {
+	runID    string
+	finishes []recordedFinish
+}
+
+func (r *lifecycleSubagentRuntime) Admit(_ context.Context, input sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
+	return sessionruntime.Admission{
+		RunID:   r.runID,
+		Started: true,
+		Handle: sessionruntime.RunHandle{
+			BotID:        input.BotID,
+			SessionID:    input.SessionID,
+			RunID:        r.runID,
+			FencingToken: 1,
+		},
+	}, nil
+}
+
+func (r *lifecycleSubagentRuntime) FinishRun(
+	_ context.Context,
+	handle sessionruntime.RunHandle,
+	status, message string,
+) error {
+	r.finishes = append(r.finishes, recordedFinish{
+		handle:  handle,
+		status:  status,
+		message: message,
+	})
+	return nil
+}
 
 type recordingContextLifecycleQueries struct {
 	dbstore.Queries
@@ -173,6 +206,56 @@ func TestContextLifecycleTerminalHeartbeatUsesAdmittedRunID(t *testing.T) {
 	}
 	if got := pgUUIDString(queries.params[0].RunID); got != admittedHeartbeatRunID {
 		t.Fatalf("heartbeat run ID = %q, want admitted ID %q", got, admittedHeartbeatRunID)
+	}
+}
+
+func TestSubagentTerminalPersistsFinalSnapshotBeforeFinishingRunExactlyOnce(t *testing.T) {
+	const admittedRunID = "55555555-5555-4555-8555-555555555555"
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	queries := &recordingContextLifecycleQueries{}
+	service := &Service{
+		sessionRuntime:    runtime,
+		contextLifecycles: queries,
+	}
+	runCtx, runID, terminal, err := service.AdmitSubagentRun(
+		context.Background(),
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		"subagent:task-1",
+		[]byte(`{"message":"work"}`),
+	)
+	if err != nil {
+		t.Fatalf("AdmitSubagentRun error: %v", err)
+	}
+	if runCtx == nil {
+		t.Fatal("AdmitSubagentRun returned nil run context")
+	}
+	if runID != admittedRunID {
+		t.Fatalf("run ID = %q, want admitted RunID %q", runID, admittedRunID)
+	}
+	cfg := lifecycleTestRunConfig(t, admittedRunID)
+	snapshot, ok := cfg.ContextLifecycle.Snapshot()
+	if !ok {
+		t.Fatal("test lifecycle snapshot is unavailable")
+	}
+
+	terminal(tools.SubagentTerminal{ContextLifecycle: &snapshot})
+	terminal(tools.SubagentTerminal{
+		Cause:            errors.New("late duplicate"),
+		ContextLifecycle: &contextfrag.LifecycleSnapshot{Version: 99},
+	})
+
+	if len(queries.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
+	}
+	if got := pgUUIDString(queries.params[0].RunID); got != admittedRunID {
+		t.Fatalf("persisted RunID = %q, want admitted RunID %q", got, admittedRunID)
+	}
+	if len(runtime.finishes) != 1 {
+		t.Fatalf("FinishRun calls = %d, want 1", len(runtime.finishes))
+	}
+	if got := runtime.finishes[0].status; got != sessionruntime.RunStatusCompleted {
+		t.Fatalf("FinishRun status = %q, want %q", got, sessionruntime.RunStatusCompleted)
 	}
 }
 

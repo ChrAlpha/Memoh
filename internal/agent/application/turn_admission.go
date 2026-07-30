@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
+	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/apperror"
 )
@@ -231,19 +233,37 @@ func (s *Service) admitTriggeredRun(ctx context.Context, botID, threadID, invoca
 // have several agents working at once, and each of those threads still runs one
 // turn at a time. Busy therefore means *this agent* is already working — a fact
 // the parent model can act on — rather than a failure to report.
-func (s *Service) AdmitSubagentRun(ctx context.Context, botID, threadID, invocationID string, submission []byte) (context.Context, func(error), error) {
-	runCtx, _, finish, err := s.admitTriggeredRun(ctx, botID, threadID, invocationID, submission)
+func (s *Service) AdmitSubagentRun(
+	ctx context.Context,
+	botID, threadID, invocationID string,
+	submission []byte,
+) (context.Context, string, func(tools.SubagentTerminal), error) {
+	runCtx, admission, finish, err := s.admitTriggeredRun(ctx, botID, threadID, invocationID, submission)
 	switch {
 	case errors.Is(err, sessionruntime.ErrSessionBusy):
-		return nil, nil, fmt.Errorf("%w: thread %s", turn.ErrSessionBusy, threadID)
+		return nil, "", nil, fmt.Errorf("%w: thread %s", turn.ErrSessionBusy, threadID)
 	case errors.Is(err, sessionruntime.ErrInvocationConflict):
 		// This task already has a run. Executing it again would answer one
 		// message twice, so it is dropped exactly like a channel redelivery.
-		return nil, nil, fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, invocationID)
+		return nil, "", nil, fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, invocationID)
 	case err != nil:
-		return nil, nil, fmt.Errorf("admit subagent turn: %w", err)
+		return nil, "", nil, fmt.Errorf("admit subagent turn: %w", err)
 	}
-	return runCtx, finish, nil
+	var once sync.Once
+	terminal := func(result tools.SubagentTerminal) {
+		once.Do(func() {
+			s.persistContextLifecycleSnapshot(
+				runCtx,
+				admission.RunID,
+				botID,
+				threadID,
+				result.ContextLifecycle,
+				result.Cause,
+			)
+			finish(result.Cause)
+		})
+	}
+	return runCtx, admission.RunID, terminal, nil
 }
 
 // turnInvocationID resolves the command's retry identity.
