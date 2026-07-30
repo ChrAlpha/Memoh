@@ -1296,6 +1296,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	}
 
 	platformIdentitiesSection := ""
+	var platformIdentityItems []native.SystemPromptItem
 	if s.platformIdentities != nil {
 		identities, err := s.platformIdentities.ListPlatformIdentities(ctx, cfg.Identity.BotID)
 		if err != nil {
@@ -1304,7 +1305,8 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 				slog.Any("error", err),
 			)
 		} else {
-			platformIdentitiesSection = buildPlatformIdentitiesSection(identities)
+			platformIdentityItems = buildPlatformIdentityPromptItems(identities)
+			platformIdentitiesSection = buildPlatformIdentitiesSectionFromItems(platformIdentityItems)
 		}
 	}
 	systemParams := native.SystemPromptParams{
@@ -1315,6 +1317,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		MaxFilesBytes:             limits.SystemFilesMaxBytes,
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
+		PlatformIdentities:        platformIdentityItems,
 	}
 	cfg.System = native.GenerateSystemPrompt(systemParams)
 	var promptHookTexts []string

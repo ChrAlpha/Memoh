@@ -48,6 +48,11 @@ var goldenFullFiles = []SystemFile{
 
 const goldenFullPlatform = "## Platform Identities\n\n<identity channel=\"telegram\" username=\"@memoh\"/>"
 
+var goldenFullPlatformItems = []SystemPromptItem{{
+	ID:   "telegram-1",
+	Text: `<identity channel="telegram" username="@memoh"/>`,
+}}
+
 // TestGenerateSystemPromptGoldenEquivalence pins GenerateSystemPrompt's output
 // to byte-exact strings captured from the pre-refactor implementation, and
 // checks that renderSystemSections(GenerateSystemSections(...)) reproduces
@@ -242,6 +247,7 @@ func TestGenerateSystemSectionsTableChat(t *testing.T) {
 		SessionType: sessionmode.Chat, Timezone: "UTC",
 		Bot: goldenFullBot, Skills: goldenFullSkills, Files: goldenFullFiles,
 		PlatformIdentitiesSection: goldenFullPlatform,
+		PlatformIdentities:        goldenFullPlatformItems,
 	})
 
 	assertSectionTable(t, sections, []goldenSectionExpectation{
@@ -249,9 +255,13 @@ func TestGenerateSystemSectionsTableChat(t *testing.T) {
 		{"system.bot_identity", contextfrag.KindBotIdentity, 20, contextfrag.RetentionPreferred},
 		{"system.prompt.body", contextfrag.KindSystemPrompt, 30, contextfrag.RetentionRequired},
 		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50, contextfrag.RetentionRequired},
-		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
-		{"system.skills", contextfrag.KindSkillsCatalog, 65, contextfrag.RetentionOptional},
-		{"system.workspace_instructions", contextfrag.KindWorkspaceInstruction, 70, contextfrag.RetentionPreferred},
+		{"system.platform_identity.header", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
+		{"system.platform_identity.telegram-1", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
+		{"system.skills.header", contextfrag.KindSkillsCatalog, 65, contextfrag.RetentionOptional},
+		{"system.skill.bar-skill", contextfrag.KindSkillsCatalog, 65, contextfrag.RetentionOptional},
+		{"system.skill.foo-skill", contextfrag.KindSkillsCatalog, 65, contextfrag.RetentionOptional},
+		{"system.workspace_file.AGENTS.md", contextfrag.KindWorkspaceInstruction, 70, contextfrag.RetentionPreferred},
+		{"system.workspace_file.PROFILES.md", contextfrag.KindWorkspaceInstruction, 70, contextfrag.RetentionPreferred},
 	})
 }
 
@@ -265,6 +275,7 @@ func TestGenerateSystemSectionsTableSubagent(t *testing.T) {
 		SessionType: sessionmode.Subagent, Timezone: "UTC",
 		Bot: goldenFullBot, Skills: goldenFullSkills, Files: goldenFullFiles,
 		PlatformIdentitiesSection: goldenFullPlatform,
+		PlatformIdentities:        goldenFullPlatformItems,
 	})
 
 	assertSectionTable(t, sections, []goldenSectionExpectation{
@@ -272,8 +283,66 @@ func TestGenerateSystemSectionsTableSubagent(t *testing.T) {
 		{"system.bot_identity", contextfrag.KindBotIdentity, 20, contextfrag.RetentionPreferred},
 		{"system.prompt.body", contextfrag.KindSystemPrompt, 30, contextfrag.RetentionRequired},
 		{"system.prompt.tail", contextfrag.KindSystemPrompt, 50, contextfrag.RetentionRequired},
-		{"system.platform_identity", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
+		{"system.platform_identity.header", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
+		{"system.platform_identity.telegram-1", contextfrag.KindPlatformIdentity, 60, contextfrag.RetentionPreferred},
 	})
+}
+
+func TestGenerateSystemSectionsGranularDynamicItemsRemainByteEquivalent(t *testing.T) {
+	t.Parallel()
+
+	platformItems := []SystemPromptItem{
+		{ID: "telegram-1", Text: `<identity channel="telegram" username="@memoh"/>`},
+		{ID: "微信-2", Text: `<identity channel="weixin" username="小明"/>`},
+	}
+	platformSection := "## Platform Identities\n\nKnown identities.\n\n" +
+		platformItems[0].Text + "\n" + platformItems[1].Text
+	skills := []SkillEntry{
+		{Name: "技能", Description: "第二"},
+		{Name: "alpha", Description: "first"},
+	}
+	files := []SystemFile{
+		{Filename: "ZETA.md", Content: "zeta"},
+		{Filename: "AGENTS.md", Content: "agents"},
+	}
+	params := SystemPromptParams{
+		SessionType:               sessionmode.Chat,
+		Timezone:                  "UTC",
+		Skills:                    skills,
+		Files:                     files,
+		PlatformIdentitiesSection: platformSection,
+		PlatformIdentities:        platformItems,
+	}
+
+	sections := GenerateSystemSections(params)
+	wantIDs := []string{
+		"system.prompt.intro",
+		"system.bot_identity",
+		"system.prompt.body",
+		"system.prompt.tail",
+		"system.platform_identity.header",
+		"system.platform_identity.telegram-1",
+		"system.platform_identity.微信-2",
+		"system.skills.header",
+		"system.skill.alpha",
+		"system.skill.技能",
+		"system.workspace_file.ZETA.md",
+		"system.workspace_file.AGENTS.md",
+	}
+	gotIDs := make([]string, 0, len(sections))
+	for _, section := range sections {
+		gotIDs = append(gotIDs, section.ID)
+	}
+	if strings.Join(gotIDs, "\n") != strings.Join(wantIDs, "\n") {
+		t.Fatalf("section IDs = %v, want %v", gotIDs, wantIDs)
+	}
+
+	wantSuffix := platformSection + "\n\n" +
+		buildSkillsSection(skills) + "\n\n" +
+		buildFileSections(files, DefaultSystemFilesMaxBytes)
+	if got := GenerateSystemPrompt(params); !strings.HasSuffix(got, wantSuffix) {
+		t.Fatalf("granular prompt suffix mismatch\ngot:  %q\nwant suffix: %q", got, wantSuffix)
+	}
 }
 
 // TestGenerateSystemSectionsTableSubagentMinimal locks in the section list
@@ -304,6 +373,7 @@ func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
 		SessionType: sessionmode.Chat, Timezone: "UTC",
 		Bot: goldenFullBot, Skills: goldenFullSkills, Files: goldenFullFiles,
 		PlatformIdentitiesSection: goldenFullPlatform,
+		PlatformIdentities:        goldenFullPlatformItems,
 	})
 
 	frags := SystemSectionFrags(sections, scope)
@@ -326,9 +396,16 @@ func TestSystemSectionFragsPreservesKindPriorityAndText(t *testing.T) {
 		if frag.Scope.BotID != scope.BotID {
 			t.Fatalf("frag[%d] scope = %#v, want %#v", i, frag.Scope, scope)
 		}
-		wantText := strings.TrimSpace(sections[i].Text)
+		wantText := contextfrag.RenderText(sections[i].Text, sections[i].Render)
 		if len(frag.Parts) != 1 || frag.Parts[0].Text != wantText {
 			t.Fatalf("frag[%d] text = %q, want %q", i, frag.Parts[0].Text, wantText)
+		}
+		wantRender := sections[i].Render
+		if wantRender.Format == "" {
+			wantRender.Format = contextfrag.RenderMarkdown
+		}
+		if frag.Render != wantRender {
+			t.Fatalf("frag[%d] render policy = %#v, want %#v", i, frag.Render, wantRender)
 		}
 	}
 	for _, want := range []contextfrag.Kind{contextfrag.KindBotIdentity, contextfrag.KindWorkspaceInstruction, contextfrag.KindPlatformIdentity} {
