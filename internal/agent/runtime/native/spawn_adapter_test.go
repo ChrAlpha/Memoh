@@ -434,6 +434,51 @@ func TestSpawnAdapterGenerateWithWatchdogPopulatesContextLifecycle(t *testing.T)
 	}
 }
 
+func TestSpawnAdapterCancellationCarriesContextLifecycle(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	provider := &atomicMockProvider{
+		stream: func(ctx context.Context, _ sdk.GenerateParams) (*sdk.StreamResult, error) {
+			parts := make(chan sdk.StreamPart)
+			close(started)
+			go func() {
+				<-ctx.Done()
+				close(parts)
+			}()
+			return &sdk.StreamResult{Stream: parts}, nil
+		},
+	}
+	adapter := NewSpawnAdapter(newTestAgent())
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancelCause := errors.New("subagent killed")
+	go func() {
+		<-started
+		cancel(cancelCause)
+	}()
+
+	result, err := adapter.GenerateWithWatchdog(ctx, tools.SpawnRunConfig{
+		Model: &sdk.Model{
+			ID:       "spawn-canceled-model",
+			Provider: provider,
+			Type:     sdk.ModelTypeChat,
+		},
+		Query:       "do the task",
+		SessionType: sessionmode.Subagent,
+		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+	}, func() {})
+
+	if !errors.Is(err, cancelCause) {
+		t.Fatalf("GenerateWithWatchdog error = %v, want cancellation cause %v", err, cancelCause)
+	}
+	if result == nil || result.ContextLifecycle == nil {
+		t.Fatalf("GenerateWithWatchdog result = %#v, want cancellation lifecycle audit", result)
+	}
+	if result.ContextLifecycle.Counts.Fragments == 0 || result.ContextLifecycle.Counts.Messages == 0 {
+		t.Fatalf("expected non-zero cancellation manifest counts, got %+v", result.ContextLifecycle.Counts)
+	}
+}
+
 func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
 	t.Parallel()
 

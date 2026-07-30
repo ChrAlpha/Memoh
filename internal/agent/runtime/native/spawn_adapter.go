@@ -221,9 +221,9 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	// Check if context was cancelled (watchdog fired or parent cancelled).
 	if ctx.Err() != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
+			return spawnFailureResult(rc), cause
 		}
-		return nil, ctx.Err()
+		return spawnFailureResult(rc), ctx.Err()
 	}
 	if streamErr != nil {
 		return spawnFailureResult(rc), streamErr

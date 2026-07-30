@@ -252,13 +252,17 @@ func (s *Service) AdmitSubagentRun(
 	var once sync.Once
 	terminal := func(result tools.SubagentTerminal) {
 		once.Do(func() {
+			lifecycleCause := result.Cause
+			if lifecycleCause == nil && runCtx.Err() != nil {
+				lifecycleCause = context.Cause(runCtx)
+			}
 			s.persistContextLifecycleSnapshot(
 				runCtx,
 				admission.RunID,
 				botID,
 				threadID,
 				result.ContextLifecycle,
-				result.Cause,
+				lifecycleCause,
 			)
 			finish(result.Cause)
 		})

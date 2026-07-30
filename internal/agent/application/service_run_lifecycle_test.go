@@ -26,10 +26,12 @@ const (
 
 type lifecycleSubagentRuntime struct {
 	runID    string
+	cancel   context.CancelFunc
 	finishes []recordedFinish
 }
 
 func (r *lifecycleSubagentRuntime) Admit(_ context.Context, input sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
+	r.cancel = input.Execution.Cancel
 	return sessionruntime.Admission{
 		RunID:   r.runID,
 		Started: true,
@@ -256,6 +258,51 @@ func TestSubagentTerminalPersistsFinalSnapshotBeforeFinishingRunExactlyOnce(t *t
 	}
 	if got := runtime.finishes[0].status; got != sessionruntime.RunStatusCompleted {
 		t.Fatalf("FinishRun status = %q, want %q", got, sessionruntime.RunStatusCompleted)
+	}
+}
+
+func TestCanceledSubagentPersistsFailedLifecycleAndFinishesAborted(t *testing.T) {
+	const admittedRunID = "66666666-6666-4666-8666-666666666666"
+	runtime := &lifecycleSubagentRuntime{runID: admittedRunID}
+	queries := &recordingContextLifecycleQueries{}
+	service := &Service{
+		sessionRuntime:    runtime,
+		contextLifecycles: queries,
+	}
+	runCtx, _, terminal, err := service.AdmitSubagentRun(
+		context.Background(),
+		lifecycleTestBotID,
+		lifecycleTestSessionID,
+		"subagent:task-canceled",
+		[]byte(`{"message":"work"}`),
+	)
+	if err != nil {
+		t.Fatalf("AdmitSubagentRun error: %v", err)
+	}
+	cfg := lifecycleTestRunConfig(t, admittedRunID)
+	snapshot, ok := cfg.ContextLifecycle.Snapshot()
+	if !ok {
+		t.Fatal("test lifecycle snapshot is unavailable")
+	}
+
+	runtime.cancel()
+	<-runCtx.Done()
+	terminal(tools.SubagentTerminal{ContextLifecycle: &snapshot})
+
+	if len(queries.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
+	}
+	if got := queries.params[0].Status; got != contextLifecycleStatusFailedProvider {
+		t.Fatalf("lifecycle status = %q, want %q", got, contextLifecycleStatusFailedProvider)
+	}
+	if len(runtime.finishes) != 1 {
+		t.Fatalf("FinishRun calls = %d, want 1", len(runtime.finishes))
+	}
+	if got := runtime.finishes[0].status; got != sessionruntime.RunStatusAborted {
+		t.Fatalf("FinishRun status = %q, want %q", got, sessionruntime.RunStatusAborted)
+	}
+	if got := runtime.finishes[0].message; got != "" {
+		t.Fatalf("FinishRun message = %q, want empty deliberate-cancel cause", got)
 	}
 }
 
