@@ -92,6 +92,9 @@ func TestFragBudgetTrimRefreshesAuditHashWithinSameTokenBucket(t *testing.T) {
 	if len(decisions) != 1 || decisions[0].Decision != contextfrag.DecisionTrimmed {
 		t.Fatalf("selection decisions = %#v, want one trimmed decision", decisions)
 	}
+	if decisions[0].Reason != "frag_budget:max_chars" {
+		t.Fatalf("trim decision reason = %q, want frag_budget:max_chars", decisions[0].Reason)
+	}
 	if decisions[0].Ref.ContentHash == source.Ref.ContentHash {
 		t.Fatalf("trim retained stale content hash %q", decisions[0].Ref.ContentHash)
 	}

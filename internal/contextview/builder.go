@@ -169,7 +169,7 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			contextfrag.ResolveFragTokens(source) != contextfrag.ResolveFragTokens(selected[0]) {
 			decision = contextfrag.DecisionTrimmed
 		}
-		decisions = append(decisions, selectionDecisionForFrag(selected[0], decision, ""))
+		decisions = append(decisions, selectionDecisionForFrag(selected[0], decision, result.EditReasons[source.ID]))
 		selectedByID[source.ID] = selected[1:]
 	}
 	for _, selected := range result.Selected {

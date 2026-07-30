@@ -54,7 +54,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 		frags, superseded = resolveConflictGroups(frags)
 	}
 	var fragBudgetDropped []fragBudgetDrop
-	var fragBudgetEdits []contextfrag.ContextEditTrace
+	var fragBudgetEdits []fragBudgetEdit
 	var fragBudgetWarnings []contextfrag.ValidationWarning
 	if isRetentionIntent(profile.Intent) {
 		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(
@@ -133,7 +133,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	return appendSystemBudgetDrops(result, systemBudgetDropped)
 }
 
-func finishSelection(result SelectionResult, exchangeDropped []contextfrag.ContextFrag, exchangeEdits []contextfrag.ContextEditTrace, fragBudgetDropped []fragBudgetDrop, fragBudgetEdits []contextfrag.ContextEditTrace, fragBudgetWarnings []contextfrag.ValidationWarning, gated []contextfrag.ContextFrag, profile IntentProfile, superseded []conflictLoser) SelectionResult {
+func finishSelection(result SelectionResult, exchangeDropped []contextfrag.ContextFrag, exchangeEdits []contextfrag.ContextEditTrace, fragBudgetDropped []fragBudgetDrop, fragBudgetEdits []fragBudgetEdit, fragBudgetWarnings []contextfrag.ValidationWarning, gated []contextfrag.ContextFrag, profile IntentProfile, superseded []conflictLoser) SelectionResult {
 	result = appendToolExchangeDrops(result, exchangeDropped, exchangeEdits)
 	result = appendFragBudgetDrops(result, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings)
 	result = appendTrustGateDrops(result, gated, profile)

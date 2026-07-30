@@ -49,6 +49,10 @@ type SelectionResult struct {
 	// Edited records in-place content edits (e.g. tool-call stripping) applied
 	// to kept fragments, for the manifest edit trace.
 	Edited []contextfrag.ContextEditTrace
+	// EditReasons maps an edited fragment ID to its stable selection reason.
+	// It stays local to selection; the manifest copies it into the per-fragment
+	// decision without placing prompt content in the audit.
+	EditReasons map[string]string
 	// Warnings records validation warnings raised during selection (e.g. an
 	// overflow policy the selector cannot enforce), for the manifest.
 	Warnings []contextfrag.ValidationWarning

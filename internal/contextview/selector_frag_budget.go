@@ -18,11 +18,17 @@ type fragBudgetDrop struct {
 	reason string
 }
 
+type fragBudgetEdit struct {
+	trace  contextfrag.ContextEditTrace
+	fragID string
+	reason string
+}
+
 func enforceFragBudgets(
 	frags []contextfrag.ContextFrag,
 	profile IntentProfile,
 	systemPlanActive bool,
-) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
+) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []fragBudgetEdit, warnings []contextfrag.ValidationWarning) {
 	kept = make([]contextfrag.ContextFrag, 0, len(frags))
 	for _, frag := range frags {
 		reason, exceeded := fragBudgetExceeded(frag)
@@ -46,7 +52,11 @@ func enforceFragBudgets(
 		case contextfrag.OverflowTrim:
 			if trimmed, ok := trimFragText(frag); ok {
 				kept = append(kept, trimmed)
-				edits = append(edits, fragBudgetTrimEdit(trimmed))
+				edits = append(edits, fragBudgetEdit{
+					trace:  fragBudgetTrimEdit(trimmed),
+					fragID: frag.ID,
+					reason: reason,
+				})
 				continue
 			}
 			kept = append(kept, frag)
@@ -61,8 +71,14 @@ func enforceFragBudgets(
 	return kept, dropped, edits, warnings
 }
 
-func appendFragBudgetDrops(result SelectionResult, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) SelectionResult {
-	result.Edited = append(result.Edited, edits...)
+func appendFragBudgetDrops(result SelectionResult, dropped []fragBudgetDrop, edits []fragBudgetEdit, warnings []contextfrag.ValidationWarning) SelectionResult {
+	for _, edit := range edits {
+		result.Edited = append(result.Edited, edit.trace)
+		if result.EditReasons == nil {
+			result.EditReasons = make(map[string]string, len(edits))
+		}
+		result.EditReasons[edit.fragID] = edit.reason
+	}
 	result.Warnings = append(result.Warnings, warnings...)
 	if len(dropped) == 0 {
 		return result
