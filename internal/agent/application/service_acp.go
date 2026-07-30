@@ -144,6 +144,16 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			contextLifecycle.SetMemoryRecall(*memoryTrace)
 		}
 	}
+	terminal := s.contextLifecycleTerminal(ctx, native.RunConfig{
+		RunID: req.RunID,
+		Identity: native.SessionContext{
+			BotID:     req.BotID,
+			SessionID: req.ThreadID,
+		},
+		ContextLifecycle: contextLifecycle,
+	})
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 	prompt := req.Query
 
 	var leadingUser *messagepkg.Message
@@ -266,6 +276,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		ContextToolExchangePolicy: defaultToolExchangePolicy(),
 		Sink:                      acpclient.EventSinkFunc(emit),
 	})
+	lifecycleCause = err
 	if err != nil {
 		s.logger.Error("ACP prompt failed",
 			slog.String("bot_id", req.BotID),
@@ -279,10 +290,12 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			return err
 		}
 		if appErr := acpPromptConfigAppError(err); appErr != nil {
+			lifecycleCause = appErr
 			cleanupLeadingUser()
 			return appErr
 		}
 		if feedbackErr := acpPromptInputFeedback(err); feedbackErr != nil {
+			lifecycleCause = feedbackErr
 			cleanupLeadingUser()
 			return feedbackErr
 		}
@@ -293,8 +306,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
 		}
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, contextLifecycle); err != nil {
-			s.logger.Error("ACP failure persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, contextLifecycle); persistErr != nil {
+			s.logger.Error("ACP failure persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 		}
 		emit(native.StreamEvent{Type: native.EventTextEnd})
 		emit(acpTerminalStreamEvent(native.EventAbort, failedResult))
@@ -305,8 +318,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	projected := projectedSnapshot()
 	result = ensureACPPromptOutput(result)
 	result.Output = filterACPProjectedOutput(result.Output, projected)
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, contextLifecycle); err != nil {
-		s.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+	if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, contextLifecycle); persistErr != nil {
+		s.logger.Error("ACP persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 	}
 	emit(acpTerminalStreamEvent(native.EventEnd, result))
 	return nil

@@ -92,15 +92,17 @@ func TestStreamACPAgentWSPersistsContextLifecycleOnFinalAssistantMessage(t *test
 
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "ok", StopReason: "end_turn"}}
 	messages := &recordingMessageService{}
+	lifecycles := &recordingContextLifecycleQueries{}
 	resolver := &Service{
-		messageService: messages,
-		acpPool:        pool,
-		botPermissions: allowWorkspaceExecFor("user-1"),
+		messageService:    messages,
+		contextLifecycles: lifecycles,
+		acpPool:           pool,
+		botPermissions:    allowWorkspaceExecForBot(lifecycleTestBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, _ string) (session.Thread, error) {
 				return session.Thread{
-					ID:    "session-1",
-					BotID: "bot-1",
+					ID:    lifecycleTestSessionID,
+					BotID: lifecycleTestBotID,
 					Type:  session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id":             "codex",
@@ -115,8 +117,9 @@ func TestStreamACPAgentWSPersistsContextLifecycleOnFinalAssistantMessage(t *test
 
 	eventCh := make(chan WSStreamEvent, 8)
 	if err := resolver.StreamChatWS(context.Background(), ChatRequest{
-		BotID:    "bot-1",
-		ThreadID: "session-1",
+		BotID:    lifecycleTestBotID,
+		ThreadID: lifecycleTestSessionID,
+		RunID:    lifecycleTestRunID,
 		Query:    "inspect the app",
 	}, eventCh, make(chan struct{})); err != nil {
 		t.Fatalf("StreamChatWS() error = %v", err)
@@ -137,6 +140,18 @@ func TestStreamACPAgentWSPersistsContextLifecycleOnFinalAssistantMessage(t *test
 	}
 	if _, ok := got.(contextfrag.LifecycleSnapshot); !ok {
 		t.Fatalf("expected metadata value to be a contextfrag.LifecycleSnapshot, got %T", got)
+	}
+	if pool.input.RunID != lifecycleTestRunID {
+		t.Fatalf("ACP prompt RunID = %q, want admitted RunID %q", pool.input.RunID, lifecycleTestRunID)
+	}
+	if len(lifecycles.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(lifecycles.params))
+	}
+	if got := pgUUIDString(lifecycles.params[0].RunID); got != lifecycleTestRunID {
+		t.Fatalf("persisted lifecycle RunID = %q, want admitted RunID %q", got, lifecycleTestRunID)
+	}
+	if got := lifecycles.params[0].Status; got != contextLifecycleStatusCompleted {
+		t.Fatalf("persisted lifecycle status = %q, want %q", got, contextLifecycleStatusCompleted)
 	}
 }
 
@@ -1379,17 +1394,20 @@ func TestPersistACPRoundEmptyOutputKeepsUsage(t *testing.T) {
 func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	t.Parallel()
 
+	const admittedRunID = "77777777-7777-4777-8777-777777777777"
 	messages := &recordingMessageService{}
+	lifecycles := &recordingContextLifecycleQueries{}
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
 	pool := &recordingACPPrompter{err: errors.New("missing codex-acp")}
 	resolver := &Service{
-		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		acpPool:         pool,
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		messageService:    messages,
+		contextLifecycles: lifecycles,
+		memoryRegistry:    registry,
+		settingsService:   settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		acpPool:           pool,
+		botPermissions:    allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
@@ -1412,7 +1430,8 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 		context.Background(),
 		ChatRequest{
 			BotID:    storeRoundBotID,
-			ThreadID: "session-1",
+			ThreadID: lifecycleTestSessionID,
+			RunID:    admittedRunID,
 			Query:    "inspect",
 		},
 		eventCh,
@@ -1432,6 +1451,15 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != "acp_runtime_prompt_failed" {
 		t.Fatalf("assistant error code metadata = %#v", messages.persisted[1].Metadata)
+	}
+	if len(lifecycles.params) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(lifecycles.params))
+	}
+	if got := pgUUIDString(lifecycles.params[0].RunID); got != admittedRunID {
+		t.Fatalf("persisted lifecycle RunID = %q, want admitted RunID %q", got, admittedRunID)
+	}
+	if got := lifecycles.params[0].Status; got != contextLifecycleStatusFailedProvider {
+		t.Fatalf("persisted lifecycle status = %q, want %q", got, contextLifecycleStatusFailedProvider)
 	}
 	events := drainAgentEvents(t, eventCh)
 	abort := requireStreamEvent(t, events, native.EventAbort)
