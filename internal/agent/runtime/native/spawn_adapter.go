@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -176,6 +177,7 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	var allText strings.Builder
 	var finalMessages []sdk.Message
 	var totalUsage sdk.Usage
+	var streamErr error
 
 	for evt := range eventCh {
 		// Touch the watchdog on every event — this is the activity signal.
@@ -184,6 +186,10 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		switch evt.Type {
 		case EventTextDelta:
 			allText.WriteString(evt.Delta)
+		case EventError:
+			if streamErr == nil {
+				streamErr = errors.New(evt.Error)
+			}
 		case EventAgentEnd, EventAgentAbort:
 			if evt.Messages != nil {
 				_ = json.Unmarshal(evt.Messages, &finalMessages)
@@ -200,6 +206,9 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 			return nil, cause
 		}
 		return nil, ctx.Err()
+	}
+	if streamErr != nil {
+		return nil, streamErr
 	}
 
 	spawnResult := &tools.SpawnResult{

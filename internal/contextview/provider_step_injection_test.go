@@ -35,6 +35,21 @@ func selectionHasUserText(messages []sdk.Message, text string) bool {
 	return false
 }
 
+func TestProviderStepBudgetEnvelopeNeverCarriesTurnStartPlan(t *testing.T) {
+	t.Parallel()
+
+	envelope := providerStepBudgetEnvelope(agentpkg.ContextStepSelectionInput{
+		BudgetMaxTokens: 123,
+	})
+
+	if envelope.Plan != nil {
+		t.Fatalf("step envelope Plan = %#v, want nil so system selection runs only at turn start", envelope.Plan)
+	}
+	if envelope.MaxTokens != 123 {
+		t.Fatalf("step MaxTokens = %d, want suffix budget 123", envelope.MaxTokens)
+	}
+}
+
 func TestMarkInjectedLoopUserFragsTypesAndProtectsOnlyUserMessages(t *testing.T) {
 	t.Parallel()
 

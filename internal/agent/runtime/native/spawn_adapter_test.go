@@ -390,3 +390,30 @@ func TestSpawnAdapterGenerateWithWatchdogPopulatesContextLifecycle(t *testing.T)
 		t.Fatalf("expected non-zero manifest counts, got %+v", result.ContextLifecycle.Counts)
 	}
 }
+
+func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
+	t.Parallel()
+
+	a := New(Deps{
+		ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+			return cfg, contextfrag.ErrBudgetUnsatisfied
+		},
+	})
+	adapter := NewSpawnAdapter(a)
+
+	result, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+		Model: &sdk.Model{
+			ID:       "spawn-preflight-error",
+			Provider: &preflightCountingProvider{},
+			Type:     sdk.ModelTypeChat,
+		},
+		Query: "do the task",
+	}, func() {})
+
+	if result != nil {
+		t.Fatalf("GenerateWithWatchdog result = %#v, want nil", result)
+	}
+	if err == nil || err.Error() != publicBudgetUnsatisfiedError {
+		t.Fatalf("GenerateWithWatchdog error = %v, want public context-budget failure", err)
+	}
+}
