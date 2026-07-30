@@ -57,11 +57,15 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	var fragBudgetEdits []contextfrag.ContextEditTrace
 	var fragBudgetWarnings []contextfrag.ValidationWarning
 	if isRetentionIntent(profile.Intent) {
-		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(frags, profile)
+		frags, fragBudgetDropped, fragBudgetEdits, fragBudgetWarnings = enforceFragBudgets(
+			frags,
+			profile,
+			systemBudgetPlanActive(profile, budget.Plan),
+		)
 	}
 	var systemBudgetDropped []contextfrag.ContextFrag
 	var systemBudgetErr error
-	frags, systemBudgetDropped, systemBudgetErr = enforceSystemBudget(frags, profile, budget.Plan)
+	frags, systemBudgetDropped, systemBudgetErr = enforceSystemBudget(frags, profile, budget.Plan, fragBudgetDropped)
 	if systemBudgetErr != nil {
 		tagged := tagFragments(frags, profile)
 		result := selectionResultFromTagged(tagged, allSelectedIndexes(tagged))

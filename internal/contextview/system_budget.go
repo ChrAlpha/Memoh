@@ -53,16 +53,40 @@ func enforceSystemBudget(
 	frags []contextfrag.ContextFrag,
 	profile IntentProfile,
 	plan *contextfrag.ContextBudgetPlan,
+	fragBudgetDropped []fragBudgetDrop,
 ) ([]contextfrag.ContextFrag, []contextfrag.ContextFrag, error) {
-	if plan == nil ||
-		(profile.Intent != contextfrag.IntentRunConfigPreProvider && profile.Intent != contextfrag.IntentDiscussReply) {
+	if !systemBudgetPlanActive(profile, plan) {
 		return frags, nil, nil
 	}
 
-	total := systemFragCost(frags)
+	droppedIDs := make([]string, 0, len(fragBudgetDropped))
+	scope := firstSystemScope(frags)
+	hasScope := false
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotSystem {
+			hasScope = true
+			break
+		}
+	}
+	for _, drop := range fragBudgetDropped {
+		if drop.frag.Slot != contextfrag.SlotSystem {
+			continue
+		}
+		droppedIDs = append(droppedIDs, drop.frag.ID)
+		if !hasScope {
+			scope = drop.frag.Scope
+			hasScope = true
+		}
+	}
+	var marker contextfrag.ContextFrag
+	if len(droppedIDs) > 0 {
+		marker = systemBudgetMarkerFrag(droppedIDs, scope)
+	}
+	selected := systemBudgetSelection(frags, nil, marker)
+	total := systemFragCost(selected)
 	if total <= plan.SystemBudget {
 		finishSystemBudgetPlan(plan, total)
-		return frags, nil, nil
+		return selected, nil, nil
 	}
 
 	candidates := make([]systemBudgetCandidate, 0)
@@ -90,13 +114,12 @@ func enforceSystemBudget(
 
 	droppedIndexes := make(map[int]bool, len(candidates))
 	dropped := make([]contextfrag.ContextFrag, 0, len(candidates))
-	droppedIDs := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		droppedIndexes[candidate.index] = true
 		dropped = append(dropped, candidate.frag)
 		droppedIDs = append(droppedIDs, candidate.frag.ID)
-		marker := systemBudgetMarkerFrag(droppedIDs, firstSystemScope(frags))
-		selected := systemBudgetSelection(frags, droppedIndexes, marker)
+		marker = systemBudgetMarkerFrag(droppedIDs, scope)
+		selected = systemBudgetSelection(frags, droppedIndexes, marker)
 		actual := systemFragCost(selected)
 		if actual <= plan.SystemBudget {
 			finishSystemBudgetPlan(plan, actual)
@@ -104,14 +127,18 @@ func enforceSystemBudget(
 		}
 	}
 
-	var marker contextfrag.ContextFrag
 	if len(droppedIDs) > 0 {
-		marker = systemBudgetMarkerFrag(droppedIDs, firstSystemScope(frags))
+		marker = systemBudgetMarkerFrag(droppedIDs, scope)
 	}
-	selected := systemBudgetSelection(frags, droppedIndexes, marker)
+	selected = systemBudgetSelection(frags, droppedIndexes, marker)
 	actual := systemFragCost(selected)
 	finishSystemBudgetPlan(plan, actual)
 	return selected, dropped, contextfrag.ErrProtectedContextOverflow
+}
+
+func systemBudgetPlanActive(profile IntentProfile, plan *contextfrag.ContextBudgetPlan) bool {
+	return plan != nil &&
+		(profile.Intent == contextfrag.IntentRunConfigPreProvider || profile.Intent == contextfrag.IntentDiscussReply)
 }
 
 func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
