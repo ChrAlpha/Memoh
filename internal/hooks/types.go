@@ -205,6 +205,7 @@ type SystemSectionOutput struct {
 	Retention SystemSectionRetention `json:"retention"`
 	Cache     SystemSectionCache     `json:"cache"`
 
+	WarningCodes []string `json:"-"`
 	hookOrder    int
 	sectionOrder int
 }

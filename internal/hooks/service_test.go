@@ -295,7 +295,11 @@ func TestRunConfigAggregatesAppendSystemSectionsWithAppendContext(t *testing.T) 
 	if len(result.AppendSystemSections) != 3 {
 		t.Fatalf("append_system_sections = %#v, want three sections", result.AppendSystemSections)
 	}
-	stable, defaulted, clamped := result.AppendSystemSections[0], result.AppendSystemSections[1], result.AppendSystemSections[2]
+	sectionsByID := make(map[string]SystemSectionOutput, len(result.AppendSystemSections))
+	for _, section := range result.AppendSystemSections {
+		sectionsByID[section.ID] = section
+	}
+	stable, defaulted, clamped := sectionsByID["stable"], sectionsByID["defaulted"], sectionsByID["clamped"]
 	if stable.HookName != "policy-hook" || defaulted.HookName != "policy-hook" || clamped.HookName != "policy-hook" {
 		t.Fatalf("hook provenance missing: %#v", result.AppendSystemSections)
 	}
@@ -308,11 +312,68 @@ func TestRunConfigAggregatesAppendSystemSectionsWithAppendContext(t *testing.T) 
 	if clamped.Retention != SystemSectionRetentionPreferred {
 		t.Fatalf("required retention = %q, want clamped preferred", clamped.Retention)
 	}
+	if !slices.Equal(clamped.WarningCodes, []string{WarningSystemSectionRequiredClamped}) {
+		t.Fatalf("clamped section warning codes = %#v, want required-retention warning", clamped.WarningCodes)
+	}
 	if len(result.Warnings) != 1 ||
 		result.Warnings[0].Code != WarningSystemSectionRequiredClamped ||
 		result.Warnings[0].HookName != "policy-hook" ||
 		result.Warnings[0].SectionID != "clamped" {
 		t.Fatalf("warnings = %#v, want required-retention clamp warning", result.Warnings)
+	}
+}
+
+func TestRunConfigOrdersAppendSystemSectionsByHookThenDeclaredID(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Version: 1,
+		Hooks: []Hook{
+			{
+				Name:     "low",
+				Event:    EventBeforePromptBuild,
+				Priority: 10,
+				Actions:  []HookAction{{Type: ActionTool, Tool: "low"}},
+			},
+			{
+				Name:     "high",
+				Event:    EventBeforePromptBuild,
+				Priority: 20,
+				Actions:  []HookAction{{Type: ActionTool, Tool: "high"}},
+			},
+		},
+	}
+	runner := &fakeToolRunner{
+		fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+			if name == "high" {
+				return map[string]any{"append_system_section": []any{
+					map[string]any{"id": "b", "text": "high b"},
+					map[string]any{"id": "a", "text": "high a"},
+				}}, nil
+			}
+			return map[string]any{"append_system_section": []any{
+				map[string]any{"id": "z", "text": "low z"},
+				map[string]any{"id": "a", "text": "low a"},
+			}}, nil
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	got := make([]string, 0, len(result.AppendSystemSections))
+	for _, section := range result.AppendSystemSections {
+		got = append(got, section.HookName+"."+section.ID)
+	}
+	want := []string{"high.a", "high.b", "low.a", "low.z"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("section order = %v, want hook execution then declared ID %v", got, want)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -265,6 +266,7 @@ func (s *Service) RunConfig(ctx context.Context, cfg Config, req Request, runner
 			}
 		}
 	}
+	sortAppendSystemSections(result.AppendSystemSections)
 	return result, nil
 }
 
@@ -617,6 +619,9 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 			Cache:        cache,
 			sectionOrder: len(sections),
 		}
+		if clampedRequired {
+			section.WarningCodes = []string{WarningSystemSectionRequiredClamped}
+		}
 		sections = append(sections, section)
 		if maxOutputBytes > 0 {
 			remainingBytes -= len(text)
@@ -631,6 +636,18 @@ func parseAppendSystemSections(value any, maxOutputBytes int) ([]SystemSectionOu
 		}
 	}
 	return sections, warnings
+}
+
+func sortAppendSystemSections(sections []SystemSectionOutput) {
+	sort.SliceStable(sections, func(i, j int) bool {
+		if sections[i].hookOrder != sections[j].hookOrder {
+			return sections[i].hookOrder < sections[j].hookOrder
+		}
+		if sections[i].ID != sections[j].ID {
+			return sections[i].ID < sections[j].ID
+		}
+		return sections[i].sectionOrder < sections[j].sectionOrder
+	})
 }
 
 func appendSystemSectionJSON(value any) ([]byte, error) {
