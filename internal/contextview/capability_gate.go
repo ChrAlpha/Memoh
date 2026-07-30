@@ -132,15 +132,19 @@ func capabilitySafeFallbackConfig(
 	cfg.ContextToolUsage = ""
 	cfg.ContextToolUsageFrags = nil
 	cfg.ContextFrags = nonSystemFrags(cfg.ContextFrags)
-	result := appendCapabilityGateDrops(SelectionResult{
-		Selected: kept,
-		Summary: SelectionSummary{
-			TotalCollected: len(kept),
-			TotalSelected:  len(kept),
-		},
-	}, gated)
+	result := appendCapabilityGateDrops(SelectionResult{}, gated)
 	cfg.ContextManifest.Selection = selectionTrace(result.Summary)
-	cfg.ContextManifest.SelectionDecisions = selectionDecisions(normalized, result)
+	cfg.ContextManifest.SelectionDecisions = make(
+		[]contextfrag.SelectionDecision,
+		0,
+		len(gated),
+	)
+	for _, frag := range gated {
+		cfg.ContextManifest.SelectionDecisions = append(
+			cfg.ContextManifest.SelectionDecisions,
+			selectionDecisionForFrag(frag, contextfrag.DecisionDropped, capabilityGateDropReason),
+		)
+	}
 	return cfg
 }
 

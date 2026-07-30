@@ -164,6 +164,16 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 			t.Errorf("fallback decision for %q = %#v, want dropped/%s", id, decision, capabilityGateDropReason)
 		}
 	}
+	if decision, ok := decisionByID(got.ContextManifest.SelectionDecisions, "duplicate"); ok {
+		t.Fatalf("fallback recorded unsent source history as selected: %#v", decision)
+	}
+	if got.ContextManifest.Selection.Selected != len(got.ContextFrags) {
+		t.Fatalf(
+			"fallback selected count = %d, want actual rendered fragment count %d",
+			got.ContextManifest.Selection.Selected,
+			len(got.ContextFrags),
+		)
+	}
 }
 
 func capabilityGateFixture() agentpkg.RunConfig {

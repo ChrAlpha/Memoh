@@ -449,7 +449,9 @@ func providerViewFallback(
 	err error,
 ) agentpkg.RunConfig {
 	warnProviderContextView(logger, cfg, message, err)
+	priorManifest := cfg.ContextManifest
 	out := legacyMaterializeQuery(cfg).RefreshContextFrag()
+	mergeCapabilityFallbackAudit(&out, priorManifest)
 	ledger.Record(contextfrag.MutationContextViewFallback, reason)
 	manifest := out.ContextManifest
 	manifest.Mutations = ledger
@@ -463,6 +465,36 @@ func providerViewFallback(
 		out.ContextLifecycle.SetManifest(manifest)
 	}
 	return out
+}
+
+func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Manifest) {
+	if out == nil || prior.Selection == nil ||
+		prior.Selection.DropReasons[capabilityGateDropReason] == 0 {
+		return
+	}
+	gated := make([]contextfrag.SelectionDecision, 0, prior.Selection.Dropped)
+	for _, decision := range prior.SelectionDecisions {
+		if decision.Decision == contextfrag.DecisionDropped &&
+			decision.Reason == capabilityGateDropReason {
+			gated = append(gated, decision)
+		}
+	}
+	if len(gated) == 0 {
+		return
+	}
+	decisions := make([]contextfrag.SelectionDecision, 0, len(out.ContextFrags)+len(gated))
+	for _, frag := range out.ContextFrags {
+		decisions = append(decisions, selectionDecisionForFrag(frag, contextfrag.DecisionSelected, ""))
+	}
+	decisions = append(decisions, gated...)
+	out.ContextManifest.Selection = &contextfrag.SelectionTrace{
+		Selected: len(out.ContextFrags),
+		Dropped:  len(gated),
+		DropReasons: map[string]int{
+			capabilityGateDropReason: len(gated),
+		},
+	}
+	out.ContextManifest.SelectionDecisions = decisions
 }
 
 // legacyMaterializeQuery reproduces the pre-view query placement for the
