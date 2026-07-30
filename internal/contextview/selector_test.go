@@ -222,6 +222,132 @@ func TestFragmentSelector_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestProviderSystemMustKeepUsesPerFragmentPolicy(t *testing.T) {
+	t.Parallel()
+
+	intents := []contextfrag.Intent{
+		contextfrag.IntentRunConfigPreProvider,
+		contextfrag.IntentDiscussReply,
+	}
+	tiers := []contextfrag.RetentionTier{
+		contextfrag.RetentionUnspecified,
+		contextfrag.RetentionRequired,
+		contextfrag.RetentionPreferred,
+		contextfrag.RetentionOptional,
+	}
+	selector := &FragmentSelector{}
+	for _, intent := range intents {
+		profile := selector.ProfileFor(intent)
+		if slotInMustKeepSlots(profile, contextfrag.SlotSystem) {
+			t.Fatalf("%s MustKeepSlots = %#v, system must use the per-fragment seam", intent, profile.MustKeepSlots)
+		}
+		if !slotInMustKeepSlots(profile, contextfrag.SlotCurrentUser) {
+			t.Fatalf("%s MustKeepSlots = %#v, want current_user", intent, profile.MustKeepSlots)
+		}
+		for _, tier := range tiers {
+			frag := contextfrag.ContextFrag{Slot: contextfrag.SlotSystem, RetentionTier: tier}
+			if !isMustKeepFrag(frag, profile) {
+				t.Fatalf("%s system retention %q must remain kept before the system-budget pass exists", intent, tier)
+			}
+		}
+	}
+}
+
+func TestProviderHistoryBudgetNeverDropsSystemFragments(t *testing.T) {
+	t.Parallel()
+
+	intents := []contextfrag.Intent{
+		contextfrag.IntentRunConfigPreProvider,
+		contextfrag.IntentDiscussReply,
+	}
+	tiers := []contextfrag.RetentionTier{
+		contextfrag.RetentionUnspecified,
+		contextfrag.RetentionRequired,
+		contextfrag.RetentionPreferred,
+		contextfrag.RetentionOptional,
+	}
+	selector := &FragmentSelector{}
+	for _, intent := range intents {
+		for _, tier := range tiers {
+			system := textFrag("system", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "system")
+			system.RetentionTier = tier
+			system.TokenEstimate = 1000
+			current := textFrag("current", contextfrag.SlotCurrentUser, contextfrag.KindCurrentUserMessage, sdk.MessageRoleUser, "current")
+			result := selector.Select(
+				[]contextfrag.ContextFrag{
+					system,
+					messageFrag("old-user", sdk.UserMessage("old question")),
+					messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+					current,
+				},
+				selector.ProfileFor(intent),
+				BudgetEnvelope{MaxTokens: 1},
+			)
+
+			if !containsFragID(result.Selected, "system") {
+				t.Fatalf("%s system retention %q was dropped under history pressure: %#v", intent, tier, fragIDs(result.Dropped))
+			}
+			if !containsFragID(result.Dropped, "old-user") || !containsFragID(result.Dropped, "old-assistant") {
+				t.Fatalf("%s retention %q did not exercise history dropping: selected=%#v dropped=%#v",
+					intent, tier, fragIDs(result.Selected), fragIDs(result.Dropped))
+			}
+		}
+	}
+}
+
+func TestLegacySystemReverseParsersStampRequired(t *testing.T) {
+	t.Parallel()
+
+	const toolUsage = "## Tool usage\nUse tools carefully."
+	const system = "Base system prompt.\n\n" + toolUsage + "\n\nTail guidance."
+	collected := collectSystemPrompt(t, contextfrag.Scope{}, system, toolUsage)
+	compiled := contextfrag.CompileFrags(contextfrag.CompileInput{
+		System:    system,
+		ToolUsage: toolUsage,
+	})
+	for name, frags := range map[string][]contextfrag.ContextFrag{
+		"collector": collected,
+		"compiler":  compiled,
+	} {
+		if len(frags) != 3 {
+			t.Fatalf("%s fragments = %d, want 3", name, len(frags))
+		}
+		for _, frag := range frags {
+			if frag.RetentionTier != contextfrag.RetentionRequired {
+				t.Fatalf("%s fragment %s retention = %q, want required", name, frag.ID, frag.RetentionTier)
+			}
+		}
+	}
+}
+
+func TestToolUsageFragIsPreferred(t *testing.T) {
+	t.Parallel()
+
+	frag := ToolUsageFrag("use tools", contextfrag.Scope{})
+	if frag.RetentionTier != contextfrag.RetentionPreferred {
+		t.Fatalf("tool usage retention = %q, want preferred", frag.RetentionTier)
+	}
+}
+
+func TestRebuildFragMessagePreservesRetentionPolicy(t *testing.T) {
+	t.Parallel()
+
+	frag := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            "message.001",
+		Message:       sdk.UserMessage("before"),
+		Kind:          contextfrag.KindConversationEvent,
+		Slot:          contextfrag.SlotHistory,
+		RetentionTier: contextfrag.RetentionPreferred,
+		DropPriority:  25,
+	})
+	rebuilt := contextfrag.RebuildFragMessage(frag, sdk.AssistantMessage("after"))
+
+	if rebuilt.RetentionTier != frag.RetentionTier || rebuilt.DropPriority != frag.DropPriority {
+		t.Fatalf("rebuilt retention policy = %q/%d, want %q/%d",
+			rebuilt.RetentionTier, rebuilt.DropPriority, frag.RetentionTier, frag.DropPriority)
+	}
+}
+
 func TestFragmentSelector_CompactionProfileMustKeepSystemAndCurrentUser(t *testing.T) {
 	t.Parallel()
 
@@ -277,8 +403,24 @@ func fragIDs(frags []contextfrag.ContextFrag) []string {
 }
 
 func slotInProfile(profile IntentProfile, slot contextfrag.Slot) bool {
+	if slotInMustKeepSlots(profile, slot) {
+		return true
+	}
+	return profile.MustKeepFrag != nil && profile.MustKeepFrag(contextfrag.ContextFrag{Slot: slot})
+}
+
+func slotInMustKeepSlots(profile IntentProfile, slot contextfrag.Slot) bool {
 	for _, candidate := range profile.MustKeepSlots {
 		if candidate == slot {
+			return true
+		}
+	}
+	return false
+}
+
+func containsFragID(frags []contextfrag.ContextFrag, id string) bool {
+	for _, frag := range frags {
+		if frag.ID == id {
 			return true
 		}
 	}

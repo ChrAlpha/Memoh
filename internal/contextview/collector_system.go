@@ -91,18 +91,19 @@ func systemPromptConfig(config any) (SystemPromptConfig, error) {
 
 func systemPromptTextFrag(scope contextfrag.Scope, id string, kind contextfrag.Kind, text string, priority int, source string, index int) contextfrag.ContextFrag {
 	return contextfrag.TextFrag(contextfrag.TextFragInput{
-		ID:         id,
-		Kind:       kind,
-		Role:       sdk.MessageRoleSystem,
-		Slot:       contextfrag.SlotSystem,
-		Text:       text,
-		Priority:   priority,
-		CacheClass: contextfrag.CacheStable,
-		Trust:      contextfrag.TrustSystem,
-		Scope:      scope,
-		Source:     source,
-		Collector:  systemPromptCollectorName,
-		Index:      index,
-		Render:     contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
+		ID:            id,
+		Kind:          kind,
+		Role:          sdk.MessageRoleSystem,
+		Slot:          contextfrag.SlotSystem,
+		Text:          text,
+		Priority:      priority,
+		RetentionTier: contextfrag.RetentionRequired,
+		CacheClass:    contextfrag.CacheStable,
+		Trust:         contextfrag.TrustSystem,
+		Scope:         scope,
+		Source:        source,
+		Collector:     systemPromptCollectorName,
+		Index:         index,
+		Render:        contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
 	})
 }

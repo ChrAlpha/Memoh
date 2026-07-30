@@ -55,6 +55,9 @@ type SelectionResult struct {
 type IntentProfile struct {
 	Intent        contextfrag.Intent
 	MustKeepSlots []contextfrag.Slot
+	// MustKeepFrag evaluates retention that depends on fragment policy rather
+	// than provider placement alone.
+	MustKeepFrag func(contextfrag.ContextFrag) bool
 	// SlotTrustFloors declares the minimum trust level per slot: fragments
 	// below the floor are dropped before selection so content never gains
 	// instruction authority its provenance does not warrant.

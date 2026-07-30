@@ -145,6 +145,8 @@ func RebuildFragMessage(frag ContextFrag, msg sdk.Message) ContextFrag {
 		Kind:          frag.Kind,
 		Slot:          frag.Slot,
 		Priority:      frag.Priority,
+		RetentionTier: frag.RetentionTier,
+		DropPriority:  frag.DropPriority,
 		CacheClass:    frag.CacheClass,
 		Trust:         frag.Trust,
 		Scope:         frag.Scope,

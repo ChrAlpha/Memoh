@@ -9,7 +9,8 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	case contextfrag.IntentRunConfigPreProvider:
 		return IntentProfile{
 			Intent:          intent,
-			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotCurrentUser},
+			MustKeepFrag:    mustKeepProviderSystemFrag,
 			SlotTrustFloors: map[contextfrag.Slot]contextfrag.TrustLevel{contextfrag.SlotSystem: contextfrag.TrustWorkspace},
 		}
 	case contextfrag.IntentCompactionCandidates:
@@ -20,7 +21,8 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	case contextfrag.IntentDiscussReply:
 		return IntentProfile{
 			Intent:          intent,
-			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotSystem, contextfrag.SlotCurrentUser},
+			MustKeepSlots:   []contextfrag.Slot{contextfrag.SlotCurrentUser},
+			MustKeepFrag:    mustKeepProviderSystemFrag,
 			SlotTrustFloors: map[contextfrag.Slot]contextfrag.TrustLevel{contextfrag.SlotSystem: contextfrag.TrustWorkspace},
 		}
 	case contextfrag.IntentACPRuntimePrompt:
@@ -35,6 +37,14 @@ func (*FragmentSelector) ProfileFor(intent contextfrag.Intent) IntentProfile {
 	default:
 		return IntentProfile{Intent: intent}
 	}
+}
+
+// mustKeepProviderSystemFrag keeps history-budget selection from claiming
+// authority over system fragments. A later system-budget pass may apply the
+// retention tier, but every system fragment surviving that pass remains
+// protected here.
+func mustKeepProviderSystemFrag(frag contextfrag.ContextFrag) bool {
+	return frag.Slot == contextfrag.SlotSystem
 }
 
 func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentProfile, budget BudgetEnvelope) SelectionResult {

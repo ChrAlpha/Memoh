@@ -81,6 +81,9 @@ func isMustKeepFrag(frag contextfrag.ContextFrag, profile IntentProfile) bool {
 	if frag.Budget.Overflow == contextfrag.OverflowKeep {
 		return true
 	}
+	if profile.MustKeepFrag != nil && profile.MustKeepFrag(frag) {
+		return true
+	}
 	for _, slot := range profile.MustKeepSlots {
 		if frag.Slot == slot {
 			return true
