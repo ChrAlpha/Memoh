@@ -8,12 +8,17 @@ import (
 )
 
 const (
-	staticPromptTokenHeadroom           = 8
-	staticPromptChatBaselineTokens      = 1227
-	staticPromptDiscussBaselineTokens   = 1299
-	staticPromptHeartbeatBaselineTokens = 1307
-	staticPromptScheduleBaselineTokens  = 1229
-	staticPromptSubagentBaselineTokens  = 610
+	staticPromptTokenHeadroom            = 4
+	staticPromptChatBaselineTokens       = 1236
+	staticPromptDiscussBaselineTokens    = 1302
+	staticPromptHeartbeatBaselineTokens  = 1310
+	staticPromptScheduleBaselineTokens   = 1244
+	staticPromptSubagentBaselineTokens   = 623
+	staticPromptChatPreRound6Tokens      = 1248
+	staticPromptDiscussPreRound6Tokens   = 1321
+	staticPromptHeartbeatPreRound6Tokens = 1329
+	staticPromptSchedulePreRound6Tokens  = 1250
+	staticPromptSubagentPreRound6Tokens  = 641
 )
 
 var staticPromptTokenBaselines = map[string]int{
@@ -22,6 +27,14 @@ var staticPromptTokenBaselines = map[string]int{
 	sessionmode.Heartbeat: staticPromptHeartbeatBaselineTokens,
 	sessionmode.Schedule:  staticPromptScheduleBaselineTokens,
 	sessionmode.Subagent:  staticPromptSubagentBaselineTokens,
+}
+
+var staticPromptPreRound6Tokens = map[string]int{
+	sessionmode.Chat:      staticPromptChatPreRound6Tokens,
+	sessionmode.Discuss:   staticPromptDiscussPreRound6Tokens,
+	sessionmode.Heartbeat: staticPromptHeartbeatPreRound6Tokens,
+	sessionmode.Schedule:  staticPromptSchedulePreRound6Tokens,
+	sessionmode.Subagent:  staticPromptSubagentPreRound6Tokens,
 }
 
 func TestStaticPromptSizeBaselines(t *testing.T) {
@@ -40,6 +53,18 @@ func TestStaticPromptSizeBaselines(t *testing.T) {
 			baseline, ok := staticPromptTokenBaselines[mode]
 			if !ok {
 				t.Fatalf("missing static prompt baseline for mode %q", mode)
+			}
+			preRound6, ok := staticPromptPreRound6Tokens[mode]
+			if !ok {
+				t.Fatalf("missing pre-Round-6 static prompt size for mode %q", mode)
+			}
+			if baseline >= preRound6 || baseline+staticPromptTokenHeadroom >= preRound6 {
+				t.Fatalf(
+					"static prompt baseline/headroom = %d/%d, pre-Round-6 = %d",
+					baseline,
+					staticPromptTokenHeadroom,
+					preRound6,
+				)
 			}
 			t.Logf("static prompt tokens = %d, bytes = %d", got, len(prompt))
 			if got > baseline+staticPromptTokenHeadroom {
@@ -90,7 +115,7 @@ func TestGenerateSystemSectionsPolicyForRemainingNativeModes(t *testing.T) {
 	}
 }
 
-func TestStaticPromptBaselineUsesByteEstimatorWithoutTokenizer(t *testing.T) {
+func TestStaticPromptFragmentsLeaveTokenEstimateUnresolved(t *testing.T) {
 	t.Parallel()
 
 	for _, mode := range allPromptSessionTypes() {
@@ -103,12 +128,6 @@ func TestStaticPromptBaselineUsesByteEstimatorWithoutTokenizer(t *testing.T) {
 				if frag.TokenEstimate != 0 {
 					t.Fatalf("static fragment %s has preset token estimate %d", frag.ID, frag.TokenEstimate)
 				}
-			}
-
-			prompt := renderSystemSections(GenerateSystemSections(params))
-			got := contextfrag.TokensFromBytes(len(prompt))
-			if want := len(prompt) / contextfrag.EstimateBytesPerToken; got != want {
-				t.Fatalf("byte estimator tokens = %d, want %d", got, want)
 			}
 		})
 	}

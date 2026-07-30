@@ -140,6 +140,79 @@ func TestNativeModeProtectedOverflowFailsClosedExceptDiscuss(t *testing.T) {
 	}
 }
 
+func TestProviderUsesByteEstimatorForStaticSystemFragsWithoutTokenizer(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{
+		sessionmode.Chat,
+		sessionmode.Heartbeat,
+		sessionmode.Schedule,
+		sessionmode.Subagent,
+	} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			params := agentpkg.SystemPromptParams{SessionType: mode, Timezone: "UTC"}
+			frags := agentpkg.SystemSectionFrags(
+				agentpkg.GenerateSystemSections(params),
+				contextfrag.Scope{},
+			)
+			resolvedCost := 0
+			expectedTokens := make(map[string]int, len(frags))
+			for _, frag := range frags {
+				if frag.TokenEstimate != 0 {
+					t.Fatalf("static fragment %s has preset token estimate %d", frag.ID, frag.TokenEstimate)
+				}
+				textBytes := 0
+				for _, part := range frag.Parts {
+					if part.Type != contextfrag.PartText {
+						t.Fatalf("static fragment %s has non-text part %s", frag.ID, part.Type)
+					}
+					textBytes += len(part.Text)
+				}
+				expectedTokens[frag.ID] = contextfrag.TokensFromBytes(textBytes)
+				resolvedCost += expectedTokens[frag.ID]
+			}
+			if len(frags) > 1 {
+				resolvedCost += len(frags) - 1
+			}
+			renderedPrompt := agentpkg.GenerateSystemPrompt(params)
+			renderedCost := contextfrag.TokensFromBytes(len(renderedPrompt))
+			wantCost := max(resolvedCost, renderedCost)
+
+			out, err := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+				SessionType:            mode,
+				ContextSourceFrags:     frags,
+				ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(wantCost + 128),
+			})
+			if err != nil {
+				t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+			}
+			if out.System != renderedPrompt {
+				t.Fatalf("provider system prompt changed without pressure")
+			}
+			if plan := out.ContextManifest.BudgetPlan; plan == nil || plan.ActualSystemCost != wantCost {
+				t.Fatalf("provider budget plan = %#v, want byte-estimated system cost %d", plan, wantCost)
+			}
+			for _, frag := range frags {
+				item := manifestItemByID(out.ContextManifest.Items, frag.ID)
+				if item == nil {
+					t.Fatalf("manifest missing static fragment %s", frag.ID)
+				}
+				if want := expectedTokens[frag.ID]; item.TokenEstimate != want {
+					t.Fatalf(
+						"manifest token estimate for %s = %d, want byte estimate %d",
+						frag.ID,
+						item.TokenEstimate,
+						want,
+					)
+				}
+			}
+		})
+	}
+}
+
 func TestOversizedDynamicSystemSourcesPruneWithExplicitMarker(t *testing.T) {
 	t.Parallel()
 

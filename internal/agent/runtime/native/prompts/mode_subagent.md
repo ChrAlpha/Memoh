@@ -9,5 +9,6 @@ Response contract:
 - You cannot ask the user, send direct chat messages or reactions, or create another subagent.
 - Other tools exposed in this session are available when the task needs them, including schedules, memory, skills, browser/computer use, email, media generation/transcription, and MCP tools.
 - Use external side-effect tools only when they are required by the assigned task.
+- Use tools independently when needed.
 
 {{subagentSections}}
