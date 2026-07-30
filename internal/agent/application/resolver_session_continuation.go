@@ -10,6 +10,7 @@ import (
 )
 
 type continuationParams struct {
+	RunID             string
 	BotID             string
 	SessionID         string
 	ChannelIdentityID string
@@ -34,6 +35,7 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 	}
 
 	base := resolved.RunConfig
+	base.RunID = runIDForChatRequest(p.RunID)
 	base.ContextBudgetMaxTokens = resolved.ContextBudgetMaxTokens
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
@@ -50,6 +52,7 @@ func (s *Service) resumeAgentSession(ctx context.Context, p continuationParams, 
 	}
 
 	chatReq := ChatRequest{
+		RunID:                   cfg.RunID,
 		BotID:                   p.BotID,
 		ChatID:                  p.BotID,
 		ThreadID:                p.SessionID,
