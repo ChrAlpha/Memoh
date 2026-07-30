@@ -178,6 +178,7 @@ type Queries interface {
 	GetFetchProviderByID(ctx context.Context, id pgtype.UUID) (dbsqlc.FetchProvider, error)
 	GetFetchProviderByName(ctx context.Context, name string) (dbsqlc.FetchProvider, error)
 	GetContextLifecycleByRunID(ctx context.Context, runID pgtype.UUID) (dbsqlc.ContextLifecycle, error)
+	GetLatestAssistantContextLifecycleMetadataByRunID(ctx context.Context, runID pgtype.UUID) ([]byte, error)
 	GetLatestAssistantUsage(ctx context.Context, sessionID pgtype.UUID) (int64, error)
 	GetLatestVisibleHistoryTurnBySession(ctx context.Context, sessionID pgtype.UUID) (HistoryTurn, error)
 	GetLatestPendingToolApprovalBySession(ctx context.Context, arg dbsqlc.GetLatestPendingToolApprovalBySessionParams) (dbsqlc.ToolApprovalRequest, error)

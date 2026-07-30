@@ -36,6 +36,16 @@ FROM context_lifecycles
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = sqlc.arg(run_id);
 
+-- name: GetLatestAssistantContextLifecycleMetadataByRunID :one
+SELECT metadata
+FROM bot_history_messages
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = sqlc.arg(run_id)
+  AND role = 'assistant'
+  AND metadata ? 'context_lifecycle'
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
 -- name: ListRecentContextLifecyclesBySession :many
 SELECT
   run_id,

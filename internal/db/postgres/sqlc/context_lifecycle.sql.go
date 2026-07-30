@@ -86,6 +86,24 @@ func (q *Queries) GetContextLifecycleByRunID(ctx context.Context, runID pgtype.U
 	return i, err
 }
 
+const getLatestAssistantContextLifecycleMetadataByRunID = `-- name: GetLatestAssistantContextLifecycleMetadataByRunID :one
+SELECT metadata
+FROM bot_history_messages
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = $1
+  AND role = 'assistant'
+  AND metadata ? 'context_lifecycle'
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestAssistantContextLifecycleMetadataByRunID(ctx context.Context, runID pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getLatestAssistantContextLifecycleMetadataByRunID, runID)
+	var metadata []byte
+	err := row.Scan(&metadata)
+	return metadata, err
+}
+
 const listRecentAssistantMessagesBySession = `-- name: ListRecentAssistantMessagesBySession :many
 SELECT
   id,

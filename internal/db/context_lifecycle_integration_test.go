@@ -154,6 +154,29 @@ SELECT $3, $1, bot.id, 'local', 'context lifecycle', '{}' FROM bot
 		t.Fatal("persisted lifecycle snapshot contains raw prompt text")
 	}
 
+	const pausedRunID = "00000000-0000-0000-0000-00000000d502"
+	pausedMetadata, err := json.Marshal(map[string]any{
+		contextfrag.MetadataContextLifecycleKey: snapshot,
+	})
+	if err != nil {
+		t.Fatalf("marshal paused lifecycle metadata: %v", err)
+	}
+	parsedPausedRunID := mustParseUUID(t, pausedRunID)
+	if _, err := conn.Exec(ctx, `
+INSERT INTO bot_history_messages (bot_id, session_id, role, content, metadata, run_id)
+VALUES ($1, $2, 'assistant', '{}'::jsonb, $3, $4)
+`, botID, sessionID, pausedMetadata, pausedRunID); err != nil {
+		t.Fatalf("seed paused assistant lifecycle: %v", err)
+	}
+	pausedRaw, err := queries.GetLatestAssistantContextLifecycleMetadataByRunID(ctx, parsedPausedRunID)
+	if err != nil {
+		t.Fatalf("get paused assistant lifecycle metadata: %v", err)
+	}
+	pausedSnapshot, ok := contextfrag.LifecycleSnapshotFromMetadata(pausedRaw)
+	if !ok || !reflect.DeepEqual(pausedSnapshot, snapshot) {
+		t.Fatalf("paused lifecycle snapshot = %#v, %t; want %#v", pausedSnapshot, ok, snapshot)
+	}
+
 	recent, err := queries.ListRecentContextLifecyclesBySession(ctx, sqlc.ListRecentContextLifecyclesBySessionParams{
 		SessionID: parsedSessionID,
 		MaxCount:  10,
