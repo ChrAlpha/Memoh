@@ -406,19 +406,20 @@ type agentRecord struct {
 }
 
 type agentRunResult struct {
-	AgentID        string `json:"agent_id"`
-	SessionID      string `json:"session_id,omitempty"`
-	TaskID         string `json:"task_id,omitempty"`
-	ModelID        string `json:"model_id,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Fork           bool   `json:"fork,omitempty"`
-	Status         string `json:"status"`
-	Message        string `json:"message,omitempty"`
-	Text           string `json:"text,omitempty"`
-	Error          string `json:"error,omitempty"`
-	QueuePosition  int    `json:"queue_position,omitempty"`
-	QueueRemaining int    `json:"queue_remaining,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
+	AgentID          string                         `json:"agent_id"`
+	SessionID        string                         `json:"session_id,omitempty"`
+	TaskID           string                         `json:"task_id,omitempty"`
+	ModelID          string                         `json:"model_id,omitempty"`
+	Provider         string                         `json:"provider,omitempty"`
+	Fork             bool                           `json:"fork,omitempty"`
+	Status           string                         `json:"status"`
+	Message          string                         `json:"message,omitempty"`
+	Text             string                         `json:"text,omitempty"`
+	Error            string                         `json:"error,omitempty"`
+	QueuePosition    int                            `json:"queue_position,omitempty"`
+	QueueRemaining   int                            `json:"queue_remaining,omitempty"`
+	TimedOut         bool                           `json:"timed_out,omitempty"`
+	ContextLifecycle *contextfrag.LifecycleSnapshot `json:"-"`
 }
 
 type agentRequest struct {
@@ -957,6 +958,9 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		wd.Stop()
 		safetyCancel()
 
+		if genResult != nil {
+			res.ContextLifecycle = genResult.ContextLifecycle
+		}
 		if err == nil {
 			res.Text = genResult.Text
 			if p.messageService != nil && req.agentSessionID != "" {
