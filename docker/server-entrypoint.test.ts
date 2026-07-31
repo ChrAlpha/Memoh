@@ -1,21 +1,20 @@
-import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { expect, test } from 'vitest'
 
 const ROOT_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const ENTRYPOINT_PATH = join(ROOT_DIR, 'docker/server-entrypoint.sh')
 const TEST_IMAGE = 'alpine:3.23'
 
-function writeExecutable(path, content) {
+function writeExecutable(path: string, content: string): void {
   writeFileSync(path, content)
   chmodSync(path, 0o755)
 }
 
-function runEntrypoint(backend, configPath = '/app/config.toml', ctrStatus = 1) {
+function runEntrypoint(backend?: string, configPath = '/app/config.toml', ctrStatus = 1) {
   const tempDir = mkdtempSync(join(tmpdir(), 'memoh-server-entrypoint-'))
   const appDir = join(tempDir, 'app')
   const configDir = join(tempDir, 'config')
@@ -108,31 +107,31 @@ exit 0
 test('docker backend starts the server without embedded containerd setup', () => {
   const { calls, result } = runEntrypoint('docker')
 
-  assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^memoh-server serve$/m)
-  assert.doesNotMatch(calls, /^(?:containerd|ctr|ip|iptables|mkdir|rm|sleep|sysctl)\b/m)
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  expect(calls).toMatch(/^memoh-server serve$/m)
+  expect(calls).not.toMatch(/^(?:containerd|ctr|ip|iptables|mkdir|rm|sleep|sysctl)\b/m)
 })
 
 test('apple backend from CONFIG_PATH starts the server without embedded containerd setup', () => {
   const { calls, result } = runEntrypoint('apple', '/test/config/config.toml')
 
-  assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^memoh-server serve$/m)
-  assert.doesNotMatch(calls, /^(?:containerd|ctr|ip|iptables|mkdir|rm|sleep|sysctl)\b/m)
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  expect(calls).toMatch(/^memoh-server serve$/m)
+  expect(calls).not.toMatch(/^(?:containerd|ctr|ip|iptables|mkdir|rm|sleep|sysctl)\b/m)
 })
 
 test('omitted backend preserves embedded containerd setup and cleanup', () => {
   const { calls, result } = runEntrypoint(undefined, '/app/config.toml', 0)
 
-  assert.equal(result.status, 0, result.stderr || result.stdout)
-  assert.match(calls, /^ip link delete cni0$/m)
-  assert.match(calls, /^rm -rf \/var\/lib\/cni\/networks\/\* \/var\/lib\/cni\/results\/\*$/m)
-  assert.match(calls, /^sysctl -w net\.ipv4\.ip_forward=1$/m)
-  assert.match(calls, /^iptables -t nat -C POSTROUTING /m)
-  assert.match(calls, /^mkdir -p \/sys\/fs\/cgroup\/init$/m)
-  assert.match(calls, /^mkdir -p \/run\/containerd$/m)
-  assert.match(calls, /^containerd $/m)
-  assert.match(calls, /^ctr version$/m)
-  assert.match(calls, /^memoh-server serve$/m)
-  assert.match(calls, /^containerd-stopped$/m)
+  expect(result.status, result.stderr || result.stdout).toBe(0)
+  expect(calls).toMatch(/^ip link delete cni0$/m)
+  expect(calls).toMatch(/^rm -rf \/var\/lib\/cni\/networks\/\* \/var\/lib\/cni\/results\/\*$/m)
+  expect(calls).toMatch(/^sysctl -w net\.ipv4\.ip_forward=1$/m)
+  expect(calls).toMatch(/^iptables -t nat -C POSTROUTING /m)
+  expect(calls).toMatch(/^mkdir -p \/sys\/fs\/cgroup\/init$/m)
+  expect(calls).toMatch(/^mkdir -p \/run\/containerd$/m)
+  expect(calls).toMatch(/^containerd $/m)
+  expect(calls).toMatch(/^ctr version$/m)
+  expect(calls).toMatch(/^memoh-server serve$/m)
+  expect(calls).toMatch(/^containerd-stopped$/m)
 })
