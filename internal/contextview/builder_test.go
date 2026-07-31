@@ -151,6 +151,40 @@ func TestBuildRecordsDroppedFragmentEditTrace(t *testing.T) {
 	}
 }
 
+func TestBuilderPlacesLateSystemFragmentInRenderedPrefixOrder(t *testing.T) {
+	t.Parallel()
+
+	history := messageFrag("history", sdk.UserMessage("hello"))
+	workspace := textFrag("workspace", contextfrag.SlotSystem, contextfrag.KindWorkspaceInstruction, sdk.MessageRoleSystem, "workspace")
+	workspace.Priority = 50
+	toolUsage := textFrag("tool-usage", contextfrag.SlotSystem, contextfrag.KindToolUsage, sdk.MessageRoleSystem, "tools")
+	toolUsage.Priority = 45
+	registry := NewMapCollectorRegistry(StaticCollector{
+		CollectorName: "late-system",
+		Frags:         []contextfrag.ContextFrag{workspace, history, toolUsage},
+	})
+	builder := NewBuilder(registry, PassthroughSelector{}, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
+
+	view, err := builder.Build(context.Background(), BuildInput{
+		Intent:  contextfrag.IntentRunConfigPreProvider,
+		Sources: []SourceSpec{{Name: "late-system"}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tool-usage", "workspace", "history"}
+	for i, id := range want {
+		if view.Selected[i].ID != id || view.Placement.Items[i].FragID != id {
+			t.Fatalf("selected = %#v, placement = %#v", view.Selected, view.Placement.Items)
+		}
+	}
+	payload := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
+	if payload.System != "tools\n\nworkspace" {
+		t.Fatalf("system = %q", payload.System)
+	}
+}
+
 func testFrags() []contextfrag.ContextFrag {
 	return []contextfrag.ContextFrag{
 		textFrag("system.prompt", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "System guidance"),

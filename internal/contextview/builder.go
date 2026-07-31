@@ -59,6 +59,11 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 		}
 		sourceFrags = append(sourceFrags, frags...)
 	}
+	// Provider system fragments render into one leading system field even when
+	// a late collector (for example tool usage) supplied them after message
+	// fragments. Canonicalize that order before selection and placement so the
+	// cache plan describes the same prefix the renderer emits.
+	sourceFrags = sortSystemFragsByPriority(sourceFrags)
 	sourceFrags = contextfrag.NormalizeContextRefs(sourceFrags)
 
 	profile := b.selector.ProfileFor(input.Intent)
