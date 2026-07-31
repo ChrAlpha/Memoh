@@ -53,6 +53,43 @@ func TestRefreshContextFragOmitsMaterializedInlineImages(t *testing.T) {
 	}
 }
 
+func TestRefreshContextFragMarksMaterializedCurrentMessage(t *testing.T) {
+	t.Parallel()
+	index := 1
+	cfg := RunConfig{
+		System:                         "base system",
+		Messages:                       []sdk.Message{sdk.AssistantMessage("history"), sdk.UserMessage("current")},
+		ContextCurrentUserMessageIndex: &index,
+		ContextQueryMaterialized:       true,
+	}
+	cfg = cfg.RefreshContextFrag()
+	if !manifestHasAgentKind(cfg.ContextManifest, contextfrag.KindCurrentUserMessage) {
+		t.Fatalf("manifest items = %#v", cfg.ContextManifest.Items)
+	}
+	if cfg.ContextFrags[index+1].Slot != contextfrag.SlotCurrentUser {
+		t.Fatalf("current fragment = %#v", cfg.ContextFrags[index+1])
+	}
+}
+
+func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
+	t.Parallel()
+	ledger := contextfrag.NewMutationLedger()
+	plan := contextfrag.CachePlan{StablePrefixHash: "prefix", StableMessageCount: 2}
+	cfg := RunConfig{
+		System:          "base system",
+		Messages:        []sdk.Message{sdk.UserMessage("hi")},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{{Provider: "native", Name: "read", Bytes: 40, TokenEstimate: 10}},
+		ContextManifest: contextfrag.Manifest{CachePlan: &plan, Mutations: ledger},
+	}
+	cfg = cfg.RefreshContextFrag()
+	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.StablePrefixHash != "prefix" || cfg.ContextManifest.Mutations != ledger {
+		t.Fatalf("manifest accounting = %#v", cfg.ContextManifest)
+	}
+	if len(cfg.ContextManifest.ToolDefs) != 1 || cfg.ContextManifest.ToolDefs[0].Name != "read" {
+		t.Fatalf("tool definitions = %#v", cfg.ContextManifest.ToolDefs)
+	}
+}
+
 func TestRefreshContextFragMarksToolUsageBeforeWorkspaceInstructions(t *testing.T) {
 	t.Parallel()
 
