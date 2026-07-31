@@ -1,7 +1,14 @@
 <template>
-  <div class="group relative flex items-start gap-3 rounded-[var(--radius-card)] border border-border bg-card px-4 py-3">
-    <div class="min-w-0 flex-1">
-      <p class="text-sm leading-snug text-foreground whitespace-pre-wrap wrap-break-word">
+  <!-- One memory entry as a SettingsRow inside the date/search section card.
+       Composing the owner (instead of a standalone bordered card) is what keeps
+       the stream hairline-separated and kills the card-in-card nesting — the
+       section card is the only frame. -->
+  <SettingsRow
+    align="center"
+    class="group"
+  >
+    <template #content>
+      <p class="text-control leading-snug text-foreground whitespace-pre-wrap wrap-break-word">
         {{ item.memory }}
       </p>
 
@@ -40,11 +47,14 @@
         >
           {{ item.score.toFixed(2) }}
         </Badge>
-        <span class="ml-1 text-caption text-muted-foreground">
+        <span
+          v-if="showTimestamp"
+          class="ml-1 text-caption text-muted-foreground"
+        >
           {{ formatRelativeTime(item.created_at, { locale }) }}
         </span>
       </div>
-    </div>
+    </template>
 
     <Button
       variant="ghost"
@@ -55,13 +65,13 @@
     >
       <Pencil class="size-4" />
     </Button>
-  </div>
+  </SettingsRow>
 </template>
 
 <script setup lang="ts">
 import { Pencil } from 'lucide-vue-next'
 import { computed } from 'vue'
-import { Badge, Button } from '@felinic/ui'
+import { Badge, Button, SettingsRow } from '@felinic/ui'
 import type { AdaptersMemoryItem } from '@memohai/sdk'
 import { useI18n } from 'vue-i18n'
 import { formatRelativeTime } from '@/utils/date-time'
@@ -73,8 +83,11 @@ const props = withDefaults(defineProps<{
   item: AdaptersMemoryItem & { id?: string; memory: string }
   locale: string
   showScore?: boolean
+  /** Dated stream groups already show the day in the section title. */
+  showTimestamp?: boolean
 }>(), {
   showScore: false,
+  showTimestamp: true,
 })
 
 defineEmits<{ edit: [] }>()
@@ -100,6 +113,6 @@ const hasMeta = computed(() =>
   confidence.value !== null
   || tags.value.length > 0
   || (props.showScore && typeof props.item.score === 'number')
-  || Boolean(props.item.created_at),
+  || (props.showTimestamp && Boolean(props.item.created_at)),
 )
 </script>
