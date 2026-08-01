@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -122,5 +123,30 @@ func TestCollectNonSystemProviderSourceFragsExcludesSystem(t *testing.T) {
 	}
 	if len(frags) != 3 || frags[1].ID != "current_user.message" || frags[2].ID != "current_user.images" {
 		t.Fatalf("frags = %#v", frags)
+	}
+}
+
+func TestApplyProviderRunConfigDoesNotAddImplicitToolStripping(t *testing.T) {
+	t.Parallel()
+	for _, messageCount := range []int{10, 11} {
+		messageCount := messageCount
+		t.Run(fmt.Sprintf("messages_%d", messageCount), func(t *testing.T) {
+			t.Parallel()
+			messages := make([]sdk.Message, 0, messageCount)
+			for i := 0; i < messageCount-2; i++ {
+				messages = append(messages, sdk.UserMessage(fmt.Sprintf("history-%d", i)))
+			}
+			messages = append(messages,
+				assistantToolCallMessage("call-1", "read", "checking"),
+				toolResultMessage("call-1", "read", "exact tool result"),
+			)
+			cfg := agentpkg.RunConfig{System: "system", Messages: messages, ContextQueryMaterialized: true}
+			cfg.ContextSourceFrags = CollectProviderSourceFrags(context.Background(), cfg)
+
+			got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+			if !reflect.DeepEqual(got.Messages, messages) {
+				t.Fatalf("nil tool policy changed %d messages: %#v", messageCount, got.Messages)
+			}
+		})
 	}
 }
