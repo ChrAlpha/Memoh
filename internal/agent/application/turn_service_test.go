@@ -629,6 +629,20 @@ func (f *errRunner) StreamChat(ctx context.Context, _ ChatRequest) (<-chan Strea
 	return ch, errCh
 }
 
+type canceledRunReporter struct{}
+
+func (*canceledRunReporter) StreamChat(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
+	ch := make(chan StreamChunk)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(ch)
+		defer close(errCh)
+		<-ctx.Done()
+		errCh <- context.Cause(ctx)
+	}()
+	return ch, errCh
+}
+
 func drainHandle(h turn.RunHandle) {
 	for range h.Events() {
 	}
@@ -678,6 +692,18 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		}
 	})
 
+	t.Run("unsolicited context cancellation", func(t *testing.T) {
+		a, admitter := newAdmittedTurnTestService(&errRunner{err: context.Canceled})
+		h, err := a.StartTurn(context.Background(), cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		drainHandle(h)
+		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
+			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
+		}
+	})
+
 	t.Run("cancellation", func(t *testing.T) {
 		a, admitter := newAdmittedTurnTestService(&fakeRunner{
 			chunks: []string{`{"type":"done"}`},
@@ -691,6 +717,19 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		drainHandle(h)
 		// A canceled run reaches the pump as two closed channels, exactly like a
 		// clean finish; only the run context tells them apart.
+		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
+			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
+		}
+	})
+
+	t.Run("cancellation reported by stream", func(t *testing.T) {
+		a, admitter := newAdmittedTurnTestService(&canceledRunReporter{})
+		h, err := a.StartTurn(context.Background(), cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Cancel()
+		drainHandle(h)
 		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
 			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
 		}

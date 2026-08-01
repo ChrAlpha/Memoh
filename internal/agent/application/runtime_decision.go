@@ -16,6 +16,7 @@ import (
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
@@ -324,7 +325,7 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 		Generation: command.Generation,
 	}
 	if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
-		_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, sessionruntime.RunStatusErrored, err.Error())
+		s.finishRuntimeDecision(ctx, handle, err)
 		return
 	}
 	eventCh := make(chan WSStreamEvent, 64)
@@ -354,8 +355,20 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 	}
 	finishCtx := context.WithoutCancel(ctx)
 	if runErr != nil {
-		_ = s.decisionRuntime.FinishRun(finishCtx, handle, sessionruntime.RunStatusErrored, runErr.Error())
+		s.finishRuntimeDecision(finishCtx, handle, runErr)
 		return
 	}
 	_ = s.decisionRuntime.FinishRun(finishCtx, handle, "", "")
+}
+
+func (s *Service) finishRuntimeDecision(ctx context.Context, handle sessionruntime.RunHandle, cause error) {
+	status, message := runtimeDecisionTerminal(cause)
+	_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, status, message)
+}
+
+func runtimeDecisionTerminal(cause error) (string, string) {
+	if cause != nil && !errors.Is(cause, context.Canceled) {
+		return sessionruntime.RunStatusErrored, string(apperror.CodeOf(cause))
+	}
+	return "", ""
 }
