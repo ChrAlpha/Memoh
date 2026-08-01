@@ -586,7 +586,7 @@ func (d *createBotStreamDB) botRow(status string) pgx.Row {
 		}
 		*dest[17].(*bool) = false
 		*dest[18].(*int32) = 200
-		*dest[19].(*int32) = 50
+		*dest[19].(*pgtype.Int4) = pgtype.Int4{Int32: 50, Valid: true}
 		*dest[20].(*pgtype.UUID) = pgtype.UUID{}
 		*dest[21].(*[]byte) = append([]byte(nil), metadata...)
 		*dest[22].(*pgtype.Timestamptz) = pgtype.Timestamptz{Valid: false}

@@ -4,12 +4,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_enabled, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, metadata, created_at, updated_at;
 
 -- name: GetBotByID :one
-SELECT id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_enabled, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, compaction_enabled, compaction_threshold, compaction_ratio, compaction_model_id, metadata, created_at, updated_at
+SELECT id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_enabled, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, compaction_enabled, compaction_threshold, compaction_target_percent, compaction_model_id, metadata, created_at, updated_at
 FROM bots
 WHERE team_id = public.memoh_current_team_id() AND id = $1;
 
 -- name: GetBotByName :one
-SELECT id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_enabled, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, compaction_enabled, compaction_threshold, compaction_ratio, compaction_model_id, metadata, created_at, updated_at
+SELECT id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_enabled, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, compaction_enabled, compaction_threshold, compaction_target_percent, compaction_model_id, metadata, created_at, updated_at
 FROM bots
 WHERE team_id = public.memoh_current_team_id() AND name = $1;
 

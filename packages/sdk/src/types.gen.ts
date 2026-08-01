@@ -2848,7 +2848,7 @@ export type SettingsSettings = {
     command_ui_language?: string;
     compaction_enabled?: boolean;
     compaction_model_id?: string;
-    compaction_ratio?: number;
+    compaction_target_percent?: number | null;
     compaction_threshold?: number;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
@@ -2909,7 +2909,7 @@ export type SettingsUpsertRequest = {
     command_ui_language?: string;
     compaction_enabled?: boolean;
     compaction_model_id?: string;
-    compaction_ratio?: number;
+    compaction_target_percent?: number;
     compaction_threshold?: number;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;

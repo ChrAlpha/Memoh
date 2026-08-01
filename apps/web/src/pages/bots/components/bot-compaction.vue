@@ -5,13 +5,17 @@ import { ConfirmPopover, InlineLoadingRow, PageShell, SettingsRow, SettingsSecti
 import { Box } from 'lucide-vue-next'
 import {
   ActionCard, Button, Badge, Dialog, DialogBody, DialogDescription, DialogHeader, DialogPanel, DialogTitle,
-  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Input, Slider,
+  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Input, Label,
   Pagination, PaginationContent, PaginationEllipsis,
   PaginationFirst, PaginationItem, PaginationLast,
   PaginationNext, PaginationPrevious,
 } from '@felinic/ui'
 import ModelSelect from './model-select.vue'
 import { filterCompactionModels } from './compaction-models'
+import {
+  compactionTargetPercentAfterToggle,
+  isCompactionTargetPercentInvalid,
+} from './compaction-target'
 import {
   getBotsByBotIdSettings, putBotsByBotIdSettings,
   getBotsByBotIdCompactionLogs, deleteBotsByBotIdCompactionLogs,
@@ -62,10 +66,15 @@ const models = computed(() => modelData.value ?? [])
 const providers = computed(() => providerData.value ?? [])
 const compactionModels = computed(() => filterCompactionModels(models.value, providers.value))
 
-const settingsForm = reactive({
+const settingsForm = reactive<{
+  compaction_enabled: boolean
+  compaction_threshold: number
+  compaction_target_percent: number | null
+  compaction_model_id: string
+}>({
   compaction_enabled: false,
   compaction_threshold: 0,
-  compaction_ratio: 80,
+  compaction_target_percent: null,
   compaction_model_id: '',
 })
 
@@ -73,7 +82,7 @@ watch(settings, (val: SettingsSettings | undefined) => {
   if (val) {
     settingsForm.compaction_enabled = val.compaction_enabled ?? false
     settingsForm.compaction_threshold = val.compaction_threshold ?? 0
-    settingsForm.compaction_ratio = val.compaction_ratio ?? 80
+    settingsForm.compaction_target_percent = val.compaction_target_percent ?? null
     settingsForm.compaction_model_id = val.compaction_model_id ?? ''
   }
 }, { immediate: true })
@@ -89,8 +98,12 @@ const settingsChanged = computed(() => {
   const s: SettingsSettings = settings.value
   return settingsForm.compaction_enabled !== (s.compaction_enabled ?? false)
     || settingsForm.compaction_threshold !== (s.compaction_threshold ?? 0)
-    || settingsForm.compaction_ratio !== (s.compaction_ratio ?? 80)
+    || settingsForm.compaction_target_percent !== (s.compaction_target_percent ?? null)
     || settingsForm.compaction_model_id !== (s.compaction_model_id ?? '')
+})
+
+const compactionTargetPercentInvalid = computed(() => {
+  return isCompactionTargetPercentInvalid(settingsForm.compaction_target_percent)
 })
 
 // Was on, now toggled off but not yet saved — the cue that disabling is pending.
@@ -100,8 +113,26 @@ function resetSettings() {
   const s = settings.value
   settingsForm.compaction_enabled = s?.compaction_enabled ?? false
   settingsForm.compaction_threshold = s?.compaction_threshold ?? 0
-  settingsForm.compaction_ratio = s?.compaction_ratio ?? 80
+  settingsForm.compaction_target_percent = s?.compaction_target_percent ?? null
   settingsForm.compaction_model_id = s?.compaction_model_id ?? ''
+}
+
+function updateCompactionEnabled(value: boolean) {
+  settingsForm.compaction_target_percent = compactionTargetPercentAfterToggle(
+    value,
+    settingsForm.compaction_target_percent,
+    settings.value?.compaction_target_percent ?? null,
+  )
+  settingsForm.compaction_enabled = value
+}
+
+function updateCompactionTargetPercent(value: string | number) {
+  if (value === '') {
+    settingsForm.compaction_target_percent = null
+    return
+  }
+  const parsed = typeof value === 'number' ? value : Number(value)
+  settingsForm.compaction_target_percent = Number.isNaN(parsed) ? null : parsed
 }
 
 const { mutateAsync: updateSettings, isLoading: isSaving } = useMutation({
@@ -117,8 +148,13 @@ const { mutateAsync: updateSettings, isLoading: isSaving } = useMutation({
 })
 
 async function handleSaveSettings() {
+  if (compactionTargetPercentInvalid.value) return
+
   try {
-    await updateSettings({ ...settingsForm })
+    await updateSettings({
+      ...settingsForm,
+      compaction_target_percent: settingsForm.compaction_target_percent ?? 0,
+    })
     toast.success(t('bots.settings.saveSuccess'))
   } catch {
     return
@@ -261,39 +297,66 @@ onBeforeUnmount(() => {
         >
           <Switch
             :model-value="settingsForm.compaction_enabled"
-            @update:model-value="(val) => settingsForm.compaction_enabled = !!val"
+            @update:model-value="updateCompactionEnabled"
           />
         </SettingsRow>
 
         <template v-if="settingsForm.compaction_enabled">
-          <SettingsRow :label="$t('bots.settings.compactionThreshold')">
+          <SettingsRow stack="sm">
+            <template #content>
+              <Label for="compaction-threshold">
+                {{ $t('bots.settings.compactionThreshold') }}
+              </Label>
+            </template>
             <Input
+              id="compaction-threshold"
               v-model.number="settingsForm.compaction_threshold"
               type="number"
               :min="0"
+              :step="1"
               placeholder="0"
-              class="h-8 w-32 tabular-nums"
+              size="sm"
+              class="w-32 tabular-nums"
             />
           </SettingsRow>
 
           <SettingsRow
-            v-if="settingsForm.compaction_threshold > 0"
-            :label="$t('bots.settings.compactionRatio')"
-            :description="$t('bots.settings.compactionRatioDescription')"
+            stack="sm"
           >
-            <div class="flex w-48 items-center gap-3">
-              <Slider
-                :model-value="[settingsForm.compaction_ratio]"
-                :min="1"
-                :max="100"
-                :step="1"
-                class="min-w-0 flex-1"
-                @update:model-value="(val) => settingsForm.compaction_ratio = val[0]"
-              />
-              <span class="w-10 text-right text-xs tabular-nums text-muted-foreground">
-                {{ settingsForm.compaction_ratio }}%
-              </span>
-            </div>
+            <template #content>
+              <Label for="compaction-target-percent">
+                {{ $t('bots.settings.compactionTargetPercent') }}
+              </Label>
+              <p
+                id="compaction-target-percent-description"
+                class="mt-0.5 text-body text-muted-foreground"
+              >
+                {{ $t('bots.settings.compactionTargetPercentDescription') }}
+              </p>
+              <p
+                v-if="compactionTargetPercentInvalid"
+                id="compaction-target-percent-error"
+                class="mt-1 text-body text-destructive"
+              >
+                {{ $t('bots.settings.compactionTargetPercentInvalid') }}
+              </p>
+            </template>
+            <Input
+              id="compaction-target-percent"
+              :model-value="settingsForm.compaction_target_percent ?? ''"
+              type="number"
+              :min="1"
+              :max="99"
+              :step="1"
+              placeholder="40"
+              size="sm"
+              class="w-32 tabular-nums"
+              :aria-describedby="compactionTargetPercentInvalid
+                ? 'compaction-target-percent-description compaction-target-percent-error'
+                : 'compaction-target-percent-description'"
+              :aria-invalid="compactionTargetPercentInvalid"
+              @update:model-value="updateCompactionTargetPercent"
+            />
           </SettingsRow>
         </template>
 
@@ -325,6 +388,7 @@ onBeforeUnmount(() => {
           <Button
             size="sm"
             :loading="isSaving"
+            :disabled="isSaving || compactionTargetPercentInvalid"
             @click="handleSaveSettings"
           >
             {{ $t('common.saveChanges') }}

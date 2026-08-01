@@ -21513,8 +21513,9 @@ const docTemplate = `{
                 "compaction_model_id": {
                     "type": "string"
                 },
-                "compaction_ratio": {
-                    "type": "integer"
+                "compaction_target_percent": {
+                    "type": "integer",
+                    "x-nullable": true
                 },
                 "compaction_threshold": {
                     "type": "integer"
@@ -21694,7 +21695,7 @@ const docTemplate = `{
                 "compaction_model_id": {
                     "type": "string"
                 },
-                "compaction_ratio": {
+                "compaction_target_percent": {
                     "type": "integer"
                 },
                 "compaction_threshold": {

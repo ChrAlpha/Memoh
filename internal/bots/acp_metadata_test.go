@@ -122,7 +122,7 @@ func makeGetBotRowWithMetadata(botID, ownerUserID pgtype.UUID, metadata []byte) 
 			*dest[16].(*string) = ""
 			*dest[17].(*bool) = false
 			*dest[18].(*int32) = 100000
-			*dest[19].(*int32) = 80
+			*dest[19].(*pgtype.Int4) = pgtype.Int4{}
 			*dest[20].(*pgtype.UUID) = pgtype.UUID{}
 			*dest[21].(*[]byte) = append([]byte(nil), metadata...)
 			*dest[22].(*pgtype.Timestamptz) = pgtype.Timestamptz{}
