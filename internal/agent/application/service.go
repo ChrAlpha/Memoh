@@ -488,6 +488,9 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
+	if usePipeline {
+		runCfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(runCfg.Messages)
+	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
 	// for storeRound so the user message gets persisted.
@@ -1242,7 +1245,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			platformIdentitiesSection = buildPlatformIdentitiesSection(identities)
 		}
 	}
-	cfg.System = native.GenerateSystemPrompt(native.SystemPromptParams{
+	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
@@ -1250,9 +1253,13 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		MaxFilesBytes:             limits.SystemFilesMaxBytes,
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
-	})
+	}
+	cfg.System = native.GenerateSystemPrompt(systemParams)
+	var promptHookTexts []string
 	if beforePromptContext != "" {
-		cfg.System += "\n\n" + formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
+		text := formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
+		cfg.System += "\n\n" + text
+		promptHookTexts = append(promptHookTexts, text)
 	}
 	afterPromptContext := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
@@ -1263,7 +1270,9 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		SystemBytes:  len(cfg.System),
 	}, hooks.EventAfterPromptBuild)
 	if afterPromptContext != "" {
-		cfg.System += "\n\n" + formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
+		text := formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
+		cfg.System += "\n\n" + text
+		promptHookTexts = append(promptHookTexts, text)
 	}
 
 	if cfg.Query != "" {
@@ -1275,6 +1284,8 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		}
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query, extra...))
 		cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+		index := len(cfg.Messages) - 1
+		cfg.ContextCurrentUserMessageIndex = &index
 		cfg.ContextQueryMaterialized = true
 	} else if len(cfg.InlineImages) > 0 {
 		// Pipeline path: the user query is already embedded in the RC messages,
@@ -1294,6 +1305,8 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 					if i < len(cfg.ForkContextSourceMessageIDs) {
 						cfg.ForkContextSourceMessageIDs[i] = ""
 					}
+					index := i
+					cfg.ContextCurrentUserMessageIndex = &index
 					injected = true
 					break
 				}
@@ -1301,12 +1314,25 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			if !injected {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+				index := len(cfg.Messages) - 1
+				cfg.ContextCurrentUserMessageIndex = &index
 			}
 			cfg.ContextQueryMaterialized = true
 		}
 	}
 
+	cfg.ContextSourceFrags = buildProviderSourceFrags(ctx, cfg, native.GenerateSystemSections(systemParams), promptHookTexts)
 	return cfg.RefreshContextFrag()
+}
+
+func latestUserMessageIndex(messages []sdk.Message) *int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == sdk.MessageRoleUser {
+			index := i
+			return &index
+		}
+	}
+	return nil
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {
