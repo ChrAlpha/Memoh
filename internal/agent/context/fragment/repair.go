@@ -139,20 +139,20 @@ func FragMessage(frag ContextFrag) *sdk.Message {
 }
 
 func RebuildFragMessage(frag ContextFrag, msg sdk.Message) ContextFrag {
-	return MessageFrag(MessageFragInput{
-		ID:            frag.ID,
-		Message:       msg,
-		Kind:          frag.Kind,
-		Slot:          frag.Slot,
-		Priority:      frag.Priority,
-		CacheClass:    frag.CacheClass,
-		Trust:         frag.Trust,
-		Scope:         frag.Scope,
-		Source:        frag.Provenance.Source,
-		SourceID:      frag.Provenance.SourceID,
-		Collector:     frag.Provenance.Collector,
-		Index:         frag.Provenance.Index,
-		Budget:        frag.Budget,
-		TokenEstimate: frag.TokenEstimate,
-	})
+	rebuilt := frag
+	cloned := cloneMessage(msg)
+	rebuilt.Role = cloned.Role
+	rebuilt.Parts = []Part{{
+		Type:       PartSDKMessage,
+		Message:    &cloned,
+		SDKMessage: &cloned,
+	}}
+	rebuilt.TokenEstimate = 0
+
+	ref := rebuilt.Ref
+	ref.HashAlgo = ""
+	ref.HashScope = ""
+	ref.ContentHash = ""
+	rebuilt.Ref = ContextRef{}
+	return WithContextRef(rebuilt, ref)
 }
