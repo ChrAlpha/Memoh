@@ -1020,6 +1020,55 @@ export type CompactionLog = {
     usage?: unknown;
 };
 
+export type ConnectitAuthMethod = {
+    credential_fields?: Array<ConnectitCredentialField>;
+    key?: string;
+    label?: string;
+    type?: string;
+};
+
+export type ConnectitConnector = {
+    auth_methods?: Array<ConnectitAuthMethod>;
+    categories?: Array<string>;
+    description?: string;
+    homepage_url?: string;
+    icon_url?: string;
+    mode?: string;
+    name?: string;
+    status?: string;
+    type?: string;
+};
+
+export type ConnectitCredentialField = {
+    default_value?: string;
+    description?: string;
+    input_type?: string;
+    key?: string;
+    label?: string;
+    options?: Array<string>;
+    pattern?: string;
+    required?: boolean;
+    secret?: boolean;
+};
+
+export type ConnectitOAuthAuthorization = {
+    authorization_url?: string;
+    connection_id?: string;
+};
+
+export type ConnectorsConnector = {
+    alias?: string;
+    auth_method?: string;
+    connection_id?: string;
+    connector_type?: string;
+    enabled?: boolean;
+    status?: string;
+};
+
+export type ConnectorsListResponse = {
+    items?: Array<ConnectorsConnector>;
+};
+
 export type ConversationSkillActivation = {
     prompt?: string;
     skills?: Array<ConversationSkillActivationSkill>;
@@ -1439,6 +1488,27 @@ export type HandlersCommandEventResponse = {
     type?: string;
 };
 
+export type HandlersConnectorCredentialRequest = {
+    auth_method?: string;
+    connector_type?: string;
+    fields?: {
+        [key: string]: string;
+    };
+};
+
+export type HandlersConnectorEnabledRequest = {
+    /**
+     * Pointer so an empty or mistyped body fails validation instead of
+     * silently disabling the connector.
+     */
+    enabled: boolean;
+};
+
+export type HandlersConnectorOAuthRequest = {
+    auth_method?: string;
+    connector_type?: string;
+};
+
 export type HandlersContainerCpuMetricsResponse = {
     kernel_nanoseconds?: number;
     usage_nanocores?: number;
@@ -1760,6 +1830,7 @@ export type HandlersModelTokenUsage = {
 
 export type HandlersPingResponse = {
     commit_hash?: string;
+    connectors?: boolean;
     container_backend?: string;
     snapshot_supported?: boolean;
     status?: string;
@@ -4489,6 +4560,389 @@ export type GetBotsByBotIdCompactionLogsResponses = {
 };
 
 export type GetBotsByBotIdCompactionLogsResponse = GetBotsByBotIdCompactionLogsResponses[keyof GetBotsByBotIdCompactionLogsResponses];
+
+export type GetBotsByBotIdConnectorsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors';
+};
+
+export type GetBotsByBotIdConnectorsErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type GetBotsByBotIdConnectorsError = GetBotsByBotIdConnectorsErrors[keyof GetBotsByBotIdConnectorsErrors];
+
+export type GetBotsByBotIdConnectorsResponses = {
+    /**
+     * OK
+     */
+    200: ConnectorsListResponse;
+};
+
+export type GetBotsByBotIdConnectorsResponse = GetBotsByBotIdConnectorsResponses[keyof GetBotsByBotIdConnectorsResponses];
+
+export type PostBotsByBotIdConnectorsApiKeyData = {
+    /**
+     * Credential request
+     */
+    body: HandlersConnectorCredentialRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/api-key';
+};
+
+export type PostBotsByBotIdConnectorsApiKeyErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type PostBotsByBotIdConnectorsApiKeyError = PostBotsByBotIdConnectorsApiKeyErrors[keyof PostBotsByBotIdConnectorsApiKeyErrors];
+
+export type PostBotsByBotIdConnectorsApiKeyResponses = {
+    /**
+     * Created
+     */
+    201: ConnectorsConnector;
+};
+
+export type PostBotsByBotIdConnectorsApiKeyResponse = PostBotsByBotIdConnectorsApiKeyResponses[keyof PostBotsByBotIdConnectorsApiKeyResponses];
+
+export type PostBotsByBotIdConnectorsOauthData = {
+    /**
+     * OAuth request
+     */
+    body: HandlersConnectorOAuthRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/oauth';
+};
+
+export type PostBotsByBotIdConnectorsOauthErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type PostBotsByBotIdConnectorsOauthError = PostBotsByBotIdConnectorsOauthErrors[keyof PostBotsByBotIdConnectorsOauthErrors];
+
+export type PostBotsByBotIdConnectorsOauthResponses = {
+    /**
+     * Created
+     */
+    201: ConnectitOAuthAuthorization;
+};
+
+export type PostBotsByBotIdConnectorsOauthResponse = PostBotsByBotIdConnectorsOauthResponses[keyof PostBotsByBotIdConnectorsOauthResponses];
+
+export type DeleteBotsByBotIdConnectorsByConnectionIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Connect-It connection ID
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/{connection_id}';
+};
+
+export type DeleteBotsByBotIdConnectorsByConnectionIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type DeleteBotsByBotIdConnectorsByConnectionIdError = DeleteBotsByBotIdConnectorsByConnectionIdErrors[keyof DeleteBotsByBotIdConnectorsByConnectionIdErrors];
+
+export type DeleteBotsByBotIdConnectorsByConnectionIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetBotsByBotIdConnectorsByConnectionIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Connect-It connection ID
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/{connection_id}';
+};
+
+export type GetBotsByBotIdConnectorsByConnectionIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type GetBotsByBotIdConnectorsByConnectionIdError = GetBotsByBotIdConnectorsByConnectionIdErrors[keyof GetBotsByBotIdConnectorsByConnectionIdErrors];
+
+export type GetBotsByBotIdConnectorsByConnectionIdResponses = {
+    /**
+     * OK
+     */
+    200: ConnectorsConnector;
+};
+
+export type GetBotsByBotIdConnectorsByConnectionIdResponse = GetBotsByBotIdConnectorsByConnectionIdResponses[keyof GetBotsByBotIdConnectorsByConnectionIdResponses];
+
+export type PatchBotsByBotIdConnectorsByConnectionIdData = {
+    /**
+     * Enabled state
+     */
+    body: HandlersConnectorEnabledRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Connect-It connection ID
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/{connection_id}';
+};
+
+export type PatchBotsByBotIdConnectorsByConnectionIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdConnectorsByConnectionIdError = PatchBotsByBotIdConnectorsByConnectionIdErrors[keyof PatchBotsByBotIdConnectorsByConnectionIdErrors];
+
+export type PatchBotsByBotIdConnectorsByConnectionIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PostBotsByBotIdConnectorsByConnectionIdReauthData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Connect-It connection ID
+         */
+        connection_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/connectors/{connection_id}/reauth';
+};
+
+export type PostBotsByBotIdConnectorsByConnectionIdReauthErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type PostBotsByBotIdConnectorsByConnectionIdReauthError = PostBotsByBotIdConnectorsByConnectionIdReauthErrors[keyof PostBotsByBotIdConnectorsByConnectionIdReauthErrors];
+
+export type PostBotsByBotIdConnectorsByConnectionIdReauthResponses = {
+    /**
+     * OK
+     */
+    200: ConnectitOAuthAuthorization;
+};
+
+export type PostBotsByBotIdConnectorsByConnectionIdReauthResponse = PostBotsByBotIdConnectorsByConnectionIdReauthResponses[keyof PostBotsByBotIdConnectorsByConnectionIdReauthResponses];
 
 export type DeleteBotsByBotIdContainerData = {
     body?: never;
@@ -10596,6 +11050,39 @@ export type GetChannelsByPlatformResponses = {
 };
 
 export type GetChannelsByPlatformResponse = GetChannelsByPlatformResponses[keyof GetChannelsByPlatformResponses];
+
+export type GetConnectorsCatalogData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/connectors/catalog';
+};
+
+export type GetConnectorsCatalogErrors = {
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type GetConnectorsCatalogError = GetConnectorsCatalogErrors[keyof GetConnectorsCatalogErrors];
+
+export type GetConnectorsCatalogResponses = {
+    /**
+     * OK
+     */
+    200: Array<ConnectitConnector>;
+};
+
+export type GetConnectorsCatalogResponse = GetConnectorsCatalogResponses[keyof GetConnectorsCatalogResponses];
 
 export type GetEmailProvidersData = {
     body?: never;

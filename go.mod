@@ -22,7 +22,7 @@ require (
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
-	github.com/google/jsonschema-go v0.4.2
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.9.2
@@ -33,9 +33,10 @@ require (
 	github.com/line/line-bot-sdk-go/v8 v8.20.1
 	github.com/mailgun/mailgun-go/v5 v5.14.0
 	github.com/memohai/acgo v0.0.0-20260221232113-babac0d6acd7
+	github.com/memohai/connect-it/sdk/go v0.1.0
 	github.com/memohai/dingtalk-stream-sdk-go v0.0.0-20260405113102-87e23096b978
 	github.com/memohai/twilight-ai v0.4.1-0.20260729090613-198e82782622
-	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pgvector/pgvector-go v0.4.0

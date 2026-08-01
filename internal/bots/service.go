@@ -27,6 +27,7 @@ type Service struct {
 	queries               dbstore.Queries
 	logger                *slog.Logger
 	containerLifecycle    ContainerLifecycle
+	connectorLifecycle    ConnectorLifecycle
 	checkers              []RuntimeChecker
 	containerReachability func(ctx context.Context, botID string) error
 }
@@ -58,6 +59,11 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 // SetContainerLifecycle registers a container lifecycle handler for bot operations.
 func (s *Service) SetContainerLifecycle(lc ContainerLifecycle) {
 	s.containerLifecycle = lc
+}
+
+// SetConnectorLifecycle registers connector cleanup for bot deletion.
+func (s *Service) SetConnectorLifecycle(lc ConnectorLifecycle) {
+	s.connectorLifecycle = lc
 }
 
 // SetContainerReachability registers a function that checks whether a bot's
@@ -598,6 +604,28 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 		lifecycleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), botLifecycleOperationTimeout)
 		defer cancel()
 
+		// The revert must succeed even when the failing cleanup consumed the
+		// whole lifecycle budget: reverting on the exhausted context would
+		// strand the bot in status "deleting" with no retry path.
+		revertToReady := func() {
+			revertCtx, cancelRevert := context.WithTimeout(context.WithoutCancel(lifecycleCtx), 15*time.Second)
+			defer cancelRevert()
+			if err := s.updateStatus(revertCtx, botID, BotStatusReady); err != nil {
+				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
+			}
+		}
+
+		if s.connectorLifecycle != nil {
+			if err := s.connectorLifecycle.CleanupBotConnectors(lifecycleCtx, botID); err != nil {
+				s.logger.Error("bot connector cleanup failed",
+					slog.String("bot_id", botID),
+					slog.Any("error", err),
+				)
+				revertToReady()
+				return
+			}
+		}
+
 		if s.containerLifecycle != nil {
 			if err := s.containerLifecycle.CleanupBotContainer(lifecycleCtx, botID, false); err != nil {
 				s.logger.Error("bot container cleanup failed",
@@ -613,9 +641,7 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 				slog.String("bot_id", botID),
 				slog.Any("error", err),
 			)
-			if err := s.updateStatus(lifecycleCtx, botID, BotStatusReady); err != nil {
-				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
-			}
+			revertToReady()
 			return
 		}
 		if err := s.queries.DeleteBotByID(lifecycleCtx, botUUID); err != nil {
@@ -623,9 +649,7 @@ func (s *Service) enqueueDeleteLifecycle(ctx context.Context, botID string) {
 				slog.String("bot_id", botID),
 				slog.Any("error", err),
 			)
-			if err := s.updateStatus(lifecycleCtx, botID, BotStatusReady); err != nil {
-				s.logger.Error("revert bot status failed", slog.String("bot_id", botID), slog.Any("error", err))
-			}
+			revertToReady()
 			return
 		}
 	}()

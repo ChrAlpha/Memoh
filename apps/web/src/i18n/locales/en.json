@@ -120,6 +120,15 @@
     "search_provider": {
       "type_conflict": "This web search provider has already been configured."
     },
+    "connector": {
+      "request_invalid": "The connector request is invalid.",
+      "not_configured": "Connectors are not configured on this server.",
+      "not_found": "This connector is no longer available.",
+      "conflict": "This connector conflicts with an existing connection.",
+      "request_rejected": "Connect-It rejected the connector request.",
+      "upstream_unavailable": "Connect-It could not complete the request. Please try again shortly.",
+      "operation_failed": "The connector operation failed. Please try again."
+    },
     "workspace": {
       "unreachable": "The workspace could not be reached.",
       "image_incompatible": "This workspace image is incompatible. Rebuild it from the current Memoh workspace image and try again.",
@@ -1970,6 +1979,7 @@
       "schedule": "Schedule",
       "history": "History",
       "plugins": "Plugins",
+      "connectors": "Connectors",
       "skills": "Skills",
       "email": "Email",
       "files": "Files",
@@ -3141,11 +3151,14 @@
   "supermarket": {
     "title": "Supermarket",
     "searchPlaceholder": "Search Plugins and Skills...",
+    "searchPlaceholderWithConnectors": "Search Plugins, Skills, and Connectors...",
     "pluginSection": "Plugins",
     "skillsSection": "Skills",
+    "connectorsSection": "Connectors",
     "noResults": "No results found",
     "noPluginResults": "No plugins found",
     "noSkillResults": "No skills found",
+    "noConnectorResults": "No connectors found",
     "install": "Install",
     "installToBot": "Install to Bot",
     "selectBot": "Select a bot",
@@ -3184,6 +3197,50 @@
     "authManagedOAuth": "Managed OAuth",
     "authUserSecret": "User secret",
     "authNone": "No auth"
+  },
+  "connectors": {
+    "title": "Connectors",
+    "connected": "Connected services",
+    "browse": "Browse connectors",
+    "connect": "Connect",
+    "connectTitle": "Connect {name}",
+    "unavailable": "Unavailable",
+    "unknown": "Unknown connector",
+    "emptyTitle": "No connectors yet",
+    "emptyDescription": "Connect a service to give this Bot access to its tools.",
+    "catalogEmptyTitle": "No connectors available",
+    "catalogEmptyDescription": "Configure Connect-It to browse and connect services.",
+    "authMethod": "Authentication method",
+    "selectAuthMethod": "Choose an authentication method",
+    "credentialPlaceholder": "Enter {field}",
+    "enabled": "Connector enabled",
+    "reauthorize": "Reauthorize",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect connector?",
+    "disconnectDescription": "This will remove {name} from the Bot and delete its stored connection.",
+    "disconnected": "Connector disconnected",
+    "disconnectFailed": "Failed to disconnect connector",
+    "loadFailed": "Failed to load connectors",
+    "updateFailed": "Failed to update connector",
+    "oauthSuccess": "Authorization completed",
+    "oauthFailed": "Authorization failed",
+    "oauthPopupBlocked": "The authorization window was blocked — allow popups for this page and try again.",
+    "connectedSuccess": "{name} connected",
+    "connectFailed": "Failed to connect service",
+    "status": {
+      "active": "Connected",
+      "pending": "Waiting for authorization",
+      "reauthRequired": "Authorization required",
+      "authorizationFailed": "Authorization failed",
+      "unavailable": "Unavailable",
+      "disabled": "Disabled"
+    },
+    "validation": {
+      "botRequired": "Select a Bot",
+      "authMethodRequired": "Select an authentication method",
+      "fieldRequired": "{field} is required",
+      "fieldInvalid": "{field} is invalid"
+    }
   },
   "platform": {
     "addTitle": "Add Platform",
