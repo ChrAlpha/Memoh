@@ -154,6 +154,8 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	runConfig.Messages = discussMessagesToSDK(cmd.DiscussMessages)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
+	runConfig.ContextCurrentUserMessageIndex = nil
+	runConfig.ContextSourceFrags = nil
 
 	// Inline image attachments from new RC segments so the model receives
 	// them as native vision input (ImagePart) on the first encounter.
