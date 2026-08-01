@@ -2,13 +2,17 @@ package application
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/contextview"
+	"github.com/memohai/memoh/internal/hooks"
 )
 
 func TestBuildContextFragScopePreservesIMTopology(t *testing.T) {
@@ -106,6 +110,46 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	}
 	if !messagesContainImage(got.Messages) {
 		t.Fatalf("prepared messages do not contain injected image: %#v", got.Messages)
+	}
+	if got.ContextCurrentUserMessageIndex == nil || *got.ContextCurrentUserMessageIndex != 0 {
+		t.Fatalf("current user index = %#v, want image recipient 0", got.ContextCurrentUserMessageIndex)
+	}
+	if len(got.ContextSourceFrags) == 0 {
+		t.Fatal("prepared config did not build authoritative source fragments")
+	}
+}
+
+func TestBuildProviderSourceFragsPreservesLegacyPromptHookAndMemoryBytes(t *testing.T) {
+	t.Parallel()
+	params := native.SystemPromptParams{SessionType: sessionmode.Chat, Timezone: "UTC"}
+	hookTexts := []string{
+		formatServiceHookContext(hooks.EventBeforePromptBuild, "before bytes"),
+		formatServiceHookContext(hooks.EventAfterPromptBuild, "after bytes"),
+	}
+	system := native.GenerateSystemPrompt(params) + "\n\n" + hookTexts[0] + "\n\n" + hookTexts[1]
+	messages := []sdk.Message{
+		sdk.UserMessage("raw memory recall\n\n[Hook Context: AfterMemorySearch]\nraw memory hook"),
+		sdk.UserMessage("  current request  "),
+	}
+	index := 1
+	cfg := native.RunConfig{
+		System: system, Messages: messages, ContextCurrentUserMessageIndex: &index,
+		ContextQueryMaterialized: true, ContextScope: contextfrag.Scope{BotID: "bot-1"},
+	}
+	cfg.ContextSourceFrags = buildProviderSourceFrags(context.Background(), cfg, native.GenerateSystemSections(params), hookTexts)
+
+	hookCount := 0
+	for _, frag := range cfg.ContextSourceFrags {
+		if frag.Kind == contextfrag.KindHookContext {
+			hookCount++
+		}
+	}
+	if hookCount != 1 {
+		t.Fatalf("hook fragment count = %d, want one combined system tail", hookCount)
+	}
+	got := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if got.System != system || !reflect.DeepEqual(got.Messages, messages) {
+		t.Fatalf("provider bytes changed: system=%q messages=%#v", got.System, got.Messages)
 	}
 }
 
