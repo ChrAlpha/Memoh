@@ -141,8 +141,8 @@ func TestSpawnRunConfigCarriesContextScopeAndMaterializedQuery(t *testing.T) {
 		t.Fatal("spawn query should be marked materialized because it is appended to Messages")
 	}
 	rc = rc.RefreshContextFrag()
-	if manifestHasAgentKind(rc.ContextManifest, contextfrag.KindCurrentUserMessage) {
-		t.Fatalf("manifest should not include duplicate pending current user query: %#v", rc.ContextManifest.Items)
+	if !manifestHasAgentKind(rc.ContextManifest, contextfrag.KindCurrentUserMessage) {
+		t.Fatalf("manifest should classify the materialized query as current user: %#v", rc.ContextManifest.Items)
 	}
 	if rc.ContextManifest.Counts.Messages != 2 {
 		t.Fatalf("manifest message count = %d, want history + materialized query", rc.ContextManifest.Counts.Messages)

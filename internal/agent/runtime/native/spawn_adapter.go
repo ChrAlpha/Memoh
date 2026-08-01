@@ -39,11 +39,14 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 	messages := cfg.Messages
+	var currentUserMessageIndex *int
 	if cfg.Query != "" {
 		messages = append(messages, sdk.Message{
 			Role:    sdk.MessageRoleUser,
 			Content: []sdk.MessagePart{sdk.TextPart{Text: cfg.Query}},
 		})
+		index := len(messages) - 1
+		currentUserMessageIndex = &index
 	}
 
 	identity := SessionContext{
@@ -71,24 +74,25 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 			Path:        skill.Path,
 		})
 	}
-	return RunConfig{
-		Model:                    cfg.Model,
-		CurrentModelUUID:         cfg.ModelUUID,
-		CurrentModelID:           cfg.ModelID,
-		CurrentModelProvider:     cfg.ModelProvider,
-		System:                   cfg.System,
-		Query:                    cfg.Query,
-		ContextQueryMaterialized: cfg.Query != "",
-		SessionType:              cfg.SessionType,
-		Messages:                 messages,
-		ReasoningEffort:          cfg.ReasoningEffort,
-		PromptCacheTTL:           cfg.PromptCacheTTL,
-		ChatCompletionsCompat:    cfg.ChatCompletionsCompat,
-		SupportsImageInput:       cfg.SupportsImageInput,
-		SupportsToolCall:         cfg.SupportsToolCall,
-		Identity:                 identity,
-		Skills:                   skills,
-		BackgroundManager:        cfg.BackgroundManager,
+	rc := RunConfig{
+		Model:                          cfg.Model,
+		CurrentModelUUID:               cfg.ModelUUID,
+		CurrentModelID:                 cfg.ModelID,
+		CurrentModelProvider:           cfg.ModelProvider,
+		System:                         cfg.System,
+		Query:                          cfg.Query,
+		ContextQueryMaterialized:       cfg.Query != "",
+		ContextCurrentUserMessageIndex: currentUserMessageIndex,
+		SessionType:                    cfg.SessionType,
+		Messages:                       messages,
+		ReasoningEffort:                cfg.ReasoningEffort,
+		PromptCacheTTL:                 cfg.PromptCacheTTL,
+		ChatCompletionsCompat:          cfg.ChatCompletionsCompat,
+		SupportsImageInput:             cfg.SupportsImageInput,
+		SupportsToolCall:               cfg.SupportsToolCall,
+		Identity:                       identity,
+		Skills:                         skills,
+		BackgroundManager:              cfg.BackgroundManager,
 		ContextScope: contextfrag.Scope{
 			BotID:             identity.BotID,
 			ChatID:            identity.ChatID,
@@ -100,6 +104,30 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 			Enabled: cfg.LoopDetection.Enabled,
 		},
 	}
+	rc.ContextSourceFrags = SpawnContextSourceFrags(rc)
+	return rc
+}
+
+// SpawnContextSourceFrags uses typed system sections only when they reproduce
+// the caller-supplied System exactly. Custom spawn prompts deliberately stay
+// on the legacy collector fallback so PR1 cannot replace or normalize them.
+func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
+	sections := GenerateSystemSections(SystemPromptParams{SessionType: rc.SessionType})
+	if renderSystemSections(sections) != rc.System {
+		return nil
+	}
+	query := rc.Query
+	if rc.ContextQueryMaterialized {
+		query = ""
+	}
+	messages := contextfrag.CompileFrags(contextfrag.CompileInput{
+		Scope:                   rc.ContextScope,
+		Messages:                rc.Messages,
+		CurrentUserMessageIndex: rc.ContextCurrentUserMessageIndex,
+		Query:                   query,
+	})
+	frags := SystemSectionFrags(sections, rc.ContextScope)
+	return append(frags, messages...)
 }
 
 // GenerateWithWatchdog runs the agent in streaming mode, touching the
