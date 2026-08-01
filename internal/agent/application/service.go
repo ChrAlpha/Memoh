@@ -134,6 +134,7 @@ type Service struct {
 	allowedTeam         string
 	sessionRuntime      turnAdmitter
 	decisionRuntime     *sessionruntime.Manager
+	publishTurnEvent    func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	turnHooks           *turnRuntimeHooks
 }
 
