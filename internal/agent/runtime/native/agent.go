@@ -13,6 +13,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/hooks"
@@ -81,7 +82,7 @@ func (a *Agent) Generate(ctx context.Context, cfg RunConfig) (*GenerateResult, e
 }
 
 func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCall) (sdk.ToolResultPart, error) {
-	sdkTools, _, err := a.assembleTools(ctx, cfg, nil, false)
+	sdkTools, _, _, err := a.assembleTools(ctx, cfg, nil, false)
 	if err != nil {
 		return sdk.ToolResultPart{}, fmt.Errorf("assemble tools: %w", err)
 	}
@@ -160,13 +161,15 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	var sdkTools []sdk.Tool
 	if cfg.SupportsToolCall {
 		var toolUsage string
+		var toolDefs []contextfrag.ToolDefAccounting
 		var err error
-		sdkTools, toolUsage, err = a.assembleTools(streamCtx, cfg, streamEmitter, cfg.LiveToolStream)
+		sdkTools, toolUsage, toolDefs, err = a.assembleTools(streamCtx, cfg, streamEmitter, cfg.LiveToolStream)
 		if err != nil {
 			turnError = fmt.Sprintf("assemble tools: %v", err)
 			sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 			return
 		}
+		cfg.ContextToolDefs = toolDefs
 		if toolUsage != "" {
 			// Must run before buildGenerateOptions so prompt caching and
 			// background task summaries see the usage-augmented text.
@@ -743,11 +746,13 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	var sdkTools []sdk.Tool
 	if cfg.SupportsToolCall {
 		var toolUsage string
+		var toolDefs []contextfrag.ToolDefAccounting
 		var err error
-		sdkTools, toolUsage, err = a.assembleTools(genCtx, cfg, collectEmitter, false)
+		sdkTools, toolUsage, toolDefs, err = a.assembleTools(genCtx, cfg, collectEmitter, false)
 		if err != nil {
 			return nil, fmt.Errorf("assemble tools: %w", err)
 		}
+		cfg.ContextToolDefs = toolDefs
 		if toolUsage != "" {
 			// Must run before buildGenerateOptions so prompt caching and
 			// background task summaries see the usage-augmented text.
@@ -933,9 +938,9 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 // (see tools.ToolUsage). emitter is injected into the session context so that
 // tools targeting the current conversation can push side-effect events
 // (attachments, reactions, speech) directly into the agent stream.
-func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter, liveStream bool) ([]sdk.Tool, string, error) {
+func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.StreamEmitter, liveStream bool) ([]sdk.Tool, string, []contextfrag.ToolDefAccounting, error) {
 	if len(a.toolProviders) == 0 {
-		return nil, "", nil
+		return nil, "", nil, nil
 	}
 	skillsMap := make(map[string]tools.SkillDetail, len(cfg.Skills))
 	for _, s := range cfg.Skills {
@@ -975,6 +980,7 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 	}
 
 	var allTools []sdk.Tool
+	var toolDefs []contextfrag.ToolDefAccounting
 	type usageRegistration struct {
 		provider tools.ToolUsage
 	}
@@ -1008,6 +1014,13 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		if len(providerTools) == 0 {
 			continue
 		}
+		label := "native"
+		if labeler, ok := provider.(tools.ProviderLabeler); ok {
+			label = labeler.ProviderLabel()
+		}
+		for _, tool := range providerTools {
+			toolDefs = append(toolDefs, contextfrag.ToolDefAccountingFor(label, tool))
+		}
 		allTools = append(allTools, providerTools...)
 		// Collect group-level usage guidance only from providers that actually
 		// contributed tools this session, so guidance and registration share
@@ -1029,7 +1042,7 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 	if len(usageSections) > 0 {
 		usage = "## Tool usage\n\n" + strings.Join(usageSections, "\n\n")
 	}
-	return allTools, usage, nil
+	return allTools, usage, toolDefs, nil
 }
 
 func appendToolUsageToSystem(system, toolUsage string) string {
