@@ -41,7 +41,10 @@ func TestLegacyMaterializeQuerySplicesToolUsageBeforeWorkspace(t *testing.T) {
 		ContextToolUsage: "## Tool usage\n\nUSE_TOOLS",
 	}
 	got := legacyMaterializeQuery(cfg)
-	if strings.Index(got.System, "## Tool usage") < 0 || strings.Index(got.System, "## Tool usage") > strings.Index(got.System, "## Workspace instruction files") {
+	if !strings.Contains(got.System, "## Tool usage") {
+		t.Fatalf("system = %q, want tool usage", got.System)
+	}
+	if strings.Index(got.System, "## Tool usage") > strings.Index(got.System, "## Workspace instruction files") {
 		t.Fatalf("system = %q", got.System)
 	}
 }

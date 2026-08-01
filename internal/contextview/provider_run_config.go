@@ -63,7 +63,8 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	if err != nil {
 		return nil
 	}
-	messages := append(history, current...)
+	messages := append([]contextfrag.ContextFrag(nil), history...)
+	messages = append(messages, current...)
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Provenance.Index < messages[j].Provenance.Index
 	})
