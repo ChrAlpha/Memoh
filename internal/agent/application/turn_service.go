@@ -317,7 +317,12 @@ func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, 
 			}
 			if err != nil {
 				h.failed.Store(true)
-				if h.streamErr == nil {
+				// StreamChat reports its terminal context cause. When the run
+				// was explicitly canceled, that context.Canceled value names a
+				// stopped run rather than a provider failure.
+				canceledRun := errors.Is(err, context.Canceled) &&
+					errors.Is(context.Cause(h.ctx), context.Canceled)
+				if h.streamErr == nil && !canceledRun {
 					h.streamErr = err
 				}
 				if !clientGone {

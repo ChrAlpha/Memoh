@@ -11,6 +11,7 @@ import (
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/chat/timeline"
@@ -377,6 +378,7 @@ func TestDiscussCancelUnblocksFullEventBuffer(t *testing.T) {
 		resolveResult: ResolveRunConfigResult{ModelID: "model-1"},
 	}
 	a := newDiscussTestService(&fakeRunner{}, agent, resolver)
+	admitter := a.sessionRuntime.(*scriptedAdmitter)
 	h, err := a.StartTurn(context.Background(), discussCommand())
 	if err != nil {
 		t.Fatal(err)
@@ -389,6 +391,9 @@ func TestDiscussCancelUnblocksFullEventBuffer(t *testing.T) {
 		case _, ok := <-h.Events():
 			if !ok {
 				for range h.Errs() {
+				}
+				if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
+					t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
 				}
 				return
 			}
