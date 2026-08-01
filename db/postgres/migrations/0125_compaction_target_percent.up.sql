@@ -1,4 +1,4 @@
--- 0124_compaction_target_percent
+-- 0125_compaction_target_percent
 -- Replace the legacy compaction ratio with a nullable window keep-share override.
 
 ALTER TABLE bots NO FORCE ROW LEVEL SECURITY;

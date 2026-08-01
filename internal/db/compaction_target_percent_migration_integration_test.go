@@ -16,14 +16,14 @@ func TestCompactionTargetPercentMigrationFiles(t *testing.T) {
 	if !strings.Contains(baseline, "compaction_target_percent INTEGER") || strings.Contains(baseline, "compaction_ratio INTEGER") {
 		t.Fatal("canonical schema must contain only the nullable compaction target percent")
 	}
-	up := readEmbeddedMigration(t, "postgres/migrations/0124_compaction_target_percent.up.sql")
+	up := readEmbeddedMigration(t, "postgres/migrations/0125_compaction_target_percent.up.sql")
 	if !strings.Contains(up, "100 - compaction_ratio") || !strings.Contains(up, "compaction_threshold > 0") {
 		t.Fatal("up migration must map legacy manual ratios to target percentages")
 	}
 	if !strings.Contains(up, "NO FORCE ROW LEVEL SECURITY") || !strings.Contains(up, "DISABLE ROW LEVEL SECURITY") {
 		t.Fatal("up migration must suspend FORCE RLS for its all-team backfill")
 	}
-	down := readEmbeddedMigration(t, "postgres/migrations/0124_compaction_target_percent.down.sql")
+	down := readEmbeddedMigration(t, "postgres/migrations/0125_compaction_target_percent.down.sql")
 	if !strings.Contains(down, "GREATEST(1, LEAST(100, 100 - compaction_target_percent))") {
 		t.Fatal("down migration must restore a clamped legacy ratio")
 	}
@@ -83,10 +83,10 @@ CREATE POLICY bots_team_isolation ON bots
 	}
 	migrationRole := migrationTestRole(t, ctx, tx, schema)
 
-	up := readEmbeddedMigration(t, "postgres/migrations/0124_compaction_target_percent.up.sql")
-	down := readEmbeddedMigration(t, "postgres/migrations/0124_compaction_target_percent.down.sql")
-	execMigrationAsRole(t, ctx, tx, migrationRole, up, "apply 0124 up")
-	execMigrationAsRole(t, ctx, tx, migrationRole, up, "reapply 0124 up")
+	up := readEmbeddedMigration(t, "postgres/migrations/0125_compaction_target_percent.up.sql")
+	down := readEmbeddedMigration(t, "postgres/migrations/0125_compaction_target_percent.down.sql")
+	execMigrationAsRole(t, ctx, tx, migrationRole, up, "apply 0125 up")
+	execMigrationAsRole(t, ctx, tx, migrationRole, up, "reapply 0125 up")
 	assertRLSForced(t, ctx, tx)
 	assertColumnExists(t, ctx, tx, schema, "bots", "compaction_ratio", false)
 	assertColumnExists(t, ctx, tx, schema, "bots", "compaction_target_percent", true)
@@ -94,8 +94,8 @@ CREATE POLICY bots_team_isolation ON bots
 	assertNullableInt(t, ctx, tx, 2, intPointer(20))
 	assertNullableInt(t, ctx, tx, 3, intPointer(99))
 
-	execMigrationAsRole(t, ctx, tx, migrationRole, down, "apply 0124 down")
-	execMigrationAsRole(t, ctx, tx, migrationRole, down, "reapply 0124 down")
+	execMigrationAsRole(t, ctx, tx, migrationRole, down, "apply 0125 down")
+	execMigrationAsRole(t, ctx, tx, migrationRole, down, "reapply 0125 down")
 	assertRLSForced(t, ctx, tx)
 	assertColumnExists(t, ctx, tx, schema, "bots", "compaction_target_percent", false)
 	assertColumnExists(t, ctx, tx, schema, "bots", "compaction_ratio", true)
@@ -103,7 +103,7 @@ CREATE POLICY bots_team_isolation ON bots
 	assertInt(t, ctx, tx, 2, 80)
 	assertInt(t, ctx, tx, 3, 1)
 
-	execMigrationAsRole(t, ctx, tx, migrationRole, up, "apply 0124 up after down")
+	execMigrationAsRole(t, ctx, tx, migrationRole, up, "apply 0125 up after down")
 	assertRLSForced(t, ctx, tx)
 	assertNullableInt(t, ctx, tx, 1, nil)
 	assertNullableInt(t, ctx, tx, 2, intPointer(20))
