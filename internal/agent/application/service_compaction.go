@@ -54,6 +54,13 @@ func compactionTargetTokens(targetPercent *int, contextTokenBudget int) int {
 	return max(1, contextTokenBudget*percent/100)
 }
 
+// syncBackstopTargetTokens caps the hard-share backstop at the soft share so it
+// always makes progress and lands below the soft trigger, restoring hysteresis.
+func syncBackstopTargetTokens(targetPercent *int, contextTokenBudget int) int {
+	softTarget := max(1, contextTokenBudget*compactionSoftThresholdPercent/100)
+	return min(compactionTargetTokens(targetPercent, contextTokenBudget), softTarget)
+}
+
 func syncCompactionShouldRun(pressure, contextTokenBudget int) bool {
 	threshold := hardCompactionThreshold(contextTokenBudget)
 	return threshold > 0 && pressure >= threshold
@@ -179,7 +186,7 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 		// disabled means there is nothing to compact.
 		return compaction.Result{}
 	}
-	cfg.TargetTokens = compactionTargetTokens(botSettings.CompactionTargetPercent, contextTokenBudget)
+	cfg.TargetTokens = syncBackstopTargetTokens(botSettings.CompactionTargetPercent, contextTokenBudget)
 
 	s.logger.Info("compaction sync: running synchronously",
 		slog.String("bot_id", req.BotID),

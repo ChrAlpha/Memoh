@@ -59,7 +59,7 @@ func TestUnifiedCompactionController(t *testing.T) {
 			wantSync:    true,
 		},
 		{
-			name:          "target override changes the shared target",
+			name:          "target override changes the configured target",
 			threshold:     90000,
 			targetPercent: targetPercentPointer(55),
 			budget:        200000,
@@ -120,15 +120,17 @@ func (r *recordingCompactionRunner) RunCompactionSync(_ context.Context, cfg com
 	return compaction.Result{Status: compaction.StatusOK}, nil
 }
 
-func TestAutomaticCompactionPathsShareTargetAndBoundAsyncDrain(t *testing.T) {
-	t.Parallel()
-
+func newControllerPolicyService(t *testing.T, targetPercent *int) (*Service, *recordingCompactionRunner) {
+	t.Helper()
 	const (
 		modelUUID    = "00000000-0000-0000-0000-000000000451"
 		providerUUID = "00000000-0000-0000-0000-000000000452"
 		botUUID      = "00000000-0000-0000-0000-000000000453"
-		threadUUID   = "00000000-0000-0000-0000-000000000454"
 	)
+	target := pgtype.Int4{}
+	if targetPercent != nil {
+		target = pgtype.Int4{Int32: int32(*targetPercent), Valid: true} //nolint:gosec // test values stay within 1..99
+	}
 	queries := &controllerQueries{
 		compactionConfigQueries: &compactionConfigQueries{
 			model: sqlc.Model{
@@ -153,7 +155,7 @@ func TestAutomaticCompactionPathsShareTargetAndBoundAsyncDrain(t *testing.T) {
 			ReasoningEffort:         "medium",
 			HeartbeatInterval:       30,
 			CompactionEnabled:       true,
-			CompactionTargetPercent: pgtype.Int4{Int32: 55, Valid: true},
+			CompactionTargetPercent: target,
 			CompactionModelID:       compactionConfigUUID(t, modelUUID),
 		},
 	}
@@ -165,7 +167,17 @@ func TestAutomaticCompactionPathsShareTargetAndBoundAsyncDrain(t *testing.T) {
 		settingsService:   settings.NewService(slog.New(slog.DiscardHandler), queries, nil, nil),
 		compactionService: runner,
 	}
-	req := ChatRequest{BotID: botUUID, ThreadID: threadUUID}
+	return service, runner
+}
+
+func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t, targetPercentPointer(55))
+	req := ChatRequest{
+		BotID:    "00000000-0000-0000-0000-000000000453",
+		ThreadID: "00000000-0000-0000-0000-000000000454",
+	}
 	resolved := resolvedContext{
 		contextTokenBudget:     200000,
 		compactableTokens:      150000,
@@ -190,8 +202,81 @@ func TestAutomaticCompactionPathsShareTargetAndBoundAsyncDrain(t *testing.T) {
 	if len(runner.configs) != 1 {
 		t.Fatalf("sync compaction passes = %d, want 1", len(runner.configs))
 	}
-	if got := runner.configs[0].TargetTokens; got != 110000 {
-		t.Fatalf("sync TargetTokens = %d, want 110000", got)
+	if got := runner.configs[0].TargetTokens; got != 100000 {
+		t.Fatalf("sync TargetTokens = %d, want 100000 soft-share cap", got)
+	}
+}
+
+func TestSyncBackstopTargetCapsAtSoftShare(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		targetPercent *int
+		wantAsync     int
+		wantSync      int
+	}{
+		{
+			name:          "target above hard backstop",
+			targetPercent: targetPercentPointer(90),
+			wantAsync:     7200,
+			wantSync:      4000,
+		},
+		{
+			name:      "default target remains below cap",
+			wantAsync: 3200,
+			wantSync:  3200,
+		},
+		{
+			name:          "target below soft share is honored",
+			targetPercent: targetPercentPointer(49),
+			wantAsync:     3920,
+			wantSync:      3920,
+		},
+		{
+			name:          "target at soft share boundary is honored",
+			targetPercent: targetPercentPointer(50),
+			wantAsync:     4000,
+			wantSync:      4000,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			service, runner := newControllerPolicyService(t, tc.targetPercent)
+			req := ChatRequest{
+				BotID:    "00000000-0000-0000-0000-000000000453",
+				ThreadID: "00000000-0000-0000-0000-000000000454",
+			}
+			resolved := resolvedContext{
+				contextTokenBudget:     8000,
+				compactableTokens:      4000,
+				compactableTokensKnown: true,
+			}
+
+			service.maybeCompact(context.Background(), req, resolved, 4000)
+			if len(runner.configs) != maxAsyncCompactionPasses {
+				t.Fatalf("async compaction passes = %d, want %d", len(runner.configs), maxAsyncCompactionPasses)
+			}
+			for pass, cfg := range runner.configs {
+				if cfg.TargetTokens != tc.wantAsync {
+					t.Fatalf("async pass %d TargetTokens = %d, want %d", pass+1, cfg.TargetTokens, tc.wantAsync)
+				}
+			}
+
+			runner.configs = nil
+			result := service.runCompactionSync(context.Background(), req, 6000, 8000, "")
+			if result.Status != compaction.StatusOK {
+				t.Fatalf("sync compaction status = %q, want %q", result.Status, compaction.StatusOK)
+			}
+			if len(runner.configs) != 1 {
+				t.Fatalf("sync compaction passes = %d, want 1", len(runner.configs))
+			}
+			if got := runner.configs[0].TargetTokens; got != tc.wantSync {
+				t.Fatalf("sync TargetTokens = %d, want %d", got, tc.wantSync)
+			}
+		})
 	}
 }
 
