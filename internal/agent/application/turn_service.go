@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/runtimefence"
@@ -95,7 +96,8 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 			defer assetMu.Unlock()
 			assets = append(assets, refs...)
 		},
-		finishRun: s.turnRunFinisher(runCtx, admission),
+		finishRun:         s.turnRunFinisher(runCtx, admission),
+		publishAgentEvent: s.turnAgentEventPublisher(admission.Handle),
 	}
 	go h.pump(cmd, chunkCh, errCh)
 	return h, nil
@@ -128,9 +130,10 @@ type runHandle struct {
 	// because the terminal record distinguishes a run someone stopped from a run
 	// that broke, and cancellation alone cannot tell them apart. Only the pump
 	// goroutine writes either, and it reads them in its own defer.
-	failed    atomic.Bool
-	streamErr error
-	finishRun func(status string, cause error)
+	failed            atomic.Bool
+	streamErr         error
+	finishRun         func(status string, cause error)
+	publishAgentEvent func(context.Context, native.StreamEvent) error
 }
 
 func (h *runHandle) RunID() string             { return h.id }
@@ -198,7 +201,30 @@ func (h *runHandle) finish() {
 		h.finishRun(sessionruntime.RunStatusAborted, nil)
 		return
 	}
-	h.finishRun(sessionruntime.RunStatusCompleted, nil)
+	// An unnamed clean end lets the runtime preserve waiting_decision or derive
+	// completed from its event projection. Naming completion here would collapse
+	// a deferred decision into a terminal run.
+	h.finishRun("", nil)
+}
+
+func (s *Service) turnAgentEventPublisher(handle sessionruntime.RunHandle) func(context.Context, native.StreamEvent) error {
+	if s == nil || s.publishTurnEvent == nil {
+		return nil
+	}
+	return func(ctx context.Context, event native.StreamEvent) error {
+		return s.publishTurnEvent(ctx, handle, event)
+	}
+}
+
+func (h *runHandle) publishChunk(chunk StreamChunk) error {
+	if h.publishAgentEvent == nil {
+		return nil
+	}
+	var event native.StreamEvent
+	if err := json.Unmarshal(chunk, &event); err != nil || event.Type == "" {
+		return nil
+	}
+	return h.publishAgentEvent(h.ctx, event)
 }
 
 // RespondToolApproval resumes a turn deferred on tool approval.
@@ -256,6 +282,15 @@ func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, 
 			if !ok {
 				chunkCh = nil
 				continue
+			}
+			if err := h.publishChunk(chunk); err != nil {
+				h.failed.Store(true)
+				h.streamErr = err
+				select {
+				case h.errs <- err:
+				case <-h.ctx.Done():
+				}
+				return
 			}
 			seq++
 			if clientGone {

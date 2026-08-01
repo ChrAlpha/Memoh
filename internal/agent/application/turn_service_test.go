@@ -11,6 +11,7 @@ import (
 	"time"
 
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
 )
@@ -45,8 +46,10 @@ type scriptedAdmitter struct {
 	// replay of a run owned elsewhere or already finished.
 	started bool
 
-	inputs   []sessionruntime.AdmitInput
-	finishes []recordedFinish
+	inputs     []sessionruntime.AdmitInput
+	finishes   []recordedFinish
+	published  []native.StreamEvent
+	publishErr error
 }
 
 type recordedFinish struct {
@@ -91,6 +94,17 @@ func (a *scriptedAdmitter) FinishRun(_ context.Context, handle sessionruntime.Ru
 	return nil
 }
 
+func (a *scriptedAdmitter) PublishAgentEvent(
+	_ context.Context,
+	_ sessionruntime.RunHandle,
+	event native.StreamEvent,
+) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.published = append(a.published, event)
+	return a.publishErr
+}
+
 func (a *scriptedAdmitter) admitted() []sessionruntime.AdmitInput {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -124,7 +138,8 @@ func newTurnTestService(streamer testChatStreamer) *Service {
 func newAdmittedTurnTestService(streamer testChatStreamer) (*Service, *scriptedAdmitter) {
 	admitter := newScriptedAdmitter()
 	return &Service{
-		sessionRuntime: admitter,
+		sessionRuntime:   admitter,
+		publishTurnEvent: admitter.PublishAgentEvent,
 		turnHooks: &turnRuntimeHooks{
 			streamChat: streamer.StreamChat,
 		},
@@ -218,6 +233,50 @@ func TestStartTurnStreamsEvents(t *testing.T) {
 		t.Fatalf("ChatRequest not translated: %+v", r.gotReq)
 	}
 	for range h.Errs() {
+	}
+}
+
+func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
+	a, admitter := newAdmittedTurnTestService(&fakeRunner{chunks: []string{
+		`{"type":"tool_approval_request","approval_id":"approval-1","status":"pending"}`,
+		`{"type":"agent_end","approval_id":"approval-1","status":"pending"}`,
+	}})
+	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
+		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainHandle(h)
+
+	admitter.mu.Lock()
+	published := append([]native.StreamEvent(nil), admitter.published...)
+	admitter.mu.Unlock()
+	if len(published) != 2 ||
+		published[0].Type != native.EventToolApprovalRequest ||
+		published[1].Type != native.EventAgentEnd {
+		t.Fatalf("published events = %#v, want approval request then agent end", published)
+	}
+	if got := admitter.awaitFinish(t); got.status != "" {
+		t.Fatalf("clean deferred finish status = %q, want unnamed runtime-derived status", got.status)
+	}
+}
+
+func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
+	a, admitter := newAdmittedTurnTestService(&fakeRunner{chunks: []string{
+		`{"type":"text_delta","delta":"hello"}`,
+	}})
+	admitter.publishErr = errors.New("runtime publication failed")
+	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
+		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainHandle(h)
+
+	if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
+		t.Fatalf("publication failure status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
 	}
 }
 
@@ -692,8 +751,8 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		}
 		drainHandle(h)
 		got := admitter.awaitFinish(t)
-		if got.status != sessionruntime.RunStatusCompleted {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusCompleted)
+		if got.status != "" {
+			t.Fatalf("status = %q, want unnamed runtime-derived completion", got.status)
 		}
 		if got.handle.FencingToken == 0 {
 			t.Fatal("terminal write carried no fencing token: a superseded owner could close this run")

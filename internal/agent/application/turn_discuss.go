@@ -40,6 +40,7 @@ func (s *Service) startDiscussTurn(runCtx context.Context, cmd turn.StartTurnCom
 		return nil, errors.New("turn: discuss runtime not configured")
 	}
 	h := newDiscussHandle(runCtx, cmd, cancel, admission.RunID, s.turnRunFinisher(runCtx, admission))
+	h.publishAgentEvent = s.turnAgentEventPublisher(admission.Handle)
 	go s.pumpDiscuss(runCtx, cmd, h)
 	return h, nil
 }
@@ -171,6 +172,12 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 
 	var finalMessages json.RawMessage
 	for event := range eventCh {
+		if h.publishAgentEvent != nil {
+			if publishErr := h.publishAgentEvent(ctx, event); publishErr != nil {
+				h.emitErr(publishErr)
+				return
+			}
+		}
 		if event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort {
 			finalMessages = event.Messages
 		}
