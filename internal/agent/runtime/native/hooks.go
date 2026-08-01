@@ -207,7 +207,7 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 	}
 	if strings.TrimSpace(res.AppendContext) != "" {
 		cfg = applyBeforeModelCallAppendContext(cfg, res.AppendContext)
-		if a == nil || a.contextViewApplier == nil {
+		if a.contextViewApplier == nil {
 			cfg = cfg.RefreshContextFrag()
 		}
 	}
