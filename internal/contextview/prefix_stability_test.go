@@ -34,6 +34,51 @@ func TestApplyProviderRunConfigCrossTurnPrefixStable(t *testing.T) {
 	}
 }
 
+func TestApplyProviderRunConfigStablePrefixIgnoresTurnLocalScope(t *testing.T) {
+	t.Parallel()
+	sections := []agentpkg.SystemSection{{
+		ID: "system.prompt", Kind: contextfrag.KindSystemPrompt, Priority: 20, Text: "same system",
+	}}
+	messages := []sdk.Message{sdk.UserMessage("same history"), sdk.UserMessage("same current")}
+	currentIndex := 1
+	build := func(scope contextfrag.Scope) agentpkg.RunConfig {
+		cfg := agentpkg.RunConfig{
+			Messages: messages, ContextCurrentUserMessageIndex: &currentIndex, ContextQueryMaterialized: true,
+			ContextScope: scope, ContextToolUsage: "same tool usage",
+		}
+		cfg.ContextSourceFrags = agentpkg.SystemSectionFrags(sections, scope)
+		cfg.ContextSourceFrags = append(cfg.ContextSourceFrags, CollectNonSystemProviderSourceFrags(context.Background(), cfg)...)
+		return ApplyProviderRunConfig(context.Background(), nil, cfg)
+	}
+	firstScope := contextfrag.Scope{
+		BotID: "bot-1", ChatID: "chat-1", SessionID: "session-1",
+		CurrentMessageID: "telegram-msg-1001", EventID: "event-001",
+	}
+	secondScope := contextfrag.Scope{
+		BotID: "bot-1", ChatID: "chat-1", SessionID: "session-1",
+		CurrentMessageID: "telegram-msg-1002", EventID: "event-002",
+	}
+	first := build(firstScope)
+	second := build(secondScope)
+
+	if first.System != second.System || !reflect.DeepEqual(first.Messages, second.Messages) {
+		t.Fatalf("provider bytes differ: first system %q messages %#v, second system %q messages %#v", first.System, first.Messages, second.System, second.Messages)
+	}
+	if first.ContextCachePlan.StablePrefixHash == "" || first.ContextCachePlan.StablePrefixHash != second.ContextCachePlan.StablePrefixHash {
+		t.Fatalf("stable prefix hashes = %q and %q", first.ContextCachePlan.StablePrefixHash, second.ContextCachePlan.StablePrefixHash)
+	}
+	for _, item := range first.ContextManifest.Items {
+		if item.Scope.CurrentMessageID != firstScope.CurrentMessageID || item.Scope.EventID != firstScope.EventID {
+			t.Fatalf("first manifest lost turn scope: %#v", item.Scope)
+		}
+	}
+	for _, item := range second.ContextManifest.Items {
+		if item.Scope.CurrentMessageID != secondScope.CurrentMessageID || item.Scope.EventID != secondScope.EventID {
+			t.Fatalf("second manifest lost turn scope: %#v", item.Scope)
+		}
+	}
+}
+
 func TestApplyProviderRunConfigMemoryAndHookIsolation(t *testing.T) {
 	t.Parallel()
 	build := func(memory, hook string) agentpkg.RunConfig {

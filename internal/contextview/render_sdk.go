@@ -32,6 +32,15 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	if err != nil {
 		return RenderedPayload{}, err
 	}
+	payload := renderSDKPayloadFromFrags(ordered)
+	hash, err := sdkRenderedPayloadHash(payload)
+	if err != nil {
+		return RenderedPayload{}, err
+	}
+	return RenderedPayload{Target: contextfrag.RenderSDKMessages, ContentHash: hash, Data: payload}, nil
+}
+
+func renderSDKPayloadFromFrags(ordered []contextfrag.ContextFrag) *SDKRenderedPayload {
 	payload := &SDKRenderedPayload{}
 	firstSystem := true
 	for _, frag := range ordered {
@@ -53,11 +62,7 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 		}
 	}
 	materializeRenderedCurrent(payload)
-	hash, err := sdkRenderedPayloadHash(payload)
-	if err != nil {
-		return RenderedPayload{}, err
-	}
-	return RenderedPayload{Target: contextfrag.RenderSDKMessages, ContentHash: hash, Data: payload}, nil
+	return payload
 }
 
 func orderedSelectedFrags(selected []contextfrag.ContextFrag, placement PlacementPlan) ([]contextfrag.ContextFrag, error) {
