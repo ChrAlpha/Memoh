@@ -23,12 +23,13 @@ import (
 
 // Agent is the core agent that handles LLM interactions.
 type Agent struct {
-	client         *sdk.Client
-	toolProviders  []tools.ToolProvider
-	bridgeProvider bridge.Provider
-	hookService    *hooks.Service
-	logger         *slog.Logger
-	limits         Limits
+	client             *sdk.Client
+	toolProviders      []tools.ToolProvider
+	bridgeProvider     bridge.Provider
+	hookService        *hooks.Service
+	logger             *slog.Logger
+	limits             Limits
+	contextViewApplier ContextViewApplier
 }
 
 const streamCancelDrainGrace = 250 * time.Millisecond
@@ -40,12 +41,23 @@ func New(deps Deps) *Agent {
 		logger = slog.Default()
 	}
 	return &Agent{
-		client:         sdk.NewClient(),
-		bridgeProvider: deps.BridgeProvider,
-		hookService:    deps.HookService,
-		logger:         logger.With(slog.String("service", "agent/runtime/native")),
-		limits:         deps.Limits.Normalize(),
+		client:             sdk.NewClient(),
+		bridgeProvider:     deps.BridgeProvider,
+		hookService:        deps.HookService,
+		logger:             logger.With(slog.String("service", "agent/runtime/native")),
+		limits:             deps.Limits.Normalize(),
+		contextViewApplier: deps.ContextViewApplier,
 	}
+}
+
+// applyContextView compiles the provider-facing fields from authoritative
+// fragments when the application installed the PR1 compiler. Direct Agent
+// users retain the legacy refresh path.
+func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) RunConfig {
+	if a != nil && a.contextViewApplier != nil {
+		return a.contextViewApplier(ctx, cfg)
+	}
+	return cfg.RefreshContextFrag()
 }
 
 // BridgeProvider returns the underlying bridge provider (workspace manager).
@@ -179,7 +191,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
+	cfg = a.applyContextView(streamCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -280,7 +293,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 		return
 	}
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
@@ -709,7 +721,8 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
+	cfg = a.applyContextView(genCtx, cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -739,7 +752,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if err != nil {
 		return nil, err
 	}
-	cfg = cfg.RefreshContextFragWithDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
 	opts := a.buildGenerateOptions(cfg, sdkTools, approvalTools, prepareStep)
 	modelStepIndex := 0
 	opts = append(opts,
@@ -817,6 +829,8 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 	system, messages, tools := models.ApplyPromptCache(
 		cfg.Model, cfg.PromptCacheTTL, cfg.System, cfg.Messages, tools,
 	)
+	finalHash, _ := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
+	cfg.ContextMutations.SetFinalInputHash(finalHash)
 	if cfg.ForkContext != nil {
 		_ = cfg.ForkContext.Store(messages)
 	}
