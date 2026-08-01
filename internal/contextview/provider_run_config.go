@@ -125,7 +125,13 @@ func preserveExplicitHistoryMetadata(collected []contextfrag.ContextFrag, cfg ag
 	for i, frag := range collected {
 		index := frag.Provenance.Index
 		if candidate, ok := overrides[index]; ok && frag.ID == messageFragmentID(index) {
-			collected[i] = candidate
+			frag.Kind = contextfrag.KindConversationSummary
+			frag.Ref = candidate.Ref
+			frag.Coverage = candidate.Coverage
+			frag.Provenance.Source = candidate.Provenance.Source
+			frag.Provenance.SourceID = candidate.Provenance.SourceID
+			frag.Provenance.Collector = candidate.Provenance.Collector
+			collected[i] = frag
 		}
 	}
 	return collected
@@ -136,13 +142,7 @@ func messageFragmentID(index int) string {
 }
 
 func hasExplicitHistoryMetadata(frag contextfrag.ContextFrag) bool {
-	if frag.Coverage != nil || frag.Ref.Durability == contextfrag.RefDurable {
-		return true
-	}
-	source := strings.TrimSpace(frag.Provenance.Source)
-	collector := strings.TrimSpace(frag.Provenance.Collector)
-	return (source != "" && source != contextfrag.SourceRunConfig) ||
-		(collector != "" && collector != contextfrag.CollectorRunConfigFields && collector != historyMessagesCollectorName)
+	return frag.Kind == contextfrag.KindConversationSummary && frag.Coverage != nil && frag.Ref.Durability == contextfrag.RefDurable
 }
 
 func singleSDKMessage(frag contextfrag.ContextFrag) (sdk.Message, bool) {

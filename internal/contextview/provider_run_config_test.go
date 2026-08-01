@@ -41,6 +41,50 @@ func TestApplyProviderRunConfigProducesManifestLedgerAndCachePlan(t *testing.T) 
 	}
 }
 
+func TestApplyProviderRunConfigMergesOnlyMatchingHistoryAuditMetadata(t *testing.T) {
+	t.Parallel()
+	message := sdk.UserMessage("summary bytes")
+	ref := contextfrag.ContextRef{
+		Namespace: "compaction_log", ID: "compact-1", Version: 1,
+		Schema: contextfrag.SchemaContextRef, Durability: contextfrag.RefDurable,
+	}
+	coverage := contextfrag.NewSummaryCoverage(ref, []contextfrag.ContextRef{{
+		Namespace: "bot_history_message", ID: "row-1", Schema: contextfrag.SchemaContextRef, Durability: contextfrag.RefDurable,
+	}})
+	shadow := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID: "message.000", Message: message, Kind: contextfrag.KindConversationSummary,
+		Slot: contextfrag.SlotHistory, CacheClass: contextfrag.CacheNever, Trust: contextfrag.TrustSystem,
+		Scope: contextfrag.Scope{CurrentMessageID: "stale"}, Source: "compaction_log", SourceID: "compact-1",
+		Collector: "history_records", Budget: contextfrag.BudgetPolicy{MaxChars: 1, Overflow: contextfrag.OverflowDrop},
+	})
+	shadow.Ref = ref
+	shadow.Coverage = &coverage
+	shadow.ConflictKey = "stale-policy"
+	shadow.Parts = append(shadow.Parts, contextfrag.Part{Type: contextfrag.PartText, Text: "untrusted extra part"})
+	scope := contextfrag.Scope{BotID: "bot-1", CurrentMessageID: "current"}
+	cfg := agentpkg.RunConfig{
+		Messages: []sdk.Message{message}, ContextFrags: []contextfrag.ContextFrag{shadow},
+		ContextScope: scope, ContextQueryMaterialized: true,
+	}
+	cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
+
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+	if !reflect.DeepEqual(got.Messages, cfg.Messages) {
+		t.Fatalf("shadow policy changed provider messages: got %#v want %#v", got.Messages, cfg.Messages)
+	}
+	if len(got.ContextFrags) != 1 {
+		t.Fatalf("provider fragments = %#v, want one history fragment", got.ContextFrags)
+	}
+	merged := got.ContextFrags[0]
+	if merged.Kind != contextfrag.KindConversationSummary || merged.Coverage == nil || merged.Ref.ID != ref.ID {
+		t.Fatalf("matching audit metadata was not preserved: %#v", merged)
+	}
+	if merged.Budget != (contextfrag.BudgetPolicy{}) || merged.ConflictKey != "" || merged.CacheClass != contextfrag.CacheStable ||
+		merged.Trust != contextfrag.TrustExternal || merged.Scope.CurrentMessageID != scope.CurrentMessageID || len(merged.Parts) != 1 {
+		t.Fatalf("shadow selection/render policy leaked into authoritative fragment: %#v", merged)
+	}
+}
+
 func TestProviderRunConfigApplierUsesInjectedLoggerShape(t *testing.T) {
 	t.Parallel()
 	applier := ProviderRunConfigApplier(nil)
