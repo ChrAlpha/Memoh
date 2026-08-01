@@ -79,6 +79,33 @@ func TestApplyProviderRunConfigStablePrefixIgnoresTurnLocalScope(t *testing.T) {
 	}
 }
 
+func TestApplyProviderRunConfigImageOnlyCurrentMovesStableMessageBoundary(t *testing.T) {
+	t.Parallel()
+	system := systemTextFrag("system.prompt", "stable system", contextfrag.KindSystemPrompt, 20)
+	history := stableHistoryMessageFrag("message.000", sdk.UserMessage("history"))
+	build := func(imageData string) agentpkg.RunConfig {
+		image := contextfrag.ImageFrag("current_user.images", []sdk.ImagePart{{
+			Image: imageData, MediaType: "image/png",
+		}}, contextfrag.Scope{}, contextfrag.SourceRunConfig)
+		return ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+			ContextSourceFrags: []contextfrag.ContextFrag{system, history, image},
+		})
+	}
+	first := build("data:image/png;base64,first")
+	second := build("data:image/png;base64,second")
+
+	if reflect.DeepEqual(first.Messages, second.Messages) {
+		t.Fatalf("image-only current input did not change provider messages: %#v", first.Messages)
+	}
+	if first.ContextCachePlan.StableMessageCount != 0 || second.ContextCachePlan.StableMessageCount != 0 {
+		t.Fatalf("stable message counts = %d and %d, want image target excluded", first.ContextCachePlan.StableMessageCount, second.ContextCachePlan.StableMessageCount)
+	}
+	wantHash := stablePrefixHash([]contextfrag.ContextFrag{system})
+	if wantHash == "" || first.ContextCachePlan.StablePrefixHash != wantHash || second.ContextCachePlan.StablePrefixHash != wantHash {
+		t.Fatalf("stable hashes = %q and %q, want system-only %q", first.ContextCachePlan.StablePrefixHash, second.ContextCachePlan.StablePrefixHash, wantHash)
+	}
+}
+
 func TestApplyProviderRunConfigMemoryAndHookIsolation(t *testing.T) {
 	t.Parallel()
 	build := func(memory, hook string) agentpkg.RunConfig {
