@@ -2,7 +2,9 @@ package contextview
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -39,7 +41,10 @@ func CollectProviderSourceFrags(ctx context.Context, cfg agentpkg.RunConfig) []c
 	if nonSystem == nil {
 		return nil
 	}
-	return append(system, nonSystem...)
+	frags := make([]contextfrag.ContextFrag, 0, len(system)+len(nonSystem))
+	frags = append(frags, system...)
+	frags = append(frags, nonSystem...)
+	return frags
 }
 
 // CollectNonSystemProviderSourceFrags preserves the exact SDK message order.
@@ -63,8 +68,10 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	if err != nil {
 		return nil
 	}
-	messages := append([]contextfrag.ContextFrag(nil), history...)
+	messages := make([]contextfrag.ContextFrag, 0, len(history)+len(current))
+	messages = append(messages, history...)
 	messages = append(messages, current...)
+	messages = preserveExplicitHistoryMetadata(messages, cfg)
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Provenance.Index < messages[j].Provenance.Index
 	})
@@ -87,6 +94,76 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	messages = append(messages, rawCurrent...)
 	messages = append(messages, images...)
 	return messages
+}
+
+func preserveExplicitHistoryMetadata(collected []contextfrag.ContextFrag, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
+	if len(collected) == 0 || len(cfg.ContextFrags) == 0 || len(cfg.Messages) == 0 {
+		return collected
+	}
+	currentIndex, hasCurrent := markedCurrentUserMessageIndex(cfg.Messages, cfg.ContextCurrentUserMessageIndex)
+	overrides := make(map[int]contextfrag.ContextFrag)
+	for _, candidate := range cfg.ContextFrags {
+		index := candidate.Provenance.Index
+		if candidate.Slot != contextfrag.SlotHistory || index < 0 || index >= len(cfg.Messages) {
+			continue
+		}
+		if hasCurrent && index == currentIndex {
+			continue
+		}
+		if candidate.ID != messageFragmentID(index) || !hasExplicitHistoryMetadata(candidate) {
+			continue
+		}
+		message, ok := singleSDKMessage(candidate)
+		if !ok || !reflect.DeepEqual(message, cfg.Messages[index]) {
+			continue
+		}
+		overrides[index] = candidate
+	}
+	if len(overrides) == 0 {
+		return collected
+	}
+	for i, frag := range collected {
+		index := frag.Provenance.Index
+		if candidate, ok := overrides[index]; ok && frag.ID == messageFragmentID(index) {
+			collected[i] = candidate
+		}
+	}
+	return collected
+}
+
+func messageFragmentID(index int) string {
+	return fmt.Sprintf("message.%03d", index)
+}
+
+func hasExplicitHistoryMetadata(frag contextfrag.ContextFrag) bool {
+	if frag.Coverage != nil || frag.Ref.Durability == contextfrag.RefDurable {
+		return true
+	}
+	source := strings.TrimSpace(frag.Provenance.Source)
+	collector := strings.TrimSpace(frag.Provenance.Collector)
+	return (source != "" && source != contextfrag.SourceRunConfig) ||
+		(collector != "" && collector != contextfrag.CollectorRunConfigFields && collector != historyMessagesCollectorName)
+}
+
+func singleSDKMessage(frag contextfrag.ContextFrag) (sdk.Message, bool) {
+	var message *sdk.Message
+	for _, part := range frag.Parts {
+		if part.Type != contextfrag.PartSDKMessage {
+			continue
+		}
+		candidate := part.SDKMessage
+		if candidate == nil {
+			candidate = part.Message
+		}
+		if candidate == nil || message != nil {
+			return sdk.Message{}, false
+		}
+		message = candidate
+	}
+	if message == nil {
+		return sdk.Message{}, false
+	}
+	return *message, true
 }
 
 func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFrag {
@@ -159,6 +236,8 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *contextfrag.MutationLedger, reason, message string, err error) agentpkg.RunConfig {
 	warnProviderContextView(logger, cfg, message, err)
 	cfg = legacyMaterializeQuery(cfg)
+	cfg.ContextFrags = nil
+	cfg.ContextSourceFrags = nil
 	cfg = cfg.RefreshContextFrag()
 	ledger.Record(contextfrag.MutationContextViewFallback, reason)
 	plan := contextfrag.CachePlan{}
