@@ -7,15 +7,15 @@
     <!-- Header card: identity + the single destructive action, mirroring the
          provider-detail header language (icon · name/type · confirm-gated
          delete) instead of a bare title above a hairline. -->
-    <section class="flex items-center gap-3 rounded-[var(--radius-menu-shell)] border border-border bg-card px-4 py-3">
+    <section class="flex items-center gap-3 rounded-menu-shell border border-border bg-card px-4 py-3">
       <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
         <Brain class="size-5 text-muted-foreground" />
       </span>
       <div class="min-w-0 flex-1">
-        <h3 class="truncate text-sm font-semibold text-foreground">
+        <h3 class="truncate text-control font-semibold text-foreground">
           {{ curProvider.name }}
         </h3>
-        <p class="mt-0.5 truncate text-xs text-muted-foreground">
+        <p class="mt-0.5 truncate text-body text-muted-foreground">
           {{ $t(`memory.providerNames.${curProvider.provider}`, curProvider.provider ?? '') }}
         </p>
       </div>
@@ -111,14 +111,9 @@ import type {
   AdaptersProviderGetResponse,
   AdaptersProviderMeta,
 } from '@memohai/sdk'
-import { toast } from '@felinic/ui'
+import { ConfirmPopover, FieldStack, FormStack, SettingsSection, SettingsShell, toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
-import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
-import SettingsShell from '@/components/settings-shell/index.vue'
-import SettingsSection from '@/components/settings/section.vue'
-import FieldStack from '@/components/settings/field-stack.vue'
-import FormStack from '@/components/settings/form-stack.vue'
 
 const { t } = useI18n()
 const queryCache = useQueryCache()

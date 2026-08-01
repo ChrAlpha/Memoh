@@ -127,17 +127,13 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuery } from '@pinia/colada'
 import { useRouter } from 'vue-router'
-import { toast } from '@felinic/ui'
+import { ConfirmPopover, PageShell, SettingsRow, SettingsSection, toast, useClipboard } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { Button, Skeleton } from '@felinic/ui'
 import { Check, Copy } from 'lucide-vue-next'
 
-import PageShell from '@/components/page-shell/index.vue'
-import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import TimezoneSelect from '@/components/timezone-select/index.vue'
 import ModelSelect from '@/pages/bots/components/model-select.vue'
-import SettingsRow from '@/components/settings/row.vue'
-import SettingsSection from '@/components/settings/section.vue'
 import ProfileIdentity from './components/profile-identity.vue'
 import PasswordSection from './components/password-section.vue'
 import ConnectedAccountsSection from './components/connected-accounts-section.vue'
@@ -151,6 +147,7 @@ import { useAvatarInitials } from '@/composables/useAvatarInitials'
 type UserAccount = AccountsAccount
 
 const { t } = useI18n()
+const { copyText } = useClipboard()
 const router = useRouter()
 const userStore = useUserStore()
 const { userInfo, exitLogin, patchUserInfo } = userStore
@@ -200,13 +197,13 @@ const passwordDialogOpen = ref(false)
 const copiedId = ref(false)
 
 async function copyToClipboard(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    copiedId.value = true
-    setTimeout(() => copiedId.value = false, 2000)
-  } catch {
+  const ok = await copyText(text)
+  if (!ok) {
     toast.error(t('common.copyFailed'))
+    return
   }
+  copiedId.value = true
+  setTimeout(() => copiedId.value = false, 2000)
 }
 
 const displayUserID = computed(() => account.value?.id || userInfo.id || '')

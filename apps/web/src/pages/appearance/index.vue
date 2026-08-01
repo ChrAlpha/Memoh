@@ -369,12 +369,10 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRender, { enableMermaid, setCustomComponents } from 'markstream-vue'
+import { PageShell, SettingsRow, SettingsSection } from '@felinic/ui'
 import { useShikiHighlighter } from '@/composables/useShikiHighlighter'
 import type { Locale } from '@/i18n'
 import type { BundledTheme } from 'shiki'
-import SettingsRow from '@/components/settings/row.vue'
-import SettingsSection from '@/components/settings/section.vue'
-import PageShell from '@/components/page-shell/index.vue'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
 import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
 import ThemedMermaidBlock from '@/components/themed-mermaid-block/index.vue'
@@ -382,7 +380,7 @@ import { colorSchemes, type ColorSchemeId, type ColorSchemeOption } from '@/cons
 import { MERMAID_THEMES, type MermaidTheme, useSettingsStore, type ThemePreference } from '@/store/settings'
 import { isMermaidTheme } from '@/store/settings/mermaid'
 import { listBundledShikiThemes } from '@/store/settings/shiki-theme'
-import { cssFontFamilyDeclaration, DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_FONT_SIZE_PX, DEFAULT_UI_FONT_SIZE_PX, normalizeCodeFontSizePx } from '@/store/settings/typography'
+import { cssCodeFontFamilyStyleValue, DEFAULT_CODE_FONT_SIZE_PX, DEFAULT_UI_FONT_SIZE_PX, normalizeCodeFontSizePx } from '@/store/settings/typography'
 
 enableMermaid()
 setCustomComponents({ mermaid: ThemedMermaidBlock })
@@ -490,7 +488,7 @@ const codeFontPreviewFallback = `<pre><code>${codeFontPreviewCode}</code></pre>`
 const codeFontPreviewLightHtml = computed(() => codeFontPreviewLight.html.value || codeFontPreviewFallback)
 const codeFontPreviewDarkHtml = computed(() => codeFontPreviewDark.html.value || codeFontPreviewFallback)
 const codeFontPreviewStyle = computed(() => ({
-  '--typography-code-preview-font-family': cssFontFamilyDeclaration(codeFontFamilyDraft.value, DEFAULT_CODE_FONT_FAMILY),
+  '--typography-code-preview-font-family': cssCodeFontFamilyStyleValue(codeFontFamilyDraft.value),
   '--typography-code-preview-font-size': `${normalizeCodeFontSizePx(codeFontSizeDraft.value)}px`,
 }))
 

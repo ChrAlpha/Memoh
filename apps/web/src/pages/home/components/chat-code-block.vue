@@ -34,7 +34,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Check, Copy } from 'lucide-vue-next'
-import { Button } from '@felinic/ui'
+import { Button, toast, useClipboard } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import CodeBlock from './code-block.vue'
 
@@ -48,6 +48,7 @@ interface CodeFenceNode {
 
 const props = defineProps<{ node: CodeFenceNode }>()
 const { t } = useI18n()
+const { copyText } = useClipboard()
 
 const code = computed(() => props.node.code ?? props.node.raw ?? '')
 const language = computed(() => (props.node.language ?? '').trim().toLowerCase())
@@ -55,14 +56,13 @@ const language = computed(() => (props.node.language ?? '').trim().toLowerCase()
 const copied = ref(false)
 let resetTimer: ReturnType<typeof setTimeout> | null = null
 async function copy() {
-  try {
-    await navigator.clipboard.writeText(code.value)
-    copied.value = true
-    if (resetTimer) clearTimeout(resetTimer)
-    resetTimer = setTimeout(() => { copied.value = false }, 1500)
+  const ok = await copyText(code.value)
+  if (!ok) {
+    toast.error(t('common.copyFailed'))
+    return
   }
-  catch {
-    // ignore clipboard failures
-  }
+  copied.value = true
+  if (resetTimer) clearTimeout(resetTimer)
+  resetTimer = setTimeout(() => { copied.value = false }, 1500)
 }
 </script>

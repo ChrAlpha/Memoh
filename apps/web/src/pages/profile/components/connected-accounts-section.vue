@@ -161,7 +161,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { Plus, Trash2, Copy, Check, RefreshCw, ArrowRight } from 'lucide-vue-next'
-import { toast } from '@felinic/ui'
+import { ConfirmPopover, SettingsRow, SettingsSection, toast, useClipboard } from '@felinic/ui'
 import {
   Button,
   Spinner,
@@ -170,9 +170,6 @@ import {
   AvatarFallback,
   Input,
 } from '@felinic/ui'
-import SettingsSection from '@/components/settings/section.vue'
-import SettingsRow from '@/components/settings/row.vue'
-import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import ChannelIcon from '@/components/channel-icon/index.vue'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { channelTypeDisplayName } from '@/utils/channel-type-label'
@@ -238,6 +235,7 @@ const { data: bindingsData, isLoading, refetch: refetchBindings } = useQuery({
 })
 
 const bindings = computed<ChannelaccessBinding[]>(() => bindingsData.value?.items ?? [])
+const { copyText } = useClipboard()
 
 // A live code is being polled in the background; when a new account shows up the
 // code has just been used, so retire it instead of leaving a stale countdown.
@@ -348,14 +346,13 @@ async function onIssue() {
 
 async function copyCode() {
   if (!activeCode.value || expired.value) return
-  try {
-    await navigator.clipboard.writeText(`/link ${activeCode.value}`)
-    copied.value = true
-    setTimeout(() => (copied.value = false), 2000)
+  const ok = await copyText(`/link ${activeCode.value}`)
+  if (!ok) {
+    toast.error(t('common.copyFailed'))
+    return
   }
-  catch {
-    // Clipboard may be unavailable; the code is selectable as a fallback.
-  }
+  copied.value = true
+  setTimeout(() => (copied.value = false), 2000)
 }
 
 async function onDisconnect(binding: ChannelaccessBinding) {

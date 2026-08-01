@@ -206,7 +206,7 @@
 </template>
 
 <script setup lang="ts">
-import { ActionCard, Button, Dialog, DialogBody, DialogHeader, DialogPanel, DialogTitle, Input } from '@felinic/ui'
+import { ActionCard, Button, ConfirmPopover, Dialog, DialogBody, DialogHeader, DialogPanel, DialogTitle, Input, SettingsRow, SettingsSection, useClipboard } from '@felinic/ui'
 import { SlidersHorizontal } from 'lucide-vue-next'
 import { reactive, watch, computed, ref } from 'vue'
 import { toast } from '@felinic/ui'
@@ -215,10 +215,7 @@ import { useMutation } from '@pinia/colada'
 import { putBotsByIdChannelByPlatform, deleteBotsByIdChannelByPlatform, patchBotsByIdChannelByPlatformStatus, postBotsByIdChannelByPlatformWebhookEndpoint } from '@memohai/sdk'
 import type { HandlersChannelMeta, ChannelChannelConfig, ChannelFieldSchema, ChannelUpsertConfigRequest } from '@memohai/sdk'
 import { client } from '@memohai/sdk/client'
-import ConfirmPopover from '@/components/confirm-popover/index.vue'
 import ChannelIcon from '@/components/channel-icon/index.vue'
-import SettingsSection from '@/components/settings/section.vue'
-import SettingsRow from '@/components/settings/row.vue'
 import ChannelField from './channel-field.vue'
 import WeixinQrLogin from './weixin-qr-login.vue'
 import { channelTypeDisplayName } from '@/utils/channel-type-label'
@@ -243,6 +240,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { copyText } = useClipboard()
 const botIdRef = computed(() => props.botId)
 const platformType = computed(() => String(props.channelItem.meta.type || '').trim())
 const channelTitle = computed(() => channelTypeDisplayName(t, props.channelItem.meta.type, props.channelItem.meta.display_name))
@@ -419,12 +417,16 @@ function buildWebhookCallbackUrl(configId: string): string {
 }
 
 async function copyWebhookCallback() {
-  if (webhookCallbackUrl.value && typeof navigator !== 'undefined' && navigator.clipboard) {
-    await navigator.clipboard.writeText(webhookCallbackUrl.value)
-    toast.success(t('common.copied'))
-  } else {
+  if (!webhookCallbackUrl.value) {
     toast.error(t('bots.channels.copyFailed'))
+    return
   }
+  const ok = await copyText(webhookCallbackUrl.value)
+  if (!ok) {
+    toast.error(t('bots.channels.copyFailed'))
+    return
+  }
+  toast.success(t('common.copied'))
 }
 
 async function handleSetLineWebhookEndpoint() {

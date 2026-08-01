@@ -919,6 +919,7 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 	}
 	var usageRegistrations []usageRegistration
 	var usageSections []string
+	seenToolNames := make(map[string]struct{})
 	for _, provider := range a.toolProviders {
 		providerTools, err := provider.Tools(ctx, session)
 		if err != nil {
@@ -928,6 +929,21 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		if session.IsSubagent {
 			providerTools = tools.FilterSubagentTools(providerTools)
 		}
+		uniqueTools := make([]sdk.Tool, 0, len(providerTools))
+		for _, tool := range providerTools {
+			name := strings.TrimSpace(tool.Name)
+			if name == "" {
+				continue
+			}
+			if _, exists := seenToolNames[name]; exists {
+				a.logger.Warn("duplicate tool name skipped", slog.String("tool", name))
+				continue
+			}
+			seenToolNames[name] = struct{}{}
+			tool.Name = name
+			uniqueTools = append(uniqueTools, tool)
+		}
+		providerTools = uniqueTools
 		if len(providerTools) == 0 {
 			continue
 		}

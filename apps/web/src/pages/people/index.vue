@@ -19,7 +19,10 @@
         <AlertDescription>{{ loadError }}</AlertDescription>
       </Alert>
 
-      <SettingsSection :title="membersTitle">
+      <section class="space-y-2.5">
+        <h2 class="px-2 text-label font-medium text-muted-foreground">
+          {{ membersTitle }}
+        </h2>
         <Table>
           <TableHeader>
             <TableRow>
@@ -143,7 +146,7 @@
             </TableRow>
           </TableBody>
         </Table>
-      </SettingsSection>
+      </section>
     </div>
 
     <Dialog v-model:open="createDialogOpen">
@@ -274,7 +277,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { toast } from '@felinic/ui'
+import { ConfirmPopover, FieldStack, FormStack, PageShell, toast } from '@felinic/ui'
 import { Trash2, UserPlus } from 'lucide-vue-next'
 import {
   Alert,
@@ -306,11 +309,6 @@ import {
   TableHeader,
   TableRow,
 } from '@felinic/ui'
-import ConfirmPopover from '@/components/confirm-popover/index.vue'
-import PageShell from '@/components/page-shell/index.vue'
-import SettingsSection from '@/components/settings/section.vue'
-import FieldStack from '@/components/settings/field-stack.vue'
-import FormStack from '@/components/settings/form-stack.vue'
 import { useUserStore } from '@/store/user'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { formatDateTime } from '@/utils/date-time'

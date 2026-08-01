@@ -1,11 +1,9 @@
 <template>
   <!-- Overview is the bot's "lobby", modeled on a real product dashboard:
-       where it's reachable (platforms), the couple of settings worth surfacing
-       (model + memory), then a usage visualization built from actual data
-       (token stat row + a daily bar chart). No filler rows that just mirror the
-       left nav. Health checks stay demoted to an issue banner + dialog so a
-       healthy bot reads calm. PageShell owns the max-w-3xl column, the tab
-       vertical rhythm, and the title, so this page never hand-rolls the shell. -->
+       where it's reachable (platforms), live runtime telemetry, token usage,
+       then memory stats. No filler rows that mirror the left nav — model and
+       provider setup live on their own tabs. Health checks stay demoted to an
+       issue banner + dialog so a healthy bot reads calm. -->
   <PageShell
     variant="tab"
     :title="$t('bots.tabs.overview')"
@@ -137,15 +135,13 @@
         v-if="isContainerBot"
         class="space-y-2.5"
       >
-        <!-- Title row: section label + status Badge (sharing a baseline, so the
-             status has an edge to align to), with the sampled-at freshness note
-             pushed to the far right as a quiet footnote. -->
+        <!-- Title row: section label + status badge (Running or unavailable note). -->
         <div class="flex items-center gap-2 px-2">
           <h2 class="text-[13px] font-medium text-muted-foreground">
             {{ $t('bots.overview.runtimeTitle') }}
           </h2>
           <Badge
-            :variant="runtimeStatusVariant"
+            variant="secondary"
             size="sm"
           >
             {{ runtimeStatusLabel }}
@@ -158,14 +154,10 @@
           </span>
         </div>
 
-        <!-- Metric tiles: CPU / memory / storage. '--' shows for any metric the
-             backend hasn't sampled, so a value is never faked as 0. Caller owns
-             the grid; each cell is a framed MetricReadout (same shape as the
-             Container tab's identical runtime tile row). -->
-        <div
-          v-if="runtimeHasMetrics"
-          class="grid grid-cols-3 gap-3"
-        >
+        <!-- Metric tiles: always render the three-slot grid so the block keeps
+             the same shape whether or not the backend has sampled yet. Missing
+             values read as '—'. -->
+        <div class="grid grid-cols-3 gap-3">
           <MetricReadout
             v-for="m in runtimeMetricCards"
             :key="m.key"
@@ -175,40 +167,16 @@
           />
         </div>
 
-        <!-- Why there's no metric grid: backend can't sample, or the container
-             is stopped. Honest one-liner instead of empty tiles. -->
         <p
-          v-else
+          v-if="runtimeMetricsNote"
           class="px-2 text-xs text-muted-foreground"
         >
           {{ runtimeMetricsNote }}
         </p>
       </section>
 
-      <!-- Core setup: only the two settings worth surfacing here — the model it
-           thinks with, and whether memory is on. Everything else lives in its
-           own tab, so this never becomes a mirror of the left nav. -->
-      <SettingsSection :title="$t('bots.overview.configTitle')">
-        <SettingsRow
-          :label="$t('bots.overview.modelLabel')"
-          :description="modelName"
-        >
-          <span
-            v-if="reasoningOn"
-            class="rounded bg-accent px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
-          >{{ reasoningLabel }}</span>
-        </SettingsRow>
-
-        <SettingsRow
-          :label="$t('bots.overview.memoryLabel')"
-          :description="memoryDesc"
-        />
-      </SettingsSection>
-
-      <!-- Usage: a real data visualization (stat row + daily token bar chart)
-           from the token-usage feed — the dashboard's "numbers", kept last so
-           identity, reachability and setup read first. Same echarts recipe as
-           the dedicated Usage page. -->
+      <!-- Usage: token stat row + daily bar chart — the dashboard's "numbers",
+           sitting above memory telemetry so it reads earlier on the page. -->
       <SettingsSection :title="$t('bots.overview.usageTitle')">
         <div class="space-y-4 p-4">
           <div class="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
@@ -249,6 +217,48 @@
         </div>
       </SettingsSection>
 
+      <!-- Memory: lightweight telemetry below usage. Manual sync and path
+           metrics live on the Memory tab (Advanced). -->
+      <section
+        v-if="showMemorySection"
+        class="space-y-2.5"
+      >
+        <div class="flex items-center gap-2 px-2">
+          <h2 class="text-[13px] font-medium text-muted-foreground">
+            {{ $t('bots.overview.memoryTitle') }}
+          </h2>
+        </div>
+
+        <div
+          v-if="memoryLoading"
+          class="grid grid-cols-3 gap-3"
+        >
+          <Skeleton
+            v-for="i in 3"
+            :key="i"
+            class="h-[4.5rem] rounded-[var(--radius-menu-shell)]"
+          />
+        </div>
+
+        <template v-else>
+          <div class="grid grid-cols-3 gap-3">
+            <MetricReadout
+              v-for="m in memoryMetricCards"
+              :key="m.key"
+              :label="m.label"
+              :value="m.value"
+            />
+          </div>
+
+          <p
+            v-if="memoryStatsNote"
+            class="px-2 text-xs text-muted-foreground"
+          >
+            {{ memoryStatsNote }}
+          </p>
+        </template>
+      </section>
+
       <BotChecksPanel
         v-model:open="checksOpen"
         :bot-id="botId"
@@ -268,7 +278,7 @@ import { BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useDark } from '@vueuse/core'
-import { Badge, Button, Skeleton } from '@felinic/ui'
+import { Badge, Button, CalloutBanner, MetricReadout, PageShell, SettingsRow, SettingsSection, Skeleton } from '@felinic/ui'
 import {
   getBotsById,
   getBotsByBotIdSettings,
@@ -276,7 +286,6 @@ import {
   getBotsByBotIdTokenUsage,
   getBotsByBotIdContainer,
   getBotsByBotIdContainerMetrics,
-  getModels,
   getChannels,
   getBotsByIdChannelByPlatform,
   type HandlersChannelMeta,
@@ -284,11 +293,6 @@ import {
   type HandlersDailyTokenUsage,
 } from '@memohai/sdk'
 import BotChecksPanel from './bot-checks-panel.vue'
-import PageShell from '@/components/page-shell/index.vue'
-import SettingsSection from '@/components/settings/section.vue'
-import SettingsRow from '@/components/settings/row.vue'
-import MetricReadout from '@/components/settings/metric-readout.vue'
-import CalloutBanner from '@/components/callout-banner/index.vue'
 import ChannelIcon from '@/components/channel-icon/index.vue'
 import { channelTypeDisplayName } from '@/utils/channel-type-label'
 import { useBotStatusMeta } from '@/composables/useBotStatusMeta'
@@ -332,15 +336,7 @@ const { data: settings } = useQuery({
   enabled: () => !!botId.value,
 })
 
-const { data: models } = useQuery({
-  key: () => ['models'],
-  query: async () => {
-    const { data } = await getModels({ throwOnError: true })
-    return data
-  },
-})
-
-const { data: memoryStatus } = useQuery({
+const { data: memoryStatus, isLoading: memoryLoading } = useQuery({
   key: () => ['bot-memory-status', botId.value],
   query: async () => {
     const { data } = await getBotsByBotIdMemoryStatus({ path: { bot_id: botId.value }, throwOnError: true })
@@ -382,13 +378,6 @@ function channelTitle(meta: HandlersChannelMeta) {
   return channelTypeDisplayName(t, meta.type, meta.display_name)
 }
 
-const modelName = computed(() => {
-  const id = settings.value?.chat_model_id
-  if (!id) return t('bots.overview.modelNone')
-  const model = (models.value ?? []).find((m) => (m.id || m.model_id) === id)
-  return model?.name || model?.model_id || id
-})
-
 // Reminders: a single, extensible "do this next" list for setup steps that the
 // dedicated surfaces don't already nag about. Platforms (connect) and the issue
 // banner (diagnostics) own their own signals, so reminders deliberately covers
@@ -421,18 +410,41 @@ const reminders = computed<BotReminder[]>(() => {
   return list
 })
 
-const reasoningOn = computed(() => !!settings.value?.reasoning_enabled)
-const reasoningLabel = computed(() => {
-  const effort = settings.value?.reasoning_effort
-  return effort
-    ? `${t('bots.overview.reasoningBadge')} · ${effort}`
-    : t('bots.overview.reasoningBadge')
+const showMemorySection = computed(() => !!settings.value?.memory_provider_id)
+
+const memoryIsBuiltin = computed(() =>
+  (memoryStatus.value?.provider_type ?? 'builtin') === 'builtin',
+)
+
+const memoryMetricCards = computed(() => {
+  const status = memoryStatus.value
+  const formatCount = (n: number | undefined) => (n == null ? '—' : formatNumber(n))
+  return [
+    {
+      key: 'indexed',
+      label: t('bots.settings.memoryIndexedEntries'),
+      value: formatCount(status?.indexed_count),
+    },
+    {
+      key: 'edges',
+      label: memoryIsBuiltin.value
+        ? t('bots.settings.memoryGraphEdges')
+        : t('bots.settings.memorySourceEntries'),
+      value: formatCount(memoryIsBuiltin.value ? status?.edge_count : status?.source_count),
+    },
+    {
+      key: 'sources',
+      label: t('bots.settings.memoryMarkdownFiles'),
+      value: formatCount(status?.markdown_file_count),
+    },
+  ]
 })
 
-const memoryDesc = computed(() => {
-  const n = memoryStatus.value?.indexed_count
-  if (n == null) return t('bots.overview.memoryNone')
-  return t('bots.overview.memoryCount', { count: n })
+const memoryStatsNote = computed(() => {
+  if (memoryLoading.value) return ''
+  if (!settings.value?.memory_provider_id) return ''
+  if (memoryStatus.value) return ''
+  return t('bots.overview.memoryNoStats')
 })
 
 // --- Runtime: live container state + resource metrics. This is only meaningful
@@ -529,18 +541,8 @@ const runtimeStatusKey = computed(() => {
   return containerRunning.value ? 'running' : 'unknown'
 })
 
-// Status as a Badge variant (not a loose dot+text): a badge gives the status a
-// real box to align against the section title, instead of floating with no edge
-// to line up with — which is what made the old dot+label read as misaligned.
-const runtimeStatusVariant = computed<'success' | 'secondary' | 'default'>(() => {
-  switch (runtimeStatusKey.value) {
-    case 'running': return 'success'
-    case 'created': return 'default'
-    case 'stopped': return 'secondary'
-    default: return 'secondary'
-  }
-})
-
+// Status label reuses the Container tab vocabulary. Badge is always secondary
+// (neutral gray) — green "Running" was too loud for a quiet telemetry row.
 const runtimeStatusLabel = computed(() => {
   switch (runtimeStatusKey.value) {
     case 'running': return t('bots.container.statusRunning')
@@ -588,8 +590,9 @@ const runtimeMetricCards = computed(() => {
   ]
 })
 
-// When there's no metric grid, say why instead of showing empty cards.
+// Footnote only when the tile grid is present but nothing has been sampled yet.
 const runtimeMetricsNote = computed(() => {
+  if (runtimeHasMetrics.value) return ''
   if (containerMetrics.value?.supported === false) {
     return t('bots.container.metricsUnsupported')
   }
