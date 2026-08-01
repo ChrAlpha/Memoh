@@ -185,8 +185,6 @@ type Scope struct {
 	BotID                     string            `json:"bot_id,omitempty"`
 	ChatID                    string            `json:"chat_id,omitempty"`
 	SessionID                 string            `json:"session_id,omitempty"`
-	SessionMode               string            `json:"session_mode,omitempty"`
-	RuntimeType               string            `json:"runtime_type,omitempty"`
 	ChannelIdentityID         string            `json:"channel_identity_id,omitempty"`
 	DisplayName               string            `json:"display_name,omitempty"`
 	Platform                  string            `json:"platform,omitempty"`
