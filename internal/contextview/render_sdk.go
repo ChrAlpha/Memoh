@@ -34,7 +34,7 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	}
 	payload := &SDKRenderedPayload{}
 	firstSystem := true
-	for _, frag := range sortSystemFragsByPriority(ordered) {
+	for _, frag := range ordered {
 		switch frag.Slot {
 		case contextfrag.SlotSystem:
 			if !firstSystem {
