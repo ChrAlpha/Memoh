@@ -18,6 +18,19 @@ For tool results, only include key outcomes; ignore intermediate steps or errors
 
 Output ONLY the summary of the new conversation segment. No preamble, no headers.`
 
+const fusionSystemPrompt = `You are a conversation summarizer. Given absorbed earlier context and a new conversation segment, produce a concise summary that preserves:
+- Key facts, decisions, and agreements
+- User preferences and requests
+- Important context needed for continuing the conversation
+- Names, dates, numbers, and specific details
+- Tool usage outcomes and their results
+
+The output summary REPLACES every earlier summary in <absorbed_context> entirely. Integrate all still-relevant information from the absorbed context and the new conversation segment. Do not write references like "see prior summary" or otherwise depend on an earlier summary remaining available.
+
+For tool results, only include key outcomes; ignore intermediate steps or errors.
+
+Output ONLY the replacement summary. No preamble, no headers.`
+
 type messageEntry struct {
 	Role    string
 	Content string
@@ -38,6 +51,33 @@ func buildUserPrompt(priorSummaries []string, messages []messageEntry) string {
 		fmt.Fprintf(&sb, "%s: %s\n", m.Role, m.Content)
 	}
 	return sb.String()
+}
+
+func buildFusionUserPrompt(absorbed []absorbedSegment, messages []messageEntry) string {
+	var sb strings.Builder
+	sb.WriteString("<absorbed_context>\n")
+	for i, segment := range absorbed {
+		if i > 0 {
+			sb.WriteString("\n---\n")
+		}
+		sb.WriteString(absorbedSegmentHeader(segment.Source))
+		sb.WriteByte('\n')
+		sb.WriteString(strings.TrimSpace(segment.Content))
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("</absorbed_context>\n\n")
+	sb.WriteString("Now summarize the following conversation segment:\n")
+	for _, message := range messages {
+		fmt.Fprintf(&sb, "%s: %s\n", message.Role, message.Content)
+	}
+	return sb.String()
+}
+
+func absorbedSegmentHeader(source absorbedSegmentSource) string {
+	if source == absorbedSourceRawTranscript {
+		return "[raw transcript segment]"
+	}
+	return "[earlier summary segment]"
 }
 
 // priorSeparatorTokens covers the "\n---\n" joiner buildUserPrompt places

@@ -141,5 +141,6 @@ func (h *Handler) buildCompactConfig(cc CommandContext, sessionID string) (compa
 	cfg.Ratio = 100
 	cfg.TotalInputTokens = 1
 	cfg.Manual = true
+	cfg.AllowFrontierFusion = true
 	return cfg, nil
 }

@@ -92,6 +92,67 @@ func TestCoverageIncludesRequiresExactPersistedHash(t *testing.T) {
 	}
 }
 
+func TestRollupCoverageBuildsValidMultiParentLineage(t *testing.T) {
+	t.Parallel()
+
+	parentA := testArtifact("parent-a")
+	parentA.Level = 1
+	parentA.Coverage = []CoveredSource{
+		strictTestCoveredSource("row-a1", 1000),
+		strictTestCoveredSource("row-a2", 2000),
+	}
+	parentB := testArtifact("parent-b")
+	parentB.Level = 3
+	parentB.Coverage = []CoveredSource{
+		strictTestCoveredSource("row-b1", 3000),
+		strictTestCoveredSource("row-b2", 4000),
+	}
+	currentCoverage := []CoveredSource{
+		strictTestCoveredSource("row-new-1", 5000),
+		strictTestCoveredSource("row-new-2", 6000),
+	}
+	current := artifactMetadata{
+		Coverage:      mustMarshalCoverage(t, currentCoverage...),
+		AnchorStartMs: 5000,
+		AnchorEndMs:   6000,
+	}
+
+	merged, err := rollupArtifactMetadata([]Artifact{parentA, parentB}, current)
+	if err != nil {
+		t.Fatalf("rollupArtifactMetadata: %v", err)
+	}
+	coverage, err := DecodeArtifactCoverage(merged.Coverage)
+	if err != nil {
+		t.Fatalf("DecodeArtifactCoverage: %v", err)
+	}
+	if len(coverage) != 6 || merged.AnchorStartMs != 1000 || merged.AnchorEndMs != 6000 {
+		t.Fatalf("merged coverage = %#v anchor=%d..%d, want six chronological entries at 1000..6000", coverage, merged.AnchorStartMs, merged.AnchorEndMs)
+	}
+
+	rollup := testArtifact("rollup")
+	rollup.Level = rollupArtifactLevel([]Artifact{parentA, parentB})
+	rollup.ParentIDs = []string{parentA.ID, parentB.ID}
+	rollup.Coverage = coverage
+	rollup.AnchorStartMs = merged.AnchorStartMs
+	rollup.AnchorEndMs = merged.AnchorEndMs
+	parentA.SupersededBy, parentA.SupersededAt = rollup.ID, time.Unix(1, 0)
+	parentB.SupersededBy, parentB.SupersededAt = rollup.ID, time.Unix(1, 0)
+
+	frontier := buildArtifactFrontier([]Artifact{parentA, parentB, rollup})
+	if len(frontier.Issues) != 0 {
+		t.Fatalf("valid rollup lineage issues = %#v", frontier.Issues)
+	}
+	if len(frontier.Artifacts) != 1 || frontier.Artifacts[0].ID != rollup.ID {
+		t.Fatalf("frontier = %#v, want only rollup %q", frontier.Artifacts, rollup.ID)
+	}
+	for _, id := range []string{parentA.ID, parentB.ID, rollup.ID} {
+		resolved, ok := frontier.Resolve(id)
+		if !ok || resolved.ID != rollup.ID {
+			t.Fatalf("Resolve(%q) = %#v, %t; want %q", id, resolved, ok, rollup.ID)
+		}
+	}
+}
+
 func TestArtifactFrontierRejectsDerivedCoverageThatReordersParentSources(t *testing.T) {
 	t.Parallel()
 
