@@ -182,6 +182,9 @@ type BotHistoryMessageAsset struct {
 	Role        string             `json:"role"`
 	Ordinal     int32              `json:"ordinal"`
 	ContentHash string             `json:"content_hash"`
+	Mime        string             `json:"mime"`
+	SizeBytes   int64              `json:"size_bytes"`
+	StorageKey  string             `json:"storage_key"`
 	Name        string             `json:"name"`
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`

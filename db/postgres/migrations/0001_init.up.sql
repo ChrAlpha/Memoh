@@ -936,14 +936,17 @@ CREATE TABLE IF NOT EXISTS bot_storage_bindings (
 
 CREATE INDEX IF NOT EXISTS idx_bot_storage_bindings_bot_id ON bot_storage_bindings(bot_id);
 
--- bot_history_message_assets: soft link (message -> content_hash only).
--- MIME, size, storage_key are derived from storage at read time.
+-- bot_history_message_assets: denormalized attachment metadata for history reads.
+-- File bytes remain content-addressed in storage; rendering history never probes storage.
 CREATE TABLE IF NOT EXISTS bot_history_message_assets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   message_id UUID NOT NULL REFERENCES bot_history_messages(id) ON DELETE CASCADE,
   role TEXT NOT NULL DEFAULT 'attachment',
   ordinal INTEGER NOT NULL DEFAULT 0,
   content_hash TEXT NOT NULL,
+  mime TEXT NOT NULL DEFAULT '',
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  storage_key TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL DEFAULT '',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
