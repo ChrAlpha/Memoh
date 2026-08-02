@@ -248,3 +248,18 @@ func TestBuildAbsorbedContextFallsBackWhenRawRowsDoNotCoverRollup(t *testing.T) 
 		t.Fatalf("segment content = %q, want inherited summary %q", segments[0].Content, parent.Summary)
 	}
 }
+
+func TestShouldFuseFrontierManualCollapsesAnyFrontier(t *testing.T) {
+	small := []Artifact{{Summary: "one"}, {Summary: "two"}}
+	cfg := TriggerConfig{AllowFrontierFusion: true, Manual: true, ContextWindowTokens: 1_000_000}
+	if !shouldFuseFrontier(cfg, small, 100_000) {
+		t.Fatal("manual pass with a multi-artifact frontier must fuse regardless of the share cap")
+	}
+	if shouldFuseFrontier(cfg, small[:1], 100_000) {
+		t.Fatal("manual pass with a single artifact has nothing to fuse")
+	}
+	cfg.AllowFrontierFusion = false
+	if shouldFuseFrontier(cfg, small, 100_000) {
+		t.Fatal("manual fusion still requires AllowFrontierFusion")
+	}
+}

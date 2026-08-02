@@ -28,6 +28,13 @@ func shouldFuseFrontier(cfg TriggerConfig, artifacts []Artifact, maxCompactToken
 	if !cfg.AllowFrontierFusion || len(artifacts) < 2 {
 		return false
 	}
+	// A manual request is an explicit consolidation: collapse any existing
+	// frontier instead of waiting for the share cap that paces automatic
+	// passes. Manual paths also lack the chat window, so the cap's chat-share
+	// bound could never engage there.
+	if cfg.Manual {
+		return true
+	}
 	// One quarter is the existing prior-reference allowance, so fusion starts
 	// where oldest-summary loss would begin; the chat-window tenth also bounds
 	// how much of the eventual chat prompt the active frontier can occupy.
