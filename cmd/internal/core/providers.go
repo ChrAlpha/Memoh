@@ -758,6 +758,13 @@ func startProviderTemplateSync(
 
 func configureMemoryProviderRegistry(mpService *memprovider.Service, registry *memprovider.Registry) {
 	mpService.SetRegistry(registry)
+	registry.SetConfigLoader(func(ctx context.Context, id string) (string, map[string]any, error) {
+		provider, err := mpService.Get(ctx, id)
+		if err != nil {
+			return "", nil, err
+		}
+		return provider.Provider, provider.Config, nil
+	})
 }
 
 func startScheduleService(lc fx.Lifecycle, scheduleService *schedule.Service) {
