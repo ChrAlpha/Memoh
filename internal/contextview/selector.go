@@ -30,8 +30,17 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	collected := len(frags)
 	selected, gated := applyTrustGate(frags, profile)
 	selected, superseded := resolveConflictGroups(selected)
-	selected, budgetDropped, edits, warnings := enforceFragBudgets(selected, profile)
-	selected, exchangeDropped, exchangeEdits := applyToolExchangePolicy(selected, budget.ToolExchange)
+	selected, budgetDropped, edits, warnings := enforceFragBudgets(
+		selected,
+		profile,
+		systemBudgetPlanActive(profile, budget.Plan),
+	)
+	selected, systemBudgetDropped, fatalError := enforceSystemBudget(selected, profile, budget.Plan, budgetDropped)
+	var exchangeDropped []contextfrag.ContextFrag
+	var exchangeEdits []contextfrag.ContextEditTrace
+	if fatalError == nil {
+		selected, exchangeDropped, exchangeEdits = applyToolExchangePolicy(selected, budget.ToolExchange)
+	}
 
 	result := SelectionResult{
 		Selected: selected,
@@ -51,10 +60,14 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	for _, dropped := range budgetDropped {
 		result.recordDrop(dropped.frag, dropped.reason)
 	}
+	for _, frag := range systemBudgetDropped {
+		result.recordDrop(frag, systemBudgetDropReason)
+	}
 	for _, frag := range exchangeDropped {
 		result.recordDrop(frag, toolExchangeDropReason)
 	}
 	result.Summary.TotalDropped = len(result.Dropped)
+	result.FatalError = fatalError
 	return result
 }
 

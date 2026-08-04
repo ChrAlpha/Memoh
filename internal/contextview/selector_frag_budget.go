@@ -18,7 +18,11 @@ type fragBudgetDrop struct {
 	reason string
 }
 
-func enforceFragBudgets(frags []contextfrag.ContextFrag, profile IntentProfile) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
+func enforceFragBudgets(
+	frags []contextfrag.ContextFrag,
+	profile IntentProfile,
+	systemPlanActive bool,
+) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
 	kept = make([]contextfrag.ContextFrag, 0, len(frags))
 	for _, frag := range frags {
 		reason, exceeded := fragBudgetExceeded(frag)
@@ -32,7 +36,7 @@ func enforceFragBudgets(frags []contextfrag.ContextFrag, profile IntentProfile) 
 			case isToolExchangeFrag(frag):
 				kept = append(kept, frag)
 				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_tool_closure", Ref: frag.Ref})
-			case isMustKeepFrag(frag, profile):
+			case isMustKeepFrag(frag, profile) && (!systemPlanActive || !droppableSystemBudgetFrag(frag)):
 				kept = append(kept, frag)
 				warnings = append(warnings, contextfrag.ValidationWarning{Code: "frag_budget_drop_blocked_must_keep", Ref: frag.Ref})
 			default:
@@ -55,6 +59,12 @@ func enforceFragBudgets(frags []contextfrag.ContextFrag, profile IntentProfile) 
 		}
 	}
 	return kept, dropped, edits, warnings
+}
+
+func droppableSystemBudgetFrag(frag contextfrag.ContextFrag) bool {
+	return frag.Slot == contextfrag.SlotSystem &&
+		(frag.RetentionTier == contextfrag.RetentionOptional ||
+			frag.RetentionTier == contextfrag.RetentionPreferred)
 }
 
 func fragBudgetExceeded(frag contextfrag.ContextFrag) (string, bool) {

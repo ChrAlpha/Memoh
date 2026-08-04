@@ -79,6 +79,10 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	manifest.DynamicMutators = normalizeDynamicMutators(input.DynamicMutators)
 	manifest.Selection = selectionTrace(result.Summary)
 	manifest.SelectionDecisions = selectionDecisions(sourceFrags, result)
+	if input.Budget.Plan != nil {
+		plan := *input.Budget.Plan
+		manifest.BudgetPlan = &plan
+	}
 	manifest.EditTrace = append(manifest.EditTrace, selectionEditTrace(result.Dropped)...)
 	manifest.EditTrace = append(manifest.EditTrace, result.Edited...)
 	manifest.ValidationWarnings = append(manifest.ValidationWarnings, result.Warnings...)
@@ -94,6 +98,9 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 		Trace:       trace,
 	}
 
+	if result.FatalError != nil {
+		return view, result.FatalError
+	}
 	if input.Options.DryRun {
 		return view, nil
 	}
@@ -261,7 +268,11 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 	}
 	for i, selected := range result.Selected {
 		if !selectedUsed[i] {
-			decisions = append(decisions, selectionDecisionForFrag(selected, contextfrag.DecisionSelected, ""))
+			reason := ""
+			if selected.ID == systemBudgetMarkerID {
+				reason = "system_budget_marker"
+			}
+			decisions = append(decisions, selectionDecisionForFrag(selected, contextfrag.DecisionSelected, reason))
 		}
 	}
 	return decisions
