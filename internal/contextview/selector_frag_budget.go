@@ -18,11 +18,17 @@ type fragBudgetDrop struct {
 	reason string
 }
 
+type fragBudgetEdit struct {
+	trace  contextfrag.ContextEditTrace
+	fragID string
+	reason string
+}
+
 func enforceFragBudgets(
 	frags []contextfrag.ContextFrag,
 	profile IntentProfile,
 	systemPlanActive bool,
-) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []contextfrag.ContextEditTrace, warnings []contextfrag.ValidationWarning) {
+) (kept []contextfrag.ContextFrag, dropped []fragBudgetDrop, edits []fragBudgetEdit, warnings []contextfrag.ValidationWarning) {
 	kept = make([]contextfrag.ContextFrag, 0, len(frags))
 	for _, frag := range frags {
 		reason, exceeded := fragBudgetExceeded(frag)
@@ -50,7 +56,11 @@ func enforceFragBudgets(
 				continue
 			}
 			kept = append(kept, trimmed)
-			edits = append(edits, fragBudgetTrimEdit(trimmed))
+			edits = append(edits, fragBudgetEdit{
+				trace:  fragBudgetTrimEdit(trimmed),
+				fragID: frag.ID,
+				reason: reason,
+			})
 		case contextfrag.OverflowSummarize:
 			kept = append(kept, frag)
 			warnings = append(warnings, contextfrag.ValidationWarning{Code: "overflow_summarize_unsupported", Ref: frag.Ref})

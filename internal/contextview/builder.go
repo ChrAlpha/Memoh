@@ -69,6 +69,14 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	profile := b.selector.ProfileFor(input.Intent)
 	result := b.selector.Select(sourceFrags, profile, input.Budget)
 	trace.SelectionSummary = result.Summary
+	if result.TrimNotice && result.TrimNoticeIndex >= 0 && result.TrimNoticeIndex <= len(result.Selected) {
+		notice := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{TrimNoticeFrag(input.Scope)})[0]
+		selected := make([]contextfrag.ContextFrag, 0, len(result.Selected)+1)
+		selected = append(selected, result.Selected[:result.TrimNoticeIndex]...)
+		selected = append(selected, notice)
+		selected = append(selected, result.Selected[result.TrimNoticeIndex:]...)
+		result.Selected = selected
+	}
 
 	placement := b.placer.Place(result.Selected, input.Intent)
 	trace.PlacementSummary = summarizePlacement(placement)
@@ -166,7 +174,7 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			contextfrag.ResolveFragTokens(source) != contextfrag.ResolveFragTokens(selected[0]) {
 			decision = contextfrag.DecisionTrimmed
 		}
-		decisions = append(decisions, selectionDecisionForFrag(selected[0], decision, ""))
+		decisions = append(decisions, selectionDecisionForFrag(selected[0], decision, result.EditReasons[source.ID]))
 		selectedByID[source.ID] = selected[1:]
 	}
 	for _, selected := range result.Selected {
