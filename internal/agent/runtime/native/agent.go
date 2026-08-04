@@ -16,6 +16,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	tools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/apperror"
 	"github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/workspace/bridge"
@@ -53,11 +54,30 @@ func New(deps Deps) *Agent {
 // applyContextView compiles the provider-facing fields from authoritative
 // fragments when the application installed the PR1 compiler. Direct Agent
 // users retain the legacy refresh path.
-func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) RunConfig {
+func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig, error) {
 	if a != nil && a.contextViewApplier != nil {
 		return a.contextViewApplier(ctx, cfg)
 	}
-	return cfg.RefreshContextFrag()
+	return cfg.RefreshContextFrag(), nil
+}
+
+const publicContextPreparationError = "The model context could not be prepared."
+
+func contextViewStreamError(err error) StreamEvent {
+	var code apperror.Code
+	switch {
+	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
+		code = apperror.CodeContextProtectedOverflow
+	case errors.Is(err, contextfrag.ErrBudgetUnsatisfied):
+		code = apperror.CodeContextBudgetUnsatisfied
+	default:
+		return StreamEvent{Type: EventError, Error: publicContextPreparationError}
+	}
+	public, ok := apperror.PublicFrom(apperror.New(code, nil), "")
+	if !ok {
+		return StreamEvent{Type: EventError, Error: publicContextPreparationError}
+	}
+	return StreamEvent{Type: EventError, Code: string(public.Code), Error: public.Detail}
 }
 
 // BridgeProvider returns the underlying bridge provider (workspace manager).
@@ -195,7 +215,15 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, true)
-	cfg = a.applyContextView(streamCtx, cfg)
+	var contextViewErr error
+	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
+	if contextViewErr != nil {
+		publicError := contextViewStreamError(contextViewErr)
+		turnError = publicError.Error
+		a.logger.Warn("context view preflight failed", slog.Any("error", contextViewErr))
+		sendEvent(ctx, ch, publicError)
+		return
+	}
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -781,7 +809,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	limit := a.Limits().ToolOutputLimit()
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaState != nil, a != nil && a.hookService != nil, false)
-	cfg = a.applyContextView(genCtx, cfg)
+	var contextViewErr error
+	cfg, contextViewErr = a.applyContextView(genCtx, cfg)
+	if contextViewErr != nil {
+		return nil, contextViewErr
+	}
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
