@@ -102,6 +102,10 @@
     "compaction": {
       "model_unavailable": "压缩模型不可用。请选择一个已启用、且声明了上下文窗口的对话模型。"
     },
+    "context": {
+      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。",
+      "protected_overflow": "必要的上下文内容超出了模型上下文预算。"
+    },
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
