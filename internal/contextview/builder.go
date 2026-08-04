@@ -70,6 +70,14 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 	profile := b.selector.ProfileFor(input.Intent)
 	result := b.selector.Select(sourceFrags, profile, input.Budget)
 	trace.SelectionSummary = result.Summary
+	if result.TrimNotice && result.TrimNoticeIndex >= 0 && result.TrimNoticeIndex <= len(result.Selected) {
+		notice := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{TrimNoticeFrag(input.Scope)})[0]
+		selected := make([]contextfrag.ContextFrag, 0, len(result.Selected)+1)
+		selected = append(selected, result.Selected[:result.TrimNoticeIndex]...)
+		selected = append(selected, notice)
+		selected = append(selected, result.Selected[result.TrimNoticeIndex:]...)
+		result.Selected = selected
+	}
 
 	placement := b.placer.Place(result.Selected, input.Intent)
 	trace.PlacementSummary = summarizePlacement(placement)
@@ -195,7 +203,7 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			continue
 		}
 		selectedIndex := indexes[0]
-		decisions[i] = selectionDecisionForSelection(source, result.Selected[selectedIndex])
+		decisions[i] = selectionDecisionForSelection(source, result.Selected[selectedIndex], result.EditReasons[source.ID])
 		decided[i] = true
 		selectedUsed[selectedIndex] = true
 		selectedByRef[key] = indexes[1:]
@@ -212,7 +220,7 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			if selectedUsed[selectedIndex] || !source.Ref.EqualIdentity(selected.Ref) {
 				continue
 			}
-			decisions[i] = selectionDecisionForSelection(source, selected)
+			decisions[i] = selectionDecisionForSelection(source, selected, result.EditReasons[source.ID])
 			decided[i] = true
 			selectedUsed[selectedIndex] = true
 			break
@@ -254,7 +262,7 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			if selectedUsed[selectedIndex] || selected.ID != source.ID {
 				continue
 			}
-			decisions[i] = selectionDecisionForSelection(source, selected)
+			decisions[i] = selectionDecisionForSelection(source, selected, result.EditReasons[source.ID])
 			decided[i] = true
 			selectedUsed[selectedIndex] = true
 			break
@@ -297,13 +305,13 @@ func newSelectionRefKey(ref contextfrag.ContextRef) (selectionRefKey, bool) {
 	}, true
 }
 
-func selectionDecisionForSelection(source, selected contextfrag.ContextFrag) contextfrag.SelectionDecision {
+func selectionDecisionForSelection(source, selected contextfrag.ContextFrag, reason string) contextfrag.SelectionDecision {
 	decision := contextfrag.DecisionSelected
 	if source.Ref.ContentHash != selected.Ref.ContentHash ||
 		contextfrag.ResolveFragTokens(source) != contextfrag.ResolveFragTokens(selected) {
 		decision = contextfrag.DecisionTrimmed
 	}
-	return selectionDecisionForFrag(selected, decision, "")
+	return selectionDecisionForFrag(selected, decision, reason)
 }
 
 func selectionDecisionForFrag(
