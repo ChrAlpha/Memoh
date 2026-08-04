@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/event"
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
@@ -98,6 +99,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	if s.acpPool == nil {
 		return errors.New("ACP session pool is not configured")
 	}
+	req.RunID = runIDForChatRequest(req.RunID)
 	sess, err := s.sessionService.Get(ctx, req.ThreadID)
 	if err != nil {
 		return err
@@ -133,6 +135,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	contextReq.Attachments = preparedAttachments.Context
 	contextReq.ReplyAttachments = nil
 	contextMarkdown := s.buildACPContextMarkdown(ctx, contextReq, agentID, projectPath)
+	contextLifecycle := contextfrag.NewLifecycleHolder()
+	contextLifecycle.SetManifest(contextfrag.BuildManifest(nil))
 
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
@@ -149,6 +153,16 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	terminal := s.contextLifecycleTerminal(streamCtx, native.RunConfig{
+		RunID: req.RunID,
+		Identity: native.SessionContext{
+			BotID:     req.BotID,
+			SessionID: req.ThreadID,
+		},
+		ContextLifecycle: contextLifecycle,
+	})
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 	activePrompt := s.registerACPActivePrompt(req.BotID, req.ThreadID)
 	defer s.unregisterACPActivePrompt(req.BotID, req.ThreadID, activePrompt)
 	// userAborted distinguishes an explicit Stop from an ordinary client
@@ -301,6 +315,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		RequiredCommand:       req.AgentCommand,
 		Sink:                  acpclient.EventSinkFunc(emit),
 	})
+	lifecycleCause = err
 	if err != nil {
 		s.logger.Error("ACP prompt failed",
 			slog.String("bot_id", req.BotID),
@@ -316,11 +331,13 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		}
 		if appErr := acpPromptConfigAppError(err); appErr != nil {
 			cleanupProjections()
+			lifecycleCause = appErr
 			cleanupLeadingUser()
 			return appErr
 		}
 		if feedbackErr := acpPromptInputFeedback(err); feedbackErr != nil {
 			cleanupProjections()
+			lifecycleCause = feedbackErr
 			cleanupLeadingUser()
 			return feedbackErr
 		}
@@ -331,8 +348,9 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			// "agent failed to complete the turn" marker.
 			abortedReq := req
 			abortedReq.SkipMemoryExtraction = true
-			if err := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil); err != nil {
-				s.logger.Error("ACP abort persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+			if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, contextLifecycle); persistErr != nil {
+				lifecycleCause = persistErr
+				s.logger.Error("ACP abort persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 			} else {
 				cleanupProjections()
 			}
@@ -344,8 +362,9 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
 		}
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err); err != nil {
-			s.logger.Error("ACP failure persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, contextLifecycle); persistErr != nil {
+			lifecycleCause = persistErr
+			s.logger.Error("ACP failure persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 		} else {
 			cleanupProjections()
 		}
@@ -364,8 +383,9 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		// a stop: the completed turn persists normally below.
 		abortedReq := req
 		abortedReq.SkipMemoryExtraction = true
-		if err := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil); err != nil {
-			s.logger.Error("ACP abort persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, contextLifecycle); persistErr != nil {
+			lifecycleCause = persistErr
+			s.logger.Error("ACP abort persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 		} else {
 			cleanupProjections()
 		}
@@ -374,8 +394,9 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		return nil
 	}
 	emit(native.StreamEvent{Type: native.EventTextEnd})
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil); err != nil {
-		s.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+	if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, contextLifecycle); persistErr != nil {
+		lifecycleCause = persistErr
+		s.logger.Error("ACP persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 	} else {
 		cleanupProjections()
 	}
@@ -773,7 +794,14 @@ func (s *Service) cancelPendingACPApprovals(ctx context.Context, req ChatRequest
 	}
 }
 
-func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error) error {
+func (s *Service) persistACPRound(
+	ctx context.Context,
+	req ChatRequest,
+	agentID, projectPath string,
+	result acpclient.PromptResult,
+	promptErr error,
+	contextLifecycle *contextfrag.LifecycleHolder,
+) error {
 	meta := map[string]any{
 		"acp_agent_id": agentID,
 		"project_path": projectPath,
@@ -816,7 +844,11 @@ func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID,
 	}
 	for idx, msg := range output {
 		if msg.Role == "assistant" {
-			metadataByIndex[idx+metadataOffset] = meta
+			entryMeta := make(map[string]any, len(meta))
+			for key, value := range meta {
+				entryMeta[key] = value
+			}
+			metadataByIndex[idx+metadataOffset] = entryMeta
 		}
 	}
 	skipMemory := promptErr != nil || req.UserMessagePersisted || req.SkipMemoryExtraction
@@ -825,6 +857,7 @@ func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID,
 		AllowEmptyAssistantText: true,
 		MessageMetadataByIndex:  metadataByIndex,
 		RequireCompletePersist:  true,
+		ContextLifecycle:        contextLifecycle,
 	})
 	if err == nil && promptErr == nil && req.UserMessagePersisted && !req.SkipMemoryExtraction {
 		go s.storeMemory(context.WithoutCancel(ctx), req, round, roundSourceRefs(req, persisted))
