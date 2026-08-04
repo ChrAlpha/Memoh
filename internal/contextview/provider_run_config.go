@@ -276,20 +276,11 @@ func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 // Native execution uses ProviderRunConfigApplier so typed budget failures are
 // returned to the runtime and fail closed before any provider call.
 func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
-	out, _ := applyProviderRunConfigWithMissingWindowAudit(ctx, logger, cfg, false)
+	out, _ := applyProviderRunConfig(ctx, logger, cfg)
 	return out
 }
 
 func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-	return applyProviderRunConfigWithMissingWindowAudit(ctx, logger, cfg, true)
-}
-
-func applyProviderRunConfigWithMissingWindowAudit(
-	ctx context.Context,
-	logger *slog.Logger,
-	cfg agentpkg.RunConfig,
-	auditMissingWindow bool,
-) (agentpkg.RunConfig, error) {
 	ledger := cfg.ContextMutations
 	if ledger == nil {
 		ledger = contextfrag.NewMutationLedger()
@@ -321,7 +312,7 @@ func applyProviderRunConfigWithMissingWindowAudit(
 		}
 	}
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
-	if cfg.ContextBudgetMaxTokens == 0 && auditMissingWindow {
+	if cfg.ContextBudgetMaxTokens == 0 {
 		recordMutationOnce(ledger, contextfrag.MutationContextBudgetDisabled, "missing_context_window")
 		warnMissingContextWindow(ctx, logger, cfg)
 	}
