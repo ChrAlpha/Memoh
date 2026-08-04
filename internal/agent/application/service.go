@@ -624,6 +624,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, err
 	}
 	req.Query = rc.query
+	req.RunID = rc.runConfig.RunID
 
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
@@ -633,8 +634,12 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		cfg.OnStepCommitted = stepCommitter.commit
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		if stepCommitter != nil {
 			_ = stepCommitter.finish(ctx, rc.estimatedTokens)
@@ -650,6 +655,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 			inputTokens = result.Usage.InputTokens
 		}
 		if err := stepCommitter.finish(ctx, inputTokens); err != nil {
+			lifecycleCause = err
 			return ChatResponse{}, err
 		}
 	} else {
@@ -658,9 +664,11 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 			SkipMemory:       storeReq.SkipMemoryExtraction,
 			ContextLifecycle: cfg.ContextLifecycle,
 		}); err != nil {
+			lifecycleCause = err
 			return ChatResponse{}, err
 		}
 		if err := s.persistSessionWorkspaceTarget(ctx, storeReq); err != nil {
+			lifecycleCause = err
 			return ChatResponse{}, err
 		}
 		if result.Usage != nil {
