@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,23 @@ import (
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/apperror"
 )
+
+type failNextRuntimeDecisionBackend struct {
+	sessionruntime.Backend
+	failNext atomic.Bool
+	err      error
+}
+
+func (b *failNextRuntimeDecisionBackend) Update(
+	ctx context.Context,
+	key sessionruntime.Key,
+	update sessionruntime.SnapshotUpdate,
+) (sessionruntime.Snapshot, bool, error) {
+	if b.failNext.CompareAndSwap(true, false) {
+		return sessionruntime.Snapshot{}, false, b.err
+	}
+	return b.Backend.Update(ctx, key, update)
+}
 
 func TestRuntimeDecisionTerminalDoesNotExposePrivateErrors(t *testing.T) {
 	tests := []struct {
@@ -110,7 +128,7 @@ func TestContinueRuntimeDecisionDoesNotParkProviderCancellation(t *testing.T) {
 		SessionID:  sessionID,
 		RunID:      runID,
 		Generation: handle.Generation,
-	}, func(chan<- WSStreamEvent) error {
+	}, func(context.Context, chan<- WSStreamEvent) error {
 		return context.Canceled
 	})
 
@@ -120,5 +138,103 @@ func TestContinueRuntimeDecisionDoesNotParkProviderCancellation(t *testing.T) {
 	}
 	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored {
 		t.Fatalf("terminal run = %#v, want errored instead of parked", snapshot.CurrentRunView)
+	}
+}
+
+func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *testing.T) {
+	const (
+		botID     = "bot-publish-failure"
+		sessionID = "session-publish-failure"
+		runID     = "run-publish-failure"
+	)
+	publishErr := errors.New("private runtime publication failure")
+	backend := &failNextRuntimeDecisionBackend{
+		Backend: sessionruntime.NewMemoryBackend(),
+		err:     publishErr,
+	}
+	manager := sessionruntime.NewManager(backend, sessionruntime.Options{
+		OwnerID:       "owner-publish-failure",
+		StateTTL:      time.Minute,
+		OwnerLeaseTTL: time.Second,
+		CommandAckTTL: time.Second,
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatalf("start runtime manager: %v", err)
+	}
+	handle, err := manager.StartRunHandle(
+		context.Background(),
+		botID,
+		sessionID,
+		runID,
+		make(chan struct{}, 1),
+		func() {},
+		make(chan turn.InjectMessage, 1),
+	)
+	if err != nil {
+		t.Fatalf("start runtime run: %v", err)
+	}
+	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
+		Type:        native.EventUserInputRequest,
+		UserInputID: "input-publish-failure",
+		Status:      "pending",
+	}); err != nil {
+		t.Fatalf("park runtime decision: %v", err)
+	}
+	if err := manager.FinishRun(context.Background(), handle, "", ""); err != nil {
+		t.Fatalf("mark deferred producer ready: %v", err)
+	}
+
+	command := sessionruntime.Command{
+		BotID:      botID,
+		SessionID:  sessionID,
+		RunID:      runID,
+		Generation: handle.Generation,
+	}
+	service := &Service{decisionRuntime: manager}
+	continuationCause := make(chan error, 1)
+	continuationDone := make(chan struct{})
+	go func() {
+		defer close(continuationDone)
+		service.continueRuntimeDecision(context.Background(), command, func(
+			continuationCtx context.Context,
+			eventCh chan<- WSStreamEvent,
+		) error {
+			backend.failNext.Store(true)
+			select {
+			case eventCh <- WSStreamEvent(`{"type":"text_delta","delta":"late"}`):
+			case <-continuationCtx.Done():
+				continuationCause <- context.Cause(continuationCtx)
+				return context.Cause(continuationCtx)
+			}
+			<-continuationCtx.Done()
+			continuationCause <- context.Cause(continuationCtx)
+			return context.Cause(continuationCtx)
+		})
+	}()
+
+	select {
+	case <-continuationDone:
+	case <-time.After(time.Second):
+		t.Fatal("runtime decision continuation hung after publication failure")
+	}
+	select {
+	case cause := <-continuationCause:
+		if !errors.Is(cause, context.Canceled) {
+			t.Fatalf("continuation cause = %v, want context canceled", cause)
+		}
+	default:
+		t.Fatal("continuation did not observe cancellation")
+	}
+
+	snapshot, err := manager.Snapshot(context.Background(), botID, sessionID)
+	if err != nil {
+		t.Fatalf("load terminal snapshot: %v", err)
+	}
+	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("terminal run = %#v, want errored", snapshot.CurrentRunView)
+	}
+	if snapshot.CurrentRunView.Error != "" {
+		t.Fatalf("terminal run error = %q, want no private publication detail", snapshot.CurrentRunView.Error)
 	}
 }
