@@ -36,6 +36,8 @@ type fakeDiscussService struct {
 	resolveResult ResolveRunConfigResult
 	inlineFn      func(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart
 	storeCalls    int
+	storeErr      error
+	storeFn       func() error
 }
 
 func (f *fakeDiscussService) ResolveRunConfig(_ context.Context, _, _, _, _, _, _, _ string) (ResolveRunConfigResult, error) {
@@ -51,7 +53,10 @@ func (f *fakeDiscussService) InlineImageAttachments(ctx context.Context, botID s
 
 func (f *fakeDiscussService) StoreRound(_ context.Context, _, _, _, _ string, _ []sdk.Message, _ string) error {
 	f.storeCalls++
-	return nil
+	if f.storeFn != nil {
+		return f.storeFn()
+	}
+	return f.storeErr
 }
 
 type testAgentStreamer interface {
