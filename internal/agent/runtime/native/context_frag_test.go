@@ -94,6 +94,7 @@ func TestRefreshContextFragKeepsMemoryDistinctFromCurrentMessage(t *testing.T) {
 func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	t.Parallel()
 	ledger := contextfrag.NewMutationLedger()
+	holder := contextfrag.NewLifecycleHolder()
 	plan := contextfrag.CachePlan{StablePrefixHash: "prefix", StableMessageCount: 2}
 	budgetPlan := contextfrag.ContextBudgetPlan{Window: 1000, HistoryBudget: 400}
 	selection := contextfrag.SelectionTrace{Selected: 1, Dropped: 1, DropReasons: map[string]int{"history_budget": 1}}
@@ -109,6 +110,7 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 			Selection:          &selection,
 			SelectionDecisions: decisions,
 		},
+		ContextLifecycle: holder,
 	}
 	cfg = cfg.RefreshContextFrag()
 	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.StablePrefixHash != "prefix" || cfg.ContextManifest.Mutations != ledger {
@@ -125,6 +127,10 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	}
 	if len(cfg.ContextManifest.SelectionDecisions) != 1 || cfg.ContextManifest.SelectionDecisions[0].ID != "old" {
 		t.Fatalf("selection decisions = %#v", cfg.ContextManifest.SelectionDecisions)
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.BudgetPlan == nil || snapshot.Selection.DropReasons["history_budget"] != 1 {
+		t.Fatalf("lifecycle snapshot = %#v, %v", snapshot, ok)
 	}
 }
 

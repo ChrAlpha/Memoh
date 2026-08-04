@@ -32,7 +32,9 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 	manifest.ToolDefs = cfg.ContextToolDefs
 	manifest = preserveProviderAccounting(cfg.ContextManifest, manifest)
 	cfg.ContextManifest = manifest
-	cfg.ContextLifecycle.SetManifest(manifest)
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
 	return cfg
 }
 
