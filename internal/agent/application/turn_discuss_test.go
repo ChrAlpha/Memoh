@@ -279,10 +279,14 @@ func TestDiscussACPSkipsWhenNotAddressed(t *testing.T) {
 
 func TestDiscussRefreshesContextFragWithoutLateBindingMessage(t *testing.T) {
 	agent := &fakeAgentStreamer{}
+	staleIndex := 0
+	staleMemoryIndex := 0
 	resolver := &fakeDiscussService{
 		resolveResult: ResolveRunConfigResult{
 			RunConfig: native.RunConfig{
-				System: "base system",
+				System:                         "base system",
+				ContextCurrentUserMessageIndex: &staleIndex,
+				ContextMemoryMessageIndex:      &staleMemoryIndex,
 				ContextSourceFrags: []contextfrag.ContextFrag{{
 					ID: "stale-system-only-source", Slot: contextfrag.SlotSystem,
 				}},
@@ -312,6 +316,9 @@ func TestDiscussRefreshesContextFragWithoutLateBindingMessage(t *testing.T) {
 	}
 	if cfg.ContextSourceFrags != nil {
 		t.Fatalf("discuss retained stale authoritative source: %#v", cfg.ContextSourceFrags)
+	}
+	if cfg.ContextCurrentUserMessageIndex != nil || cfg.ContextMemoryMessageIndex != nil {
+		t.Fatalf("discuss retained stale message markers: current=%#v memory=%#v", cfg.ContextCurrentUserMessageIndex, cfg.ContextMemoryMessageIndex)
 	}
 	if lastMessageFragContains(cfg.ContextFrags, "Current time:") ||
 		lastMessageFragContains(cfg.ContextFrags, "MUST use the `send` tool") {

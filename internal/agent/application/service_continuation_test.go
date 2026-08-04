@@ -19,10 +19,12 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	resolver := &Service{userInput: &userinput.Service{}}
 	eventCh := make(chan WSStreamEvent)
 	staleIndex := 0
+	staleMemoryIndex := 0
 	base := native.RunConfig{
 		Query:                          "stale query",
 		Messages:                       []sdk.Message{sdk.UserMessage("stale context")},
 		ContextCurrentUserMessageIndex: &staleIndex,
+		ContextMemoryMessageIndex:      &staleMemoryIndex,
 		ContextSourceFrags: []contextfrag.ContextFrag{{
 			ID:   "stale-source-fragment",
 			Kind: contextfrag.KindConversationEvent,
@@ -53,6 +55,9 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	}
 	if got.ContextCurrentUserMessageIndex != nil {
 		t.Fatalf("continuation retained stale current-user index: %#v", got.ContextCurrentUserMessageIndex)
+	}
+	if got.ContextMemoryMessageIndex != nil {
+		t.Fatalf("continuation retained stale memory index: %#v", got.ContextMemoryMessageIndex)
 	}
 	for _, frag := range got.ContextSourceFrags {
 		if frag.ID == "stale-source-fragment" {
