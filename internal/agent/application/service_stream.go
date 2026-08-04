@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -48,6 +49,22 @@ func hasVisibleAgentStreamOutput(event native.StreamEvent) bool {
 	default:
 		return false
 	}
+}
+
+func agentStreamEventError(event native.StreamEvent) error {
+	if event.Type != native.EventError {
+		return nil
+	}
+	if code := apperror.Code(strings.TrimSpace(event.Code)); code != "" {
+		if _, ok := apperror.Lookup(code); ok {
+			return apperror.New(code, nil)
+		}
+	}
+	detail := strings.TrimSpace(event.Error)
+	if detail == "" {
+		detail = "agent stream failed"
+	}
+	return errors.New(detail)
 }
 
 // extractTerminalSnapshot decodes a terminal stream event payload into the
@@ -166,6 +183,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		var hasSnapshot bool
 		var toolCallCount int
 		var hasVisibleOutput bool
+		var agentStreamErr error
 		for event := range eventCh {
 			idleCancel.Reset() // each event resets the idle timer
 
@@ -175,11 +193,15 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				idleCancel.RecordToolCall()
 			}
 
-			if event.Type == native.EventError {
+			if eventErr := agentStreamEventError(event); eventErr != nil {
+				if agentStreamErr == nil {
+					agentStreamErr = eventErr
+				}
 				s.logger.Error("agent stream error",
 					slog.String("bot_id", streamReq.BotID),
 					slog.String("chat_id", streamReq.ChatID),
 					slog.String("model_id", rc.model.ID),
+					slog.String("code", event.Code),
 					slog.String("error", event.Error),
 				)
 			}
@@ -263,6 +285,9 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					}
 				}
 			}
+		}
+		if agentStreamErr != nil {
+			errCh <- agentStreamErr
 		}
 	}()
 	return chunkCh, errCh
