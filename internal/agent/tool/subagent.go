@@ -38,6 +38,7 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
+	RunID         string
 	Model         *sdk.Model
 	ModelUUID     string
 	ModelID       string
@@ -948,6 +949,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		history = combined
 	}
 	cfg := SpawnRunConfig{
+		RunID:                    strings.TrimSpace(req.admission.RunID),
 		Model:                    req.runtime.Model,
 		ModelUUID:                req.runtime.UUID,
 		ModelID:                  req.runtime.ModelID,
