@@ -64,7 +64,7 @@ func TestApplyProviderRunConfigMergesOnlyMatchingHistoryAuditMetadata(t *testing
 	scope := contextfrag.Scope{BotID: "bot-1", CurrentMessageID: "current"}
 	cfg := agentpkg.RunConfig{
 		Messages: []sdk.Message{message}, ContextFrags: []contextfrag.ContextFrag{shadow},
-		ContextScope: scope, ContextQueryMaterialized: true,
+		ContextScope: scope, ContextQueryMaterialized: true, ContextTrimmableMessages: 1,
 	}
 	cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
 
