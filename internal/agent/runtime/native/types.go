@@ -102,6 +102,7 @@ type RunConfig struct {
 	ContextQueryMaterialized    bool
 	ContextToolUsage            string
 	ContextDynamicMutators      []contextfrag.DynamicMutator
+	ContextLifecycle            *contextfrag.LifecycleHolder
 	SessionType                 string
 	LiveToolStream              bool
 	CanRequestUserInput         bool

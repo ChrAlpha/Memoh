@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	attachmentpkg "github.com/memohai/memoh/internal/attachment"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 )
@@ -21,6 +22,7 @@ type storeRoundOptions struct {
 	SkipMemory              bool
 	AllowEmptyAssistantText bool
 	MessageMetadataByIndex  map[int]map[string]any
+	ContextLifecycle        *contextfrag.LifecycleHolder
 }
 
 func (s *Service) storeRoundWithOptions(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) error {
@@ -64,13 +66,72 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	if len(filtered) == 0 {
 		return nil, nil
 	}
+	opts = opts.withContextLifecycleMetadata(s.logger, req, filtered)
 
 	persisted := s.storeMessages(ctx, req, filtered, modelID, opts)
+	opts.ContextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
 		go s.storeMemory(context.WithoutCancel(ctx), req, filtered)
 	}
 
 	return persisted, nil
+}
+
+func (opts storeRoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req ChatRequest, messages []ModelMessage) storeRoundOptions {
+	snapshot, ok := opts.ContextLifecycle.Snapshot()
+	if !ok {
+		reason := "missing_snapshot"
+		if opts.ContextLifecycle == nil {
+			reason = "missing_lifecycle"
+		}
+		logContextLifecycleMetadataSkipped(logger, req, reason, len(messages))
+		return opts
+	}
+	idx := lastAssistantMessageIndex(messages)
+	if idx < 0 {
+		logContextLifecycleMetadataSkipped(logger, req, "missing_assistant", len(messages))
+		return opts
+	}
+	if opts.MessageMetadataByIndex == nil {
+		opts.MessageMetadataByIndex = make(map[int]map[string]any, 1)
+	}
+	existing := opts.MessageMetadataByIndex[idx]
+	if existing == nil {
+		existing = map[string]any{}
+	}
+	existing[contextfrag.MetadataContextLifecycleKey] = snapshot
+	opts.MessageMetadataByIndex[idx] = existing
+	return opts
+}
+
+func logContextLifecycleMetadataSkipped(logger *slog.Logger, req ChatRequest, reason string, messages int) {
+	if logger == nil {
+		return
+	}
+	logger.Debug("context lifecycle metadata not persisted",
+		slog.String("reason", reason),
+		slog.String("bot_id", req.BotID),
+		slog.String("session_id", req.ThreadID),
+		slog.Int("messages", messages),
+	)
+}
+
+func lastAssistantMessageIndex(messages []ModelMessage) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
+			return i
+		}
+	}
+	return -1
+}
+
+func lastPersistedAssistantMessageID(messages []messagepkg.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
+			return strings.TrimSpace(messages[i].ID)
+		}
+	}
+	return ""
 }
 
 // isEmptyAssistantMessage returns true if an assistant message has no
