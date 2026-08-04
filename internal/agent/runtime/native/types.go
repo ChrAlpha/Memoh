@@ -100,6 +100,7 @@ type RunConfig struct {
 	ContextManifest                contextfrag.Manifest
 	ContextScope                   contextfrag.Scope
 	ContextCurrentUserMessageIndex *int
+	ContextMemoryMessageIndex      *int
 	ContextQueryMaterialized       bool
 	ContextToolUsage               string
 	ContextToolDefs                []contextfrag.ToolDefAccounting

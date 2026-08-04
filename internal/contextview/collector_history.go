@@ -20,6 +20,9 @@ type HistoryMessagesConfig struct {
 	// Messages. The history collector omits it and the current-user collector
 	// retains it in the current-user slot.
 	CurrentUserMessageIndex *int
+	// MemoryMessageIndex identifies materialized memory recall that must be
+	// collected separately without changing its provider message position.
+	MemoryMessageIndex *int
 	// RepairToolClosures applies the shared repair when a caller has not
 	// already repaired its materialized message stream.
 	RepairToolClosures bool
@@ -42,10 +45,11 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 
 	historyScope := req.Scope
 	historyScope.Attention = nil
-	currentUserIndex, hasCurrentUser := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex)
+	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.MemoryMessageIndex)
+	currentUserIndex, hasCurrentUser := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex, optionalIndex(memoryIndex, hasMemory)...)
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages))
 	for i, msg := range cfg.Messages {
-		if hasCurrentUser && i == currentUserIndex {
+		if hasCurrentUser && i == currentUserIndex || hasMemory && i == memoryIndex {
 			continue
 		}
 		frags = append(frags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
@@ -79,7 +83,8 @@ func (*materializedCurrentUserCollector) Collect(_ context.Context, req CollectR
 	if err != nil {
 		return nil, err
 	}
-	index, ok := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex)
+	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.MemoryMessageIndex)
+	index, ok := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex, optionalIndex(memoryIndex, hasMemory)...)
 	if !ok {
 		return nil, nil
 	}
@@ -100,19 +105,42 @@ func (*materializedCurrentUserCollector) Collect(_ context.Context, req CollectR
 	})}, nil
 }
 
-func markedCurrentUserMessageIndex(messages []sdk.Message, index *int) (int, bool) {
+func markedCurrentUserMessageIndex(messages []sdk.Message, index *int, excluded ...int) (int, bool) {
 	if index == nil {
 		return 0, false
 	}
-	if *index >= 0 && *index < len(messages) && messages[*index].Role == sdk.MessageRoleUser {
+	if *index >= 0 && *index < len(messages) && messages[*index].Role == sdk.MessageRoleUser && !containsIndex(excluded, *index) {
 		return *index, true
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == sdk.MessageRoleUser {
+		if messages[i].Role == sdk.MessageRoleUser && !containsIndex(excluded, i) {
 			return i, true
 		}
 	}
 	return 0, false
+}
+
+func markedMemoryMessageIndex(messages []sdk.Message, index *int) (int, bool) {
+	if index == nil || *index < 0 || *index >= len(messages) || messages[*index].Role != sdk.MessageRoleUser {
+		return 0, false
+	}
+	return *index, true
+}
+
+func optionalIndex(index int, ok bool) []int {
+	if !ok {
+		return nil
+	}
+	return []int{index}
+}
+
+func containsIndex(indexes []int, target int) bool {
+	for _, index := range indexes {
+		if index == target {
+			return true
+		}
+	}
+	return false
 }
 
 func historyMessagesConfig(config any) (HistoryMessagesConfig, error) {

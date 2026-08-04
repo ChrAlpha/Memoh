@@ -126,6 +126,86 @@ func TestCollectNonSystemProviderSourceFragsExcludesSystem(t *testing.T) {
 	}
 }
 
+func TestCollectNonSystemProviderSourceFragsSeparatesMemoryFromCurrent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		messages    []sdk.Message
+		current     int
+		memory      int
+		wantFragIDs []string
+	}{
+		{
+			name:        "pipeline current before memory",
+			messages:    []sdk.Message{sdk.UserMessage("current"), sdk.UserMessage("memory recall")},
+			current:     0,
+			memory:      1,
+			wantFragIDs: []string{"message.000", "memory.recall"},
+		},
+		{
+			name:        "legacy memory before materialized current",
+			messages:    []sdk.Message{sdk.AssistantMessage("history"), sdk.UserMessage("memory recall"), sdk.UserMessage("current")},
+			current:     2,
+			memory:      1,
+			wantFragIDs: []string{"message.000", "memory.recall", "message.002"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := agentpkg.RunConfig{
+				Messages:                       tt.messages,
+				ContextCurrentUserMessageIndex: &tt.current,
+				ContextMemoryMessageIndex:      &tt.memory,
+				ContextQueryMaterialized:       true,
+			}
+			cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
+			if len(cfg.ContextSourceFrags) != len(tt.wantFragIDs) {
+				t.Fatalf("source fragments = %#v", cfg.ContextSourceFrags)
+			}
+			for i, wantID := range tt.wantFragIDs {
+				if cfg.ContextSourceFrags[i].ID != wantID {
+					t.Fatalf("source fragment ids = %#v", cfg.ContextSourceFrags)
+				}
+			}
+
+			currentFrag := cfg.ContextSourceFrags[indexOfFragID(t, cfg.ContextSourceFrags, fmt.Sprintf("message.%03d", tt.current))]
+			if currentFrag.Kind != contextfrag.KindCurrentUserMessage || currentFrag.Slot != contextfrag.SlotCurrentUser || currentFrag.CacheClass != contextfrag.CacheNever {
+				t.Fatalf("current fragment = %#v", currentFrag)
+			}
+			memoryFrag := cfg.ContextSourceFrags[indexOfFragID(t, cfg.ContextSourceFrags, "memory.recall")]
+			if memoryFrag.Kind != contextfrag.KindMemoryRecall || memoryFrag.Slot != contextfrag.SlotHistory || memoryFrag.CacheClass != contextfrag.CacheNever || memoryFrag.Trust != contextfrag.TrustWorkspace {
+				t.Fatalf("memory fragment = %#v", memoryFrag)
+			}
+
+			got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+			if !reflect.DeepEqual(got.Messages, tt.messages) {
+				t.Fatalf("provider messages changed: got %#v want %#v", got.Messages, tt.messages)
+			}
+			if got.ContextCurrentUserMessageIndex == nil || *got.ContextCurrentUserMessageIndex != tt.current {
+				t.Fatalf("current message index = %#v, want %d", got.ContextCurrentUserMessageIndex, tt.current)
+			}
+			if got.ContextMemoryMessageIndex == nil || *got.ContextMemoryMessageIndex != tt.memory {
+				t.Fatalf("memory message index = %#v, want %d", got.ContextMemoryMessageIndex, tt.memory)
+			}
+		})
+	}
+}
+
+func indexOfFragID(t *testing.T, frags []contextfrag.ContextFrag, id string) int {
+	t.Helper()
+	for i, frag := range frags {
+		if frag.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("fragment %q not found in %#v", id, frags)
+	return -1
+}
+
 func TestApplyProviderRunConfigDoesNotAddImplicitToolStripping(t *testing.T) {
 	t.Parallel()
 	for _, messageCount := range []int{10, 11} {
