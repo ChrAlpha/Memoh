@@ -95,11 +95,20 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	t.Parallel()
 	ledger := contextfrag.NewMutationLedger()
 	plan := contextfrag.CachePlan{StablePrefixHash: "prefix", StableMessageCount: 2}
+	budgetPlan := contextfrag.ContextBudgetPlan{Window: 1000, HistoryBudget: 400}
+	selection := contextfrag.SelectionTrace{Selected: 1, Dropped: 1, DropReasons: map[string]int{"history_budget": 1}}
+	decisions := []contextfrag.SelectionDecision{{ID: "old", Decision: contextfrag.DecisionDropped, Reason: "history_budget"}}
 	cfg := RunConfig{
 		System:          "base system",
 		Messages:        []sdk.Message{sdk.UserMessage("hi")},
 		ContextToolDefs: []contextfrag.ToolDefAccounting{{Provider: "native", Name: "read", Bytes: 40, TokenEstimate: 10}},
-		ContextManifest: contextfrag.Manifest{CachePlan: &plan, Mutations: ledger},
+		ContextManifest: contextfrag.Manifest{
+			CachePlan:          &plan,
+			Mutations:          ledger,
+			BudgetPlan:         &budgetPlan,
+			Selection:          &selection,
+			SelectionDecisions: decisions,
+		},
 	}
 	cfg = cfg.RefreshContextFrag()
 	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.StablePrefixHash != "prefix" || cfg.ContextManifest.Mutations != ledger {
@@ -107,6 +116,15 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	}
 	if len(cfg.ContextManifest.ToolDefs) != 1 || cfg.ContextManifest.ToolDefs[0].Name != "read" {
 		t.Fatalf("tool definitions = %#v", cfg.ContextManifest.ToolDefs)
+	}
+	if cfg.ContextManifest.BudgetPlan == nil || cfg.ContextManifest.BudgetPlan.HistoryBudget != 400 {
+		t.Fatalf("budget plan = %#v", cfg.ContextManifest.BudgetPlan)
+	}
+	if cfg.ContextManifest.Selection == nil || cfg.ContextManifest.Selection.DropReasons["history_budget"] != 1 {
+		t.Fatalf("selection = %#v", cfg.ContextManifest.Selection)
+	}
+	if len(cfg.ContextManifest.SelectionDecisions) != 1 || cfg.ContextManifest.SelectionDecisions[0].ID != "old" {
+		t.Fatalf("selection decisions = %#v", cfg.ContextManifest.SelectionDecisions)
 	}
 }
 

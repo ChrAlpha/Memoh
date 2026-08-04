@@ -56,6 +56,8 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 		Messages:                cfg.Messages,
 		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
 		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
+		TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+		TrimmablePrefix:         cfg.ContextTrimmableMessages,
 	}
 	history, err := (&HistoryMessagesCollector{}).Collect(ctx, CollectRequest{
 		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider, Config: historyConfig,
@@ -188,6 +190,85 @@ func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFra
 		Collector: sourceFragsCollectorName, Render: contextfrag.RenderPolicy{Format: contextfrag.RenderMarkdown},
 		ConflictKey: toolUsageConflictKey,
 	})
+}
+
+const DefaultRecentProtectTokens = 20000
+
+func resolveRecentProtectTokens(override *int) int {
+	if override == nil {
+		return DefaultRecentProtectTokens
+	}
+	if *override < 0 {
+		return 0
+	}
+	return *override
+}
+
+func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*contextfrag.ContextBudgetPlan, error) {
+	if cfg.ContextBudgetMaxTokens == 0 {
+		return nil, nil
+	}
+	currentRequestCost, err := providerCurrentRequestCost(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	toolDefsCost := 0
+	for _, def := range cfg.ContextToolDefs {
+		toolDefsCost += max(def.TokenEstimate, contextfrag.ProviderBudgetTokensFromBytes(def.Bytes))
+	}
+	return ComputeContextBudgetPlan(
+		cfg.ContextBudgetMaxTokens,
+		min(DefaultOutputReserveTokens, cfg.ContextBudgetMaxTokens/4),
+		toolDefsCost,
+		currentRequestCost,
+	)
+}
+
+func providerCurrentRequestCost(ctx context.Context, cfg agentpkg.RunConfig) (int, error) {
+	if len(cfg.ContextSourceFrags) > 0 {
+		return currentRequestFragCost(cfg.ContextSourceFrags), nil
+	}
+	query := cfg.Query
+	inlineImages := cfg.InlineImages
+	if cfg.ContextQueryMaterialized {
+		query = ""
+		inlineImages = nil
+	}
+	historyConfig := HistoryMessagesConfig{
+		Messages:                cfg.Messages,
+		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
+		TokenEstimates:          cfg.ContextHistoryTokenEstimates,
+	}
+	specs := []struct {
+		collector Collector
+		config    any
+	}{
+		{&materializedCurrentUserCollector{}, historyConfig},
+		{&CurrentUserCollector{}, CurrentUserConfig{Query: query}},
+		{&InlineImageCollector{}, InlineImageConfig{Images: inlineImages}},
+	}
+	var frags []contextfrag.ContextFrag
+	for _, spec := range specs {
+		collected, err := spec.collector.Collect(ctx, CollectRequest{
+			Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider, Config: spec.config,
+		})
+		if err != nil {
+			return 0, err
+		}
+		frags = append(frags, collected...)
+	}
+	return currentRequestFragCost(frags), nil
+}
+
+func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
+	total := 0
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
+			total += contextfrag.ResolveProviderBudgetFragTokens(frag)
+		}
+	}
+	return total
 }
 
 func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
