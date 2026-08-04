@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
@@ -28,14 +29,18 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 
 	result, err := s.agent.Generate(ctx, rc)
 	if err != nil {
-		return nil, err
+		return spawnFailureResult(rc), err
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: result.Messages,
 		Text:     result.Text,
 		Usage:    result.Usage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
 }
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
@@ -105,6 +110,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		LoopDetection: LoopDetectionConfig{
 			Enabled: cfg.LoopDetection.Enabled,
 		},
+		ContextLifecycle: contextfrag.NewLifecycleHolder(),
 	}
 }
 
@@ -121,6 +127,7 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	var allText strings.Builder
 	var finalMessages []sdk.Message
 	var totalUsage sdk.Usage
+	var streamErr error
 
 	for evt := range eventCh {
 		// Touch the watchdog on every event — this is the activity signal.
@@ -129,6 +136,10 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		switch evt.Type {
 		case EventTextDelta:
 			allText.WriteString(evt.Delta)
+		case EventError:
+			if streamErr == nil {
+				streamErr = errors.New(evt.Error)
+			}
 		case EventAgentEnd, EventAgentAbort:
 			if evt.Messages != nil {
 				_ = json.Unmarshal(evt.Messages, &finalMessages)
@@ -142,16 +153,34 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	// Check if context was cancelled (watchdog fired or parent cancelled).
 	if ctx.Err() != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
+			return spawnFailureResult(rc), cause
 		}
-		return nil, ctx.Err()
+		return spawnFailureResult(rc), ctx.Err()
+	}
+	if streamErr != nil {
+		return spawnFailureResult(rc), streamErr
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: finalMessages,
 		Text:     allText.String(),
 		Usage:    &totalUsage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
+}
+
+func spawnFailureResult(rc RunConfig) *tools.SpawnResult {
+	if rc.ContextLifecycle == nil {
+		return nil
+	}
+	snapshot, ok := rc.ContextLifecycle.Snapshot()
+	if !ok {
+		return nil
+	}
+	return &tools.SpawnResult{ContextLifecycle: &snapshot}
 }
 
 // SpawnSystemPrompt returns the system prompt for a given session type.

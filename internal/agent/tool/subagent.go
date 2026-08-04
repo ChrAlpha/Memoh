@@ -17,6 +17,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -81,9 +82,10 @@ type SpawnLoopConfig struct {
 
 // SpawnResult mirrors agent.GenerateResult.
 type SpawnResult struct {
-	Messages []sdk.Message
-	Text     string
-	Usage    *sdk.Usage
+	Messages         []sdk.Message
+	Text             string
+	Usage            *sdk.Usage
+	ContextLifecycle *contextfrag.LifecycleSnapshot
 }
 
 const (
@@ -402,19 +404,20 @@ type agentRecord struct {
 }
 
 type agentRunResult struct {
-	AgentID        string `json:"agent_id"`
-	SessionID      string `json:"session_id,omitempty"`
-	TaskID         string `json:"task_id,omitempty"`
-	ModelID        string `json:"model_id,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Fork           bool   `json:"fork,omitempty"`
-	Status         string `json:"status"`
-	Message        string `json:"message,omitempty"`
-	Text           string `json:"text,omitempty"`
-	Error          string `json:"error,omitempty"`
-	QueuePosition  int    `json:"queue_position,omitempty"`
-	QueueRemaining int    `json:"queue_remaining,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
+	AgentID          string                         `json:"agent_id"`
+	SessionID        string                         `json:"session_id,omitempty"`
+	TaskID           string                         `json:"task_id,omitempty"`
+	ModelID          string                         `json:"model_id,omitempty"`
+	Provider         string                         `json:"provider,omitempty"`
+	Fork             bool                           `json:"fork,omitempty"`
+	Status           string                         `json:"status"`
+	Message          string                         `json:"message,omitempty"`
+	Text             string                         `json:"text,omitempty"`
+	Error            string                         `json:"error,omitempty"`
+	QueuePosition    int                            `json:"queue_position,omitempty"`
+	QueueRemaining   int                            `json:"queue_remaining,omitempty"`
+	TimedOut         bool                           `json:"timed_out,omitempty"`
+	ContextLifecycle *contextfrag.LifecycleSnapshot `json:"-"`
 }
 
 type agentRequest struct {
@@ -745,6 +748,12 @@ func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *ag
 	if task := p.bgManager.Get(req.taskID); task != nil {
 		if snap := task.Snapshot(); snap.Status == background.TaskKilled {
 			result.Status = string(background.TaskKilled)
+			// Manager.Kill publishes TaskKilled immediately before canceling the
+			// task context. Wait for the admitted child context so terminal
+			// classification cannot race through as completed.
+			if runCtx.Err() == nil {
+				<-runCtx.Done()
+			}
 		}
 	}
 	// Release the thread's slot before the queue promotes the next message, or
@@ -946,6 +955,9 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest, 
 		wd.Stop()
 		safetyCancel()
 
+		if genResult != nil && genResult.ContextLifecycle != nil {
+			res.ContextLifecycle = genResult.ContextLifecycle
+		}
 		if err == nil {
 			res.Text = genResult.Text
 			if p.messageService != nil && req.agentSessionID != "" {
@@ -1341,7 +1353,14 @@ func (p *SpawnProvider) persistMessages(
 		p.persistUserMessage(ctx, botID, sessionID, query)
 	}
 
-	for _, msg := range result.Messages {
+	lastAssistantIdx := -1
+	for i, msg := range result.Messages {
+		if msg.Role == sdk.MessageRoleAssistant {
+			lastAssistantIdx = i
+		}
+	}
+
+	for i, msg := range result.Messages {
 		if msg.Role == sdk.MessageRoleUser {
 			continue
 		}
@@ -1353,15 +1372,27 @@ func (p *SpawnProvider) persistMessages(
 		if msg.Usage != nil {
 			usage, _ = json.Marshal(msg.Usage)
 		}
-		if _, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
+		var metadata map[string]any
+		if i == lastAssistantIdx && result.ContextLifecycle != nil {
+			metadata = map[string]any{
+				contextfrag.MetadataContextLifecycleKey: *result.ContextLifecycle,
+			}
+		}
+		persisted, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:     botID,
 			SessionID: sessionID,
 			Role:      string(msg.Role),
 			Content:   content,
+			Metadata:  metadata,
 			Usage:     usage,
 			ModelID:   modelID,
-		}); err != nil {
+		})
+		if err != nil {
 			p.logger.Warn("persist subagent message failed", slog.Any("error", err))
+			continue
+		}
+		if i == lastAssistantIdx && result.ContextLifecycle != nil {
+			result.ContextLifecycle.AssistantMessageID = persisted.ID
 		}
 	}
 }
