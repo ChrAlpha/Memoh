@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/google/uuid"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -38,6 +39,10 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 }
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
+	runID := strings.TrimSpace(cfg.RunID)
+	if runID == "" {
+		runID = uuid.NewString()
+	}
 	messages := cfg.Messages
 	if cfg.Query != "" {
 		messages = append(messages, sdk.Message{
@@ -72,6 +77,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		})
 	}
 	return RunConfig{
+		RunID:                    runID,
 		Model:                    cfg.Model,
 		CurrentModelUUID:         cfg.ModelUUID,
 		CurrentModelID:           cfg.ModelID,

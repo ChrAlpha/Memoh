@@ -24,7 +24,7 @@ type turnRuntimeHooks struct {
 	streamAgent      func(context.Context, native.RunConfig) <-chan native.StreamEvent
 	resolveRunConfig func(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
 	inlineImages     func(context.Context, string, []timeline.ImageAttachmentRef) []sdk.ImagePart
-	storeRound       func(context.Context, string, string, string, string, []sdk.Message, string) error
+	storeRound       func(context.Context, string, string, string, string, string, []sdk.Message, string) error
 }
 
 // startDiscussTurn orchestrates one discuss turn: resolve the run config,
@@ -200,6 +200,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		var sdkMsgs []sdk.Message
 		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
 			if storeErr := s.storeDiscussRound(ctx,
+				runConfig.RunID,
 				cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
 				sdkMsgs, resolved.ModelID,
 			); storeErr != nil {
@@ -371,6 +372,7 @@ func (s *Service) streamDiscussAgent(ctx context.Context, cfg native.RunConfig) 
 
 func (s *Service) storeDiscussRound(
 	ctx context.Context,
+	runID string,
 	botID, sessionID, channelIdentityID, currentPlatform string,
 	messages []sdk.Message,
 	modelID string,
@@ -378,6 +380,7 @@ func (s *Service) storeDiscussRound(
 	if s.turnHooks != nil && s.turnHooks.storeRound != nil {
 		return s.turnHooks.storeRound(
 			ctx,
+			runID,
 			botID,
 			sessionID,
 			channelIdentityID,
@@ -386,7 +389,15 @@ func (s *Service) storeDiscussRound(
 			modelID,
 		)
 	}
-	return s.StoreRound(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID)
+	return s.storeRound(ctx, ChatRequest{
+		RunID:                   runID,
+		BotID:                   botID,
+		ChatID:                  botID,
+		ThreadID:                sessionID,
+		SourceChannelIdentityID: channelIdentityID,
+		CurrentChannel:          currentPlatform,
+		UserMessagePersisted:    true,
+	}, sdkMessagesToModelMessages(messages), modelID)
 }
 
 // discussMessagesToSDK converts composed context messages into SDK

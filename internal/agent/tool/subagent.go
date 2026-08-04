@@ -36,6 +36,7 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
+	RunID                 string
 	Model                 *sdk.Model
 	ModelUUID             string
 	ModelID               string
@@ -732,7 +733,7 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 }
 
 func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *agentRequest) agentRunResult {
-	runCtx, finishRun, admitErr := p.admitAgentRun(ctx, req)
+	runCtx, runID, finishRun, admitErr := p.admitAgentRun(ctx, req)
 	if admitErr != nil {
 		// Nothing was started and nothing was persisted, but the task record has
 		// to close anyway: a caller waiting on it would otherwise wait on a run
@@ -740,7 +741,7 @@ func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *ag
 		return p.completeAgentRequest(ctx, key, req, rejectedAgentRun(req, admitErr))
 	}
 	req.messagePersisted = p.persistUserMessage(context.WithoutCancel(runCtx), req.parentSession.BotID, req.agentSessionID, req.message)
-	result := p.runSubagentTask(runCtx, req)
+	result := p.runSubagentTask(runCtx, req, runID)
 	if task := p.bgManager.Get(req.taskID); task != nil {
 		if snap := task.Snapshot(); snap.Status == background.TaskKilled {
 			result.Status = string(background.TaskKilled)
@@ -837,7 +838,7 @@ func (p *SpawnProvider) finishAgentRequest(ctx context.Context, key string, resu
 	go p.runAgentRequest(runCtx, key, next)
 }
 
-func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) agentRunResult {
+func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest, runID string) agentRunResult {
 	res := agentRunResult{
 		AgentID:   req.agentID,
 		SessionID: req.agentSessionID,
@@ -891,6 +892,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		history = combined
 	}
 	cfg := SpawnRunConfig{
+		RunID:                 runID,
 		Model:                 req.runtime.Model,
 		ModelUUID:             req.runtime.UUID,
 		ModelID:               req.runtime.ModelID,
