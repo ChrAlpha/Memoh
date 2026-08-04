@@ -781,6 +781,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		Skills:            agentSkills,
 		LoopDetection:     native.LoopDetectionConfig{Enabled: loopDetectionEnabled},
 		BackgroundManager: s.bgManager,
+		ContextLifecycle:  contextfrag.NewLifecycleHolder(),
 		ContextScope: contextfrag.Scope{
 			BotID:             p.BotID,
 			ChatID:            chatID,

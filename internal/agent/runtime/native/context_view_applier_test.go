@@ -171,6 +171,20 @@ func TestContextViewStreamErrorUsesStablePublicContract(t *testing.T) {
 	}
 }
 
+func TestAgentInstallsLifecycleHolderBeforeContextPreflight(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan *contextfrag.LifecycleHolder, 1)
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		seen <- cfg.ContextLifecycle
+		return cfg, contextfrag.ErrBudgetUnsatisfied
+	}})
+	_, _ = a.Generate(context.Background(), RunConfig{})
+	if holder := <-seen; holder == nil {
+		t.Fatal("context preflight received a nil lifecycle holder")
+	}
+}
+
 func TestGenerateContextBudgetErrorStopsBeforeProvider(t *testing.T) {
 	t.Parallel()
 

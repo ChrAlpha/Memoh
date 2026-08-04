@@ -165,6 +165,9 @@ func sendEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool
 }
 
 func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
+	if cfg.ContextLifecycle == nil {
+		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
+	}
 	streamCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	aborted := false
@@ -710,6 +713,9 @@ func drainStreamUntilClosed(stream <-chan sdk.StreamPart, grace time.Duration) b
 }
 
 func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *GenerateResult, retErr error) {
+	if cfg.ContextLifecycle == nil {
+		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
+	}
 	genCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	defer func() {
