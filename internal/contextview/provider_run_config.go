@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -21,7 +22,7 @@ const (
 
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
 	return func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-		return ApplyProviderRunConfig(ctx, logger, cfg), nil
+		return applyProviderRunConfig(ctx, logger, cfg)
 	}
 }
 
@@ -271,7 +272,24 @@ func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 	return total
 }
 
+// ApplyProviderRunConfig keeps the direct compiler helper source-compatible.
+// Native execution uses ProviderRunConfigApplier so typed budget failures are
+// returned to the runtime and fail closed before any provider call.
 func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	out, _ := applyProviderRunConfigWithMissingWindowAudit(ctx, logger, cfg, false)
+	return out
+}
+
+func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
+	return applyProviderRunConfigWithMissingWindowAudit(ctx, logger, cfg, true)
+}
+
+func applyProviderRunConfigWithMissingWindowAudit(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg agentpkg.RunConfig,
+	auditMissingWindow bool,
+) (agentpkg.RunConfig, error) {
 	ledger := cfg.ContextMutations
 	if ledger == nil {
 		ledger = contextfrag.NewMutationLedger()
@@ -299,8 +317,13 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		cfg = legacyMaterializeQuery(cfg)
 		frags = CollectProviderSourceFrags(ctx, cfg)
 		if frags == nil {
-			return providerViewFallback(logger, cfg, ledger, "collect_error", "context view collection failed", nil)
+			return providerViewFallback(logger, cfg, ledger, "collect_error", "context view collection failed", nil), nil
 		}
+	}
+	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
+	if cfg.ContextBudgetMaxTokens == 0 && auditMissingWindow {
+		recordMutationOnce(ledger, contextfrag.MutationContextBudgetDisabled, "missing_context_window")
+		warnMissingContextWindow(ctx, logger, cfg)
 	}
 
 	selector := Selector(&FragmentSelector{})
@@ -314,22 +337,38 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		}
 		selector = gate
 	}
+	if budgetErr != nil && !isContextBudgetError(budgetErr) {
+		return providerViewFallback(logger, fallbackCfg, ledger, "budget_plan_error", "context budget plan failed", budgetErr), nil
+	}
 
 	registry := NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})
 	builder := NewBuilder(registry, selector, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
 	view, err := builder.Build(ctx, BuildInput{
 		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
-		Sources:         []SourceSpec{{Name: sourceFragsCollectorName}},
-		Targets:         []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
-		Budget:          BudgetEnvelope{ToolExchange: cfg.ContextToolExchangePolicy},
+		Sources: []SourceSpec{{Name: sourceFragsCollectorName}},
+		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
+		Budget: BudgetEnvelope{
+			MaxTokens:           cfg.ContextBudgetMaxTokens,
+			Plan:                budgetPlan,
+			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
+			ToolExchange:        cfg.ContextToolExchangePolicy,
+		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
+	if budgetErr != nil {
+		recordContextBudgetFailure(ledger, budgetErr)
+		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
+	}
 	if err != nil {
-		return providerViewFallback(logger, fallbackCfg, ledger, "build_error", "context view build failed", err)
+		if isContextBudgetError(err) {
+			recordContextBudgetFailure(ledger, err)
+			return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
+		}
+		return providerViewFallback(logger, fallbackCfg, ledger, "build_error", "context view build failed", err), nil
 	}
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
-		return providerViewFallback(logger, fallbackCfg, ledger, "unexpected_payload", "context view rendered unexpected payload", nil)
+		return providerViewFallback(logger, fallbackCfg, ledger, "unexpected_payload", "context view rendered unexpected payload", nil), nil
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
@@ -343,7 +382,7 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	cfg.Messages = payload.Messages
 	ordered, err := orderedSelectedFrags(view.Selected, view.Placement)
 	if err != nil {
-		return providerViewFallback(logger, fallbackCfg, ledger, "placement_error", "context view placement invalid after render", err)
+		return providerViewFallback(logger, fallbackCfg, ledger, "placement_error", "context view placement invalid after render", err), nil
 	}
 	currentIndex, memoryIndex := renderedSpecialMessageIndexes(ordered)
 	cfg.ContextMemoryMessageIndex = memoryIndex
@@ -360,6 +399,70 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
+	return cfg, nil
+}
+
+func isContextBudgetError(err error) bool {
+	return errors.Is(err, contextfrag.ErrProtectedContextOverflow) ||
+		errors.Is(err, contextfrag.ErrBudgetUnsatisfied)
+}
+
+func recordContextBudgetFailure(ledger *contextfrag.MutationLedger, err error) {
+	reason := "budget_unsatisfied"
+	if errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		reason = "protected_context_overflow"
+	}
+	recordMutationOnce(ledger, contextfrag.MutationContextBudgetFailure, reason)
+}
+
+func recordMutationOnce(ledger *contextfrag.MutationLedger, kind contextfrag.MutationKind, detail string) {
+	for _, record := range ledger.Records() {
+		if record.Kind == kind && record.Detail == detail {
+			return
+		}
+	}
+	ledger.Record(kind, detail)
+}
+
+func providerBudgetAuditConfig(
+	cfg agentpkg.RunConfig,
+	view *ContextView,
+	ledger *contextfrag.MutationLedger,
+	budgetPlan *contextfrag.ContextBudgetPlan,
+) agentpkg.RunConfig {
+	if view == nil {
+		manifest := contextfrag.BuildManifest(nil)
+		manifest.View = contextfrag.ViewRunConfigPreProvider
+		manifest.DynamicMutators = normalizeDynamicMutators(cfg.ContextDynamicMutators)
+		if budgetPlan != nil {
+			plan := *budgetPlan
+			manifest.BudgetPlan = &plan
+		}
+		manifest.Mutations = ledger
+		cfg.ContextManifest = manifest
+		cfg.ContextMutations = ledger
+		if cfg.ContextLifecycle != nil {
+			cfg.ContextLifecycle.SetManifest(manifest)
+		}
+		return cfg
+	}
+	cachePlan := cachePlanFromPlacement(view.Placement)
+	cachePlan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
+	manifest := view.Manifest
+	manifest.CachePlan = &cachePlan
+	manifest.Mutations = ledger
+	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+
+	cfg.ContextFrags = view.Selected
+	cfg.ContextManifest = manifest
+	cfg.ContextCachePlan = cachePlan
+	cfg.ContextMutations = ledger
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
 	return cfg
 }
 
@@ -380,6 +483,9 @@ func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *c
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
+	if cfg.ContextLifecycle != nil {
+		cfg.ContextLifecycle.SetManifest(manifest)
+	}
 	return cfg
 }
 
@@ -557,7 +663,7 @@ func optionalPointerValue(value *int) []int {
 
 func hasCurrentUserFrag(frags []contextfrag.ContextFrag) bool {
 	for _, frag := range frags {
-		if frag.Slot == contextfrag.SlotCurrentUser {
+		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
 			return true
 		}
 	}
@@ -575,4 +681,16 @@ func warnProviderContextView(logger *slog.Logger, cfg agentpkg.RunConfig, messag
 		attrs = append(attrs, slog.Any("error", err))
 	}
 	logger.Warn(message, attrs...) //nolint:sloglint // message names the exact fallback stage
+}
+
+func warnMissingContextWindow(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) {
+	if logger == nil {
+		return
+	}
+	logger.WarnContext(ctx, "context budget disabled: missing model context window",
+		slog.String("reason", "missing_context_window"),
+		slog.String("bot_id", cfg.ContextScope.BotID),
+		slog.String("session_id", cfg.ContextScope.SessionID),
+		slog.String("model_id", cfg.CurrentModelID),
+	)
 }

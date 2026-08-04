@@ -111,6 +111,7 @@ type RunConfig struct {
 	ContextCachePlan               contextfrag.CachePlan
 	ContextMutations               *contextfrag.MutationLedger
 	ContextDynamicMutators         []contextfrag.DynamicMutator
+	ContextLifecycle               *contextfrag.LifecycleHolder
 	SessionType                    string
 	LiveToolStream                 bool
 	CanRequestUserInput            bool
