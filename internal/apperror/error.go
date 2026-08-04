@@ -14,6 +14,8 @@ const (
 	CodeBotNameTaken                     Code = "bot.name_taken"
 	CodeChannelRuntimeUnavailable        Code = "channel.runtime_unavailable"
 	CodeCompactionModelUnavailable       Code = "compaction.model_unavailable"
+	CodeContextBudgetUnsatisfied         Code = "context.budget_unsatisfied"
+	CodeContextProtectedOverflow         Code = "context.protected_overflow"
 	CodeWorkspaceUnreachable             Code = "workspace.unreachable"
 	CodeWorkspaceImageIncompatible       Code = "workspace.image_incompatible"
 	CodeWorkspaceTemplateBootstrapFailed Code = "workspace.template_bootstrap_failed"
@@ -67,6 +69,14 @@ var catalog = map[Code]Definition{
 		HTTPStatus:  http.StatusBadRequest,
 		Detail:      "The compaction model is unavailable.",
 		AllowedArgs: []string{"reason"},
+	},
+	CodeContextBudgetUnsatisfied: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "The model context window is too small for this request.",
+	},
+	CodeContextProtectedOverflow: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "Required context exceeds the model context budget.",
 	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,

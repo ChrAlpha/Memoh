@@ -20,8 +20,8 @@ const (
 )
 
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
-	return func(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
-		return ApplyProviderRunConfig(ctx, logger, cfg)
+	return func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
+		return ApplyProviderRunConfig(ctx, logger, cfg), nil
 	}
 }
 

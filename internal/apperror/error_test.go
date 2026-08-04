@@ -102,3 +102,23 @@ func TestLookupDoesNotExposeMutableCatalogState(t *testing.T) {
 		t.Fatalf("catalog allowed args were mutated: %#v", fresh.AllowedArgs)
 	}
 }
+
+func TestContextBudgetErrorsHaveStableCatalogContracts(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		code   Code
+		detail string
+	}{
+		{CodeContextBudgetUnsatisfied, "The model context window is too small for this request."},
+		{CodeContextProtectedOverflow, "Required context exceeds the model context budget."},
+	} {
+		definition, ok := Lookup(tt.code)
+		if !ok {
+			t.Fatalf("catalog missing %q", tt.code)
+		}
+		if definition.HTTPStatus != http.StatusUnprocessableEntity || definition.Detail != tt.detail {
+			t.Fatalf("catalog[%q] = %#v", tt.code, definition)
+		}
+	}
+}
