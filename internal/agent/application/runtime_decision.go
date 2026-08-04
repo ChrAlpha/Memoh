@@ -353,21 +353,23 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 	if publishErr != nil {
 		runErr = publishErr
 	}
-	finishCtx := context.WithoutCancel(ctx)
 	if runErr != nil {
-		s.finishRuntimeDecision(finishCtx, handle, runErr)
+		s.finishRuntimeDecision(ctx, handle, runErr)
 		return
 	}
-	_ = s.decisionRuntime.FinishRun(finishCtx, handle, "", "")
+	_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, "", "")
 }
 
 func (s *Service) finishRuntimeDecision(ctx context.Context, handle sessionruntime.RunHandle, cause error) {
-	status, message := runtimeDecisionTerminal(cause)
+	status, message := runtimeDecisionTerminal(ctx, cause)
 	_ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, status, message)
 }
 
-func runtimeDecisionTerminal(cause error) (string, string) {
-	if cause != nil && !errors.Is(cause, context.Canceled) {
+func runtimeDecisionTerminal(ctx context.Context, cause error) (string, string) {
+	explicitlyCanceled := ctx != nil &&
+		errors.Is(cause, context.Canceled) &&
+		errors.Is(context.Cause(ctx), context.Canceled)
+	if cause != nil && !explicitlyCanceled {
 		return sessionruntime.RunStatusErrored, string(apperror.CodeOf(cause))
 	}
 	return "", ""

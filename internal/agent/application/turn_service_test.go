@@ -14,6 +14,7 @@ import (
 	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/apperror"
 )
 
 type fakeRunner struct {
@@ -258,17 +259,29 @@ func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
 	a, admitter := newAdmittedTurnTestService(&fakeRunner{chunks: []string{
 		`{"type":"text_delta","delta":"hello"}`,
 	}})
-	admitter.publishErr = errors.New("runtime publication failed")
+	publishErr := errors.New("private runtime publication failure")
+	admitter.publishErr = publishErr
 	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
 		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	drainHandle(h)
+	for range h.Events() {
+	}
+	var publicErr error
+	for streamErr := range h.Errs() {
+		publicErr = streamErr
+	}
 
 	if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
 		t.Fatalf("publication failure status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
+	}
+	if got := apperror.CodeOf(publicErr); got != apperror.CodeSessionHistoryInconsistent {
+		t.Fatalf("publication failure code = %q, want %q", got, apperror.CodeSessionHistoryInconsistent)
+	}
+	if got := apperror.CauseOf(publicErr); !errors.Is(got, publishErr) {
+		t.Fatalf("private publication cause = %v, want %v", got, publishErr)
 	}
 }
 
@@ -643,6 +656,20 @@ func (*canceledRunReporter) StreamChat(ctx context.Context, _ ChatRequest) (<-ch
 	return ch, errCh
 }
 
+type canceledRunTerminalReporter struct{}
+
+func (*canceledRunTerminalReporter) StreamChat(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
+	ch := make(chan StreamChunk, 1)
+	errCh := make(chan error)
+	go func() {
+		defer close(ch)
+		defer close(errCh)
+		<-ctx.Done()
+		ch <- StreamChunk(`{"type":"agent_abort"}`)
+	}()
+	return ch, errCh
+}
+
 func drainHandle(h turn.RunHandle) {
 	for range h.Events() {
 	}
@@ -729,7 +756,38 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 			t.Fatal(err)
 		}
 		h.Cancel()
-		drainHandle(h)
+		for range h.Events() {
+		}
+		for streamErr := range h.Errs() {
+			t.Fatalf("canceled run exposed stream error: %v", streamErr)
+		}
+		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
+			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
+		}
+	})
+
+	t.Run("cancellation reported by detached terminal event", func(t *testing.T) {
+		a, admitter := newAdmittedTurnTestService(&canceledRunTerminalReporter{})
+		a.publishTurnEvent = func(
+			ctx context.Context,
+			handle sessionruntime.RunHandle,
+			event native.StreamEvent,
+		) error {
+			if ctx.Err() != nil {
+				return context.Cause(ctx)
+			}
+			return admitter.PublishAgentEvent(ctx, handle, event)
+		}
+		h, err := a.StartTurn(context.Background(), cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Cancel()
+		for range h.Events() {
+		}
+		for streamErr := range h.Errs() {
+			t.Fatalf("canceled run exposed stream error: %v", streamErr)
+		}
 		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
 			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
 		}
@@ -750,6 +808,68 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 			t.Fatal("terminal write carried no fencing token: a superseded owner could close this run")
 		}
 	})
+}
+
+func TestRecordStreamFailureClassifiesOnlyExplicitCancellationAsAborted(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	tests := []struct {
+		name         string
+		contextCause error
+		err          error
+		wantStored   bool
+	}{
+		{
+			name:         "explicit cancellation",
+			contextCause: context.Canceled,
+			err:          context.Canceled,
+		},
+		{
+			name:         "wrapped explicit cancellation",
+			contextCause: context.Canceled,
+			err:          runtimeHistoryError(context.Canceled),
+		},
+		{
+			name:       "provider cancellation with active context",
+			err:        context.Canceled,
+			wantStored: true,
+		},
+		{
+			name:         "ownership loss",
+			contextCause: sessionruntime.ErrRunOwnershipLost,
+			err:          context.Canceled,
+			wantStored:   true,
+		},
+		{
+			name:       "provider failure",
+			err:        providerErr,
+			wantStored: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tt.contextCause != nil {
+				var cancel context.CancelCauseFunc
+				ctx, cancel = context.WithCancelCause(ctx)
+				cancel(tt.contextCause)
+			}
+			h := &runHandle{ctx: ctx}
+			reported := h.recordStreamFailure(tt.err)
+
+			if !h.failed.Load() {
+				t.Fatal("stream failure did not mark the run failed")
+			}
+			if tt.wantStored && !errors.Is(h.streamErr, tt.err) {
+				t.Fatalf("stored error = %v, want %v", h.streamErr, tt.err)
+			}
+			if !tt.wantStored && h.streamErr != nil {
+				t.Fatalf("stored error = %v, want explicit cancellation suppressed", h.streamErr)
+			}
+			if reported != tt.wantStored {
+				t.Fatalf("reported = %v, want %v", reported, tt.wantStored)
+			}
+		})
+	}
 }
 
 // TestDiscussInjectFailsFast: discuss handles have no inject reader, so
