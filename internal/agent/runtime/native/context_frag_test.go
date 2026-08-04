@@ -71,6 +71,26 @@ func TestRefreshContextFragMarksMaterializedCurrentMessage(t *testing.T) {
 	}
 }
 
+func TestRefreshContextFragKeepsMemoryDistinctFromCurrentMessage(t *testing.T) {
+	t.Parallel()
+	currentIndex := 0
+	memoryIndex := 1
+	cfg := RunConfig{
+		Messages:                       []sdk.Message{sdk.UserMessage("current"), sdk.UserMessage("memory recall")},
+		ContextCurrentUserMessageIndex: &currentIndex,
+		ContextMemoryMessageIndex:      &memoryIndex,
+		ContextQueryMaterialized:       true,
+	}
+
+	cfg = cfg.RefreshContextFrag()
+	if cfg.ContextFrags[currentIndex].Kind != contextfrag.KindCurrentUserMessage || cfg.ContextFrags[currentIndex].Slot != contextfrag.SlotCurrentUser {
+		t.Fatalf("current fragment = %#v", cfg.ContextFrags[currentIndex])
+	}
+	if cfg.ContextFrags[memoryIndex].Kind != contextfrag.KindMemoryRecall || cfg.ContextFrags[memoryIndex].Slot != contextfrag.SlotHistory || cfg.ContextFrags[memoryIndex].CacheClass != contextfrag.CacheNever {
+		t.Fatalf("memory fragment = %#v", cfg.ContextFrags[memoryIndex])
+	}
+}
+
 func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	t.Parallel()
 	ledger := contextfrag.NewMutationLedger()

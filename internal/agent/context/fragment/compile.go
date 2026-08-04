@@ -22,12 +22,15 @@ type CompileInput struct {
 	// CurrentUserMessageIndex identifies a current request already carried in
 	// Messages so legacy manifests retain its typed slot.
 	CurrentUserMessageIndex *int
-	Query                   string
-	InlineImages            []sdk.ImagePart
-	ToolUsage               string
-	View                    ManifestView
-	DynamicMutators         []DynamicMutator
-	Existing                []ContextFrag
+	// MemoryMessageIndex identifies materialized memory recall that remains in
+	// Messages for byte-equivalent provider ordering.
+	MemoryMessageIndex *int
+	Query              string
+	InlineImages       []sdk.ImagePart
+	ToolUsage          string
+	View               ManifestView
+	DynamicMutators    []DynamicMutator
+	Existing           []ContextFrag
 }
 
 // CompileFrags builds the typed fragment list from the current SDK-shaped
@@ -73,6 +76,11 @@ func CompileFrags(input CompileInput) []ContextFrag {
 		trust := trustForMessage(msg)
 		budget := BudgetPolicy{}
 		messageScope := scope
+		if isMemoryMessage(input.MemoryMessageIndex, i, msg) {
+			kind = KindMemoryRecall
+			cacheClass = CacheNever
+			trust = TrustWorkspace
+		}
 		if isCurrentUserMessage(input.CurrentUserMessageIndex, i, msg) {
 			kind = KindCurrentUserMessage
 			slot = SlotCurrentUser
@@ -122,6 +130,10 @@ func CompileFrags(input CompileInput) []ContextFrag {
 }
 
 func isCurrentUserMessage(index *int, candidate int, msg sdk.Message) bool {
+	return index != nil && *index == candidate && msg.Role == sdk.MessageRoleUser
+}
+
+func isMemoryMessage(index *int, candidate int, msg sdk.Message) bool {
 	return index != nil && *index == candidate && msg.Role == sdk.MessageRoleUser
 }
 

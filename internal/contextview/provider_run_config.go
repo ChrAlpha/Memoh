@@ -55,6 +55,7 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	historyConfig := HistoryMessagesConfig{
 		Messages:                cfg.Messages,
 		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
 	}
 	history, err := (&HistoryMessagesCollector{}).Collect(ctx, CollectRequest{
 		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider, Config: historyConfig,
@@ -68,8 +69,20 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	if err != nil {
 		return nil
 	}
-	messages := make([]contextfrag.ContextFrag, 0, len(history)+len(current))
+	var memory []contextfrag.ContextFrag
+	if index, ok := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex); ok {
+		message := cfg.Messages[index]
+		memory, err = (&MemoryContextCollector{}).Collect(ctx, CollectRequest{
+			Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
+			Config: MemoryContextConfig{Message: &message, Index: index},
+		})
+		if err != nil {
+			return nil
+		}
+	}
+	messages := make([]contextfrag.ContextFrag, 0, len(history)+len(memory)+len(current))
 	messages = append(messages, history...)
+	messages = append(messages, memory...)
 	messages = append(messages, current...)
 	messages = preserveExplicitHistoryMetadata(messages, cfg)
 	sort.SliceStable(messages, func(i, j int) bool {
@@ -100,7 +113,8 @@ func preserveExplicitHistoryMetadata(collected []contextfrag.ContextFrag, cfg ag
 	if len(collected) == 0 || len(cfg.ContextFrags) == 0 || len(cfg.Messages) == 0 {
 		return collected
 	}
-	currentIndex, hasCurrent := markedCurrentUserMessageIndex(cfg.Messages, cfg.ContextCurrentUserMessageIndex)
+	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex)
+	currentIndex, hasCurrent := markedCurrentUserMessageIndex(cfg.Messages, cfg.ContextCurrentUserMessageIndex, optionalIndex(memoryIndex, hasMemory)...)
 	overrides := make(map[int]contextfrag.ContextFrag)
 	for _, candidate := range cfg.ContextFrags {
 		index := candidate.Provenance.Index
@@ -222,8 +236,19 @@ func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 
 	cfg.System = payload.System
 	cfg.Messages = payload.Messages
-	if hasCurrentUserFrag(view.Selected) {
-		cfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(cfg.Messages)
+	ordered, err := orderedSelectedFrags(view.Selected, view.Placement)
+	if err != nil {
+		return providerViewFallback(logger, cfg, ledger, "placement_error", "context view placement invalid after render", err)
+	}
+	currentIndex, memoryIndex := renderedSpecialMessageIndexes(ordered)
+	cfg.ContextMemoryMessageIndex = memoryIndex
+	switch {
+	case currentIndex != nil:
+		cfg.ContextCurrentUserMessageIndex = currentIndex
+	case hasCurrentUserFrag(view.Selected):
+		cfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(cfg.Messages, optionalPointerValue(memoryIndex)...)
+	default:
+		cfg.ContextCurrentUserMessageIndex = nil
 	}
 	cfg.ContextQueryMaterialized = true
 	cfg.ContextFrags = view.Selected
@@ -355,13 +380,42 @@ func stablePrefixTokenEstimate(placement PlacementPlan, selected []contextfrag.C
 	return total
 }
 
-func latestUserMessageIndex(messages []sdk.Message) *int {
+func latestUserMessageIndex(messages []sdk.Message, excluded ...int) *int {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == sdk.MessageRoleUser {
+		if messages[i].Role == sdk.MessageRoleUser && !containsIndex(excluded, i) {
 			return intPointer(i)
 		}
 	}
 	return nil
+}
+
+func renderedSpecialMessageIndexes(frags []contextfrag.ContextFrag) (current, memory *int) {
+	messageIndex := 0
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotSystem {
+			continue
+		}
+		for _, part := range frag.Parts {
+			if part.Type != contextfrag.PartSDKMessage || sdkMessagePart(part) == nil {
+				continue
+			}
+			switch {
+			case frag.Kind == contextfrag.KindMemoryRecall:
+				memory = intPointer(messageIndex)
+			case frag.Kind == contextfrag.KindCurrentUserMessage || frag.Slot == contextfrag.SlotCurrentUser:
+				current = intPointer(messageIndex)
+			}
+			messageIndex++
+		}
+	}
+	return current, memory
+}
+
+func optionalPointerValue(value *int) []int {
+	if value == nil {
+		return nil
+	}
+	return []int{*value}
 }
 
 func hasCurrentUserFrag(frags []contextfrag.ContextFrag) bool {

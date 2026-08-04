@@ -20,6 +20,7 @@ func (cfg RunConfig) RefreshContextFrag() RunConfig {
 		System:                  cfg.System,
 		Messages:                cfg.Messages,
 		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
+		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
 		Query:                   query,
 		InlineImages:            inlineImages,
 		ToolUsage:               cfg.ContextToolUsage,
