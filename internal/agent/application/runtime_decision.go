@@ -243,8 +243,11 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 		})
 		go func() {
 			defer runCancel()
-			s.continueRuntimeDecision(runCtx, command, func(eventCh chan<- WSStreamEvent) error {
-				return s.ContinueCommittedUserInputResponse(runCtx, committed, eventCh)
+			s.continueRuntimeDecision(runCtx, command, func(
+				continuationCtx context.Context,
+				eventCh chan<- WSStreamEvent,
+			) error {
+				return s.ContinueCommittedUserInputResponse(continuationCtx, committed, eventCh)
 			})
 		}()
 		return nil
@@ -282,8 +285,11 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 		})
 		go func() {
 			defer runCancel()
-			s.continueRuntimeDecision(runCtx, command, func(eventCh chan<- WSStreamEvent) error {
-				return s.ContinueCommittedToolApprovalResponse(runCtx, committed, eventCh)
+			s.continueRuntimeDecision(runCtx, command, func(
+				continuationCtx context.Context,
+				eventCh chan<- WSStreamEvent,
+			) error {
+				return s.ContinueCommittedToolApprovalResponse(continuationCtx, committed, eventCh)
 			})
 		}()
 		return nil
@@ -317,7 +323,11 @@ func (s *Service) publishCommittedRuntimeDecision(ctx context.Context, command s
 	}
 }
 
-func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionruntime.Command, continueRun func(chan<- WSStreamEvent) error) {
+func (s *Service) continueRuntimeDecision(
+	ctx context.Context,
+	command sessionruntime.Command,
+	continueRun func(context.Context, chan<- WSStreamEvent) error,
+) {
 	handle := sessionruntime.RunHandle{
 		BotID:      command.BotID,
 		SessionID:  command.SessionID,
@@ -333,7 +343,7 @@ func (s *Service) continueRuntimeDecision(ctx context.Context, command sessionru
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
-		runDone <- continueRun(eventCh)
+		runDone <- continueRun(runCtx, eventCh)
 		close(eventCh)
 	}()
 
