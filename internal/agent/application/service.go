@@ -305,6 +305,35 @@ type resolvedContext struct {
 	contextTokenBudget          int // token budget used to clamp compaction triggers
 }
 
+func contextBudgetFromChatModel(chatModel models.GetResponse) int {
+	return chatModel.Config.ContextBudgetMaxTokens()
+}
+
+func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID string) {
+	if cfg == nil {
+		return
+	}
+	cfg.ContextCurrentUserMessageIndex = nil
+	requiredMessageID = strings.TrimSpace(requiredMessageID)
+	if requiredMessageID == "" {
+		return
+	}
+	for index, sourceMessageID := range cfg.ForkContextSourceMessageIDs {
+		if strings.TrimSpace(sourceMessageID) != requiredMessageID {
+			continue
+		}
+		if index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser {
+			return
+		}
+		cfg.ContextCurrentUserMessageIndex = intPointer(index)
+		return
+	}
+}
+
+func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
+	return contextfrag.DefaultToolExchangePolicy()
+}
+
 func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext, error) {
 	modelQuery := modelQueryText(req)
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
@@ -364,10 +393,8 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		}
 	}
 
-	contextTokenBudget := 0
-	if chatModel.Config.ContextWindow != nil && *chatModel.Config.ContextWindow > 0 {
-		contextTokenBudget = *chatModel.Config.ContextWindow
-	}
+	contextTokenBudget := contextBudgetFromChatModel(chatModel)
+	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
 	var messages []ModelMessage
 	var historyRecords []historyfrag.HistoryRecord
@@ -438,6 +465,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 			}
 		}
 	}
+	historyMessageCount := len(messages)
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
 		messages = append(messages, *notice)
 	}
@@ -452,11 +480,20 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	if !usePipeline && !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
+	trimmableMessages := normalizedContextPrefixLength(messages, historyMessageCount)
 	messages, currentMessageIndex, memoryMessageIndex = normalizeContextMessages(
 		messages,
 		currentMessageIndex,
 		memoryMessageIndex,
 	)
+	runCfg.ContextHistoryTokenEstimates = make([]int, len(messages))
+	for index := range messages {
+		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
+	}
+	runCfg.ContextTrimmableMessages = min(trimmableMessages, len(messages))
+	if runCfg.ContextToolExchangePolicy == nil {
+		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
+	}
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
@@ -492,6 +529,8 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
 		runCfg.ContextCurrentUserMessageIndex = currentMessageIndex
+	} else if req.ReusePersistedUserMessage {
+		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
 	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
@@ -1206,11 +1245,14 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 		return ResolveRunConfigResult{}, err
 	}
 
+	contextBudget := contextBudgetFromChatModel(chatModel)
+	cfg.ContextBudgetMaxTokens = contextBudget
 	cfg = s.prepareRunConfig(ctx, cfg)
 	return ResolveRunConfigResult{
-		RunConfig:   cfg,
-		ModelID:     chatModel.ID,
-		RuntimeType: runtimeType,
+		RunConfig:              cfg,
+		ModelID:                chatModel.ID,
+		RuntimeType:            runtimeType,
+		ContextBudgetMaxTokens: contextBudget,
 	}, nil
 }
 
@@ -1346,6 +1388,20 @@ func normalizeContextMessages(messages []ModelMessage, currentIndex, memoryIndex
 	return cleaned,
 		remapContextMessageIndex(messages, currentIndex, stripTools),
 		remapContextMessageIndex(messages, memoryIndex, stripTools)
+}
+
+func normalizedContextPrefixLength(messages []ModelMessage, rawPrefixLength int) int {
+	if rawPrefixLength <= 0 || len(messages) == 0 {
+		return 0
+	}
+	rawPrefixLength = min(rawPrefixLength, len(messages))
+	stripTools := len(sanitizeMessages(messages)) > 10
+	prefix := sanitizeMessages(messages[:rawPrefixLength])
+	if stripTools {
+		prefix = stripToolMessages(prefix)
+	}
+	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
+	return len(prefix)
 }
 
 func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bool) *int {
