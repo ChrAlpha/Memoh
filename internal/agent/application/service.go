@@ -374,8 +374,10 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	var estimatedTokens int
 	var compactableTokens int
 	var compactableTokensKnown bool
+	var currentMessageIndex *int
 	if usePipeline {
 		messages = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		currentMessageIndex = latestModelUserMessageIndex(messages)
 	} else {
 		historyFallback := historyScopeFallbackFromChatRequest(req)
 		prepared, loadErr := s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
@@ -439,8 +441,10 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
 		messages = append(messages, *notice)
 	}
+	var memoryMessageIndex *int
 	if memoryMsg != nil {
 		messages = append(messages, *memoryMsg)
+		memoryMessageIndex = intPointer(len(messages) - 1)
 	}
 	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
 		messages = append(messages, *requestedSkillMsg)
@@ -448,14 +452,11 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	if !usePipeline && !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
-	messages = sanitizeMessages(messages)
-	// Strip tool messages and tool-call-only assistant messages from context.
-	// Tool outputs are large and waste tokens; the LLM doesn't need raw tool
-	// results when summaries and memory tools are available for lookup.
-	if len(messages) > 10 {
-		messages = stripToolMessages(messages)
-	}
-	messages = repairToolCallClosures(messages, syntheticToolClosureError)
+	messages, currentMessageIndex, memoryMessageIndex = normalizeContextMessages(
+		messages,
+		currentMessageIndex,
+		memoryMessageIndex,
+	)
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
@@ -488,8 +489,9 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
+	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
-		runCfg.ContextCurrentUserMessageIndex = latestUserMessageIndex(runCfg.Messages)
+		runCfg.ContextCurrentUserMessageIndex = currentMessageIndex
 	}
 	// When using the pipeline the user message is already in the RC;
 	// don't send it to the LLM again. headerifiedQuery is still kept
@@ -1298,6 +1300,11 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			}
 		}
 		if len(imageParts) > 0 {
+			currentIndex := validCurrentUserMessageIndex(
+				cfg.Messages,
+				cfg.ContextCurrentUserMessageIndex,
+				cfg.ContextMemoryMessageIndex,
+			)
 			injected := false
 			for i := len(cfg.Messages) - 1; i >= 0; i-- {
 				if cfg.Messages[i].Role == sdk.MessageRoleUser {
@@ -1305,8 +1312,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 					if i < len(cfg.ForkContextSourceMessageIDs) {
 						cfg.ForkContextSourceMessageIDs[i] = ""
 					}
-					index := i
-					cfg.ContextCurrentUserMessageIndex = &index
 					injected = true
 					break
 				}
@@ -1315,8 +1320,9 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
-				cfg.ContextCurrentUserMessageIndex = &index
+				currentIndex = &index
 			}
+			cfg.ContextCurrentUserMessageIndex = currentIndex
 			cfg.ContextQueryMaterialized = true
 		}
 	}
@@ -1325,15 +1331,78 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	return cfg.RefreshContextFrag()
 }
 
-func latestUserMessageIndex(messages []sdk.Message) *int {
+func normalizeContextMessages(messages []ModelMessage, currentIndex, memoryIndex *int) ([]ModelMessage, *int, *int) {
+	cleaned := sanitizeMessages(messages)
+	stripTools := len(cleaned) > 10
+	if stripTools {
+		// Tool outputs are large and waste tokens; the LLM doesn't need raw
+		// tool results when summaries and memory tools are available for lookup.
+		cleaned = stripToolMessages(cleaned)
+	}
+	cleaned = repairToolCallClosures(cleaned, syntheticToolClosureError)
+	return cleaned,
+		remapContextMessageIndex(messages, currentIndex, stripTools),
+		remapContextMessageIndex(messages, memoryIndex, stripTools)
+}
+
+func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bool) *int {
+	if index == nil || *index < 0 || *index >= len(messages) || !strings.EqualFold(strings.TrimSpace(messages[*index].Role), "user") {
+		return nil
+	}
+	prefix := sanitizeMessages(messages[:*index+1])
+	if stripTools {
+		prefix = stripToolMessages(prefix)
+	}
+	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
+	if len(prefix) == 0 || !strings.EqualFold(strings.TrimSpace(prefix[len(prefix)-1].Role), "user") {
+		return nil
+	}
+	return intPointer(len(prefix) - 1)
+}
+
+func latestModelUserMessageIndex(messages []ModelMessage) *int {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == sdk.MessageRoleUser {
-			index := i
-			return &index
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
+			return intPointer(i)
 		}
 	}
 	return nil
 }
+
+func validCurrentUserMessageIndex(messages []sdk.Message, currentIndex, memoryIndex *int) *int {
+	if currentIndex != nil && *currentIndex >= 0 && *currentIndex < len(messages) &&
+		messages[*currentIndex].Role == sdk.MessageRoleUser && (memoryIndex == nil || *currentIndex != *memoryIndex) {
+		return intPointer(*currentIndex)
+	}
+	return latestUserMessageIndex(messages, optionalIndex(memoryIndex)...)
+}
+
+func latestUserMessageIndex(messages []sdk.Message, excluded ...int) *int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == sdk.MessageRoleUser && !containsIndex(excluded, i) {
+			return intPointer(i)
+		}
+	}
+	return nil
+}
+
+func optionalIndex(index *int) []int {
+	if index == nil {
+		return nil
+	}
+	return []int{*index}
+}
+
+func containsIndex(indexes []int, target int) bool {
+	for _, index := range indexes {
+		if index == target {
+			return true
+		}
+	}
+	return false
+}
+
+func intPointer(value int) *int { return &value }
 
 func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {
 	name := strings.TrimSpace(entry.Name)

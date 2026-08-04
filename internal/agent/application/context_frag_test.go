@@ -94,9 +94,16 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 
 	image := sdk.ImagePart{Image: "data:image/png;base64,abc", MediaType: "image/png"}
 	resolver := &Service{}
+	currentIndex := 0
+	memoryIndex := 1
 	cfg := native.RunConfig{
-		Messages:     []sdk.Message{sdk.UserMessage("pipeline current user")},
-		InlineImages: []sdk.ImagePart{image},
+		Messages: []sdk.Message{
+			sdk.UserMessage("pipeline current user"),
+			sdk.UserMessage("memory recall"),
+		},
+		InlineImages:                   []sdk.ImagePart{image},
+		ContextCurrentUserMessageIndex: &currentIndex,
+		ContextMemoryMessageIndex:      &memoryIndex,
 	}
 
 	got := resolver.prepareRunConfig(context.Background(), cfg)
@@ -112,10 +119,75 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 		t.Fatalf("prepared messages do not contain injected image: %#v", got.Messages)
 	}
 	if got.ContextCurrentUserMessageIndex == nil || *got.ContextCurrentUserMessageIndex != 0 {
-		t.Fatalf("current user index = %#v, want image recipient 0", got.ContextCurrentUserMessageIndex)
+		t.Fatalf("current user index = %#v, want pipeline current 0", got.ContextCurrentUserMessageIndex)
+	}
+	if got.ContextMemoryMessageIndex == nil || *got.ContextMemoryMessageIndex != 1 {
+		t.Fatalf("memory index = %#v, want 1", got.ContextMemoryMessageIndex)
+	}
+	wantMessages := []sdk.Message{
+		sdk.UserMessage("pipeline current user"),
+		sdk.UserMessage("memory recall", image),
+	}
+	if !reflect.DeepEqual(got.Messages, wantMessages) {
+		t.Fatalf("provider messages changed: got %#v want %#v", got.Messages, wantMessages)
 	}
 	if len(got.ContextSourceFrags) == 0 {
 		t.Fatal("prepared config did not build authoritative source fragments")
+	}
+}
+
+func TestNormalizeContextMessagesRemapsCurrentAndMemory(t *testing.T) {
+	t.Parallel()
+
+	webCall := sdkMessagesToModelMessages([]sdk.Message{{
+		Role: sdk.MessageRoleAssistant,
+		Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "web-call", ToolName: "web_fetch",
+		}},
+	}})[0]
+	webResult := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
+		ToolCallID: "web-call", ToolName: "web_fetch", Result: "discarded",
+	})})[0]
+	askCall := sdkMessagesToModelMessages([]sdk.Message{{
+		Role: sdk.MessageRoleAssistant,
+		Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "ask-call", ToolName: "ask_user",
+		}},
+	}})[0]
+	messages := []ModelMessage{
+		{Content: newTextContent("missing role")},
+		{Role: "user", Content: newTextContent("history 0")},
+		{Role: "assistant", Content: newTextContent("answer 0")},
+		{Role: "user", Content: newTextContent("history 1")},
+		webCall,
+		webResult,
+		{Role: "assistant", Content: newTextContent("answer 1")},
+		{Role: "user", Content: newTextContent("history 2")},
+		{Role: "assistant", Content: newTextContent("answer 2")},
+		{Role: "user", Content: newTextContent("history 3")},
+		askCall,
+		{Role: "user", Content: newTextContent("pipeline current")},
+		{Role: "user", Content: newTextContent("memory recall")},
+	}
+	currentIndex := 11
+	memoryIndex := 12
+
+	want := sanitizeMessages(messages)
+	if len(want) <= 10 {
+		t.Fatalf("fixture did not activate tool stripping: %d messages", len(want))
+	}
+	want = stripToolMessages(want)
+	want = repairToolCallClosures(want, syntheticToolClosureError)
+	got, gotCurrent, gotMemory := normalizeContextMessages(messages, &currentIndex, &memoryIndex)
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized messages changed: got %#v want %#v", got, want)
+	}
+	if gotCurrent == nil || *gotCurrent != 9 || got[*gotCurrent].TextContent() != "pipeline current" {
+		t.Fatalf("current index = %#v in %#v, want pipeline current at 9", gotCurrent, got)
+	}
+	if gotMemory == nil || *gotMemory != 10 || got[*gotMemory].TextContent() != "memory recall" {
+		t.Fatalf("memory index = %#v in %#v, want memory recall at 10", gotMemory, got)
 	}
 }
 
