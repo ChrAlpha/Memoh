@@ -17,6 +17,7 @@ import (
 	tools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/agent/turn"
 	"github.com/memohai/memoh/internal/apperror"
+	"github.com/memohai/memoh/internal/runtimefence"
 )
 
 // turnAdmitter is the durable admission gate StartTurn depends on.
@@ -49,6 +50,7 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 	}
 	manager.SetDecisionStore(s)
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
+	manager.SetTerminalObserver(s.reconcileTerminalContextLifecycle)
 }
 
 // admitTurnRun puts a StartTurnCommand through durable admission and answers in
@@ -135,6 +137,23 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 	// still needs whatever scoping the caller's context carries.
 	writeCtx := context.WithoutCancel(ctx)
 	return func(status string, cause error) {
+		lifecycleCause := cause
+		switch {
+		case lifecycleCause == nil && status == sessionruntime.RunStatusAborted:
+			lifecycleCause = context.Canceled
+		case lifecycleCause == nil && status == sessionruntime.RunStatusErrored:
+			lifecycleCause = errors.New("run finished with an unspecified error")
+		}
+		minimal := minimalContextLifecycleSnapshot()
+		staged := s.stageContextLifecycleCandidate(
+			runCtx,
+			handle.RunID,
+			handle.BotID,
+			handle.SessionID,
+			&minimal,
+			lifecycleCause,
+			contextLifecycleCandidateMinimal,
+		)
 		message := ""
 		if cause != nil {
 			message = string(apperror.CodeOf(cause))
@@ -144,23 +163,16 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 		err := s.sessionRuntime.FinishRun(ctx, handle, status, message)
 		switch {
 		case err == nil:
-			if status == "" && cause == nil {
-				return
+			if !staged && (status != "" || cause != nil) {
+				s.EnsureTerminalContextLifecycle(
+					runCtx,
+					handle.RunID,
+					handle.BotID,
+					handle.SessionID,
+					lifecycleCause,
+				)
 			}
-			lifecycleCause := cause
-			switch {
-			case lifecycleCause == nil && status == sessionruntime.RunStatusAborted:
-				lifecycleCause = context.Canceled
-			case lifecycleCause == nil && status == sessionruntime.RunStatusErrored:
-				lifecycleCause = errors.New("run finished with an unspecified error")
-			}
-			s.EnsureTerminalContextLifecycle(
-				runCtx,
-				handle.RunID,
-				handle.BotID,
-				handle.SessionID,
-				lifecycleCause,
-			)
+			return
 		case s.logger == nil:
 			return
 		case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
@@ -233,6 +245,7 @@ func (s *Service) admitTriggeredRun(ctx context.Context, botID, threadID, invoca
 		cancelCause(context.Canceled)
 		return nil, sessionruntime.Admission{}, nil, fmt.Errorf("%w: %s", sessionruntime.ErrInvocationConflict, invocationID)
 	}
+	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 	finishRun := s.turnRunFinisher(runCtx, admission)
 	finish := func(cause error) {
 		defer cancelCause(context.Canceled)
@@ -256,6 +269,22 @@ func (s *Service) admitTriggeredRun(ctx context.Context, botID, threadID, invoca
 		}
 	}
 	return runCtx, admission, finish, nil
+}
+
+func (s *Service) withAdmissionRuntimeFence(ctx context.Context, admission sessionruntime.Admission) context.Context {
+	if !s.usesDurableTerminalObserver() {
+		return ctx
+	}
+	return runtimefence.WithContext(ctx, runtimefence.Fence{
+		BotID:     admission.Handle.BotID,
+		SessionID: admission.Handle.SessionID,
+		Token:     admission.Handle.FencingToken,
+	})
+}
+
+func (s *Service) usesDurableTerminalObserver() bool {
+	_, durable := s.sessionRuntime.(*sessionruntime.Manager)
+	return durable
 }
 
 // AdmitSubagentRun puts a spawned agent's turn through the same durable

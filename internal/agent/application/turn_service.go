@@ -51,6 +51,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 			cancel()
 			return nil, err
 		}
+		runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 		return s.startDiscussTurn(runCtx, cmd, cancel, admission)
 	}
 
@@ -60,6 +61,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		cancel()
 		return nil, err
 	}
+	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 
 	var (
 		assetMu sync.Mutex
