@@ -123,6 +123,9 @@ func TestS3TraceMeetsGovernanceContract(t *testing.T) {
 			if record.ProtectedContentViolations != 0 || !record.ProtectedContentIntact {
 				t.Fatalf("typed step %d lost protected content: %#v", record.Step, record)
 			}
+			if record.ProviderCallAllowed && record.OverAllowance {
+				t.Fatalf("typed step %d allowed an over-allowance provider payload: %#v", record.Step, record)
+			}
 			if !record.AttemptPreflightAllowanceExact {
 				t.Fatalf("typed step %d did not mirror attempt-preflight allowance", record.Step)
 			}

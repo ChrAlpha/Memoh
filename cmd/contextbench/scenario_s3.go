@@ -89,6 +89,7 @@ type s3Step struct {
 
 type s3TypedSetup struct {
 	cfg             agentpkg.RunConfig
+	tools           []sdk.Tool
 	prefix          []sdk.Message
 	prefixCount     int
 	plan            contextfrag.ContextBudgetPlan
@@ -238,6 +239,7 @@ func buildS3TypedSetup(fixture benchFixture) s3TypedSetup {
 
 	return s3TypedSetup{
 		cfg:             cfg,
+		tools:           fixture.tools,
 		prefix:          prefix,
 		prefixCount:     len(prefix),
 		plan:            plan,
@@ -251,13 +253,16 @@ func buildS3TypedSetup(fixture benchFixture) s3TypedSetup {
 
 func (s s3TypedSetup) selectionInput(messages []sdk.Message) agentpkg.ContextStepSelectionInput {
 	return agentpkg.ContextStepSelectionInput{
-		Scope:                 s.cfg.ContextScope,
-		InitialMessageCount:   s.prefixCount,
-		Messages:              messages,
-		BudgetMaxTokens:       s.suffixBudget,
-		RecentProtectTokens:   s.cfg.ContextRecentProtectTokens,
-		KeepRecentToolResults: s3KeepRecentToolResults,
-		MinMessages:           s3MinMessages,
+		Scope:                        s.cfg.ContextScope,
+		InitialMessageCount:          s.prefixCount,
+		Messages:                     messages,
+		BudgetMaxTokens:              s.suffixBudget,
+		ProviderSystem:               s.cfg.System,
+		ProviderTools:                s.tools,
+		ProviderInputAllowanceTokens: s.inputAllowance,
+		RecentProtectTokens:          s.cfg.ContextRecentProtectTokens,
+		KeepRecentToolResults:        s3KeepRecentToolResults,
+		MinMessages:                  s3MinMessages,
 	}
 }
 
