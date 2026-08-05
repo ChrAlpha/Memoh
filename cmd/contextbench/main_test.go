@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	"github.com/memohai/memoh/internal/contextview"
 )
 
 func TestDeterministicScenarioRunsAreByteIdentical(t *testing.T) {
@@ -65,6 +66,9 @@ func TestParseBenchmarkResultsUsesFiveSampleMedian(t *testing.T) {
 		if math.Abs(record.ProviderRoundTripPercent-0.00003) > 1e-12 {
 			t.Fatalf("provider percentage = %v", record.ProviderRoundTripPercent)
 		}
+		if record.FixtureState != benchmarkFixtureState(record.Benchmark) {
+			t.Fatalf("fixture state = %q for %s", record.FixtureState, record.Benchmark)
+		}
 	}
 }
 
@@ -91,6 +95,7 @@ func TestS3TraceMeetsGovernanceContract(t *testing.T) {
 	imageCounts := make(map[string]int)
 	lastLegacyTokens := 0
 	typedFatals := 0
+	typedFatalSeen := false
 	for _, record := range records {
 		counts[record.Variant]++
 		if record.HugeResult {
@@ -111,6 +116,9 @@ func TestS3TraceMeetsGovernanceContract(t *testing.T) {
 			if record.AttemptPreflightAllowanceExact {
 				t.Fatalf("legacy step %d claims typed attempt-preflight allowance", record.Step)
 			}
+			if record.SyntheticContinuationAfterFatal {
+				t.Fatalf("legacy step %d claims synthetic typed continuation", record.Step)
+			}
 		case "typed":
 			if record.ProtectedContentViolations != 0 || !record.ProtectedContentIntact {
 				t.Fatalf("typed step %d lost protected content: %#v", record.Step, record)
@@ -118,8 +126,12 @@ func TestS3TraceMeetsGovernanceContract(t *testing.T) {
 			if !record.AttemptPreflightAllowanceExact {
 				t.Fatalf("typed step %d did not mirror attempt-preflight allowance", record.Step)
 			}
+			if record.SyntheticContinuationAfterFatal != typedFatalSeen {
+				t.Fatalf("typed step %d synthetic continuation = %v, want %v", record.Step, record.SyntheticContinuationAfterFatal, typedFatalSeen)
+			}
 			if record.Fatal {
 				typedFatals++
+				typedFatalSeen = true
 				if record.ProviderCallAllowed {
 					t.Fatalf("typed fatal step %d allowed a provider call", record.Step)
 				}
@@ -137,6 +149,25 @@ func TestS3TraceMeetsGovernanceContract(t *testing.T) {
 	}
 	if typedFatals == 0 {
 		t.Fatal("typed trace did not exercise fail-closed protected overflow")
+	}
+}
+
+func TestS1DropOrderAuditRequiresCompleteTrace(t *testing.T) {
+	t.Parallel()
+
+	fixture := buildS1Fixture()
+	cfg, err := contextview.ProviderRunConfigApplier(nil)(context.Background(), typedConfig(fixture, fixture.sourceFrags, 8_000))
+	if err != nil {
+		t.Fatalf("compile typed fixture: %v", err)
+	}
+	correct, actual := validateSystemDropOrder(fixture.systemFrags, cfg.ContextManifest)
+	if !correct || len(actual) == 0 {
+		t.Fatalf("complete drop trace: correct=%v actual=%v", correct, actual)
+	}
+	manifestWithoutTrace := cfg.ContextManifest
+	manifestWithoutTrace.EditTrace = nil
+	if correct, _ = validateSystemDropOrder(fixture.systemFrags, manifestWithoutTrace); correct {
+		t.Fatal("incomplete drop trace passed the drop-order audit")
 	}
 }
 

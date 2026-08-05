@@ -27,6 +27,7 @@ type benchmarkSample struct {
 type s4Record struct {
 	Scenario                   string  `json:"scenario"`
 	Benchmark                  string  `json:"benchmark"`
+	FixtureState               string  `json:"fixture_state"`
 	Statistic                  string  `json:"statistic"`
 	Samples                    int     `json:"samples"`
 	NSPerOp                    float64 `json:"ns_per_op"`
@@ -79,13 +80,21 @@ func parseBenchmarkResults(output string) ([]s4Record, error) {
 		allocValues := metricValues(values, func(sample benchmarkSample) float64 { return sample.allocsPerOp })
 		ns := median(nsValues)
 		records = append(records, s4Record{
-			Scenario: "s4_orchestration_overhead", Benchmark: name, Statistic: "median", Samples: len(values),
+			Scenario: "s4_orchestration_overhead", Benchmark: name, FixtureState: benchmarkFixtureState(name),
+			Statistic: "median", Samples: len(values),
 			NSPerOp: ns, BytesPerOp: median(byteValues), AllocsPerOp: median(allocValues),
 			NominalProviderRoundTripNS: nominalProviderRoundTripNS,
 			ProviderRoundTripPercent:   ns / nominalProviderRoundTripNS * 100,
 		})
 	}
 	return records, nil
+}
+
+func benchmarkFixtureState(name string) string {
+	if name == "BenchmarkSelectProviderStepMessages" {
+		return "synthetic_s3_40_step_state_after_fail_closed_continuation"
+	}
+	return "s1_mid_size"
 }
 
 func benchmarkMetrics(fields []string) (benchmarkSample, bool) {

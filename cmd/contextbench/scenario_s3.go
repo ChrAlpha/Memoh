@@ -100,12 +100,13 @@ type s3TypedSetup struct {
 }
 
 type s3SelectionAudit struct {
-	dropped            int
-	truncated          int
-	dropReasons        map[string]int
-	reselectionApplied bool
-	fatal              bool
-	fatalError         string
+	dropped             int
+	truncated           int
+	dropReasons         map[string]int
+	reselectionApplied  bool
+	fatal               bool
+	fatalError          string
+	syntheticAfterFatal bool
 }
 
 func runS3(fixture benchFixture) []s3Record {
@@ -117,6 +118,7 @@ func runS3(fixture benchFixture) []s3Record {
 	legacyPrefix := cloneMessages(legacyMessages)
 	legacyPrefixCount := len(legacyPrefix)
 	typedMessages := cloneMessages(typedSetup.prefix)
+	typedSeriesSynthetic := false
 
 	expectedInjections := make([]string, 0, 3)
 	records := make([]s3Record, 0, s3StepCount*2)
@@ -130,9 +132,10 @@ func runS3(fixture benchFixture) []s3Record {
 
 		selection := typedSetup.cfg.ContextStepReselector(context.Background(), typedSetup.selectionInput(typedCandidate))
 		audit := s3SelectionAudit{
-			dropped:     selection.Dropped,
-			truncated:   selection.Truncated,
-			dropReasons: cloneS3Counts(selection.DropReasons),
+			dropped:             selection.Dropped,
+			truncated:           selection.Truncated,
+			dropReasons:         cloneS3Counts(selection.DropReasons),
+			syntheticAfterFatal: typedSeriesSynthetic,
 		}
 		typedRecordMessages := typedCandidate
 		switch {
@@ -140,6 +143,7 @@ func runS3(fixture benchFixture) []s3Record {
 			audit.fatal = true
 			audit.fatalError = budgetErrorLabel(selection.FatalError)
 			typedMessages = recoverS3AfterFatal(typedSetup.prefix, expectedInjections, step.BackgroundSummaryText)
+			typedSeriesSynthetic = true
 		case selection.Messages != nil && s3PrefixIntact(selection.Messages, typedSetup.prefix):
 			typedMessages = selection.Messages
 			typedRecordMessages = typedMessages
@@ -312,7 +316,7 @@ func measureS3Record(
 		HugeResult: step.HugeResult, RawToolResultBytes: step.ToolResultBytes,
 		Dropped: audit.dropped, Truncated: audit.truncated, DropReasons: audit.dropReasons,
 		ReselectionApplied: audit.reselectionApplied, Fatal: audit.fatal, FatalError: audit.fatalError,
-		ProviderCallAllowed: !audit.fatal, SyntheticContinuationAfterFatal: audit.fatal,
+		ProviderCallAllowed: !audit.fatal, SyntheticContinuationAfterFatal: audit.syntheticAfterFatal,
 		MeasurementScope: s3MeasurementScope,
 		IsolationCaveat:  s3IsolationCaveat, GenericToolOutputCapApplied: false,
 		ImageAccounting: s3ImageAccounting, AttemptPreflightAllowanceExact: variant == "typed",

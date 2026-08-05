@@ -47,6 +47,7 @@ type s1Record struct {
 	MarkerPresent           bool        `json:"marker_present"`
 	MarkerBytes             int         `json:"marker_bytes"`
 	DropOrderCorrect        bool        `json:"drop_order_correct"`
+	DropOrderIDs            []string    `json:"drop_order_ids,omitempty"`
 	DistinctRecordHashCount int         `json:"distinct_record_hash_count"`
 }
 
@@ -86,6 +87,7 @@ func measureS1(fixture benchFixture, variant string, window int) s1Record {
 	markerPresent := false
 	markerBytes := 0
 	dropOrderCorrect := true
+	var dropOrderIDs []string
 	if variant == "typed" {
 		cfg, err := contextview.ProviderRunConfigApplier(nil)(context.Background(), typedConfig(fixture, fixture.sourceFrags, window))
 		providerCallAllowed = err == nil
@@ -99,7 +101,7 @@ func measureS1(fixture benchFixture, variant string, window int) s1Record {
 			payload = providerPayload{System: audit.System, Messages: audit.Messages, Tools: fixture.tools}
 		}
 		survivedIDs, droppedIDs, markerPresent, markerBytes = s1TypedInventory(fixture, cfg.ContextManifest)
-		dropOrderCorrect = validateSystemDropOrder(fixture.systemFrags, cfg.ContextManifest)
+		dropOrderCorrect, dropOrderIDs = validateSystemDropOrder(fixture.systemFrags, cfg.ContextManifest)
 	}
 	hash, payloadBytes, _ := providerPayloadMetrics(payload)
 	payloadTokens := providerEnvelopeTokens(payload)
@@ -116,7 +118,7 @@ func measureS1(fixture benchFixture, variant string, window int) s1Record {
 			SurvivedIDs: survivedIDs, DroppedIDs: droppedIDs,
 		},
 		RequiredSectionsIntact: containsAll(survivedIDs, fixture.requiredIDs) && containsMessage(payload.Messages, fixture.messages[len(fixture.messages)-1]), MarkerPresent: markerPresent,
-		MarkerBytes: markerBytes, DropOrderCorrect: dropOrderCorrect,
+		MarkerBytes: markerBytes, DropOrderCorrect: dropOrderCorrect, DropOrderIDs: dropOrderIDs,
 	}
 }
 
@@ -149,13 +151,21 @@ func s1TypedInventory(fixture benchFixture, manifest contextfrag.Manifest) ([]st
 	return survived, dropped, markerPresent, markerBytes
 }
 
-func validateSystemDropOrder(source []contextfrag.ContextFrag, manifest contextfrag.Manifest) bool {
+func validateSystemDropOrder(source []contextfrag.ContextFrag, manifest contextfrag.Manifest) (bool, []string) {
 	byID := make(map[string]contextfrag.ContextFrag, len(source))
+	selected := make(map[string]bool, len(manifest.Items))
+	for _, item := range manifest.Items {
+		selected[item.ID] = true
+	}
 	var expected []contextfrag.ContextFrag
+	droppedCandidates := 0
 	for _, frag := range source {
 		byID[frag.ID] = frag
 		if (frag.RetentionTier == contextfrag.RetentionOptional || frag.RetentionTier == contextfrag.RetentionPreferred) && !strings.HasSuffix(frag.ID, ".header") {
 			expected = append(expected, frag)
+			if !selected[frag.ID] {
+				droppedCandidates++
+			}
 		}
 	}
 	sort.SliceStable(expected, func(i, j int) bool {
@@ -180,15 +190,15 @@ func validateSystemDropOrder(source []contextfrag.ContextFrag, manifest contextf
 		}
 		actual = append(actual, id)
 	}
-	if len(actual) > len(expected) {
-		return false
+	if len(actual) != droppedCandidates || len(actual) > len(expected) {
+		return false, actual
 	}
 	for i, id := range actual {
 		if id != expected[i].ID {
-			return false
+			return false, actual
 		}
 	}
-	return true
+	return true, actual
 }
 
 func budgetErrorLabel(err error) string {
