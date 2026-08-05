@@ -1020,6 +1020,22 @@ export type CompactionLog = {
     usage?: unknown;
 };
 
+export type ContextfragLifecycleSnapshot = {
+    assistant_message_id?: string;
+    counts?: ContextfragManifestCounts;
+    version?: number;
+    view?: ContextfragManifestView;
+};
+
+export type ContextfragManifestCounts = {
+    fragments?: number;
+    images?: number;
+    messages?: number;
+    text_bytes?: number;
+};
+
+export type ContextfragManifestView = 'run_config_pre_provider';
+
 export type ConversationSkillActivation = {
     prompt?: string;
     skills?: Array<ConversationSkillActivationSkill>;
@@ -1496,6 +1512,19 @@ export type HandlersContainerResourceLimitValuesResponse = {
 export type HandlersContainerStorageMetricsResponse = {
     path?: string;
     used_bytes?: number;
+};
+
+export type HandlersContextLifecycleResponse = {
+    turns?: Array<HandlersContextLifecycleTurn>;
+};
+
+export type HandlersContextLifecycleTurn = {
+    assistant_message_id?: string;
+    created_at?: string;
+    error_code?: string;
+    run_id?: string;
+    snapshot?: ContextfragLifecycleSnapshot;
+    status?: string;
 };
 
 export type HandlersContextUsage = {
@@ -8761,6 +8790,53 @@ export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
 };
 
 export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: {
+        /**
+         * Maximum number of turns to return (default 50, max 200)
+         */
+        limit?: number;
+    };
+    url: '/bots/{bot_id}/sessions/{session_id}/context-lifecycle';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors = {
+    /**
+     * Bad Request
+     */
+    400: HandlersErrorResponse;
+    /**
+     * Forbidden
+     */
+    403: HandlersErrorResponse;
+    /**
+     * Internal Server Error
+     */
+    500: HandlersErrorResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleError = GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors[keyof GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses = {
+    /**
+     * OK
+     */
+    200: HandlersContextLifecycleResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse = GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses[keyof GetBotsByBotIdSessionsBySessionIdContextLifecycleResponses];
 
 export type PostBotsByBotIdSessionsBySessionIdForkData = {
     /**
