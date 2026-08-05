@@ -134,6 +134,10 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 
 	cfg := capabilityGateFixture()
 	cfg.Messages = []sdk.Message{sdk.UserMessage("legacy message")}
+	currentUserIndex := 0
+	cfg.ContextCurrentUserMessageIndex = &currentUserIndex
+	cfg.ContextQueryMaterialized = true
+	cfg.ContextHookText = "legacy append_context"
 	legacyHooks, err := (&HookContextCollector{}).Collect(context.Background(), CollectRequest{
 		Config: HookContextConfig{Text: "legacy append_context"},
 	})
@@ -176,14 +180,12 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 	)
 
 	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
-	if got.System != "base system\n\nlegacy append_context" {
-		t.Fatalf(
-			"fallback system = %q, want byte-exact base plus legacy TrustSystem hook",
-			got.System,
-		)
+	if got.System != "base system" {
+		t.Fatalf("fallback system = %q, want capability-filtered base without hook context", got.System)
 	}
-	if len(got.Messages) != 1 || messageText(t, got.Messages[0]) != "legacy message" {
-		t.Fatalf("fallback messages = %#v, want legacy message", got.Messages)
+	if len(got.Messages) != 2 || messageText(t, got.Messages[0]) != "legacy append_context" ||
+		messageText(t, got.Messages[1]) != "legacy message" {
+		t.Fatalf("fallback messages = %#v, want user hook before current", got.Messages)
 	}
 	records := got.ContextMutations.Records()
 	if len(records) != 3 ||
