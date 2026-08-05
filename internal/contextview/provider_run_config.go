@@ -370,6 +370,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.System = payload.System
 	cfg.Messages = payload.Messages
@@ -435,6 +436,7 @@ func providerBudgetAuditConfig(
 			manifest.BudgetPlan = &plan
 		}
 		manifest.Mutations = ledger
+		appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 		cfg.ContextManifest = manifest
 		cfg.ContextMutations = ledger
 		if cfg.ContextLifecycle != nil {
@@ -449,6 +451,7 @@ func providerBudgetAuditConfig(
 	manifest.CachePlan = &cachePlan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
@@ -474,6 +477,7 @@ func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *c
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
@@ -481,6 +485,44 @@ func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *c
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
 	return cfg
+}
+
+func appendContextSourceWarnings(
+	manifest *contextfrag.Manifest,
+	warnings []contextfrag.ValidationWarning,
+) {
+	if manifest == nil || len(warnings) == 0 {
+		return
+	}
+	for _, warning := range warnings {
+		warning.Ref = finalContextSourceWarningRef(*manifest, warning.Ref)
+		manifest.ValidationWarnings = append(manifest.ValidationWarnings, warning)
+	}
+}
+
+func finalContextSourceWarningRef(
+	manifest contextfrag.Manifest,
+	ref contextfrag.ContextRef,
+) contextfrag.ContextRef {
+	if strings.TrimSpace(ref.ID) == "" {
+		return ref
+	}
+	for _, item := range manifest.Items {
+		if sameContextRefIdentity(item.Ref, ref) {
+			return item.Ref
+		}
+	}
+	for _, decision := range manifest.SelectionDecisions {
+		if sameContextRefIdentity(decision.Ref, ref) {
+			return decision.Ref
+		}
+	}
+	return ref
+}
+
+func sameContextRefIdentity(left, right contextfrag.ContextRef) bool {
+	return left.ID == right.ID &&
+		(left.Namespace == "" || right.Namespace == "" || left.Namespace == right.Namespace)
 }
 
 func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Manifest) {
