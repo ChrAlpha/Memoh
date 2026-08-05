@@ -297,7 +297,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			lifecycleCause = runtimeHistoryError(persistErr)
 			s.logger.Error("ACP failure persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 		}
-		if status, _ := classifyContextLifecycleTerminal(streamCtx, lifecycleCause); status != contextLifecycleStatusAborted {
+		lifecycleSnapshot, _ := contextLifecycle.Snapshot()
+		if status, _ := classifyContextLifecycleTerminal(streamCtx, lifecycleSnapshot, lifecycleCause); status != contextLifecycleStatusAborted {
 			emit(acpRuntimeFailureEvent(lifecycleCause))
 		}
 		emit(native.StreamEvent{Type: native.EventTextEnd})
