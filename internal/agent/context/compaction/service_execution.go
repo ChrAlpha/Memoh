@@ -77,56 +77,43 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	for _, issue := range frontier.Issues {
 		s.logger.Warn("compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
 	}
-	retainBudget := frontierRetainBudget(cfg, maxCompactTokens)
 	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens)
-	var absorbedArtifacts, keptArtifacts []Artifact
-	if fusing {
-		absorbedArtifacts = selectFusionPrefix(frontier.Artifacts, retainBudget, fusionMinOutputTokens)
-		keptArtifacts = frontier.Artifacts[len(absorbedArtifacts):]
-	}
-	if fusing && !frontierHasPersistedCoverage(absorbedArtifacts) {
+	if fusing && !frontierHasPersistedCoverage(frontier.Artifacts) {
 		s.logger.Warn("compaction: frontier fusion skipped",
 			slog.String("reason", "legacy_parent_missing_coverage"),
 			slog.String("session_id", cfg.SessionID),
 		)
 		fusing = false
 	}
-	selectedOutputTokens := maxOutputTokens
 	selectedSystemPrompt := systemPrompt
 	if fusing {
-		selectedOutputTokens = frontierFusionOutputCap(retainBudget, keptArtifacts, maxOutputTokens)
 		selectedSystemPrompt = fusionSystemPrompt
-		maxCompactTokens, err = boundedCompactionInputTokens(cfg, baseMaxCompactTokens, selectedOutputTokens, selectedSystemPrompt)
+		maxCompactTokens, err = boundedCompactionInputTokens(cfg, baseMaxCompactTokens, maxOutputTokens, selectedSystemPrompt)
 		if err != nil {
 			return Result{}, err
 		}
 	}
 
-	priorArtifacts := frontier.Artifacts
-	if fusing {
-		priorArtifacts = keptArtifacts
-	}
-	priorSummaries := make([]string, 0, len(priorArtifacts))
-	for _, artifact := range priorArtifacts {
-		if strings.TrimSpace(artifact.Summary) != "" {
-			priorSummaries = append(priorSummaries, artifact.Summary)
-		}
-	}
-	priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens/4)
-	priorTokens := priorContextTokens(priorSummaries)
-
+	var priorSummaries []string
 	var absorbedSegments []absorbedSegment
-	var absorbTokens, entriesBudget int
+	var priorTokens, absorbTokens, entriesBudget int
 	if fusing {
-		absorbedSegments, absorbTokens, err = buildAbsorbedContext(ctx, absorbedArtifacts, maxCompactTokens/2, s.loadAbsorbedRows)
+		absorbedSegments, absorbTokens, err = buildAbsorbedContext(ctx, frontier.Artifacts, maxCompactTokens/2, s.loadAbsorbedRows)
 		if err != nil {
 			return Result{}, err
 		}
-		entriesBudget = maxCompactTokens - absorbTokens - priorTokens
+		entriesBudget = maxCompactTokens - absorbTokens
 		if entriesBudget < maxCompactTokens/2 {
 			entriesBudget = maxCompactTokens / 2
 		}
 	} else {
+		for _, artifact := range frontier.Artifacts {
+			if strings.TrimSpace(artifact.Summary) != "" {
+				priorSummaries = append(priorSummaries, artifact.Summary)
+			}
+		}
+		priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens/4)
+		priorTokens = priorContextTokens(priorSummaries)
 		// capPriorSummaries always keeps the newest summary, so a single oversized
 		// one can exceed its allowance; floor the entries budget at half the total
 		// so compaction keeps making progress.
@@ -147,8 +134,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	// The progress guarantee may keep one oversized markable group past the
 	// entries budget; the prior context is reference-only, so shrink it (down
 	// to nothing) before letting the combined prompt exceed MaxCompactTokens.
-	if entriesCost := markableCompactCost(toCompact); entriesCost+absorbTokens+priorTokens > maxCompactTokens {
-		priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens-absorbTokens-entriesCost)
+	if entriesCost := markableCompactCost(toCompact); !fusing && entriesCost+priorTokens > maxCompactTokens {
+		priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens-entriesCost)
 		priorTokens = priorContextTokens(priorSummaries)
 	}
 	s.logger.Info("compaction: after trim",
@@ -226,7 +213,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Result{}, err
 	}
 	if fusing {
-		artifact, err = rollupArtifactMetadata(absorbedArtifacts, artifact)
+		artifact, err = rollupArtifactMetadata(frontier.Artifacts, artifact)
 		if err != nil {
 			_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 			return Result{}, err
@@ -257,7 +244,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		sdk.WithModel(model),
 		sdk.WithSystem(systemPromptDecorated),
 		sdk.WithMessages(sdkMessages),
-		sdk.WithMaxTokens(selectedOutputTokens),
+		sdk.WithMaxTokens(maxOutputTokens),
 	)
 	if err != nil {
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
@@ -276,7 +263,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	replacementTokens := entriesPromptCost(entries)
 	if fusing {
-		replacementTokens = summaryReplacementTokens(entries, absorbedArtifacts)
+		replacementTokens = summaryReplacementTokens(entries, frontier.Artifacts)
 	}
 	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacementTokens {
 		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", errIneffectiveSummary, summaryTokens, replacementTokens)
@@ -288,7 +275,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelRecordID)
 	if fusing {
-		err = s.completeRollupLog(persistCtx, logID, summary, len(compactedMessageIDs), usageJSON, modelUUID, artifact, absorbedArtifacts)
+		err = s.completeRollupLog(persistCtx, logID, summary, len(compactedMessageIDs), usageJSON, modelUUID, artifact, frontier.Artifacts)
 	} else {
 		err = s.completeLog(persistCtx, logID, "ok", summary, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact)
 	}

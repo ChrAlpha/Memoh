@@ -39,7 +39,7 @@ Output ONLY the summary of the new conversation segment. No preamble, no headers
 	}
 }
 
-func TestFusionPromptSeparatesKeptPriorFromAbsorbedContext(t *testing.T) {
+func TestFusionPromptRendersAbsorbedContextWithoutPriorContext(t *testing.T) {
 	t.Parallel()
 
 	absorbed := []absorbedSegment{
@@ -47,15 +47,12 @@ func TestFusionPromptSeparatesKeptPriorFromAbsorbedContext(t *testing.T) {
 		{Source: absorbedSourceEarlierSummary, Content: "earlier condensed state"},
 	}
 	prompt := buildFusionUserPrompt(
-		[]string{"kept recent summary"},
+		nil,
 		absorbed,
 		[]messageEntry{{Role: "user", Content: "new conversation"}},
 	)
 
 	for _, want := range []string{
-		"<prior_context>",
-		"kept recent summary",
-		"Do NOT include or repeat any of this content",
 		"<absorbed_context>",
 		"[raw transcript segment]",
 		"[earlier summary segment]",
@@ -67,14 +64,13 @@ func TestFusionPromptSeparatesKeptPriorFromAbsorbedContext(t *testing.T) {
 			t.Fatalf("fusion user prompt missing %q:\n%s", want, prompt)
 		}
 	}
-	if strings.Index(prompt, "<prior_context>") > strings.Index(prompt, "<absorbed_context>") {
-		t.Fatalf("kept prior context must precede absorbed context:\n%s", prompt)
+	if strings.Contains(prompt, "<prior_context>") {
+		t.Fatalf("whole-frontier fusion prompt retained prior context:\n%s", prompt)
 	}
 	for _, want := range []string{
 		"REPLACES",
 		"Integrate all still-relevant information",
 		"see prior summary",
-		"Do NOT include, repeat, or rephrase any content from <prior_context>",
 	} {
 		if !strings.Contains(fusionSystemPrompt, want) {
 			t.Fatalf("fusion system prompt missing %q:\n%s", want, fusionSystemPrompt)

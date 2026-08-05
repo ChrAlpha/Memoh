@@ -17,10 +17,7 @@ const (
 	absorbedSourceEarlierSummary absorbedSegmentSource = "earlier_summary"
 )
 
-const (
-	frontierRetainOverheadTokens = 1024
-	fusionMinOutputTokens        = 512
-)
+const frontierRetainOverheadTokens = 1024
 
 type absorbedSegment struct {
 	Source  absorbedSegmentSource
@@ -38,22 +35,9 @@ func shouldFuseFrontier(cfg TriggerConfig, artifacts []Artifact, maxCompactToken
 
 func frontierRetainBudget(cfg TriggerConfig, maxCompactTokens int) int {
 	if cfg.ContextWindowTokens > 0 {
-		return max(fusionMinOutputTokens, cfg.ContextWindowTokens*60/100-frontierRetainOverheadTokens)
+		return max(512, cfg.ContextWindowTokens*60/100-frontierRetainOverheadTokens)
 	}
 	return maxCompactTokens / 4
-}
-
-func selectFusionPrefix(artifacts []Artifact, retainBudget, fusedReserve int) []Artifact {
-	if len(artifacts) < 2 || frontierSummaryTokens(artifacts)+fusedReserve <= retainBudget {
-		return nil
-	}
-	for absorbed := 1; absorbed < len(artifacts); absorbed++ {
-		kept := artifacts[absorbed:]
-		if frontierSummaryTokens(kept)+fusedReserve <= retainBudget || absorbed == len(artifacts)-1 {
-			return artifacts[:absorbed]
-		}
-	}
-	return nil
 }
 
 func frontierHasPersistedCoverage(artifacts []Artifact) bool {
@@ -71,11 +55,6 @@ func frontierSummaryTokens(artifacts []Artifact) int {
 		summaries = append(summaries, artifact.Summary)
 	}
 	return priorContextTokens(summaries)
-}
-
-func frontierFusionOutputCap(retainBudget int, kept []Artifact, maxOutputTokens int) int {
-	available := retainBudget - frontierSummaryTokens(kept)
-	return min(maxOutputTokens, max(fusionMinOutputTokens, available))
 }
 
 func rollupArtifactLevel(parents []Artifact) int {
