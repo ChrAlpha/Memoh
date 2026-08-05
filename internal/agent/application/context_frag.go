@@ -16,19 +16,9 @@ func buildProviderSourceFrags(
 	cfg native.RunConfig,
 	sections []native.SystemSection,
 	hookSystemFrags []contextfrag.ContextFrag,
-	promptHookTexts []string,
 ) []contextfrag.ContextFrag {
 	frags := native.SystemSectionFrags(sections, cfg.ContextScope)
 	frags = append(frags, hookSystemFrags...)
-	if hookText := strings.Join(promptHookTexts, "\n\n"); hookText != "" {
-		hookFrags, err := (&contextview.HookContextCollector{}).Collect(ctx, contextview.CollectRequest{
-			Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
-			Config: contextview.HookContextConfig{Text: hookText},
-		})
-		if err == nil {
-			frags = append(frags, hookFrags...)
-		}
-	}
 	return append(frags, contextview.CollectNonSystemProviderSourceFrags(ctx, cfg)...)
 }
 

@@ -416,7 +416,7 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 			t.Fatalf("ContextSourceFrags missing %q: %#v", wantID, frags)
 		}
 	}
-	for _, wantID := range []string{"system.hook_context", "memory.recall"} {
+	for _, wantID := range []string{"hook_context.message", "memory.recall"} {
 		if !hasContextFragID(frags, wantID) {
 			t.Fatalf("ContextSourceFrags missing preserved %q: %#v", wantID, frags)
 		}
@@ -433,24 +433,40 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 	if currentMessage == nil || len(currentMessage.Content) != 2 {
 		t.Fatalf("current discuss message = %#v, want text plus one image", currentMessage)
 	}
+	memoryIndex := contextFragIndex(frags, "memory.recall")
+	hookIndex := contextFragIndex(frags, "hook_context.message")
+	currentIndex := contextFragIndex(frags, "discuss.message.005")
+	if memoryIndex < 0 || hookIndex <= memoryIndex || currentIndex <= hookIndex {
+		t.Fatalf("dynamic placement memory=%d hook=%d current=%d", memoryIndex, hookIndex, currentIndex)
+	}
 
 	rendered, err := contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(context.Background(), *cfg)
 	if err != nil {
 		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
 	}
-	if rendered.System != "base system\n\nhook system" {
-		t.Fatalf("System = %q, want preserved base and hook system fragments", rendered.System)
+	if rendered.System != "base system" {
+		t.Fatalf("System = %q, want legacy hook isolated from system", rendered.System)
 	}
 	if rendered.ContextManifest.BudgetPlan == nil || rendered.ContextManifest.BudgetPlan.CurrentRequestCost <= 0 {
 		t.Fatalf("budget plan = %#v, want an active discuss current-request reserve", rendered.ContextManifest.BudgetPlan)
 	}
-	wantMessages := append([]sdk.Message(nil), cfg.Messages...)
-	wantMessages = append(wantMessages, sdk.UserMessage("remember this"))
+	wantMessages := append([]sdk.Message(nil), cfg.Messages[:len(cfg.Messages)-1]...)
+	wantMessages = append(wantMessages, sdk.UserMessage("remember this"), sdk.UserMessage("hook system"))
+	wantMessages = append(wantMessages, cfg.Messages[len(cfg.Messages)-1])
 	assertSDKMessagesEqual(t, rendered.Messages, wantMessages)
 }
 
 func hasContextFragID(frags []contextfrag.ContextFrag, id string) bool {
 	return contextFragByID(frags, id) != nil
+}
+
+func contextFragIndex(frags []contextfrag.ContextFrag, id string) int {
+	for i := range frags {
+		if frags[i].ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func contextFragByID(frags []contextfrag.ContextFrag, id string) *contextfrag.ContextFrag {
