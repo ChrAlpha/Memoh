@@ -31,6 +31,7 @@ type Agent struct {
 	logger             *slog.Logger
 	limits             Limits
 	contextViewApplier ContextViewApplier
+	loopReselectMode   LoopReselectMode
 }
 
 const streamCancelDrainGrace = 250 * time.Millisecond
@@ -48,7 +49,17 @@ func New(deps Deps) *Agent {
 		logger:             logger.With(slog.String("service", "agent/runtime/native")),
 		limits:             deps.Limits.Normalize(),
 		contextViewApplier: deps.ContextViewApplier,
+		loopReselectMode:   deps.LoopReselectMode.Normalize(),
 	}
+}
+
+// LoopReselectMode returns the normalized rollout mode for in-loop context
+// reselection. A nil Agent defaults to active.
+func (a *Agent) LoopReselectMode() LoopReselectMode {
+	if a == nil {
+		return LoopReselectActive
+	}
+	return a.loopReselectMode.Normalize()
 }
 
 // applyContextView compiles the provider-facing fields from authoritative

@@ -483,6 +483,7 @@ func provideAgent(log *slog.Logger, provider bridge.Provider, hookService *hooks
 		Logger:             log,
 		Limits:             agentLimitsFromConfig(cfg.Agent),
 		ContextViewApplier: contextview.ProviderRunConfigApplier(log),
+		LoopReselectMode:   agentLoopReselectModeFromConfig(log, cfg.Agent),
 	})
 }
 
@@ -492,6 +493,14 @@ func agentLimitsFromConfig(cfg config.AgentConfig) native.Limits {
 		cfg.ToolOutputMaxLines,
 		cfg.SystemFilesMaxBytes,
 	)
+}
+
+func agentLoopReselectModeFromConfig(log *slog.Logger, cfg config.AgentConfig) native.LoopReselectMode {
+	mode, recognized := cfg.EffectiveContextLoopReselectMode()
+	if !recognized {
+		log.Warn("unrecognized agent.context_loop_reselect value; defaulting to active", slog.String("value", cfg.ContextLoopReselect))
+	}
+	return native.LoopReselectMode(mode)
 }
 
 func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
