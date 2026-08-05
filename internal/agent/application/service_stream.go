@@ -67,6 +67,15 @@ func agentStreamEventError(event native.StreamEvent) error {
 	return errors.New(detail)
 }
 
+func agentAbortCause(ctx context.Context) error {
+	if ctx != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
+	return errors.New("agent run aborted")
+}
+
 // extractTerminalSnapshot decodes a terminal stream event payload into the
 // raw SDK messages plus auxiliary metadata. Returns ok=false when the event
 // has no usable messages.
@@ -164,6 +173,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 			return
 		}
 		streamReq.Query = rc.query
+		streamReq.RunID = rc.runConfig.RunID
 
 		go s.maybeGenerateSessionTitle(context.WithoutCancel(streamCtx), streamReq, streamReq.RawQuery)
 
@@ -171,6 +181,14 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		cfg.LiveToolStream = true
 		cfg.CanRequestUserInput = s.canDeliverUserInputStream()
 		cfg = s.prepareRunConfig(streamCtx, cfg)
+		terminal := s.contextLifecycleTerminal(streamCtx, cfg)
+		var lifecycleCause error
+		var lifecycleDeferred bool
+		defer func() {
+			if !lifecycleDeferred {
+				terminal(lifecycleCause)
+			}
+		}()
 
 		// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.
 		idleCtx, idleCancel := withIdleTimeout(streamCtx)
@@ -184,6 +202,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		var toolCallCount int
 		var hasVisibleOutput bool
 		var agentStreamErr error
+		var terminalEventSeen bool
 		for event := range eventCh {
 			idleCancel.Reset() // each event resets the idle timer
 
@@ -197,6 +216,9 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				if agentStreamErr == nil {
 					agentStreamErr = eventErr
 				}
+				if lifecycleCause == nil {
+					lifecycleCause = eventErr
+				}
 				s.logger.Error("agent stream error",
 					slog.String("bot_id", streamReq.BotID),
 					slog.String("chat_id", streamReq.ChatID),
@@ -204,6 +226,21 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					slog.String("code", event.Code),
 					slog.String("error", event.Error),
 				)
+			}
+			if event.IsTerminal() {
+				terminalEventSeen = true
+				lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+				if !lifecycleDeferred {
+					switch event.Type {
+					case native.EventAgentEnd:
+						// A terminal success means an earlier retryable stream error recovered.
+						lifecycleCause = nil
+					case native.EventAgentAbort:
+						if context.Cause(streamCtx) != nil || lifecycleCause == nil {
+							lifecycleCause = agentAbortCause(streamCtx)
+						}
+					}
+				}
 			}
 			if hasVisibleAgentStreamOutput(event) {
 				hasVisibleOutput = true
@@ -218,11 +255,18 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					snap.visibleOutput = hasVisibleOutput
 					lastSnapshot = snap
 					hasSnapshot = true
+					lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
+					if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
+						lifecycleCause = agentAbortCause(streamCtx)
+					}
 					if !stored && !runOwnershipLost(streamCtx) {
 						// Use WithoutCancel so persistence still succeeds even
 						// when the parent ctx has already been cancelled by a
 						// client disconnect or idle timeout.
 						if storeErr := s.persistTerminalSnapshot(context.WithoutCancel(streamCtx), streamReq, rc, snap); storeErr != nil {
+							if lifecycleCause == nil {
+								lifecycleCause = storeErr
+							}
 							s.logger.Error("stream persist failed", slog.Any("error", storeErr))
 						} else {
 							stored = true
@@ -241,6 +285,16 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				case <-streamCtx.Done():
 					clientGone = true
 				}
+			}
+		}
+		if lifecycleCause == nil && !lifecycleDeferred {
+			switch {
+			case idleCancel.DidFire():
+				lifecycleCause = context.DeadlineExceeded
+			case streamCtx.Err() != nil:
+				lifecycleCause = context.Cause(streamCtx)
+			case !terminalEventSeen:
+				lifecycleCause = errors.New("agent stream ended without a terminal event")
 			}
 		}
 
@@ -382,6 +436,7 @@ func (s *Service) streamChatWSResultWithHooks(
 		return nil, fmt.Errorf("resolve: %w", err)
 	}
 	req.Query = rc.query
+	req.RunID = rc.runConfig.RunID
 
 	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
@@ -400,6 +455,14 @@ func (s *Service) streamChatWSResultWithHooks(
 	cfg.LiveToolStream = true
 	cfg.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
 	cfg = s.prepareRunConfig(streamCtx, cfg)
+	terminal := s.contextLifecycleTerminal(streamCtx, cfg)
+	var lifecycleCause error
+	var lifecycleDeferred bool
+	defer func() {
+		if !lifecycleDeferred {
+			terminal(lifecycleCause)
+		}
+	}()
 
 	// Wrap with idle timeout: if no events arrive within the adaptive timeout, cancel the stream.
 	idleCtx, idleCancel := withIdleTimeout(streamCtx)
@@ -415,6 +478,7 @@ func (s *Service) streamChatWSResultWithHooks(
 	var hasVisibleOutput bool
 	var persistedMessages []messagepkg.Message
 	postPersistApplied := false
+	terminalEventSeen := false
 	for event := range agentEventCh {
 		idleCancel.Reset() // each event resets the idle timer
 
@@ -424,13 +488,30 @@ func (s *Service) streamChatWSResultWithHooks(
 			idleCancel.RecordToolCall()
 		}
 
-		if event.Type == native.EventError {
+		if eventErr := agentStreamEventError(event); eventErr != nil {
+			if lifecycleCause == nil {
+				lifecycleCause = eventErr
+			}
 			s.logger.Error("agent stream error",
 				slog.String("bot_id", req.BotID),
 				slog.String("chat_id", req.ChatID),
 				slog.String("model_id", modelID),
 				slog.String("error", event.Error),
 			)
+		}
+		if event.IsTerminal() {
+			terminalEventSeen = true
+			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+			if !lifecycleDeferred {
+				switch event.Type {
+				case native.EventAgentEnd:
+					lifecycleCause = nil
+				case native.EventAgentAbort:
+					if context.Cause(streamCtx) != nil || lifecycleCause == nil {
+						lifecycleCause = agentAbortCause(streamCtx)
+					}
+				}
+			}
 		}
 		if hasVisibleAgentStreamOutput(event) {
 			hasVisibleOutput = true
@@ -446,9 +527,16 @@ func (s *Service) streamChatWSResultWithHooks(
 				snap.visibleOutput = hasVisibleOutput
 				lastSnapshot = snap
 				hasSnapshot = true
+				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
+				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
+					lifecycleCause = agentAbortCause(streamCtx)
+				}
 				if !stored && !runOwnershipLost(ctx) {
 					persisted, storeErr := s.persistTerminalSnapshotResult(context.WithoutCancel(ctx), req, rc, snap)
 					if storeErr != nil {
+						if lifecycleCause == nil {
+							lifecycleCause = storeErr
+						}
 						s.logger.Error("ws persist failed", slog.Any("error", storeErr))
 					} else {
 						persistedMessages = persisted
@@ -460,6 +548,8 @@ func (s *Service) streamChatWSResultWithHooks(
 
 		if event.IsTerminal() && postPersist != nil && !postPersistApplied {
 			if err := postPersist(context.WithoutCancel(ctx), persistedMessages); err != nil {
+				lifecycleCause = err
+				lifecycleDeferred = false
 				return persistedMessages, err
 			}
 			postPersistApplied = true
@@ -471,6 +561,16 @@ func (s *Service) streamChatWSResultWithHooks(
 			case <-ctx.Done():
 				clientGone = true
 			}
+		}
+	}
+	if lifecycleCause == nil && !lifecycleDeferred {
+		switch {
+		case idleCancel.DidFire():
+			lifecycleCause = context.DeadlineExceeded
+		case streamCtx.Err() != nil:
+			lifecycleCause = context.Cause(streamCtx)
+		case !terminalEventSeen:
+			lifecycleCause = errors.New("agent stream ended without a terminal event")
 		}
 	}
 
@@ -516,6 +616,8 @@ func (s *Service) streamChatWSResultWithHooks(
 
 	if postPersist != nil && !postPersistApplied {
 		if err := postPersist(context.WithoutCancel(ctx), persistedMessages); err != nil {
+			lifecycleCause = err
+			lifecycleDeferred = false
 			return persistedMessages, err
 		}
 	}
@@ -562,6 +664,7 @@ func (s *Service) persistTerminalSnapshotResult(ctx context.Context, req ChatReq
 
 	persisted, err := s.storeRoundWithOptionsResult(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
 		AllowPendingToolCalls: snap.deferredToolID != "",
+		ContextLifecycle:      rc.runConfig.ContextLifecycle,
 	})
 	if err != nil {
 		return nil, err

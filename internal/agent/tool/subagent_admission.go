@@ -8,8 +8,16 @@ import (
 	"strings"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/turn"
 )
+
+// SubagentTerminal is the terminal audit data returned to the application
+// boundary after the subagent's internal retry loop has ended.
+type SubagentTerminal struct {
+	Cause            error
+	ContextLifecycle *contextfrag.LifecycleSnapshot
+}
 
 // SubagentAdmitter is the durable admission gate a spawned agent's turn passes
 // through before it executes.
@@ -21,11 +29,11 @@ import (
 // dependency pointing the one way it can — the runtime is built on top of the
 // agent, which is built on top of these tools.
 type SubagentAdmitter interface {
-	// AdmitSubagentRun returns the context the run must execute in and the
-	// terminal write that releases the thread's slot, or an error naming why
-	// nothing was started. turn.ErrSessionBusy means the agent is already
-	// working; turn.ErrDuplicateTurn means this task already has a run.
-	AdmitSubagentRun(ctx context.Context, botID, threadID, invocationID string, submission []byte) (context.Context, func(error), error)
+	// AdmitSubagentRun returns the context and identity the run must execute
+	// with, plus the terminal write that releases the thread's slot, or an error
+	// naming why nothing was started. turn.ErrSessionBusy means the agent is
+	// already working; turn.ErrDuplicateTurn means this task already has a run.
+	AdmitSubagentRun(ctx context.Context, botID, threadID, invocationID string, submission []byte) (context.Context, string, func(SubagentTerminal), error)
 }
 
 // SetSubagentAdmitter injects the admission gate. Setter injection for the same
@@ -37,20 +45,20 @@ func (p *SpawnProvider) SetSubagentAdmitter(admitter SubagentAdmitter) {
 }
 
 // admitAgentRun claims the agent's thread for this task and returns the run
-// context plus the write that ends the run's record.
+// context and identity plus the write that ends the run's record.
 //
 // The finish takes the result rather than an error because how a run ended is
 // not always visible in one: a killed task carries the cancellation as its
 // error text, and recording that as a failure would misname a deliberate stop.
-func (p *SpawnProvider) admitAgentRun(ctx context.Context, req *agentRequest) (context.Context, func(agentRunResult), error) {
+func (p *SpawnProvider) admitAgentRun(ctx context.Context, req *agentRequest) (context.Context, string, func(agentRunResult), error) {
 	if p.admitter == nil {
-		return nil, nil, errors.New("session runtime is not available")
+		return nil, "", nil, errors.New("session runtime is not available")
 	}
 	submission, err := subagentSubmission(req)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode subagent submission: %w", err)
+		return nil, "", nil, fmt.Errorf("encode subagent submission: %w", err)
 	}
-	runCtx, finish, err := p.admitter.AdmitSubagentRun(
+	runCtx, runID, finish, err := p.admitter.AdmitSubagentRun(
 		ctx,
 		req.parentSession.BotID,
 		req.agentSessionID,
@@ -58,21 +66,25 @@ func (p *SpawnProvider) admitAgentRun(ctx context.Context, req *agentRequest) (c
 		submission,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, "", nil, err
 	}
-	return runCtx, func(result agentRunResult) {
+	return runCtx, runID, func(result agentRunResult) {
+		terminal := SubagentTerminal{
+			Cause:            result.Cause,
+			ContextLifecycle: result.ContextLifecycle,
+		}
 		if result.Status == string(background.TaskKilled) {
-			// A kill cancels the run's context, which is what the terminal write
-			// reads to record an abort. Passing the cancellation as an error
-			// instead would file a deliberate stop as a failure.
-			finish(nil)
+			// A kill is named by the admitted context cancellation, not by a
+			// provider error that may have raced it. The application boundary reads
+			// that owning context before it records the abort.
+			terminal.Cause = nil
+			finish(terminal)
 			return
 		}
-		if strings.TrimSpace(result.Error) != "" {
-			finish(errors.New(result.Error))
-			return
+		if terminal.Cause == nil && strings.TrimSpace(result.Error) != "" {
+			terminal.Cause = errors.New(result.Error)
 		}
-		finish(nil)
+		finish(terminal)
 	}, nil
 }
 

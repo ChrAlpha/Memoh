@@ -37,6 +37,7 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
+	RunID                     string
 	Model                     *sdk.Model
 	ModelUUID                 string
 	ModelID                   string
@@ -83,9 +84,10 @@ type SpawnLoopConfig struct {
 
 // SpawnResult mirrors agent.GenerateResult.
 type SpawnResult struct {
-	Messages []sdk.Message
-	Text     string
-	Usage    *sdk.Usage
+	Messages         []sdk.Message
+	Text             string
+	Usage            *sdk.Usage
+	ContextLifecycle *contextfrag.LifecycleSnapshot
 }
 
 const (
@@ -405,19 +407,21 @@ type agentRecord struct {
 }
 
 type agentRunResult struct {
-	AgentID        string `json:"agent_id"`
-	SessionID      string `json:"session_id,omitempty"`
-	TaskID         string `json:"task_id,omitempty"`
-	ModelID        string `json:"model_id,omitempty"`
-	Provider       string `json:"provider,omitempty"`
-	Fork           bool   `json:"fork,omitempty"`
-	Status         string `json:"status"`
-	Message        string `json:"message,omitempty"`
-	Text           string `json:"text,omitempty"`
-	Error          string `json:"error,omitempty"`
-	QueuePosition  int    `json:"queue_position,omitempty"`
-	QueueRemaining int    `json:"queue_remaining,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
+	AgentID          string                         `json:"agent_id"`
+	SessionID        string                         `json:"session_id,omitempty"`
+	TaskID           string                         `json:"task_id,omitempty"`
+	ModelID          string                         `json:"model_id,omitempty"`
+	Provider         string                         `json:"provider,omitempty"`
+	Fork             bool                           `json:"fork,omitempty"`
+	Status           string                         `json:"status"`
+	Message          string                         `json:"message,omitempty"`
+	Text             string                         `json:"text,omitempty"`
+	Error            string                         `json:"error,omitempty"`
+	QueuePosition    int                            `json:"queue_position,omitempty"`
+	QueueRemaining   int                            `json:"queue_remaining,omitempty"`
+	TimedOut         bool                           `json:"timed_out,omitempty"`
+	ContextLifecycle *contextfrag.LifecycleSnapshot `json:"-"`
+	Cause            error                          `json:"-"`
 }
 
 type agentRequest struct {
@@ -736,7 +740,7 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 }
 
 func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *agentRequest) agentRunResult {
-	runCtx, finishRun, admitErr := p.admitAgentRun(ctx, req)
+	runCtx, runID, finishRun, admitErr := p.admitAgentRun(ctx, req)
 	if admitErr != nil {
 		// Nothing was started and nothing was persisted, but the task record has
 		// to close anyway: a caller waiting on it would otherwise wait on a run
@@ -744,10 +748,16 @@ func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *ag
 		return p.completeAgentRequest(ctx, key, req, rejectedAgentRun(req, admitErr))
 	}
 	req.messagePersisted = p.persistUserMessage(context.WithoutCancel(runCtx), req.parentSession.BotID, req.agentSessionID, req.message)
-	result := p.runSubagentTask(runCtx, req)
+	result := p.runSubagentTask(runCtx, req, runID)
 	if task := p.bgManager.Get(req.taskID); task != nil {
 		if snap := task.Snapshot(); snap.Status == background.TaskKilled {
 			result.Status = string(background.TaskKilled)
+			// Manager.Kill publishes TaskKilled immediately before canceling the
+			// task context. Wait for the admitted child context so terminal
+			// classification cannot race through as completed.
+			if runCtx.Err() == nil {
+				<-runCtx.Done()
+			}
 		}
 	}
 	// Release the thread's slot before the queue promotes the next message, or
@@ -841,7 +851,7 @@ func (p *SpawnProvider) finishAgentRequest(ctx context.Context, key string, resu
 	go p.runAgentRequest(runCtx, key, next)
 }
 
-func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) agentRunResult {
+func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest, runID string) agentRunResult {
 	res := agentRunResult{
 		AgentID:   req.agentID,
 		SessionID: req.agentSessionID,
@@ -860,12 +870,14 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 	)
 	if err != nil {
 		res.Error = fmt.Sprintf("resolve pinned subagent model: %v", err)
+		res.Cause = err
 		res.Status = string(background.TaskFailed)
 		return res
 	}
 	req.runtime = runtime
 	if err := p.runSubagentHook(ctx, hooks.EventSubagentStart, req, res); err != nil {
 		res.Error = err.Error()
+		res.Cause = err
 		res.Status = string(background.TaskFailed)
 		return res
 	}
@@ -886,6 +898,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		parentMessages, loadErr := p.loadAgentForkContext(context.WithoutCancel(ctx), req.agentSessionID)
 		if loadErr != nil {
 			res.Error = fmt.Sprintf("load fork context: %v", loadErr)
+			res.Cause = loadErr
 			res.Status = string(background.TaskFailed)
 			return res
 		}
@@ -899,6 +912,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
 	}
 	cfg := SpawnRunConfig{
+		RunID:                     runID,
 		Model:                     req.runtime.Model,
 		ModelUUID:                 req.runtime.UUID,
 		ModelID:                   req.runtime.ModelID,
@@ -944,6 +958,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 			case <-ctx.Done():
 				timer.Stop()
 				res.Error = fmt.Sprintf("parent cancelled: %v", ctx.Err())
+				res.Cause = context.Cause(ctx)
 				return res
 			}
 		}
@@ -954,6 +969,9 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		wd.Stop()
 		safetyCancel()
 
+		if genResult != nil && genResult.ContextLifecycle != nil {
+			res.ContextLifecycle = genResult.ContextLifecycle
+		}
 		if err == nil {
 			res.Text = genResult.Text
 			if p.messageService != nil && req.agentSessionID != "" {
@@ -964,15 +982,18 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		lastErr = err
 		if ctx.Err() != nil && !errors.Is(err, ErrWatchdogTimedOut) {
 			res.Error = fmt.Sprintf("parent cancelled: %v", ctx.Err())
+			res.Cause = context.Cause(ctx)
 			return res
 		}
 		if errors.Is(err, ErrWatchdogTimedOut) || isRetryableSubagentError(err) {
 			continue
 		}
 		res.Error = err.Error()
+		res.Cause = err
 		return res
 	}
 	res.Error = fmt.Sprintf("all %d attempts failed (last: %v)", subagentMaxRetries+1, lastErr)
+	res.Cause = lastErr
 	return res
 }
 
@@ -1349,7 +1370,14 @@ func (p *SpawnProvider) persistMessages(
 		p.persistUserMessage(ctx, botID, sessionID, query)
 	}
 
-	for _, msg := range result.Messages {
+	lastAssistantIdx := -1
+	for i, msg := range result.Messages {
+		if msg.Role == sdk.MessageRoleAssistant {
+			lastAssistantIdx = i
+		}
+	}
+
+	for i, msg := range result.Messages {
 		if msg.Role == sdk.MessageRoleUser {
 			continue
 		}
@@ -1361,15 +1389,27 @@ func (p *SpawnProvider) persistMessages(
 		if msg.Usage != nil {
 			usage, _ = json.Marshal(msg.Usage)
 		}
-		if _, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
+		var metadata map[string]any
+		if i == lastAssistantIdx && result.ContextLifecycle != nil {
+			metadata = map[string]any{
+				contextfrag.MetadataContextLifecycleKey: *result.ContextLifecycle,
+			}
+		}
+		persisted, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
 			BotID:     botID,
 			SessionID: sessionID,
 			Role:      string(msg.Role),
 			Content:   content,
+			Metadata:  metadata,
 			Usage:     usage,
 			ModelID:   modelID,
-		}); err != nil {
+		})
+		if err != nil {
 			p.logger.Warn("persist subagent message failed", slog.Any("error", err))
+			continue
+		}
+		if i == lastAssistantIdx && result.ContextLifecycle != nil {
+			result.ContextLifecycle.AssistantMessageID = persisted.ID
 		}
 	}
 }

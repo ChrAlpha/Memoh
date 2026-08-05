@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/google/uuid"
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
@@ -28,17 +29,25 @@ func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (
 
 	result, err := s.agent.Generate(ctx, rc)
 	if err != nil {
-		return nil, err
+		return spawnFailureResult(rc), err
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: result.Messages,
 		Text:     result.Text,
 		Usage:    result.Usage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
 }
 
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
+	runID := strings.TrimSpace(cfg.RunID)
+	if runID == "" {
+		runID = uuid.NewString()
+	}
 	messages := cfg.Messages
 	var currentUserMessageIndex *int
 	if cfg.Query != "" {
@@ -76,6 +85,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		})
 	}
 	rc := RunConfig{
+		RunID:                          runID,
 		Model:                          cfg.Model,
 		CurrentModelUUID:               cfg.ModelUUID,
 		CurrentModelID:                 cfg.ModelID,
@@ -106,6 +116,7 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		LoopDetection: LoopDetectionConfig{
 			Enabled: cfg.LoopDetection.Enabled,
 		},
+		ContextLifecycle: contextfrag.NewLifecycleHolder(),
 	}
 	rc.ContextSourceFrags = SpawnContextSourceFrags(rc)
 	return rc
@@ -160,6 +171,10 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 				streamErr = errors.New(evt.Error)
 			}
 		case EventAgentEnd, EventAgentAbort:
+			if evt.Type == EventAgentEnd {
+				// A terminal success means an earlier retryable stream error recovered.
+				streamErr = nil
+			}
 			if evt.Messages != nil {
 				_ = json.Unmarshal(evt.Messages, &finalMessages)
 			}
@@ -172,19 +187,34 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	// Check if context was cancelled (watchdog fired or parent cancelled).
 	if ctx.Err() != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return nil, cause
+			return spawnFailureResult(rc), cause
 		}
-		return nil, ctx.Err()
+		return spawnFailureResult(rc), ctx.Err()
 	}
 	if streamErr != nil {
-		return nil, streamErr
+		return spawnFailureResult(rc), streamErr
 	}
 
-	return &tools.SpawnResult{
+	spawnResult := &tools.SpawnResult{
 		Messages: finalMessages,
 		Text:     allText.String(),
 		Usage:    &totalUsage,
-	}, nil
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	return spawnResult, nil
+}
+
+func spawnFailureResult(rc RunConfig) *tools.SpawnResult {
+	if rc.ContextLifecycle == nil {
+		return nil
+	}
+	snapshot, ok := rc.ContextLifecycle.Snapshot()
+	if !ok {
+		return nil
+	}
+	return &tools.SpawnResult{ContextLifecycle: &snapshot}
 }
 
 // SpawnSystemPrompt returns the system prompt for a given session type.

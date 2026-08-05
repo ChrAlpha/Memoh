@@ -12,6 +12,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/event"
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
@@ -92,6 +93,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	if s.acpPool == nil {
 		return errors.New("ACP session pool is not configured")
 	}
+	req.RunID = runIDForChatRequest(req.RunID)
 	sess, err := s.sessionService.Get(ctx, req.ThreadID)
 	if err != nil {
 		return err
@@ -127,6 +129,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	contextReq.Attachments = preparedAttachments.Context
 	contextReq.ReplyAttachments = nil
 	contextMarkdown := s.buildACPContextMarkdown(ctx, contextReq, agentID, projectPath)
+	contextLifecycle := contextfrag.NewLifecycleHolder()
+	contextLifecycle.SetManifest(contextfrag.BuildManifest(nil))
 
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
@@ -143,6 +147,16 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	terminal := s.contextLifecycleTerminal(streamCtx, native.RunConfig{
+		RunID: req.RunID,
+		Identity: native.SessionContext{
+			BotID:     req.BotID,
+			SessionID: req.ThreadID,
+		},
+		ContextLifecycle: contextLifecycle,
+	})
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 	activePrompt := s.registerACPActivePrompt(req.BotID, req.ThreadID)
 	defer s.unregisterACPActivePrompt(req.BotID, req.ThreadID, activePrompt)
 	go func() {
@@ -249,6 +263,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		ForceFreshRuntime:     req.ForceFreshRuntime,
 		Sink:                  acpclient.EventSinkFunc(emit),
 	})
+	lifecycleCause = err
 	if err != nil {
 		s.logger.Error("ACP prompt failed",
 			slog.String("bot_id", req.BotID),
@@ -262,10 +277,12 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			return err
 		}
 		if appErr := acpPromptConfigAppError(err); appErr != nil {
+			lifecycleCause = appErr
 			cleanupLeadingUser()
 			return appErr
 		}
 		if feedbackErr := acpPromptInputFeedback(err); feedbackErr != nil {
+			lifecycleCause = feedbackErr
 			cleanupLeadingUser()
 			return feedbackErr
 		}
@@ -276,8 +293,12 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
 		}
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err); err != nil {
-			s.logger.Error("ACP failure persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, contextLifecycle); persistErr != nil {
+			lifecycleCause = runtimeHistoryError(persistErr)
+			s.logger.Error("ACP failure persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
+		}
+		if status, _ := classifyContextLifecycleTerminal(streamCtx, lifecycleCause); status != contextLifecycleStatusAborted {
+			emit(acpRuntimeFailureEvent(lifecycleCause))
 		}
 		emit(native.StreamEvent{Type: native.EventTextEnd})
 		emit(acpTerminalStreamEvent(native.EventAbort, failedResult))
@@ -288,11 +309,23 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	projected := projectedSnapshot()
 	result = ensureACPPromptOutput(result)
 	result.Output = filterACPProjectedOutput(result.Output, projected)
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil); err != nil {
-		s.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+	if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, contextLifecycle); persistErr != nil {
+		lifecycleCause = runtimeHistoryError(persistErr)
+		s.logger.Error("ACP persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
+		emit(acpRuntimeFailureEvent(lifecycleCause))
+		emit(acpTerminalStreamEvent(native.EventAbort, result))
+		return nil
 	}
 	emit(acpTerminalStreamEvent(native.EventEnd, result))
 	return nil
+}
+
+func acpRuntimeFailureEvent(cause error) native.StreamEvent {
+	code := string(apperror.CodeOf(cause))
+	if strings.TrimSpace(code) == "" {
+		code = "acp_runtime_prompt_failed"
+	}
+	return native.StreamEvent{Type: native.EventError, Error: code}
 }
 
 func (s *Service) prepareACPAttachments(ctx context.Context, req ChatRequest) (acpPreparedAttachments, error) {
@@ -710,7 +743,14 @@ func (s *Service) cancelPendingACPApprovals(ctx context.Context, req ChatRequest
 	}
 }
 
-func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID, projectPath string, result acpclient.PromptResult, promptErr error) error {
+func (s *Service) persistACPRound(
+	ctx context.Context,
+	req ChatRequest,
+	agentID, projectPath string,
+	result acpclient.PromptResult,
+	promptErr error,
+	contextLifecycle *contextfrag.LifecycleHolder,
+) error {
 	meta := map[string]any{
 		"acp_agent_id": agentID,
 		"project_path": projectPath,
@@ -753,15 +793,23 @@ func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID,
 	}
 	for idx, msg := range output {
 		if msg.Role == "assistant" {
-			metadataByIndex[idx+metadataOffset] = meta
+			entryMeta := make(map[string]any, len(meta))
+			for key, value := range meta {
+				entryMeta[key] = value
+			}
+			metadataByIndex[idx+metadataOffset] = entryMeta
 		}
 	}
 	skipMemory := promptErr != nil || req.UserMessagePersisted || req.SkipMemoryExtraction
-	err := s.storeRoundWithOptions(ctx, req, round, "", storeRoundOptions{
+	persisted, err := s.storeRoundWithOptionsResult(ctx, req, round, "", storeRoundOptions{
 		SkipMemory:              skipMemory,
 		AllowEmptyAssistantText: true,
 		MessageMetadataByIndex:  metadataByIndex,
+		ContextLifecycle:        contextLifecycle,
 	})
+	if err == nil && lastPersistedAssistantMessageID(persisted) == "" {
+		err = errors.New("ACP assistant output was not persisted")
+	}
 	if err == nil && promptErr == nil && req.UserMessagePersisted && !req.SkipMemoryExtraction {
 		go s.storeMemory(context.WithoutCancel(ctx), req, round)
 	}

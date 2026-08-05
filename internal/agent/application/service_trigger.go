@@ -61,6 +61,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	if err != nil {
 		return schedule.TriggerResult{}, err
 	}
+	req.RunID = rc.runConfig.RunID
 
 	cfg := rc.runConfig
 	cfg.SessionType = sessionmode.Schedule
@@ -77,15 +78,24 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	})
 	cfg = attachCurrentTurnPrompt(cfg, schedulePrompt)
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		return schedule.TriggerResult{}, err
 	}
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	roundMessages := prependUserMessage(req.Query, outputMessages)
-	storeErr := s.storeRound(ctx, req, roundMessages, rc.model.ID)
+	storeErr := s.storeRoundWithOptions(ctx, req, roundMessages, rc.model.ID, storeRoundOptions{
+		ContextLifecycle: cfg.ContextLifecycle,
+	})
+	if storeErr != nil {
+		lifecycleCause = storeErr
+	}
 
 	totalUsageJSON, _ := json.Marshal(result.Usage)
 	return schedule.TriggerResult{
@@ -139,6 +149,7 @@ func (s *Service) TriggerHeartbeat(ctx context.Context, botID string, payload he
 	if err != nil {
 		return heartbeat.TriggerResult{}, err
 	}
+	req.RunID = rc.runConfig.RunID
 
 	cfg := rc.runConfig
 	cfg.SessionType = sessionmode.Heartbeat
@@ -161,8 +172,12 @@ func (s *Service) TriggerHeartbeat(ctx context.Context, botID string, payload he
 	heartbeatPrompt := native.GenerateHeartbeatPrompt(payload.Interval, checklist, now, payload.LastHeartbeatAt)
 	cfg = attachCurrentTurnPrompt(cfg, heartbeatPrompt)
 	cfg = s.prepareRunConfig(ctx, cfg)
+	terminal := s.contextLifecycleTerminal(ctx, cfg)
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	result, err := s.agent.Generate(ctx, cfg)
+	lifecycleCause = err
 	if err != nil {
 		return heartbeat.TriggerResult{}, err
 	}
@@ -175,7 +190,9 @@ func (s *Service) TriggerHeartbeat(ctx context.Context, botID string, payload he
 
 	outputMessages := sdkMessagesToModelMessages(result.Messages)
 	roundMessages := prependUserMessage(heartbeatPrompt, outputMessages)
-	_ = s.storeRound(ctx, req, roundMessages, rc.model.ID)
+	_ = s.storeRoundWithOptions(ctx, req, roundMessages, rc.model.ID, storeRoundOptions{
+		ContextLifecycle: cfg.ContextLifecycle,
+	})
 
 	totalUsageJSON, _ := json.Marshal(result.Usage)
 	return heartbeat.TriggerResult{

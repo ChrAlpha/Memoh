@@ -1,13 +1,19 @@
 package contextfrag
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
-// LifecycleSnapshot is the in-memory, content-light audit for one provider
-// context build. Persistence and run classification belong to later layers.
+const MetadataContextLifecycleKey = "context_lifecycle"
+
+// LifecycleSnapshot is the durable, content-light audit for one provider
+// context build. It intentionally excludes manifest items and payloads.
 type LifecycleSnapshot struct {
 	Version            int                 `json:"version"`
 	View               ManifestView        `json:"view,omitempty"`
 	Counts             ManifestCounts      `json:"counts"`
+	AssistantMessageID string              `json:"assistant_message_id,omitempty"`
 	SelectionDecisions []SelectionDecision `json:"selection_decisions,omitempty"`
 	Selection          SelectionTrace      `json:"selection"`
 	BudgetPlan         *ContextBudgetPlan  `json:"budget_plan,omitempty"`
@@ -23,7 +29,8 @@ type LifecycleSnapshot struct {
 	Steps              []StepSnapshot      `json:"steps,omitempty"`
 }
 
-// LifecycleHolder shares the latest audit across copied RunConfig values.
+// LifecycleHolder keeps the latest audit shared by the copied RunConfig
+// values that participate in one run.
 type LifecycleHolder struct {
 	mu       sync.RWMutex
 	snapshot LifecycleSnapshot
@@ -39,10 +46,25 @@ func (h *LifecycleHolder) SetManifest(manifest Manifest) {
 	if h == nil {
 		return
 	}
+	next := BuildLifecycleSnapshot(manifest)
 	h.mu.Lock()
-	h.snapshot = BuildLifecycleSnapshot(manifest)
+	next.AssistantMessageID = h.snapshot.AssistantMessageID
+	h.snapshot = next
 	h.ledger = manifest.Mutations
 	h.set = true
+	h.mu.Unlock()
+}
+
+func (h *LifecycleHolder) SetAssistantMessageID(messageID string) {
+	if h == nil {
+		return
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return
+	}
+	h.mu.Lock()
+	h.snapshot.AssistantMessageID = messageID
 	h.mu.Unlock()
 }
 

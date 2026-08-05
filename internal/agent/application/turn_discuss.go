@@ -27,7 +27,7 @@ type turnRuntimeHooks struct {
 	streamAgent      func(context.Context, native.RunConfig) <-chan native.StreamEvent
 	resolveRunConfig func(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
 	inlineImages     func(context.Context, string, []timeline.ImageAttachmentRef) []sdk.ImagePart
-	storeRound       func(context.Context, string, string, string, string, []sdk.Message, string) error
+	storeRound       func(context.Context, string, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
 }
 
 // startDiscussTurn orchestrates one discuss turn: resolve the run config,
@@ -43,6 +43,7 @@ func (s *Service) startDiscussTurn(runCtx context.Context, cmd turn.StartTurnCom
 		return nil, errors.New("turn: discuss runtime not configured")
 	}
 	h := newDiscussHandle(runCtx, cmd, cancel, admission.RunID, s.turnRunFinisher(runCtx, admission))
+	h.publishAgentEvent = s.turnAgentEventPublisher(admission.Handle)
 	go s.pumpDiscuss(runCtx, cmd, h)
 	return h, nil
 }
@@ -74,9 +75,10 @@ func (*discussHandle) Inject(context.Context, turn.InjectMessage) error {
 // discussHandle reuses runHandle's channel pair with manual event emission.
 type discussHandle struct {
 	runHandle
-	teamID    string
-	sessionID string
-	seq       int64
+	teamID               string
+	sessionID            string
+	seq                  int64
+	contentLightTerminal bool
 }
 
 // emit delivers one event, giving up when the run context is canceled so
@@ -99,14 +101,11 @@ func (h *discussHandle) emit(kind string, payload []byte) bool {
 	}
 }
 
-// emitErr mirrors emit for the error channel. Any reported error marks the
-// run failed so finish releases the idempotency claim.
+// emitErr mirrors emit for the error channel. Any reported error marks the run
+// failed; recordStreamFailure preserves explicit cancellation as an abort.
 func (h *discussHandle) emitErr(err error) bool {
-	h.failed.Store(true)
-	if h.streamErr == nil {
-		// Keep the first error: without it the terminal record cannot tell a
-		// discuss turn that broke from one that was stopped.
-		h.streamErr = err
+	if !h.recordStreamFailure(err) {
+		return false
 	}
 	select {
 	case h.errs <- err:
@@ -119,6 +118,11 @@ func (h *discussHandle) emitErr(err error) bool {
 func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
 	defer close(h.events)
 	defer close(h.errs)
+	defer func() {
+		if h.contentLightTerminal && !h.failed.Load() && h.streamErr == nil && !s.usesDurableTerminalObserver() {
+			s.EnsureTerminalContextLifecycle(ctx, h.id, cmd.BotID, cmd.ThreadID, nil)
+		}
+	}()
 	defer h.finish()
 	defer func() {
 		// External cancellation can surface as a cleanly closed agent
@@ -143,7 +147,9 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 
 	if strings.TrimSpace(resolved.RuntimeType) == sessionpkg.RuntimeACPAgent {
 		if !cmd.DiscussAddressed {
-			h.emit(turn.DiscussEventSkipped, nil)
+			if h.emit(turn.DiscussEventSkipped, nil) {
+				h.contentLightTerminal = true
+			}
 			return
 		}
 		s.pumpDiscussACP(ctx, cmd, h)
@@ -154,12 +160,16 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 
 func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle, resolved ResolveRunConfigResult) {
 	runConfig := resolved.RunConfig
+	runConfig.RunID = h.id
 	runConfig.Messages = discussMessagesToSDK(cmd.DiscussMessages)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
 	runConfig.ContextCurrentUserMessageIndex = nil
 	runConfig.ContextMemoryMessageIndex = nil
 	runConfig.ContextBudgetMaxTokens = resolved.ContextBudgetMaxTokens
+	if runConfig.ContextLifecycle == nil {
+		runConfig.ContextLifecycle = contextfrag.NewLifecycleHolder()
+	}
 	if runConfig.ContextToolExchangePolicy == nil {
 		runConfig.ContextToolExchangePolicy = defaultToolExchangePolicy()
 	}
@@ -177,33 +187,105 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	}
 	runConfig.ContextSourceFrags = s.collectDiscussSourceFrags(ctx, runConfig, cmd.DiscussMessages, imageParts)
 	runConfig = runConfig.RefreshContextFrag()
+	terminal := s.contextLifecycleTerminal(ctx, runConfig)
+	var lifecycleCause error
+	var lifecycleDeferred bool
+	defer func() {
+		if !lifecycleDeferred {
+			terminal(lifecycleCause)
+		}
+	}()
 
 	eventCh := s.streamDiscussAgent(ctx, runConfig)
 
 	var finalMessages json.RawMessage
+	var terminalEvent native.StreamEvent
+	var terminalPayload []byte
+	var hasTerminalEvent bool
 	for event := range eventCh {
-		if event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort {
+		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
+			lifecycleCause = eventErr
+		}
+		terminal := event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort
+		if terminal {
 			finalMessages = event.Messages
+			terminalEvent = event
+			terminalPayload, _ = json.Marshal(event)
+			hasTerminalEvent = true
+			lifecycleDeferred = strings.TrimSpace(event.ApprovalID) != ""
+			if !lifecycleDeferred {
+				switch event.Type {
+				case native.EventAgentEnd:
+					lifecycleCause = nil
+				case native.EventAgentAbort:
+					if context.Cause(ctx) != nil || lifecycleCause == nil {
+						lifecycleCause = agentAbortCause(ctx)
+					}
+				}
+			}
+			continue
+		}
+		if h.publishAgentEvent != nil {
+			if publishErr := h.publishAgentEvent(ctx, event); publishErr != nil {
+				lifecycleCause = publishErr
+				lifecycleDeferred = false
+				h.emitErr(publishErr)
+				return
+			}
 		}
 		payload, marshalErr := json.Marshal(event)
 		if marshalErr != nil {
 			continue
 		}
 		if !h.emit(string(event.Type), payload) {
+			if lifecycleCause == nil {
+				lifecycleCause = context.Cause(ctx)
+			}
 			return
 		}
+	}
+	if !hasTerminalEvent {
+		if lifecycleCause == nil {
+			if ctx.Err() != nil {
+				lifecycleCause = context.Cause(ctx)
+			} else {
+				lifecycleCause = errors.New("native discuss stream ended without a terminal event")
+			}
+		}
+		if ctx.Err() == nil {
+			h.emitErr(lifecycleCause)
+		}
+		return
 	}
 
 	if len(finalMessages) > 0 {
 		var sdkMsgs []sdk.Message
 		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
 			if storeErr := s.storeDiscussRound(ctx,
+				runConfig.RunID,
 				cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
 				sdkMsgs, resolved.ModelID,
+				runConfig.ContextLifecycle,
 			); storeErr != nil {
-				h.emitErr(storeErr)
+				historyErr := runtimeHistoryError(storeErr)
+				lifecycleCause = historyErr
+				lifecycleDeferred = false
+				h.emitErr(historyErr)
+				return
 			}
 		}
+	}
+	if hasTerminalEvent && h.publishAgentEvent != nil {
+		if publishErr := h.publishAgentEvent(ctx, terminalEvent); publishErr != nil {
+			lifecycleCause = publishErr
+			lifecycleDeferred = false
+			h.emitErr(publishErr)
+			return
+		}
+		h.terminalPublished = true
+	}
+	if len(terminalPayload) > 0 && !h.emit(string(terminalEvent.Type), terminalPayload) {
+		return
 	}
 
 	// Compute pressure on this goroutine so the detached trigger holds a few
@@ -292,12 +374,14 @@ func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand,
 	if strings.TrimSpace(prompt) == "" {
 		// No composable context: end without a skip marker so the caller
 		// does not advance its consumed cursor (pre-port semantics).
+		h.contentLightTerminal = true
 		return
 	}
 	chunks, errs := s.streamTurnChat(ctx, ChatRequest{
 		BotID:                   cmd.BotID,
 		ChatID:                  cmd.BotID,
 		ThreadID:                cmd.ThreadID,
+		RunID:                   h.id,
 		RouteID:                 cmd.RouteID,
 		SourceChannelIdentityID: cmd.SourceChannelIdentityID,
 		CurrentChannel:          cmd.CurrentChannel,
@@ -318,6 +402,10 @@ func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand,
 			if !ok {
 				chunks = nil
 				continue
+			}
+			if err := h.publishChunk(chunk); err != nil {
+				h.emitErr(err)
+				return
 			}
 			if !h.emit(parseKind(chunk), chunk) {
 				return
@@ -393,22 +481,34 @@ func (s *Service) streamDiscussAgent(ctx context.Context, cfg native.RunConfig) 
 
 func (s *Service) storeDiscussRound(
 	ctx context.Context,
+	runID string,
 	botID, sessionID, channelIdentityID, currentPlatform string,
 	messages []sdk.Message,
 	modelID string,
+	lifecycle *contextfrag.LifecycleHolder,
 ) error {
 	if s.turnHooks != nil && s.turnHooks.storeRound != nil {
 		return s.turnHooks.storeRound(
 			ctx,
+			runID,
 			botID,
 			sessionID,
 			channelIdentityID,
 			currentPlatform,
 			messages,
 			modelID,
+			lifecycle,
 		)
 	}
-	return s.StoreRound(ctx, botID, sessionID, channelIdentityID, currentPlatform, messages, modelID)
+	return s.storeRoundWithOptions(ctx, ChatRequest{
+		RunID:                   runID,
+		BotID:                   botID,
+		ChatID:                  botID,
+		ThreadID:                sessionID,
+		SourceChannelIdentityID: channelIdentityID,
+		CurrentChannel:          currentPlatform,
+		UserMessagePersisted:    true,
+	}, sdkMessagesToModelMessages(messages), modelID, storeRoundOptions{ContextLifecycle: lifecycle})
 }
 
 // discussMessagesToSDK converts composed context messages into SDK

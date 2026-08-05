@@ -8,8 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/memohai/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
 	"github.com/memohai/memoh/internal/agent/turn"
+	"github.com/memohai/memoh/internal/apperror"
 )
 
 var _ turn.Service = (*Service)(nil)
@@ -49,6 +51,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 			cancel()
 			return nil, err
 		}
+		runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 		return s.startDiscussTurn(runCtx, cmd, cancel, admission)
 	}
 
@@ -58,6 +61,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		cancel()
 		return nil, err
 	}
+	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 
 	var (
 		assetMu sync.Mutex
@@ -89,7 +93,8 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 			defer assetMu.Unlock()
 			assets = append(assets, refs...)
 		},
-		finishRun: s.turnRunFinisher(runCtx, admission),
+		finishRun:         s.turnRunFinisher(runCtx, admission),
+		publishAgentEvent: s.turnAgentEventPublisher(admission.Handle),
 	}
 	go h.pump(cmd, chunkCh, errCh)
 	return h, nil
@@ -122,9 +127,11 @@ type runHandle struct {
 	// because the terminal record distinguishes a run someone stopped from a run
 	// that broke, and cancellation alone cannot tell them apart. Only the pump
 	// goroutine writes either, and it reads them in its own defer.
-	failed    atomic.Bool
-	streamErr error
-	finishRun func(status string, cause error)
+	failed            atomic.Bool
+	streamErr         error
+	terminalPublished bool
+	finishRun         func(status string, cause error)
+	publishAgentEvent func(context.Context, native.StreamEvent) error
 }
 
 func (h *runHandle) RunID() string             { return h.id }
@@ -181,13 +188,78 @@ func (h *runHandle) finish() {
 		h.finishRun(sessionruntime.RunStatusErrored, h.streamErr)
 		return
 	}
+	// Once the terminal event is in the runtime projection, that projection is
+	// authoritative. A consumer disconnect while forwarding the same terminal
+	// event must not rewrite a completed, aborted, or parked run as aborted.
+	if h.terminalPublished {
+		h.finishRun("", nil)
+		return
+	}
 	// Canceled with nothing on the error channel means someone stopped this run
 	// — /stop, a routed abort, or a lost owner lease — rather than it breaking.
 	if h.failed.Load() {
 		h.finishRun(sessionruntime.RunStatusAborted, nil)
 		return
 	}
-	h.finishRun(sessionruntime.RunStatusCompleted, nil)
+	// An unnamed clean end lets the runtime preserve waiting_decision or derive
+	// completed from its event projection. Naming completion here would collapse
+	// a deferred decision into a terminal run.
+	h.finishRun("", nil)
+}
+
+func (h *runHandle) recordStreamFailure(err error) bool {
+	h.failed.Store(true)
+	if err == nil {
+		return false
+	}
+	// Native and ACP streams may report context.Canceled after the run was
+	// explicitly stopped. That terminal signal still means aborted; a provider
+	// cancellation while the run context is active remains an error.
+	failureCause := err
+	if privateCause := apperror.CauseOf(err); privateCause != nil {
+		failureCause = privateCause
+	}
+	explicitlyCanceled := h.ctx != nil &&
+		errors.Is(failureCause, context.Canceled) &&
+		errors.Is(context.Cause(h.ctx), context.Canceled)
+	if explicitlyCanceled {
+		return false
+	}
+	if h.streamErr == nil {
+		h.streamErr = err
+	}
+	return true
+}
+
+func runtimeHistoryError(err error) error {
+	if err == nil || apperror.CodeOf(err) != "" {
+		return err
+	}
+	return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+}
+
+func (s *Service) turnAgentEventPublisher(handle sessionruntime.RunHandle) func(context.Context, native.StreamEvent) error {
+	if s == nil || s.publishTurnEvent == nil {
+		return nil
+	}
+	return func(ctx context.Context, event native.StreamEvent) error {
+		return runtimeHistoryError(s.publishTurnEvent(ctx, handle, event))
+	}
+}
+
+func (h *runHandle) publishChunk(chunk StreamChunk) error {
+	if h.publishAgentEvent == nil {
+		return nil
+	}
+	var event native.StreamEvent
+	if err := json.Unmarshal(chunk, &event); err != nil || event.Type == "" {
+		return nil
+	}
+	err := h.publishAgentEvent(h.ctx, event)
+	if err == nil && (event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort) {
+		h.terminalPublished = true
+	}
+	return err
 }
 
 // RespondToolApproval resumes a turn deferred on tool approval.
@@ -241,6 +313,15 @@ func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, 
 				chunkCh = nil
 				continue
 			}
+			if err := h.publishChunk(chunk); err != nil {
+				if h.recordStreamFailure(err) {
+					select {
+					case h.errs <- err:
+					case <-h.ctx.Done():
+					}
+				}
+				return
+			}
 			seq++
 			select {
 			case h.events <- turn.Event{
@@ -261,9 +342,8 @@ func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, 
 				continue
 			}
 			if err != nil {
-				h.failed.Store(true)
-				if h.streamErr == nil {
-					h.streamErr = err
+				if !h.recordStreamFailure(err) {
+					return
 				}
 				select {
 				case h.errs <- err:
