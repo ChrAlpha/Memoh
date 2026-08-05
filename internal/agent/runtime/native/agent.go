@@ -1803,6 +1803,10 @@ func (a *Agent) runMidStreamRetry(
 					aborted = true
 				}
 			case *sdk.ErrorPart:
+				if contextStepBudgetError(streamCtx) != nil {
+					aborted = true
+					break
+				}
 				errMsg := rp.Error.Error()
 				if isAskUserArgumentParseError(errMsg) {
 					continue
