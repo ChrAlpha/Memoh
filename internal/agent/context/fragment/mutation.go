@@ -157,7 +157,7 @@ func (l *MutationLedger) AppendStepSnapshot(snapshot StepSnapshot) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	snapshot.Attempt = l.attempt
-	l.steps = append(l.steps, snapshot)
+	l.steps = append(l.steps, cloneStepSnapshot(snapshot))
 }
 
 func (l *MutationLedger) StepSnapshots() []StepSnapshot {
@@ -167,8 +167,22 @@ func (l *MutationLedger) StepSnapshots() []StepSnapshot {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := make([]StepSnapshot, len(l.steps))
-	copy(out, l.steps)
+	for i, snapshot := range l.steps {
+		out[i] = cloneStepSnapshot(snapshot)
+	}
 	return out
+}
+
+func cloneStepSnapshot(snapshot StepSnapshot) StepSnapshot {
+	if snapshot.DropReasons == nil {
+		return snapshot
+	}
+	dropReasons := make(map[string]int, len(snapshot.DropReasons))
+	for reason, count := range snapshot.DropReasons {
+		dropReasons[reason] = count
+	}
+	snapshot.DropReasons = dropReasons
+	return snapshot
 }
 
 // AdvanceAttempt starts a new retry attempt and returns its number.
