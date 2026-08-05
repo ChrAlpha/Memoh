@@ -80,3 +80,50 @@ func TestRefreshContextFragUpdatesLifecycleHolder(t *testing.T) {
 		t.Fatalf("snapshot = %#v, manifest = %#v", snapshot, cfg.ContextManifest)
 	}
 }
+
+func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
+	t.Parallel()
+
+	ledger := contextfrag.NewMutationLedger()
+	ledger.SetModelInfo("claude-x", "anthropic-messages")
+	ledger.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash-0"})
+	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{
+		StepIndex:        0,
+		CacheReadTokens:  11,
+		CacheWriteTokens: 7,
+	})
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, Mutations: ledger})
+
+	snapshot, ok := holder.Snapshot()
+	if !ok {
+		t.Fatal("snapshot should be available")
+	}
+	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
+		t.Fatalf("snapshot model/client_type = (%q, %q)", snapshot.Model, snapshot.ClientType)
+	}
+	if snapshot.LoopSelectionMode != contextfrag.LoopSelectionSuffixOnly {
+		t.Fatalf("snapshot loop selection mode = %q", snapshot.LoopSelectionMode)
+	}
+	if len(snapshot.Steps) != 1 || snapshot.Steps[0].PostPrepareInputHash != "step-hash-0" {
+		t.Fatalf("snapshot steps = %#v", snapshot.Steps)
+	}
+	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 || len(snapshot.CacheUsage) != 1 {
+		t.Fatalf("snapshot cache usage = %#v, read/write = %d/%d", snapshot.CacheUsage, snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
+	}
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	for _, want := range []string{
+		`"model":"claude-x"`, `"client_type":"anthropic-messages"`,
+		`"loop_selection_mode":"suffix_only"`, `"steps":`, "step-hash-0",
+		`"step_index":0`, `"cache_read_tokens":11`, `"cache_write_tokens":7`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("snapshot JSON missing %q: %s", want, raw)
+		}
+	}
+}
