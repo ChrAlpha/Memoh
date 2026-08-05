@@ -485,16 +485,15 @@ type agentRunResult struct {
 }
 
 type agentRequest struct {
-	taskID                 string
-	agentID                string
-	agentSessionID         string
-	message                string
-	messagePersisted       bool
-	parentSession          SessionContext
-	config                 sessionpkg.SubagentConfig
-	runtime                resolvedSubagentModel
-	contextBudgetMaxTokens int
-	systemPrompt           string
+	taskID           string
+	agentID          string
+	agentSessionID   string
+	message          string
+	messagePersisted bool
+	parentSession    SessionContext
+	config           sessionpkg.SubagentConfig
+	runtime          resolvedSubagentModel
+	systemPrompt     string
 	// admission is the run identity the durable gate allocated; persistence
 	// files this task's messages under admission.TurnID.
 	admission SubagentAdmission
@@ -742,14 +741,13 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	}
 
 	req := &agentRequest{
-		agentID:                rec.AgentID,
-		agentSessionID:         rec.SessionID,
-		message:                message,
-		parentSession:          session,
-		config:                 config,
-		runtime:                runtime,
-		contextBudgetMaxTokens: runtime.ContextBudgetMaxTokens,
-		systemPrompt:           systemPrompt,
+		agentID:        rec.AgentID,
+		agentSessionID: rec.SessionID,
+		message:        message,
+		parentSession:  session,
+		config:         config,
+		runtime:        runtime,
+		systemPrompt:   systemPrompt,
 	}
 	description := truncateTitle(fmt.Sprintf("%s: %s", rec.AgentID, message), 120)
 
@@ -1003,7 +1001,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		combined = append(combined, history...)
 		history = combined
 	}
-	contextBudgetMaxTokens := req.contextBudgetMaxTokens
+	contextBudgetMaxTokens := req.runtime.ContextBudgetMaxTokens
 	if contextBudgetMaxTokens <= 0 {
 		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
 	}

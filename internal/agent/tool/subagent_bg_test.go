@@ -758,6 +758,66 @@ func TestBusyAgentQueuesAndRunsFIFO(t *testing.T) {
 	}
 }
 
+func TestQueuedSpawnAgentUsesExecutionModelContextBudget(t *testing.T) {
+	block := make(chan struct{})
+	agent := &fakeSpawnAgent{block: block}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	var resolverMu sync.Mutex
+	resolverBudgets := []int{128000, 128000, 128000, 64000, 32000}
+	resolverCall := 0
+	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+		resolverMu.Lock()
+		defer resolverMu.Unlock()
+		if resolverCall >= len(resolverBudgets) {
+			return resolvedSubagentModel{}, errors.New("unexpected model resolution")
+		}
+		budget := resolverBudgets[resolverCall]
+		resolverCall++
+		return resolvedSubagentModel{
+			Model:                  &sdk.Model{},
+			ModelID:                "model-2",
+			ProviderName:           "provider-2",
+			ContextBudgetMaxTokens: budget,
+		}, nil
+	}
+	session := SessionContext{
+		BotID:                  "bot1",
+		SessionID:              "parent1",
+		ContextBudgetMaxTokens: 256000,
+	}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
+		"id":                "worker",
+		"task":              "first",
+		"run_in_background": true,
+	})
+	waitUntil(t, 2*time.Second, func() bool {
+		return reflect.DeepEqual(agent.queries(), []string{"first"})
+	})
+	queued := asMap(t, mustExecuteAgentTool(t, p, session, "send_message", map[string]any{
+		"id":      "worker",
+		"message": "second",
+	}))
+	if queued["status"] != string(background.TaskQueued) {
+		t.Fatalf("expected second request queued, got %v", queued)
+	}
+
+	close(block)
+	waitUntil(t, 2*time.Second, func() bool {
+		return reflect.DeepEqual(agent.queries(), []string{"first", "second"})
+	})
+	secondCall, ok := agent.callAt(1)
+	if !ok {
+		t.Fatal("expected queued request to execute")
+	}
+	if secondCall.ContextBudgetMaxTokens != 32000 {
+		t.Fatalf(
+			"queued ContextBudgetMaxTokens = %d, want latest execution resolution 32000",
+			secondCall.ContextBudgetMaxTokens,
+		)
+	}
+}
+
 func TestBackgroundSpawnPersistsUserMessageBeforeAgentCompletes(t *testing.T) {
 	block := make(chan struct{})
 	p, _, _, messages := newAgentControlProvider(t, &fakeSpawnAgent{block: block})
