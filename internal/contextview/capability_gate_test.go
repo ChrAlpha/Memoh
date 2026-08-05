@@ -134,8 +134,29 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 
 	cfg := capabilityGateFixture()
 	cfg.Messages = []sdk.Message{sdk.UserMessage("legacy message")}
+	legacyHooks, err := (&HookContextCollector{}).Collect(context.Background(), CollectRequest{
+		Config: HookContextConfig{Text: "legacy append_context"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceHook := contextfrag.NormalizeContextRefs([]contextfrag.ContextFrag{hookSystemTestFrag(
+		"system.hook.policy",
+		"workspace hook system section",
+		contextfrag.RetentionPreferred,
+		contextfrag.CacheDynamic,
+		contextfrag.TrustWorkspace,
+		80,
+		contextfrag.Scope{},
+	)})[0]
+	cfg.ContextSourceWarnings = []contextfrag.ValidationWarning{{
+		Code: "hook_system_section_required_clamped",
+		Ref:  workspaceHook.Ref,
+	}}
 	cfg.ContextSourceFrags = append(
 		cfg.ContextSourceFrags,
+		legacyHooks[0],
+		workspaceHook,
 		contextfrag.MessageFrag(contextfrag.MessageFragInput{
 			ID:        "duplicate",
 			Message:   sdk.UserMessage("first"),
@@ -155,8 +176,11 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 	)
 
 	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
-	if got.System != "base system" || strings.Contains(got.System, "alpha") {
-		t.Fatalf("fallback system = %q, want capability-filtered base system", got.System)
+	if got.System != "base system\n\nlegacy append_context" {
+		t.Fatalf(
+			"fallback system = %q, want byte-exact base plus legacy TrustSystem hook",
+			got.System,
+		)
 	}
 	if len(got.Messages) != 1 || messageText(t, got.Messages[0]) != "legacy message" {
 		t.Fatalf("fallback messages = %#v, want legacy message", got.Messages)
@@ -186,6 +210,13 @@ func TestApplyProviderRunConfigFallbackCannotRestoreGatedGuidance(t *testing.T) 
 			"fallback selected count = %d, want actual rendered fragment count %d",
 			got.ContextManifest.Selection.Selected,
 			len(got.ContextFrags),
+		)
+	}
+	if !hasValidationWarning(got.ContextManifest.ValidationWarnings, cfg.ContextSourceWarnings[0]) {
+		t.Fatalf(
+			"fallback validation warnings = %#v, want source warning %#v",
+			got.ContextManifest.ValidationWarnings,
+			cfg.ContextSourceWarnings[0],
 		)
 	}
 }
