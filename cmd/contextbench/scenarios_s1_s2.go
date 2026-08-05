@@ -329,14 +329,6 @@ func s2Payload(fixture benchFixture, history []sdk.Message, input s2TurnInput, v
 		return providerPayload{System: baseSystem + "\n\n" + input.hook, Messages: messages}, contextfrag.CachePlan{}
 	case "typed":
 		source := slices.Clone(fixture.systemFrags)
-		hookFrags, err := (&contextview.HookContextCollector{}).Collect(context.Background(), contextview.CollectRequest{
-			Scope: contextfrag.Scope{BotID: "contextbench"}, Intent: contextfrag.IntentRunConfigPreProvider,
-			Config: contextview.HookContextConfig{Text: input.hook},
-		})
-		if err != nil {
-			panic(err)
-		}
-		source = append(source, hookFrags...)
 		for i, message := range history {
 			trust := contextfrag.TrustExternal
 			if message.Role == sdk.MessageRoleAssistant {
@@ -355,6 +347,14 @@ func s2Payload(fixture benchFixture, history []sdk.Message, input s2TurnInput, v
 			memoryFrags[i].TokenEstimate = contextfrag.ResolveProviderBudgetFragTokens(memoryFrags[i])
 		}
 		source = append(source, memoryFrags...)
+		hookFrags, err := (&contextview.HookContextCollector{}).Collect(context.Background(), contextview.CollectRequest{
+			Scope: contextfrag.Scope{BotID: "contextbench"}, Intent: contextfrag.IntentRunConfigPreProvider,
+			Config: contextview.HookContextConfig{Text: input.hook},
+		})
+		if err != nil {
+			panic(err)
+		}
+		source = append(source, hookFrags...)
 		currentFrag := estimatedMessageFrag("message.current", current, contextfrag.KindCurrentUserMessage, contextfrag.SlotCurrentUser, contextfrag.TrustUser, len(history)+1)
 		currentFrag.CacheClass = contextfrag.CacheNever
 		currentFrag.Budget.Overflow = contextfrag.OverflowKeep
