@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/memohai/memoh/internal/agent/decision/approval"
 	"github.com/memohai/memoh/internal/agent/decision/feedback"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
@@ -187,20 +188,22 @@ type PromptInput struct {
 	ChannelIdentityID        string
 	// SessionToken is consumed only by Prompt, where it flows into the
 	// per-prompt tool context overlay. Ensure and SetModel ignore it.
-	SessionToken          string //nolint:gosec // runtime session credential, not a hardcoded secret.
-	CurrentPlatform       string
-	ReplyTarget           string
-	ConversationType      string
-	CanRequestUserInput   bool
-	SupportsImageInput    bool
-	ToolOutputLimit       client.ToolOutputLimit
-	ToolHTTPURL           string
-	ContextURI            string
-	ContextMarkdown       string
-	RuntimeOwnerAccountID string
-	ForceFreshRuntime     bool
-	Sink                  client.EventSink
-	RuntimeGuard          func(context.Context) error
+	SessionToken              string //nolint:gosec // runtime session credential, not a hardcoded secret.
+	CurrentPlatform           string
+	ReplyTarget               string
+	ConversationType          string
+	CanRequestUserInput       bool
+	SupportsImageInput        bool
+	ToolOutputLimit           client.ToolOutputLimit
+	ToolHTTPURL               string
+	ContextURI                string
+	ContextMarkdown           string
+	RuntimeOwnerAccountID     string
+	ForceFreshRuntime         bool
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	Sink                      client.EventSink
+	RuntimeGuard              func(context.Context) error
 }
 
 // CreateRuntimeInput describes a pre-session runtime creation request.
@@ -1636,6 +1639,12 @@ func (h *runtimeHandle) toolContext() mcp.ToolSessionContext {
 	if h.active.SupportsImageInput {
 		ctx.SupportsImageInput = true
 	}
+	if h.active.ContextBudgetMaxTokens != 0 {
+		ctx.ContextBudgetMaxTokens = h.active.ContextBudgetMaxTokens
+	}
+	if h.active.ContextToolExchangePolicy != nil {
+		ctx.ContextToolExchangePolicy = h.active.ContextToolExchangePolicy
+	}
 	if h.active.RuntimeFence.Valid() {
 		ctx.RuntimeFence = h.active.RuntimeFence
 	}
@@ -1666,24 +1675,26 @@ func (h *runtimeHandle) setStatus(status string) {
 func toolSessionContext(ctx context.Context, input PromptInput, h *runtimeHandle) client.ToolSessionContext {
 	fence, _ := runtimefence.FromContext(ctx)
 	return client.ToolSessionContext{
-		BotID:               h.botID,
-		ChatID:              firstNonEmpty(input.ChatID, h.botID),
-		RuntimeID:           h.id,
-		SessionID:           strings.TrimSpace(input.SessionID),
-		RunID:               strings.TrimSpace(input.RunID),
-		SessionType:         firstNonEmpty(input.SessionType, sessionmode.ACPAgent),
-		RouteID:             input.RouteID,
-		ChannelIdentityID:   input.ChannelIdentityID,
-		SessionToken:        input.SessionToken,
-		CurrentPlatform:     input.CurrentPlatform,
-		ReplyTarget:         input.ReplyTarget,
-		ConversationType:    input.ConversationType,
-		CanRequestUserInput: input.CanRequestUserInput,
-		IsSubagent:          false,
-		SupportsImageInput:  input.SupportsImageInput,
-		RuntimeFence:        fence,
-		RunContext:          ctx,
-		RuntimeGuard:        input.RuntimeGuard,
+		BotID:                     h.botID,
+		ChatID:                    firstNonEmpty(input.ChatID, h.botID),
+		RuntimeID:                 h.id,
+		SessionID:                 strings.TrimSpace(input.SessionID),
+		RunID:                     strings.TrimSpace(input.RunID),
+		SessionType:               firstNonEmpty(input.SessionType, sessionmode.ACPAgent),
+		RouteID:                   input.RouteID,
+		ChannelIdentityID:         input.ChannelIdentityID,
+		SessionToken:              input.SessionToken,
+		CurrentPlatform:           input.CurrentPlatform,
+		ReplyTarget:               input.ReplyTarget,
+		ConversationType:          input.ConversationType,
+		CanRequestUserInput:       input.CanRequestUserInput,
+		IsSubagent:                false,
+		SupportsImageInput:        input.SupportsImageInput,
+		ContextBudgetMaxTokens:    input.ContextBudgetMaxTokens,
+		ContextToolExchangePolicy: input.ContextToolExchangePolicy,
+		RuntimeFence:              fence,
+		RunContext:                ctx,
+		RuntimeGuard:              input.RuntimeGuard,
 	}
 }
 

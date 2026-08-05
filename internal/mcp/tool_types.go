@@ -9,33 +9,36 @@ import (
 	"strings"
 	"time"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/runtimefence"
 )
 
 // ToolSessionContext carries request-scoped identity for tool execution.
 type ToolSessionContext struct {
-	BotID               string
-	ChatID              string
-	RuntimeID           string
-	RuntimeToken        string `json:"-"`
-	SessionID           string
-	RunID               string
-	ToolCallID          string
-	SessionType         string
-	RouteID             string
-	ChannelIdentityID   string
-	SessionToken        string `json:"-"`
-	CurrentPlatform     string
-	ReplyTarget         string
-	ConversationType    string
-	CanRequestUserInput bool
-	CanListUserInput    bool
-	IsSubagent          bool
-	RuntimeActive       bool
-	SupportsImageInput  bool
-	RuntimeFence        runtimefence.Fence          `json:"-"`
-	RunContext          context.Context             `json:"-"`
-	RuntimeGuard        func(context.Context) error `json:"-"`
+	BotID                     string
+	ChatID                    string
+	RuntimeID                 string
+	RuntimeToken              string `json:"-"`
+	SessionID                 string
+	RunID                     string
+	ToolCallID                string
+	SessionType               string
+	RouteID                   string
+	ChannelIdentityID         string
+	SessionToken              string `json:"-"`
+	CurrentPlatform           string
+	ReplyTarget               string
+	ConversationType          string
+	CanRequestUserInput       bool
+	CanListUserInput          bool
+	IsSubagent                bool
+	RuntimeActive             bool
+	SupportsImageInput        bool
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	RuntimeFence              runtimefence.Fence          `json:"-"`
+	RunContext                context.Context             `json:"-"`
+	RuntimeGuard              func(context.Context) error `json:"-"`
 }
 
 const runtimeGuardTimeout = 5 * time.Second

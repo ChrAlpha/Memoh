@@ -276,6 +276,12 @@ func MergeToolSessionContext(base, latest ToolSessionContext) ToolSessionContext
 	if latest.SupportsImageInput {
 		merged.SupportsImageInput = true
 	}
+	if latest.ContextBudgetMaxTokens != 0 {
+		merged.ContextBudgetMaxTokens = latest.ContextBudgetMaxTokens
+	}
+	if latest.ContextToolExchangePolicy != nil {
+		merged.ContextToolExchangePolicy = latest.ContextToolExchangePolicy
+	}
 	if latest.RuntimeFence.Valid() {
 		merged.RuntimeFence = latest.RuntimeFence
 	}

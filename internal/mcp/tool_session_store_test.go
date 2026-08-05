@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"testing"
+
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 )
 
 func TestToolSessionContextStoreMergesLatestPromptContext(t *testing.T) {
@@ -42,6 +44,34 @@ func TestToolSessionContextMergePreservesUserInputCapability(t *testing.T) {
 	merged := MergeToolSessionContext(base, ToolSessionContext{CanRequestUserInput: true})
 	if !merged.CanRequestUserInput {
 		t.Fatalf("CanRequestUserInput = false, want true")
+	}
+}
+
+func TestToolSessionContextMergeOverridesContextBudgetMaxTokens(t *testing.T) {
+	base := ToolSessionContext{BotID: "bot-1", ContextBudgetMaxTokens: 100}
+	merged := MergeToolSessionContext(base, ToolSessionContext{ContextBudgetMaxTokens: 200})
+	if merged.ContextBudgetMaxTokens != 200 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 200", merged.ContextBudgetMaxTokens)
+	}
+	merged = MergeToolSessionContext(base, ToolSessionContext{})
+	if merged.ContextBudgetMaxTokens != 100 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want base value 100 preserved", merged.ContextBudgetMaxTokens)
+	}
+}
+
+func TestToolSessionContextMergeOverridesContextToolExchangePolicy(t *testing.T) {
+	basePolicy := &contextfrag.ToolExchangePolicy{MinMessages: 9}
+	base := ToolSessionContext{BotID: "bot-1", ContextToolExchangePolicy: basePolicy}
+
+	latestPolicy := &contextfrag.ToolExchangePolicy{MinMessages: 5}
+	merged := MergeToolSessionContext(base, ToolSessionContext{ContextToolExchangePolicy: latestPolicy})
+	if merged.ContextToolExchangePolicy != latestPolicy {
+		t.Fatalf("ContextToolExchangePolicy = %#v, want latest policy %#v", merged.ContextToolExchangePolicy, latestPolicy)
+	}
+
+	merged = MergeToolSessionContext(base, ToolSessionContext{})
+	if merged.ContextToolExchangePolicy != basePolicy {
+		t.Fatalf("ContextToolExchangePolicy = %#v, want base policy preserved %#v", merged.ContextToolExchangePolicy, basePolicy)
 	}
 }
 
