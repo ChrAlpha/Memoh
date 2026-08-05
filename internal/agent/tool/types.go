@@ -323,10 +323,13 @@ type SessionContext struct {
 	WorkspaceTargetID   string
 	WorkspaceTargetKind string
 	WorkspaceTargetName string
-	Skills              map[string]SkillDetail
-	TimezoneLocation    *time.Location
-	Emitter             StreamEmitter
-	LiveStream          bool
+	// WorkdirPath is the session's immutable working directory. When set,
+	// relative tool paths resolve under it and exec defaults its cwd to it.
+	WorkdirPath      string
+	Skills           map[string]SkillDetail
+	TimezoneLocation *time.Location
+	Emitter          StreamEmitter
+	LiveStream       bool
 }
 
 // CanAskUser reports whether ask_user can be both shown to the model and

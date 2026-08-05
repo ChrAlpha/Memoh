@@ -503,6 +503,26 @@
                         />
                       </DropdownMenuItem>
                     </template>
+                    <!-- Folder-bound chats pin the workspace target for the
+                       session's whole life, so the computer switcher gives way
+                       to a read-only folder entry; a draft can still opt out
+                       before the session exists. -->
+                    <template v-if="composerFolderLocked">
+                      <DropdownMenuSeparator v-if="canChangeAgent && enabledACPProfiles.length" />
+                      <DropdownMenuLabel>{{ $t('chat.folder') }}</DropdownMenuLabel>
+                      <DropdownMenuItem disabled>
+                        <FolderOpen class="size-4 shrink-0" />
+                        <span class="min-w-0 flex-1 truncate">{{ composerFolderName }}</span>
+                        <Check class="ml-auto" />
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-if="!activeSession"
+                        @select="clearWorkingFolder"
+                      >
+                        <X class="size-4 shrink-0" />
+                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.folderDetachDraft') }}</span>
+                      </DropdownMenuItem>
+                    </template>
                     <template v-if="showComputersMenu">
                       <DropdownMenuSeparator v-if="canChangeAgent && enabledACPProfiles.length" />
                       <DropdownMenuLabel>{{ $t('chat.computers') }}</DropdownMenuLabel>
@@ -560,7 +580,7 @@
                         />
                       </DropdownMenuItem>
                     </template>
-                    <DropdownMenuSeparator v-if="(canChangeAgent && enabledACPProfiles.length) || showComputersMenu" />
+                    <DropdownMenuSeparator v-if="(canChangeAgent && enabledACPProfiles.length) || showComputersMenu || composerFolderLocked" />
                     <DropdownMenuItem
                       :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages"
                       @select="fileInput?.click()"
@@ -731,6 +751,7 @@ import {
 } from 'lucide-vue-next'
 import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Spinner, menuChromeClass, toast } from '@felinic/ui'
 import { useChatStore, type ACPAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
+import { useWorkdirsStore } from '@/store/workdirs'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { storeToRefs } from 'pinia'
 import { useElementSize, useIntersectionObserver } from '@vueuse/core'
@@ -878,9 +899,13 @@ function pickWelcomeGreetingIndex() {
   return Math.floor(Math.random() * WELCOME_GREETING_KEYS.length)
 }
 const welcomeGreetingIndex = ref(pickWelcomeGreetingIndex())
-const welcomeGreeting = computed(() =>
-  t(WELCOME_GREETING_KEYS[welcomeGreetingIndex.value] ?? WELCOME_GREETING_KEYS[0]),
-)
+const welcomeGreeting = computed(() => {
+  // A draft under a working folder names its destination instead of the
+  // generic rotation — the greeting doubles as the binding's visibility.
+  const folderName = draftWorkingFolder.value?.name?.trim()
+  if (folderName) return t('chat.welcome.folder', { name: folderName })
+  return t(WELCOME_GREETING_KEYS[welcomeGreetingIndex.value] ?? WELCOME_GREETING_KEYS[0])
+})
 watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
   if (welcome) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
 })
@@ -1070,10 +1095,52 @@ const forkSourceDividerAfterIndex = computed<number | null>(() => {
 const activeIsPendingACP = computed(() => activeChatTarget.value.isPendingACP)
 const activeIsACP = computed(() => activeChatTarget.value.isACP)
 const activeUsesACPComposer = computed(() => activeIsPendingACP.value || activeIsACP.value)
+// ---- workdir binding ----
+// A session bound to a bot workdir (or a draft under the bot's working
+// folder) has its workspace target pinned by that binding: the computer
+// switcher is replaced by a read-only folder entry, and sends carry no
+// explicit workspace_target_id — the backend derives it from the binding.
+const workdirsStore = useWorkdirsStore()
+watch(() => currentBotId.value, (botId) => {
+  if (botId) void workdirsStore.ensureWorkdirs(botId)
+}, { immediate: true })
+const activeSessionWorkdirId = computed(() => (activeSession.value?.workdir_id ?? '').trim())
+const draftWorkingFolder = computed(() => {
+  if (activeSession.value || !currentBotId.value) return null
+  const workdir = workdirsStore.workingWorkdirFor(currentBotId.value)
+  if (!workdir) return null
+  // ACP sessions can only bind native-workspace workdirs; a remote working
+  // workdir is skipped at creation, so don't pretend it applies here.
+  if (activeUsesACPComposer.value && workdir.target_kind === 'remote') return null
+  return workdir
+})
+const composerFolderLocked = computed(() => (
+  !!activeSessionWorkdirId.value || !!draftWorkingFolder.value
+))
+const composerFolderName = computed(() => {
+  if (activeSessionWorkdirId.value) {
+    const workdir = workdirsStore.workdirById(currentBotId.value, activeSessionWorkdirId.value)
+    return workdir?.name?.trim() || t('chat.folderUnavailable')
+  }
+  return draftWorkingFolder.value?.name?.trim() || t('chat.folderUnavailable')
+})
+
+function clearWorkingFolder() {
+  workdirsStore.setWorkingWorkdir(currentBotId.value, null)
+}
+
+// Sends from a folder-bound chat carry no explicit workspace_target_id: the
+// binding decides the target, and a lingering earlier selection would be
+// rejected by the backend as a target conflict.
+const sendWorkspaceTargetId = computed(() => (
+  composerFolderLocked.value ? '' : selectedWorkspaceTargetId.value
+))
+
 const showComputersMenu = computed(() => (
   !activeIsACP.value
   && !activeIsPendingACP.value
   && canWorkspaceRead.value
+  && !composerFolderLocked.value
 ))
 const computerSwitchLocked = computed(() => (
   streaming.value
@@ -2372,7 +2439,7 @@ async function handleRetryMessage(messageId: string) {
     target: paneTarget.value,
     modelId: overrideModelId.value,
     reasoningEffort: overrideReasoningEffort.value,
-    workspaceTargetId: selectedWorkspaceTargetId.value,
+    workspaceTargetId: sendWorkspaceTargetId.value,
   })
   await refreshACPComposerConfigAfterSelectionError(result)
   if (!result.ok && result.error) {
@@ -2391,7 +2458,7 @@ async function handleEditMessage(messageId: string, text: string, done?: (starte
       target: paneTarget.value,
       modelId: overrideModelId.value,
       reasoningEffort: overrideReasoningEffort.value,
-      workspaceTargetId: selectedWorkspaceTargetId.value,
+      workspaceTargetId: sendWorkspaceTargetId.value,
     })
     await refreshACPComposerConfigAfterSelectionError(result)
     if (!result.ok && result.error) {
@@ -2448,7 +2515,7 @@ async function handleSend() {
   )
   const sentModelId = overrideModelId.value
   const sentReasoningEffort = overrideReasoningEffort.value
-  const sentWorkspaceTargetId = selectedWorkspaceTargetId.value
+  const sentWorkspaceTargetId = sendWorkspaceTargetId.value
   composerError.value = ''
   inputText.value = ''
   saveInputDraft(sentDraftKey, '')
