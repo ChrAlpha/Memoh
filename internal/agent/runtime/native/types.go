@@ -155,6 +155,7 @@ type RunConfig struct {
 	initialProviderMessageCount    int
 	initialProviderPrefixSet       bool
 	providerAttemptState           *providerAttemptState
+	preparedStepMessages           *stepMessageCapture
 	contextStepFailure             func(error)
 	SessionType                    string
 	LiveToolStream                 bool
@@ -187,10 +188,10 @@ type RunConfig struct {
 	// user messages to the conversation before the next LLM call.
 	InjectCh <-chan InjectMessage
 
-	// InjectedRecorder is called each time a message is injected via
-	// PrepareStep, recording the headerified text and the number of SDK
-	// output messages that preceded the injection. Used by the resolver
-	// to interleave injected messages at the correct position in storeRound.
+	// InjectedRecorder is called during terminal delivery for each injected
+	// message admitted by a provider attempt, recording the headerified text
+	// and the number of SDK output messages that preceded the injection. Used
+	// by the resolver to interleave injected messages in storeRound.
 	InjectedRecorder func(headerifiedText string, insertAfter int)
 
 	// OnStepCommitted is a synchronous durability barrier. The callback sees

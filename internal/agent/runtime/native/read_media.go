@@ -71,8 +71,10 @@ type readMediaDecorationState struct {
 }
 
 type readMediaInjection struct {
-	afterStep int
-	message   sdk.Message
+	afterStep    int
+	messageIndex int
+	message      sdk.Message
+	admitted     bool
 }
 
 func (s *readMediaDecorationState) prepareStep(params *sdk.GenerateParams) *sdk.GenerateParams {
@@ -109,8 +111,9 @@ func (s *readMediaDecorationState) prepareStep(params *sdk.GenerateParams) *sdk.
 		Content: parts,
 	}
 	s.injections = append(s.injections, readMediaInjection{
-		afterStep: afterStep,
-		message:   message,
+		afterStep:    afterStep,
+		messageIndex: len(params.Messages),
+		message:      message,
 	})
 
 	next := *params
@@ -118,32 +121,88 @@ func (s *readMediaDecorationState) prepareStep(params *sdk.GenerateParams) *sdk.
 	return &next
 }
 
-func (s *readMediaDecorationState) mergeMessages(steps []sdk.StepResult, fallback []sdk.Message) []sdk.Message {
-	if s == nil || len(s.injections) == 0 {
+func (s *readMediaDecorationState) mergeMessages(steps []sdk.StepResult, fallback []sdk.Message, interruptedDurableStep int) []sdk.Message {
+	if s == nil {
+		return fallback
+	}
+	s.mu.Lock()
+	injections := append([]readMediaInjection(nil), s.injections...)
+	s.mu.Unlock()
+	if len(injections) == 0 {
 		return fallback
 	}
 	if len(steps) == 0 {
 		merged := append([]sdk.Message(nil), fallback...)
-		for _, injection := range s.injections {
-			merged = append(merged, injection.message)
+		for _, injection := range injections {
+			if shouldMergeReadMediaInjection(injection, interruptedDurableStep) {
+				merged = append(merged, injection.message)
+			}
 		}
 		return merged
 	}
 
-	merged := make([]sdk.Message, 0, len(fallback)+len(s.injections))
+	merged := make([]sdk.Message, 0, len(fallback)+len(injections))
 	injectionIndex := 0
 	for stepIndex, step := range steps {
 		merged = append(merged, step.Messages...)
-		for injectionIndex < len(s.injections) && s.injections[injectionIndex].afterStep == stepIndex {
-			merged = append(merged, s.injections[injectionIndex].message)
+		for injectionIndex < len(injections) && injections[injectionIndex].afterStep == stepIndex {
+			if shouldMergeReadMediaInjection(injections[injectionIndex], interruptedDurableStep) {
+				merged = append(merged, injections[injectionIndex].message)
+			}
 			injectionIndex++
 		}
 	}
-	for injectionIndex < len(s.injections) {
-		merged = append(merged, s.injections[injectionIndex].message)
+	for injectionIndex < len(injections) {
+		if shouldMergeReadMediaInjection(injections[injectionIndex], interruptedDurableStep) {
+			merged = append(merged, injections[injectionIndex].message)
+		}
 		injectionIndex++
 	}
 	return merged
+}
+
+func shouldMergeReadMediaInjection(injection readMediaInjection, interruptedDurableStep int) bool {
+	// A persisted interrupted checkpoint is decorated with the same admitted
+	// input, so terminal fallback must not add that carrier a second time.
+	return injection.admitted && injection.afterStep+1 != interruptedDurableStep
+}
+
+func (s *readMediaDecorationState) reconcilePreparedMessages(step int, admissions []admittedPreparedMessage) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.injections {
+		if s.injections[i].afterStep+1 != step {
+			continue
+		}
+		s.injections[i].admitted = preparedAdmissionsContainIndex(admissions, s.injections[i].messageIndex)
+	}
+}
+
+func (s *readMediaDecorationState) admittedInjections() []readMediaInjection {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]readMediaInjection, 0, len(s.injections))
+	for _, injection := range s.injections {
+		if injection.admitted {
+			out = append(out, injection)
+		}
+	}
+	return out
+}
+
+func preparedAdmissionsContainIndex(admissions []admittedPreparedMessage, index int) bool {
+	for _, admission := range admissions {
+		if admission.index == index {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeReadMediaOutput(output any, clientType string) (any, sdk.MessagePart, bool) {
