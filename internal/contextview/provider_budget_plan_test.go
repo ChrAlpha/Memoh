@@ -336,3 +336,170 @@ func TestMissingContextWindowIsAuditedWithoutChangingProviderBytes(t *testing.T)
 		t.Fatalf("disabled snapshot = %#v, %v", snapshot, ok)
 	}
 }
+
+func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *testing.T) {
+	t.Parallel()
+
+	history := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            "history",
+		Message:       sdk.UserMessage("old context"),
+		Kind:          contextfrag.KindConversationEvent,
+		Slot:          contextfrag.SlotHistory,
+		TokenEstimate: 100,
+	})
+	current := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:    "current",
+		Kind:  contextfrag.KindCurrentUserMessage,
+		Role:  sdk.MessageRoleUser,
+		Slot:  contextfrag.SlotCurrentUser,
+		Text:  "current request",
+		Trust: contextfrag.TrustUser,
+	})
+	current.TokenEstimate = 120
+	cfg := agentpkg.RunConfig{
+		ContextSourceFrags: []contextfrag.ContextFrag{history, current},
+		ContextToolDefs: []contextfrag.ToolDefAccounting{
+			{Name: "tool", TokenEstimate: 80},
+		},
+		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(80 + 120 + 500),
+	}
+
+	disabled := cfg
+	disabled.ContextBudgetMaxTokens = 0
+	legacyOut, err := ProviderRunConfigApplier(nil)(context.Background(), disabled)
+	if err != nil {
+		t.Fatalf("plan-disabled ApplyProviderRunConfig() error = %v", err)
+	}
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil {
+		t.Fatal("successful active run lost its budget plan")
+	}
+	if plan.SystemBudget != 500 || plan.ActualSystemCost != 0 || plan.HistoryBudget != 500 {
+		t.Fatalf("budget plan = %#v, want system/actual/history = 500/0/500", plan)
+	}
+	if out.ContextMutations == nil || len(out.ContextMutations.Records()) != 0 {
+		t.Fatalf("no-pressure mutations = %#v, want zero", out.ContextMutations)
+	}
+	if len(out.Messages) != 2 {
+		t.Fatalf("messages = %#v, want history and current request", out.Messages)
+	}
+	if out.System != legacyOut.System ||
+		out.Query != legacyOut.Query ||
+		!reflect.DeepEqual(out.Messages, legacyOut.Messages) ||
+		!reflect.DeepEqual(out.InlineImages, legacyOut.InlineImages) {
+		t.Fatalf("active no-pressure payload diverged:\nactive=%#v\nlegacy=%#v", out, legacyOut)
+	}
+}
+
+func TestApplyProviderRunConfigBudgetErrorKeepsAuditWhenRenderFails(t *testing.T) {
+	t.Parallel()
+
+	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
+	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
+	holder := contextfrag.NewLifecycleHolder()
+	cfg := agentpkg.RunConfig{
+		System:                 "legacy system",
+		Messages:               []sdk.Message{sdk.UserMessage("legacy message")},
+		ContextSourceFrags:     []contextfrag.ContextFrag{first, second},
+		ContextBudgetMaxTokens: 100,
+		ContextLifecycle:       holder,
+	}
+
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
+	}
+	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, cfg.Messages) {
+		t.Fatalf("budget failure changed provider payload: system=%q messages=%#v", out.System, out.Messages)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil || plan.Window != 100 {
+		t.Fatalf("budget plan = %#v, want retained 100-token window", plan)
+	}
+	records := out.ContextManifest.Mutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
+		records[0].Detail != "budget_unsatisfied" {
+		t.Fatalf("budget failure mutations = %#v, want one stable failure record", records)
+	}
+	if out.ContextMutations == nil {
+		t.Fatal("budget failure lost the run-config mutation ledger")
+	}
+	snapshot, ok := holder.Snapshot()
+	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.Window != 100 {
+		t.Fatalf("lifecycle snapshot = %#v, %v; want retained plan", snapshot, ok)
+	}
+	if len(snapshot.Mutations) != 1 ||
+		snapshot.Mutations[0].Kind != contextfrag.MutationContextBudgetFailure {
+		t.Fatalf("lifecycle mutations = %#v, want budget failure", snapshot.Mutations)
+	}
+}
+
+func TestProviderSelectorReservesHistoryTrimNoticeWithinPlan(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		attentionMessageFrag("old-1", sdk.UserMessage("old one"), 100),
+		attentionMessageFrag("old-2", sdk.AssistantMessage("old two"), 100),
+		contextfrag.TextFrag(contextfrag.TextFragInput{
+			ID:    "current",
+			Kind:  contextfrag.KindCurrentUserMessage,
+			Role:  sdk.MessageRoleUser,
+			Slot:  contextfrag.SlotCurrentUser,
+			Text:  "current",
+			Trust: contextfrag.TrustUser,
+		}),
+	}
+	plan := &contextfrag.ContextBudgetPlan{SystemBudget: 120}
+
+	result := (&FragmentSelector{}).Select(
+		frags,
+		(&FragmentSelector{}).ProfileFor(contextfrag.IntentRunConfigPreProvider),
+		BudgetEnvelope{Plan: plan},
+	)
+
+	if result.FatalError != nil {
+		t.Fatalf("Select() error = %v", result.FatalError)
+	}
+	if !result.TrimNotice {
+		t.Fatal("history pressure must retain its notice")
+	}
+	if len(result.Dropped) != 2 {
+		t.Fatalf("dropped = %#v, want both 100-token history fragments so the notice fits", result.Dropped)
+	}
+	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
+	if noticeCost > plan.HistoryBudget {
+		t.Fatalf("notice cost %d exceeds history budget %d", noticeCost, plan.HistoryBudget)
+	}
+}
+
+func TestApplyProviderRunConfigInternalBuildErrorStillFallsBack(t *testing.T) {
+	t.Parallel()
+
+	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
+	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
+	cfg := agentpkg.RunConfig{
+		System:                 "legacy system",
+		Messages:               []sdk.Message{sdk.UserMessage("legacy message")},
+		ContextSourceFrags:     []contextfrag.ContextFrag{first, second},
+		ContextBudgetMaxTokens: 100000,
+	}
+
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want ordinary build fallback", err)
+	}
+	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, cfg.Messages) {
+		t.Fatalf("fallback payload = system %q messages %#v, want legacy payload", out.System, out.Messages)
+	}
+	records := out.ContextMutations.Records()
+	if len(records) != 1 ||
+		records[0].Kind != contextfrag.MutationContextViewFallback ||
+		records[0].Detail != "build_error" {
+		t.Fatalf("fallback records = %#v, want one build_error context fallback", records)
+	}
+}
