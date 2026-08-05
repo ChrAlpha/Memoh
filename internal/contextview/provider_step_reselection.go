@@ -78,7 +78,7 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 // base64 bodies can exceed the whole step budget on their own.
 func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	for i := range frags {
-		msg := discussFragMessage(frags[i])
+		msg := providerStepFragMessage(frags[i])
 		if msg == nil || !isRole(msg.Role, sdk.MessageRoleUser) {
 			continue
 		}
@@ -116,7 +116,7 @@ func truncateOldToolResultFrags(frags []contextfrag.ContextFrag, keepRecent int)
 	recentCycles := 0
 	cutoff := -1
 	for i := len(frags) - 1; i >= 0; i-- {
-		msg := discussFragMessage(frags[i])
+		msg := providerStepFragMessage(frags[i])
 		if msg == nil || msg.Role != sdk.MessageRoleTool {
 			continue
 		}
@@ -133,7 +133,7 @@ func truncateOldToolResultFrags(frags []contextfrag.ContextFrag, keepRecent int)
 	out := make([]contextfrag.ContextFrag, len(frags))
 	copy(out, frags)
 	for i := 0; i <= cutoff; i++ {
-		msg := discussFragMessage(out[i])
+		msg := providerStepFragMessage(out[i])
 		if msg == nil || msg.Role != sdk.MessageRoleTool {
 			continue
 		}
@@ -145,6 +145,15 @@ func truncateOldToolResultFrags(frags []contextfrag.ContextFrag, keepRecent int)
 		truncated++
 	}
 	return out, truncated
+}
+
+func providerStepFragMessage(frag contextfrag.ContextFrag) *sdk.Message {
+	for _, part := range frag.Parts {
+		if part.Type == contextfrag.PartSDKMessage {
+			return sdkMessagePart(part)
+		}
+	}
+	return nil
 }
 
 func selectedProviderStepFrags(selection SelectionResult, scope contextfrag.Scope) []contextfrag.ContextFrag {
