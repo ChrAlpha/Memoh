@@ -652,6 +652,9 @@ func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 		optionalIndex(memoryIndex, hasMemory)...,
 	)
 	if !hasCurrent {
+		currentIndex, hasCurrent = sourceCurrentUserMessageIndex(cfg, memoryIndex, hasMemory)
+	}
+	if !hasCurrent {
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
 		if len(cfg.ForkContextSourceMessageIDs) == len(cfg.Messages)-1 {
 			cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
@@ -660,23 +663,55 @@ func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	}
 
 	messageCount := len(cfg.Messages)
-	cfg.Messages = append(cfg.Messages, sdk.Message{})
-	copy(cfg.Messages[currentIndex+1:], cfg.Messages[currentIndex:messageCount])
-	cfg.Messages[currentIndex] = sdk.UserMessage(text)
+	currentMessage := cfg.Messages[currentIndex]
+	messages := make([]sdk.Message, 0, messageCount+1)
+	messages = append(messages, cfg.Messages[:currentIndex]...)
+	messages = append(messages, cfg.Messages[currentIndex+1:]...)
+	messages = append(messages, sdk.UserMessage(text), currentMessage)
+	cfg.Messages = messages
 	if len(cfg.ForkContextSourceMessageIDs) == messageCount {
-		cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
-		copy(cfg.ForkContextSourceMessageIDs[currentIndex+1:], cfg.ForkContextSourceMessageIDs[currentIndex:messageCount])
-		cfg.ForkContextSourceMessageIDs[currentIndex] = ""
+		currentSourceID := cfg.ForkContextSourceMessageIDs[currentIndex]
+		sourceIDs := make([]string, 0, messageCount+1)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[:currentIndex]...)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[currentIndex+1:]...)
+		sourceIDs = append(sourceIDs, "", currentSourceID)
+		cfg.ForkContextSourceMessageIDs = sourceIDs
 	}
-	if cfg.ContextCurrentUserMessageIndex != nil {
-		shifted := currentIndex + 1
-		cfg.ContextCurrentUserMessageIndex = &shifted
+	if len(cfg.ContextHistoryTokenEstimates) == messageCount {
+		currentEstimate := cfg.ContextHistoryTokenEstimates[currentIndex]
+		estimates := make([]int, 0, messageCount+1)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[:currentIndex]...)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[currentIndex+1:]...)
+		estimates = append(estimates, 0, currentEstimate)
+		cfg.ContextHistoryTokenEstimates = estimates
 	}
-	if cfg.ContextMemoryMessageIndex != nil && *cfg.ContextMemoryMessageIndex >= currentIndex {
-		shifted := *cfg.ContextMemoryMessageIndex + 1
-		cfg.ContextMemoryMessageIndex = &shifted
+	cfg.ContextCurrentUserMessageIndex = intPointer(messageCount)
+	if hasMemory {
+		if memoryIndex > currentIndex {
+			memoryIndex--
+		}
+		cfg.ContextMemoryMessageIndex = intPointer(memoryIndex)
 	}
 	return cfg
+}
+
+func sourceCurrentUserMessageIndex(cfg agentpkg.RunConfig, memoryIndex int, hasMemory bool) (int, bool) {
+	for i := len(cfg.ContextSourceFrags) - 1; i >= 0; i-- {
+		frag := cfg.ContextSourceFrags[i]
+		if frag.Kind != contextfrag.KindCurrentUserMessage && frag.Slot != contextfrag.SlotCurrentUser {
+			continue
+		}
+		index := frag.Provenance.Index
+		if index < 0 || index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser ||
+			hasMemory && index == memoryIndex {
+			continue
+		}
+		message, ok := singleSDKMessage(frag)
+		if ok && reflect.DeepEqual(message, cfg.Messages[index]) {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func appendToolUsageLegacy(system, usage string) string {
