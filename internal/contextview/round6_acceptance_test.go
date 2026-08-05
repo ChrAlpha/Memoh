@@ -250,7 +250,7 @@ func TestOversizedDynamicSystemSourcesPruneWithExplicitMarker(t *testing.T) {
 					contextfrag.Scope{},
 				)
 				id := "system.workspace_file.AGENTS.md"
-				workspace := round6FragByID(frags, id)
+				workspace := round6PR7FragByID(frags, id)
 				if workspace == nil ||
 					!utf8.ValidString(workspace.Parts[0].Text) ||
 					!strings.Contains(workspace.Parts[0].Text, "[memoh pruned]") {
@@ -296,7 +296,7 @@ func TestOversizedDynamicSystemSourcesPruneWithExplicitMarker(t *testing.T) {
 					t.Fatalf("decision for %s = %#v, %v; want dropped/system_budget", id, decision, ok)
 				}
 			}
-			markerFrag := round6FragByID(out.ContextFrags, systemBudgetMarkerID)
+			markerFrag := round6PR7FragByID(out.ContextFrags, systemBudgetMarkerID)
 			markerItem := manifestItemByID(out.ContextManifest.Items, systemBudgetMarkerID)
 			if markerFrag == nil || markerItem == nil ||
 				!utf8.ValidString(markerFrag.Parts[0].Text) ||
@@ -386,7 +386,7 @@ func round6WithoutFragIDs(frags []contextfrag.ContextFrag, ids []string) []conte
 	return out
 }
 
-func round6FragByID(frags []contextfrag.ContextFrag, id string) *contextfrag.ContextFrag {
+func round6PR7FragByID(frags []contextfrag.ContextFrag, id string) *contextfrag.ContextFrag {
 	for i := range frags {
 		if frags[i].ID == id {
 			return &frags[i]
