@@ -208,7 +208,7 @@ func TestBuildProviderSourceFragsPreservesLegacyPromptHookAndMemoryBytes(t *test
 		System: system, Messages: messages, ContextCurrentUserMessageIndex: &index,
 		ContextQueryMaterialized: true, ContextScope: contextfrag.Scope{BotID: "bot-1"},
 	}
-	cfg.ContextSourceFrags = buildProviderSourceFrags(context.Background(), cfg, native.GenerateSystemSections(params), hookTexts)
+	cfg.ContextSourceFrags = buildProviderSourceFrags(context.Background(), cfg, native.GenerateSystemSections(params), nil, hookTexts)
 
 	hookCount := 0
 	for _, frag := range cfg.ContextSourceFrags {

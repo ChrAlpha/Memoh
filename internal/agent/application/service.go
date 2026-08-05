@@ -1259,13 +1259,14 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
-	beforePromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
 	}, hooks.EventBeforePromptBuild)
+	beforePromptContext := beforePromptResult.AppendContext
 	var files []native.SystemFile
 	limits := native.DefaultLimits()
 	if s.agent != nil {
@@ -1309,14 +1310,15 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		cfg.System += "\n\n" + text
 		promptHookTexts = append(promptHookTexts, text)
 	}
-	afterPromptContext := s.runPromptHook(ctx, agentRunConfigView{
+	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  len(cfg.System),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, hookSystemSectionTexts(beforePromptResult)),
 	}, hooks.EventAfterPromptBuild)
+	afterPromptContext := afterPromptResult.AppendContext
 	if afterPromptContext != "" {
 		text := formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
 		cfg.System += "\n\n" + text
@@ -1373,7 +1375,18 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		}
 	}
 
-	cfg.ContextSourceFrags = buildProviderSourceFrags(ctx, cfg, native.GenerateSystemSections(systemParams), promptHookTexts)
+	hookBuild := buildHookSystemSections([]promptHookOutput{
+		{Event: hooks.EventBeforePromptBuild, Result: beforePromptResult},
+		{Event: hooks.EventAfterPromptBuild, Result: afterPromptResult},
+	}, cfg.ContextScope)
+	cfg.ContextSourceFrags = buildProviderSourceFrags(
+		ctx,
+		cfg,
+		native.GenerateSystemSections(systemParams),
+		hookBuild.Frags,
+		promptHookTexts,
+	)
+	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg.RefreshContextFrag()
 }
 

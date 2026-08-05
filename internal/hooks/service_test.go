@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -214,6 +215,391 @@ func TestRunConfigLimitsToolAppendContext(t *testing.T) {
 		t.Fatalf("append_context was not limited")
 	}
 	assertHookTextPreservesHeadTail(t, result.AppendContext)
+}
+
+func TestApplyActionOutputParsesAppendSystemSectionObject(t *testing.T) {
+	t.Parallel()
+
+	var result ActionResult
+	applyActionOutput(&result, `{
+		"append_system_section": {
+			"id": "guardrail",
+			"text": "system-only guidance"
+		}
+	}`, 4096)
+
+	if len(result.AppendSystemSections) != 1 {
+		t.Fatalf("append_system_sections = %#v, want one section", result.AppendSystemSections)
+	}
+	section := result.AppendSystemSections[0]
+	if section.ID != "guardrail" || section.Text != "system-only guidance" {
+		t.Fatalf("section = %#v, want parsed object", section)
+	}
+	if section.Retention != SystemSectionRetentionOptional || section.Cache != SystemSectionCacheDynamic {
+		t.Fatalf("section defaults = retention %q cache %q, want optional/dynamic", section.Retention, section.Cache)
+	}
+}
+
+func TestRunConfigAggregatesAppendSystemSectionsWithAppendContext(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:  "policy-hook",
+			Event: EventBeforePromptBuild,
+			Actions: []HookAction{
+				{Type: ActionTool, Tool: "mixed"},
+				{Type: ActionTool, Tool: "sections"},
+			},
+		}},
+	}
+	runner := &fakeToolRunner{
+		fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+			switch name {
+			case "mixed":
+				return map[string]any{
+					"decision":       DecisionAppendContext,
+					"append_context": "turn-only note",
+					"append_system_section": map[string]any{
+						"id":        "stable",
+						"text":      "stable system guidance",
+						"retention": "preferred",
+						"cache":     "stable",
+					},
+				}, nil
+			case "sections":
+				return map[string]any{
+					"append_system_section": []any{
+						map[string]any{"id": "defaulted", "text": "default system guidance"},
+						map[string]any{"id": "clamped", "text": "cannot be required", "retention": "required"},
+					},
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	if result.AppendContext != "turn-only note" {
+		t.Fatalf("append_context = %q, want byte-identical turn channel", result.AppendContext)
+	}
+	if len(result.AppendSystemSections) != 3 {
+		t.Fatalf("append_system_sections = %#v, want three sections", result.AppendSystemSections)
+	}
+	sectionsByID := make(map[string]SystemSectionOutput, len(result.AppendSystemSections))
+	for _, section := range result.AppendSystemSections {
+		sectionsByID[section.ID] = section
+	}
+	stable, defaulted, clamped := sectionsByID["stable"], sectionsByID["defaulted"], sectionsByID["clamped"]
+	if stable.HookName != "policy-hook" || defaulted.HookName != "policy-hook" || clamped.HookName != "policy-hook" {
+		t.Fatalf("hook provenance missing: %#v", result.AppendSystemSections)
+	}
+	if stable.Retention != SystemSectionRetentionPreferred || stable.Cache != SystemSectionCacheStable {
+		t.Fatalf("explicit section policy = %#v, want preferred/stable", stable)
+	}
+	if defaulted.Retention != SystemSectionRetentionOptional || defaulted.Cache != SystemSectionCacheDynamic {
+		t.Fatalf("default section policy = %#v, want optional/dynamic", defaulted)
+	}
+	if clamped.Retention != SystemSectionRetentionPreferred {
+		t.Fatalf("required retention = %q, want clamped preferred", clamped.Retention)
+	}
+	if !slices.Equal(clamped.WarningCodes, []string{WarningSystemSectionRequiredClamped}) {
+		t.Fatalf("clamped section warning codes = %#v, want required-retention warning", clamped.WarningCodes)
+	}
+	if len(result.Warnings) != 1 ||
+		result.Warnings[0].Code != WarningSystemSectionRequiredClamped ||
+		result.Warnings[0].HookName != "policy-hook" ||
+		result.Warnings[0].SectionID != "clamped" {
+		t.Fatalf("warnings = %#v, want required-retention clamp warning", result.Warnings)
+	}
+}
+
+func TestRunConfigOrdersAppendSystemSectionsByHookThenDeclaredID(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Version: 1,
+		Hooks: []Hook{
+			{
+				Name:     "low",
+				Event:    EventBeforePromptBuild,
+				Priority: 10,
+				Actions:  []HookAction{{Type: ActionTool, Tool: "low"}},
+			},
+			{
+				Name:     "high",
+				Event:    EventBeforePromptBuild,
+				Priority: 20,
+				Actions:  []HookAction{{Type: ActionTool, Tool: "high"}},
+			},
+		},
+	}
+	runner := &fakeToolRunner{
+		fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+			if name == "high" {
+				return map[string]any{"append_system_section": []any{
+					map[string]any{"id": "b", "text": "high b"},
+					map[string]any{"id": "a", "text": "high a"},
+				}}, nil
+			}
+			return map[string]any{"append_system_section": []any{
+				map[string]any{"id": "z", "text": "low z"},
+				map[string]any{"id": "a", "text": "low a"},
+			}}, nil
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	got := make([]string, 0, len(result.AppendSystemSections))
+	for _, section := range result.AppendSystemSections {
+		got = append(got, section.HookName+"."+section.ID)
+	}
+	want := []string{"high.a", "high.b", "low.a", "low.z"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("section order = %v, want hook execution then declared ID %v", got, want)
+	}
+}
+
+func TestRunConfigIgnoresInvalidAppendSystemSectionsWithWarnings(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:  "invalid-sections",
+			Event: EventAfterPromptBuild,
+			Actions: []HookAction{
+				{Type: ActionTool, Tool: "mixed-array"},
+				{Type: ActionTool, Tool: "invalid-root"},
+			},
+		}},
+	}
+	runner := &fakeToolRunner{
+		fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+			switch name {
+			case "mixed-array":
+				return map[string]any{
+					"append_system_section": []any{
+						map[string]any{"id": "valid", "text": "keep me"},
+						"not an object",
+						map[string]any{"id": "missing-text"},
+						map[string]any{"text": "bad retention", "retention": "forever"},
+						map[string]any{"text": "bad cache", "cache": "immutable"},
+					},
+				}, nil
+			case "invalid-root":
+				return map[string]any{"append_system_section": "not an object or array"}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventAfterPromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	if len(result.AppendSystemSections) != 1 || result.AppendSystemSections[0].ID != "valid" {
+		t.Fatalf("append_system_sections = %#v, want only valid sibling", result.AppendSystemSections)
+	}
+	if len(result.Warnings) != 5 {
+		t.Fatalf("warnings = %#v, want five invalid-shape warnings", result.Warnings)
+	}
+	for _, warning := range result.Warnings {
+		if warning.Code != WarningInvalidAppendSystemSection || warning.HookName != "invalid-sections" {
+			t.Fatalf("warning = %#v, want content-light invalid-section warning", warning)
+		}
+	}
+}
+
+func TestRunConfigLimitsAppendSystemSectionText(t *testing.T) {
+	t.Parallel()
+
+	large := "HEAD\n" + strings.Repeat("system detail ", 300) + "\nTAIL"
+	cfg := Config{
+		Version:  1,
+		Defaults: Defaults{MaxOutputBytes: 192},
+		Hooks: []Hook{{
+			Name:    "limited-system-section",
+			Event:   EventBeforePromptBuild,
+			Actions: []HookAction{{Type: ActionTool, Tool: "section"}},
+		}},
+	}
+	runner := &fakeToolRunner{
+		fn: func(context.Context, string, map[string]any) (any, error) {
+			return map[string]any{
+				"append_system_section": []any{
+					map[string]any{"id": "first", "text": large},
+					map[string]any{"id": "second", "text": large},
+				},
+			}, nil
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	if len(result.AppendSystemSections) == 0 {
+		t.Fatal("append_system_sections is empty, want capped section output")
+	}
+	total := 0
+	for _, section := range result.AppendSystemSections {
+		total += len(section.Text)
+	}
+	if total > 192 {
+		t.Fatalf("aggregate section text bytes = %d, want hook output cap <= 192", total)
+	}
+	text := result.AppendSystemSections[0].Text
+	if len(text) >= len(large) {
+		t.Fatalf("first section text bytes = %d, want limited output", len(text))
+	}
+	assertHookTextPreservesHeadTail(t, text)
+	if !slices.Contains(result.AppendSystemSections[0].WarningCodes, WarningAppendSystemSectionOutputLimited) {
+		t.Fatalf("section warning codes = %#v, want output-limit audit", result.AppendSystemSections[0].WarningCodes)
+	}
+	var limitedWarning bool
+	for _, warning := range result.Warnings {
+		if warning.Code == WarningAppendSystemSectionOutputLimited && warning.SectionID == "first" {
+			limitedWarning = true
+		}
+	}
+	if !limitedWarning {
+		t.Fatalf("warnings = %#v, want output-limit warning for truncated section", result.Warnings)
+	}
+}
+
+func TestRunConfigLimitsPluginAppendSystemSectionToNarrowestCap(t *testing.T) {
+	t.Parallel()
+
+	large := "HEAD\n" + strings.Repeat("plugin system detail ", 300) + "\nTAIL"
+	tests := []struct {
+		name      string
+		globalCap int
+		pluginCap int
+	}{
+		{name: "plugin cap", globalCap: 4096, pluginCap: 192},
+		{name: "global cap", globalCap: 192, pluginCap: 4096},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Version:  1,
+				Defaults: Defaults{MaxOutputBytes: tt.globalCap},
+				Hooks: []Hook{{
+					Name:  "plugin system section",
+					Event: EventBeforePromptBuild,
+					source: hookSource{
+						Kind:           sourceKindPlugin,
+						PluginID:       "github",
+						MaxOutputBytes: tt.pluginCap,
+					},
+					Actions: []HookAction{
+						{Type: ActionTool, Tool: "section-one"},
+						{Type: ActionTool, Tool: "section-two"},
+					},
+				}},
+			}
+			runner := &fakeToolRunner{
+				fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+					return map[string]any{
+						"append_system_section": map[string]any{"id": name, "text": large},
+					}, nil
+				},
+			}
+
+			result, err := NewService(nil, nil).RunConfig(
+				context.Background(),
+				cfg,
+				Request{Event: EventBeforePromptBuild},
+				runner,
+			)
+			if err != nil {
+				t.Fatalf("RunConfig returned error: %v", err)
+			}
+			total := 0
+			for _, section := range result.AppendSystemSections {
+				total += len(section.Text)
+			}
+			if total > 192 {
+				t.Fatalf("aggregate section text bytes = %d, want narrower cap <= 192", total)
+			}
+		})
+	}
+}
+
+func TestRunConfigLimitsAppendSystemSectionCount(t *testing.T) {
+	t.Parallel()
+
+	sections := make([]any, 0, maxAppendSystemSections+2)
+	for i := range maxAppendSystemSections + 2 {
+		sections = append(sections, map[string]any{
+			"id":   fmt.Sprintf("section-%d", i),
+			"text": "x",
+		})
+	}
+	cfg := Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:    "many sections",
+			Event:   EventBeforePromptBuild,
+			Actions: []HookAction{{Type: ActionTool, Tool: "sections"}},
+		}},
+	}
+	runner := &fakeToolRunner{
+		fn: func(context.Context, string, map[string]any) (any, error) {
+			return map[string]any{"append_system_section": sections}, nil
+		},
+	}
+
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	if len(result.AppendSystemSections) != maxAppendSystemSections {
+		t.Fatalf("append_system_sections = %d, want cap %d", len(result.AppendSystemSections), maxAppendSystemSections)
+	}
+	if len(result.ActionResults) != 1 ||
+		len(result.ActionResults[0].AppendSystemSections) != maxAppendSystemSections {
+		t.Fatalf("action results retain unbounded sections: %#v", result.ActionResults)
+	}
+	if len(result.Warnings) != 1 ||
+		result.Warnings[0].Code != WarningAppendSystemSectionOutputLimited {
+		t.Fatalf("warnings = %#v, want one bounded output-limit warning", result.Warnings)
+	}
 }
 
 func TestRunConfigLimitsAggregatedAppendContext(t *testing.T) {
