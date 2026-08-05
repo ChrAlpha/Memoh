@@ -62,7 +62,8 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	tagged := tagFragments(frags, profile)
 	historyBudget := budget.MaxTokens
 	trimDrops := budgetTrimDrops
-	if budget.Plan != nil {
+	hardBudget := budget.Plan != nil || budget.EnforceProtectedBudget
+	if hardBudget {
 		protectedCost := protectedHistoryTokenCost(tagged)
 		if protectedCost > historyBudget {
 			result := selectionResultFromTaggedReasons(tagged, allSelectedIndexes(tagged), nil)
@@ -85,7 +86,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	}
 
 	if drops, dropReasons := trimDrops(tagged, historyBudget, budget.RecentProtectTokens); len(drops) > 0 {
-		if budget.Plan != nil && hasSpatialBudgetDrop(dropReasons) {
+		if hardBudget && hasSpatialBudgetDrop(dropReasons) {
 			noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 			if noticeCost > historyBudget {
 				result := selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
