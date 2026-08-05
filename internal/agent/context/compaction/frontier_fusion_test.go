@@ -9,7 +9,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
-func TestShouldFuseFrontierUsesPriorReferenceAndChatShareCaps(t *testing.T) {
+func TestShouldFuseFrontierUsesEvictionAlignedRetainBudget(t *testing.T) {
 	t.Parallel()
 
 	artifactWithTokens := func(id string, tokens int) Artifact {
@@ -17,9 +17,10 @@ func TestShouldFuseFrontierUsesPriorReferenceAndChatShareCaps(t *testing.T) {
 		artifact.Summary = strings.Repeat(id[:1], tokens*4)
 		return artifact
 	}
-	equalDefaultCap := []Artifact{artifactWithTokens("a", 48), artifactWithTokens("b", 48)}
-	overDefaultCap := []Artifact{artifactWithTokens("a", 49), artifactWithTokens("b", 48)}
-	overChatCapOnly := []Artifact{artifactWithTokens("a", 23), artifactWithTokens("b", 24)}
+	equalFallbackBudget := []Artifact{artifactWithTokens("a", 48), artifactWithTokens("b", 48)}
+	overFallbackBudget := []Artifact{artifactWithTokens("a", 49), artifactWithTokens("b", 48)}
+	belowKnownBudget := []Artifact{artifactWithTokens("a", 296), artifactWithTokens("b", 297)}
+	overKnownBudget := []Artifact{artifactWithTokens("a", 299), artifactWithTokens("b", 298)}
 
 	tests := []struct {
 		name      string
@@ -28,39 +29,36 @@ func TestShouldFuseFrontierUsesPriorReferenceAndChatShareCaps(t *testing.T) {
 		want      bool
 	}{
 		{
-			name:      "disabled above cap",
-			cfg:       TriggerConfig{},
-			artifacts: overDefaultCap,
+			name:      "flag off",
+			cfg:       TriggerConfig{ContextWindowTokens: 1000},
+			artifacts: overKnownBudget,
 		},
 		{
-			name:      "one artifact above cap",
-			cfg:       TriggerConfig{AllowFrontierFusion: true},
-			artifacts: []Artifact{artifactWithTokens("a", 120)},
+			name:      "single artifact",
+			cfg:       TriggerConfig{AllowFrontierFusion: true, ContextWindowTokens: 1000},
+			artifacts: []Artifact{artifactWithTokens("a", 700)},
 		},
 		{
-			name:      "equal to prior reference cap",
-			cfg:       TriggerConfig{AllowFrontierFusion: true},
-			artifacts: equalDefaultCap,
+			name:      "known window below sixty percent",
+			cfg:       TriggerConfig{AllowFrontierFusion: true, ContextWindowTokens: 1000},
+			artifacts: belowKnownBudget,
 		},
 		{
-			name:      "above prior reference cap",
-			cfg:       TriggerConfig{AllowFrontierFusion: true},
-			artifacts: overDefaultCap,
+			name:      "known window above sixty percent",
+			cfg:       TriggerConfig{AllowFrontierFusion: true, ContextWindowTokens: 1000},
+			artifacts: overKnownBudget,
 			want:      true,
 		},
 		{
-			name: "chat share cap is tighter",
-			cfg: TriggerConfig{
-				AllowFrontierFusion: true,
-				ContextWindowTokens: 500,
-			},
-			artifacts: overChatCapOnly,
-			want:      true,
+			name:      "unknown window equal to fallback budget",
+			cfg:       TriggerConfig{AllowFrontierFusion: true},
+			artifacts: equalFallbackBudget,
 		},
 		{
-			name:      "unknown chat window keeps prior reference cap",
+			name:      "unknown window above fallback budget",
 			cfg:       TriggerConfig{AllowFrontierFusion: true},
-			artifacts: overChatCapOnly,
+			artifacts: overFallbackBudget,
+			want:      true,
 		},
 	}
 
@@ -69,6 +67,86 @@ func TestShouldFuseFrontierUsesPriorReferenceAndChatShareCaps(t *testing.T) {
 			t.Parallel()
 			if got := shouldFuseFrontier(tt.cfg, tt.artifacts, 400); got != tt.want {
 				t.Fatalf("shouldFuseFrontier() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectFusionPrefixAbsorbsOnlyOverflow(t *testing.T) {
+	t.Parallel()
+
+	artifactWithTokens := func(id string, tokens int) Artifact {
+		artifact := testArtifact(id)
+		artifact.Summary = strings.Repeat(id[:1], tokens*4)
+		return artifact
+	}
+	artifacts := []Artifact{
+		artifactWithTokens("a", 40),
+		artifactWithTokens("b", 30),
+		artifactWithTokens("c", 20),
+	}
+
+	tests := []struct {
+		name         string
+		artifacts    []Artifact
+		retainBudget int
+		fusedReserve int
+		wantAbsorbed []string
+	}{
+		{
+			name:         "whole frontier and reserve fit",
+			artifacts:    artifacts,
+			retainBudget: 120,
+			fusedReserve: 20,
+		},
+		{
+			name:         "minimal oldest prefix keeps newest",
+			artifacts:    artifacts,
+			retainBudget: 100,
+			fusedReserve: 20,
+			wantAbsorbed: []string{"a"},
+		},
+		{
+			name:         "tiny retain budget absorbs all but newest",
+			artifacts:    artifacts,
+			retainBudget: 10,
+			fusedReserve: 5,
+			wantAbsorbed: []string{"a", "b"},
+		},
+		{
+			name: "exactly fitting suffix absorbs nothing extra",
+			artifacts: append(append([]Artifact(nil), artifacts...),
+				artifactWithTokens("d", 10)),
+			retainBudget: 54,
+			fusedReserve: 20,
+			wantAbsorbed: []string{"a", "b"},
+		},
+		{
+			name: "single artifact prefix is valid",
+			artifacts: []Artifact{
+				artifactWithTokens("a", 40),
+				artifactWithTokens("b", 20),
+			},
+			retainBudget: 42,
+			fusedReserve: 20,
+			wantAbsorbed: []string{"a"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			absorbed := selectFusionPrefix(tt.artifacts, tt.retainBudget, tt.fusedReserve)
+			if len(absorbed) != len(tt.wantAbsorbed) {
+				t.Fatalf("selectFusionPrefix() = %#v, want ids %v", absorbed, tt.wantAbsorbed)
+			}
+			for i, wantID := range tt.wantAbsorbed {
+				if absorbed[i].ID != wantID {
+					t.Fatalf("selectFusionPrefix()[%d].ID = %q, want %q", i, absorbed[i].ID, wantID)
+				}
+			}
+			if len(absorbed) >= len(tt.artifacts) {
+				t.Fatal("selectFusionPrefix absorbed the newest artifact")
 			}
 		})
 	}
@@ -249,17 +327,28 @@ func TestBuildAbsorbedContextFallsBackWhenRawRowsDoNotCoverRollup(t *testing.T) 
 	}
 }
 
-func TestShouldFuseFrontierManualCollapsesAnyFrontier(t *testing.T) {
-	small := []Artifact{{Summary: "one"}, {Summary: "two"}}
-	cfg := TriggerConfig{AllowFrontierFusion: true, Manual: true, ContextWindowTokens: 1_000_000}
-	if !shouldFuseFrontier(cfg, small, 100_000) {
-		t.Fatal("manual pass with a multi-artifact frontier must fuse regardless of the share cap")
+func TestShouldFuseFrontierManualFollowsRetainBudget(t *testing.T) {
+	artifactWithTokens := func(tokens int) Artifact {
+		return Artifact{Summary: strings.Repeat("x", tokens*4)}
 	}
-	if shouldFuseFrontier(cfg, small[:1], 100_000) {
-		t.Fatal("manual pass with a single artifact has nothing to fuse")
+	belowKnownBudget := []Artifact{artifactWithTokens(296), artifactWithTokens(297)}
+	overKnownBudget := []Artifact{artifactWithTokens(299), artifactWithTokens(298)}
+	equalFallbackBudget := []Artifact{artifactWithTokens(48), artifactWithTokens(48)}
+	overFallbackBudget := []Artifact{artifactWithTokens(49), artifactWithTokens(48)}
+
+	known := TriggerConfig{AllowFrontierFusion: true, Manual: true, ContextWindowTokens: 1000}
+	if shouldFuseFrontier(known, belowKnownBudget, 400) {
+		t.Fatal("manual pass fused below the chat-window retain budget")
 	}
-	cfg.AllowFrontierFusion = false
-	if shouldFuseFrontier(cfg, small, 100_000) {
-		t.Fatal("manual fusion still requires AllowFrontierFusion")
+	if !shouldFuseFrontier(known, overKnownBudget, 400) {
+		t.Fatal("manual pass did not fuse above the chat-window retain budget")
+	}
+
+	unknown := TriggerConfig{AllowFrontierFusion: true, Manual: true}
+	if shouldFuseFrontier(unknown, equalFallbackBudget, 400) {
+		t.Fatal("manual pass fused at the unknown-window fallback boundary")
+	}
+	if !shouldFuseFrontier(unknown, overFallbackBudget, 400) {
+		t.Fatal("manual pass did not fuse above the unknown-window fallback budget")
 	}
 }

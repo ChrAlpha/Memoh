@@ -28,21 +28,27 @@ func shouldFuseFrontier(cfg TriggerConfig, artifacts []Artifact, maxCompactToken
 	if !cfg.AllowFrontierFusion || len(artifacts) < 2 {
 		return false
 	}
-	// A manual request is an explicit consolidation: collapse any existing
-	// frontier instead of waiting for the share cap that paces automatic
-	// passes. Manual paths also lack the chat window, so the cap's chat-share
-	// bound could never engage there.
-	if cfg.Manual {
-		return true
-	}
-	// One quarter is the existing prior-reference allowance, so fusion starts
-	// where oldest-summary loss would begin; the chat-window tenth also bounds
-	// how much of the eventual chat prompt the active frontier can occupy.
-	shareCap := maxCompactTokens / 4
+	return frontierSummaryTokens(artifacts) > frontierRetainBudget(cfg, maxCompactTokens)
+}
+
+func frontierRetainBudget(cfg TriggerConfig, maxCompactTokens int) int {
 	if cfg.ContextWindowTokens > 0 {
-		shareCap = min(shareCap, cfg.ContextWindowTokens/10)
+		return cfg.ContextWindowTokens * 60 / 100
 	}
-	return frontierSummaryTokens(artifacts) > shareCap
+	return maxCompactTokens / 4
+}
+
+func selectFusionPrefix(artifacts []Artifact, retainBudget, fusedReserve int) []Artifact {
+	if len(artifacts) < 2 || frontierSummaryTokens(artifacts)+fusedReserve <= retainBudget {
+		return nil
+	}
+	for absorbed := 1; absorbed < len(artifacts); absorbed++ {
+		kept := artifacts[absorbed:]
+		if frontierSummaryTokens(kept)+fusedReserve <= retainBudget || absorbed == len(artifacts)-1 {
+			return artifacts[:absorbed]
+		}
+	}
+	return nil
 }
 
 func frontierHasPersistedCoverage(artifacts []Artifact) bool {

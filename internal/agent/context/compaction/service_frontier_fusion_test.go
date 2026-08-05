@@ -16,7 +16,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 )
 
-func TestDoCompactionFusionIneffectiveGateCountsReplacedParentSummaries(t *testing.T) {
+func TestDoCompactionFusionIneffectiveGateCountsOnlyAbsorbedParentSummaries(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubModel{}
@@ -31,8 +31,9 @@ func TestDoCompactionFusionIneffectiveGateCountsReplacedParentSummaries(t *testi
 	entryTokens := entriesPromptCost(entries)
 	stub.summary = strings.Repeat("s", entryTokens*4)
 	summaryTokens := estimateSummaryReplayTokens(stub.summary)
+	absorbedParents := fusionArtifacts(t, parents[:1])
 	parentTokens := 0
-	for _, parent := range parents {
+	for _, parent := range absorbedParents {
 		parentTokens += estimateSummaryReplayTokens(parent.Summary)
 	}
 	if summaryTokens < entryTokens || summaryTokens >= entryTokens+parentTokens {
@@ -50,11 +51,91 @@ func TestDoCompactionFusionIneffectiveGateCountsReplacedParentSummaries(t *testi
 	if len(q.completeCalls) != 0 {
 		t.Fatalf("ordinary completion calls = %d, want none on successful fusion", len(q.completeCalls))
 	}
-	for _, parent := range parents {
-		if successor := q.parentSuccessors[parent.ID]; successor != q.createdLogID {
-			t.Fatalf("parent %v successor = %v, want rollup %v", parent.ID, successor, q.createdLogID)
+	if successor := q.parentSuccessors[parents[0].ID]; successor != q.createdLogID {
+		t.Fatalf("absorbed parent %v successor = %v, want rollup %v", parents[0].ID, successor, q.createdLogID)
+	}
+	assertFusionParentsActive(t, q, parents[1:])
+}
+
+func TestDoCompactionFusionAbsorbsOverflowPrefixAndKeepsRecentPriorContext(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "concise partial frontier replacement"}
+	cfg := machineryConfig(stub, 200)
+	cfg.AllowFrontierFusion = true
+	cfg.MaxCompactTokens = 12000
+	cfg.ContextWindowTokens = 10000
+
+	absorbedSummary := "absorbed-oldest:" + strings.Repeat("a", 18800)
+	keptMiddleSummary := "kept-middle:" + strings.Repeat("b", 4000)
+	keptNewestSummary := "kept-newest:" + strings.Repeat("c", 1200)
+	parents := fusionParentLogs(t, cfg, absorbedSummary, keptMiddleSummary, keptNewestSummary)
+	artifacts := fusionArtifacts(t, parents)
+	retainBudget := frontierRetainBudget(cfg, cfg.MaxCompactTokens)
+	if !shouldFuseFrontier(cfg, artifacts, cfg.MaxCompactTokens) {
+		t.Fatalf("test setup did not cross retain budget: frontier=%d retain=%d", frontierSummaryTokens(artifacts), retainBudget)
+	}
+	if selected := selectFusionPrefix(artifacts, retainBudget, maxCompactionSummaryTokens); len(selected) != 1 || selected[0].ID != artifacts[0].ID {
+		t.Fatalf("test setup selected %#v, want oldest parent only", selected)
+	}
+
+	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("RunCompactionSync: %v", err)
+	}
+	if res.Status != StatusOK || len(q.rollupCalls) != 1 {
+		t.Fatalf("partial fusion result = %#v rollup_calls=%d, want ok with one rollup", res, len(q.rollupCalls))
+	}
+
+	priorStart := strings.LastIndex(stub.prompt, "<prior_context>")
+	priorEnd := strings.LastIndex(stub.prompt, "</prior_context>")
+	absorbedStart := strings.LastIndex(stub.prompt, "<absorbed_context>")
+	absorbedEnd := strings.LastIndex(stub.prompt, "</absorbed_context>")
+	if priorStart < 0 || priorEnd <= priorStart || absorbedStart <= priorEnd || absorbedEnd <= absorbedStart {
+		t.Fatalf("partial fusion prompt section offsets = prior %d..%d absorbed %d..%d", priorStart, priorEnd, absorbedStart, absorbedEnd)
+	}
+	priorSection := stub.prompt[priorStart:priorEnd]
+	absorbedSection := stub.prompt[absorbedStart:absorbedEnd]
+	for _, kept := range []string{"kept-middle:", "kept-newest:"} {
+		if !strings.Contains(priorSection, kept) || strings.Contains(absorbedSection, kept) {
+			t.Fatalf("kept summary %q was not reference-only:\n%s", kept, stub.prompt)
 		}
 	}
+	if !strings.Contains(absorbedSection, "absorbed-oldest:") || strings.Contains(priorSection, "absorbed-oldest:") {
+		t.Fatalf("absorbed parent was not isolated to absorbed context:\n%s", stub.prompt)
+	}
+
+	rollup := q.rollupCalls[0]
+	if len(rollup.Parents) != 1 || rollup.Parents[0] != parents[0].ID {
+		t.Fatalf("rollup parents = %v, want absorbed parent %v only", rollup.Parents, parents[0].ID)
+	}
+	if rollup.Level != parents[0].ArtifactLevel+1 {
+		t.Fatalf("rollup level = %d, want absorbed-parent level %d", rollup.Level, parents[0].ArtifactLevel+1)
+	}
+	coverage, err := DecodeArtifactCoverage(rollup.Coverage)
+	if err != nil {
+		t.Fatalf("DecodeArtifactCoverage(rollup): %v", err)
+	}
+	coveredKeys := make(map[string]bool, len(coverage))
+	for _, source := range coverage {
+		coveredKeys[source.Ref.StableKey()] = true
+	}
+	if !coveredKeys[artifacts[0].Coverage[0].Ref.StableKey()] {
+		t.Fatal("rollup coverage omitted the absorbed parent")
+	}
+	for _, kept := range artifacts[1:] {
+		if coveredKeys[kept.Coverage[0].Ref.StableKey()] {
+			t.Fatalf("rollup coverage included kept parent %q", kept.ID)
+		}
+	}
+	if rollup.AnchorStartMs != parents[0].AnchorStartMs || rollup.AnchorEndMs <= parents[len(parents)-1].AnchorEndMs {
+		t.Fatalf("rollup anchor = %d..%d, want it to straddle kept anchors through a newer row", rollup.AnchorStartMs, rollup.AnchorEndMs)
+	}
+	if successor := q.parentSuccessors[parents[0].ID]; successor != q.createdLogID {
+		t.Fatalf("absorbed parent successor = %v, want %v", successor, q.createdLogID)
+	}
+	assertFusionParentsActive(t, q, parents[1:])
 }
 
 func TestDoCompactionFusionLegacyCoverageFallsBackToOrdinaryPass(t *testing.T) {
@@ -104,7 +185,7 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 
 	items, _ := itemsFromRows(rows)
 	entries, _ := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
-	replacementTokens := summaryReplacementTokens(entries, fusionArtifacts(t, parents))
+	replacementTokens := summaryReplacementTokens(entries, fusionArtifacts(t, parents[:1]))
 	stub.summary = strings.Repeat("s", replacementTokens*4)
 	if summaryTokens := estimateSummaryReplayTokens(stub.summary); summaryTokens < replacementTokens {
 		t.Fatalf("test setup invalid: summary=%d replacement=%d", summaryTokens, replacementTokens)

@@ -25,6 +25,8 @@ const fusionSystemPrompt = `You are a conversation summarizer. Given absorbed ea
 - Names, dates, numbers, and specific details
 - Tool usage outcomes and their results
 
+If <prior_context> is provided, it contains summaries that remain active after this pass. Use them ONLY to understand the conversation flow and maintain continuity. Do NOT include, repeat, or rephrase any content from <prior_context> in your output.
+
 The output summary REPLACES every earlier summary in <absorbed_context> entirely. Integrate all still-relevant information from the absorbed context and the new conversation segment. Do not write references like "see prior summary" or otherwise depend on an earlier summary remaining available.
 
 For tool results, only include key outcomes; ignore intermediate steps or errors.
@@ -53,8 +55,14 @@ func buildUserPrompt(priorSummaries []string, messages []messageEntry) string {
 	return sb.String()
 }
 
-func buildFusionUserPrompt(absorbed []absorbedSegment, messages []messageEntry) string {
+func buildFusionUserPrompt(priorSummaries []string, absorbed []absorbedSegment, messages []messageEntry) string {
 	var sb strings.Builder
+	if len(priorSummaries) > 0 {
+		sb.WriteString("<prior_context>\n")
+		sb.WriteString("The following are summaries of earlier parts of this conversation. They are provided ONLY as reference context to help you understand the conversation flow. Do NOT include or repeat any of this content in your output summary.\n\n")
+		sb.WriteString(strings.Join(priorSummaries, "\n---\n"))
+		sb.WriteString("\n</prior_context>\n\n")
+	}
 	sb.WriteString("<absorbed_context>\n")
 	for i, segment := range absorbed {
 		if i > 0 {
