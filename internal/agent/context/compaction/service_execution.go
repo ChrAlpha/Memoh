@@ -81,7 +81,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens)
 	var absorbedArtifacts, keptArtifacts []Artifact
 	if fusing {
-		absorbedArtifacts = selectFusionPrefix(frontier.Artifacts, retainBudget, maxOutputTokens)
+		absorbedArtifacts = selectFusionPrefix(frontier.Artifacts, retainBudget, fusionMinOutputTokens)
 		keptArtifacts = frontier.Artifacts[len(absorbedArtifacts):]
 	}
 	if fusing && !frontierHasPersistedCoverage(absorbedArtifacts) {
@@ -91,10 +91,12 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		)
 		fusing = false
 	}
+	selectedOutputTokens := maxOutputTokens
 	selectedSystemPrompt := systemPrompt
 	if fusing {
+		selectedOutputTokens = frontierFusionOutputCap(retainBudget, keptArtifacts, maxOutputTokens)
 		selectedSystemPrompt = fusionSystemPrompt
-		maxCompactTokens, err = boundedCompactionInputTokens(cfg, baseMaxCompactTokens, maxOutputTokens, selectedSystemPrompt)
+		maxCompactTokens, err = boundedCompactionInputTokens(cfg, baseMaxCompactTokens, selectedOutputTokens, selectedSystemPrompt)
 		if err != nil {
 			return Result{}, err
 		}
@@ -255,7 +257,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		sdk.WithModel(model),
 		sdk.WithSystem(systemPromptDecorated),
 		sdk.WithMessages(sdkMessages),
-		sdk.WithMaxTokens(maxOutputTokens),
+		sdk.WithMaxTokens(selectedOutputTokens),
 	)
 	if err != nil {
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)

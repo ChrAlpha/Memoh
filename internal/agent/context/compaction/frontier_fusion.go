@@ -17,6 +17,11 @@ const (
 	absorbedSourceEarlierSummary absorbedSegmentSource = "earlier_summary"
 )
 
+const (
+	frontierRetainOverheadTokens = 1024
+	fusionMinOutputTokens        = 512
+)
+
 type absorbedSegment struct {
 	Source  absorbedSegmentSource
 	Content string
@@ -33,7 +38,7 @@ func shouldFuseFrontier(cfg TriggerConfig, artifacts []Artifact, maxCompactToken
 
 func frontierRetainBudget(cfg TriggerConfig, maxCompactTokens int) int {
 	if cfg.ContextWindowTokens > 0 {
-		return cfg.ContextWindowTokens * 60 / 100
+		return max(fusionMinOutputTokens, cfg.ContextWindowTokens*60/100-frontierRetainOverheadTokens)
 	}
 	return maxCompactTokens / 4
 }
@@ -66,6 +71,11 @@ func frontierSummaryTokens(artifacts []Artifact) int {
 		summaries = append(summaries, artifact.Summary)
 	}
 	return priorContextTokens(summaries)
+}
+
+func frontierFusionOutputCap(retainBudget int, kept []Artifact, maxOutputTokens int) int {
+	available := retainBudget - frontierSummaryTokens(kept)
+	return min(maxOutputTokens, max(fusionMinOutputTokens, available))
 }
 
 func rollupArtifactLevel(parents []Artifact) int {

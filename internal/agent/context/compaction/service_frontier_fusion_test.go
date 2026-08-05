@@ -1,9 +1,11 @@
 package compaction
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -63,8 +65,9 @@ func TestDoCompactionFusionAbsorbsOverflowPrefixAndKeepsRecentPriorContext(t *te
 	stub := &stubModel{summary: "concise partial frontier replacement"}
 	cfg := machineryConfig(stub, 200)
 	cfg.AllowFrontierFusion = true
-	cfg.MaxCompactTokens = 12000
+	cfg.MaxCompactTokens = 50000
 	cfg.ContextWindowTokens = 10000
+	cfg.SummaryWindowTokens = 50000
 
 	absorbedSummary := "absorbed-oldest:" + strings.Repeat("a", 18800)
 	keptMiddleSummary := "kept-middle:" + strings.Repeat("b", 4000)
@@ -75,17 +78,30 @@ func TestDoCompactionFusionAbsorbsOverflowPrefixAndKeepsRecentPriorContext(t *te
 	if !shouldFuseFrontier(cfg, artifacts, cfg.MaxCompactTokens) {
 		t.Fatalf("test setup did not cross retain budget: frontier=%d retain=%d", frontierSummaryTokens(artifacts), retainBudget)
 	}
-	if selected := selectFusionPrefix(artifacts, retainBudget, maxCompactionSummaryTokens); len(selected) != 1 || selected[0].ID != artifacts[0].ID {
+	if selected := selectFusionPrefix(artifacts, retainBudget, 512); len(selected) != 1 || selected[0].ID != artifacts[0].ID {
 		t.Fatalf("test setup selected %#v, want oldest parent only", selected)
+	}
+	expectedOutputCap := frontierFusionOutputCap(retainBudget, artifacts[1:], maxCompactionSummaryTokens)
+	expectedInputBudget, err := boundedCompactionInputTokens(cfg, cfg.MaxCompactTokens, expectedOutputCap, fusionSystemPrompt)
+	if err != nil {
+		t.Fatalf("bounded fusion input fixture: %v", err)
 	}
 
 	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	var logOutput bytes.Buffer
+	svc := NewService(slog.New(slog.NewTextHandler(&logOutput, nil)), q)
+	res, err := svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if res.Status != StatusOK || len(q.rollupCalls) != 1 {
 		t.Fatalf("partial fusion result = %#v rollup_calls=%d, want ok with one rollup", res, len(q.rollupCalls))
+	}
+	if stub.maxTokens != expectedOutputCap {
+		t.Fatalf("fusion max output tokens = %d, want kept-suffix cap %d", stub.maxTokens, expectedOutputCap)
+	}
+	if want := fmt.Sprintf("max_compact_tokens=%d", expectedInputBudget); !strings.Contains(logOutput.String(), want) {
+		t.Fatalf("fusion input budget log missing %q:\n%s", want, logOutput.String())
 	}
 
 	priorStart := strings.LastIndex(stub.prompt, "<prior_context>")
@@ -163,6 +179,9 @@ func TestDoCompactionFusionLegacyCoverageFallsBackToOrdinaryPass(t *testing.T) {
 	}
 	if len(q.rollupCalls) != 0 {
 		t.Fatalf("rollup completion calls = %d, want none for legacy parents", len(q.rollupCalls))
+	}
+	if stub.maxTokens != maxCompactionSummaryTokens {
+		t.Fatalf("legacy fallback max output tokens = %d, want ordinary cap %d", stub.maxTokens, maxCompactionSummaryTokens)
 	}
 	if !strings.Contains(stub.prompt, "<prior_context>") || strings.Contains(stub.prompt, "<absorbed_context>") {
 		t.Fatalf("legacy fallback prompt did not use ordinary mode:\n%s", stub.prompt)
