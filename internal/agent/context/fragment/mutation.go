@@ -72,8 +72,8 @@ type StepSnapshot struct {
 	DropReasons          map[string]int `json:"drop_reasons,omitempty"`
 }
 
-// MutationLedger records post-render changes and the final provider input
-// hash. It intentionally carries no provider-attempt or step state.
+// MutationLedger records post-render changes, provider-attempt metadata, and
+// content-light step snapshots. All methods are nil-safe.
 type MutationLedger struct {
 	mu                sync.Mutex
 	records           []MutationRecord
