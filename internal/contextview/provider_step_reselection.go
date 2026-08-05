@@ -44,7 +44,7 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	}
 	frags = markInjectedLoopUserFrags(frags)
 	if input.ProviderInputAllowanceTokens > 0 {
-		frags = applyProviderStepSerializedCosts(frags)
+		frags = applyProviderStepSerializedCosts(frags, input)
 	}
 
 	selector := &FragmentSelector{}
@@ -103,17 +103,37 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	)}
 }
 
-func applyProviderStepSerializedCosts(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+func applyProviderStepSerializedCosts(
+	frags []contextfrag.ContextFrag,
+	input agentpkg.ContextStepSelectionInput,
+) []contextfrag.ContextFrag {
+	prefix := append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...)
+	_, runningBytes := contextfrag.ProviderPayloadHashAndBytes(input.ProviderSystem, prefix, input.ProviderTools)
+	runningTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
+	_, emptyEnvelopeBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{}, nil)
+	messageCount := len(prefix)
 	for i := range frags {
 		msg := providerStepFragMessage(frags[i])
 		if msg == nil {
 			continue
 		}
-		_, serializedBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{*msg}, nil)
-		serializedTokens := contextfrag.ProviderBudgetTokensFromBytes(serializedBytes)
+		_, singletonBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{*msg}, nil)
+		messageBytes := singletonBytes - emptyEnvelopeBytes
+		if messageCount == 0 {
+			// The fixed-envelope measurement serializes an empty cloned prefix as
+			// null. The first message replaces those four bytes with [<message>].
+			messageBytes -= 2
+		} else {
+			messageBytes++ // comma before an appended array element
+		}
+		runningBytes += messageBytes
+		nextTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
+		serializedTokens := nextTokens - runningTokens
 		if serializedTokens > frags[i].TokenEstimate {
 			frags[i].TokenEstimate = serializedTokens
 		}
+		runningTokens = nextTokens
+		messageCount++
 	}
 	return frags
 }

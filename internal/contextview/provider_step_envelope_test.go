@@ -108,3 +108,46 @@ func TestProviderStepReselectionTightensSerializedS3HugeResultWhenDroppable(t *t
 		t.Fatalf("nonfatal provider payload = %d tokens, want <= allowance %d", got, inputAllowance)
 	}
 }
+
+func TestProviderStepReselectionAllowsExactlyFittingProtectedSerializedSuffix(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage(strings.Repeat("prefix", 137))}
+	loop := []sdk.Message{
+		assistantToolCallMessage("exact-fit", "exec", ""),
+		toolResultMessage("exact-fit", "exec", strings.Repeat("result", 211)),
+	}
+	messages := append(append([]sdk.Message(nil), prefix...), loop...)
+	system := strings.Repeat("system", 83)
+	tools := []sdk.Tool{{Name: "exec", Description: "Execute a bounded command."}}
+	_, fixedBytes := contextfrag.ProviderPayloadHashAndBytes(system, prefix, tools)
+	_, candidateBytes := contextfrag.ProviderPayloadHashAndBytes(system, messages, tools)
+	fixedTokens := contextfrag.ProviderBudgetTokensFromBytes(fixedBytes)
+	allowance := contextfrag.ProviderBudgetTokensFromBytes(candidateBytes)
+	suffixBudget := allowance - fixedTokens
+
+	singletonCost := 0
+	for _, message := range loop {
+		_, messageBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{message}, nil)
+		singletonCost += contextfrag.ProviderBudgetTokensFromBytes(messageBytes)
+	}
+	if singletonCost <= suffixBudget {
+		t.Fatalf("fixture singleton cost = %d, want greater than exact additive suffix %d", singletonCost, suffixBudget)
+	}
+
+	result := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:                        contextfrag.Scope{BotID: "contextbench"},
+		InitialMessageCount:          len(prefix),
+		Messages:                     messages,
+		BudgetMaxTokens:              suffixBudget,
+		ProviderSystem:               system,
+		ProviderTools:                tools,
+		ProviderInputAllowanceTokens: allowance,
+	})
+	if result.FatalError != nil {
+		t.Fatalf("exact-fit protected suffix failed admission: %v", result.FatalError)
+	}
+	if result.Messages != nil || result.Dropped != 0 || result.Truncated != 0 {
+		t.Fatalf("exact-fit protected suffix changed: %+v", result)
+	}
+}
