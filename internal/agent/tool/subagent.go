@@ -68,15 +68,17 @@ type SpawnRunConfig struct {
 	ReasoningConfig *models.ReasoningConfig
 	// Keep the unresolved parent-turn inputs as well, so a nested subagent can
 	// resolve the same override against its own selected model.
-	ReasoningStoredEffort    string
-	ReasoningRequestedEffort string
-	PromptCacheTTL           string
-	ChatCompletionsCompat    string
-	SupportsImageInput       bool
-	SupportsFileInput        bool
-	SupportsToolCall         bool
-	Skills                   map[string]SkillDetail
-	BackgroundManager        *background.Manager
+	ReasoningStoredEffort     string
+	ReasoningRequestedEffort  string
+	PromptCacheTTL            string
+	ChatCompletionsCompat     string
+	SupportsImageInput        bool
+	SupportsFileInput         bool
+	SupportsToolCall          bool
+	Skills                    map[string]SkillDetail
+	BackgroundManager         *background.Manager
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 	// TurnRequestMessageID is the persisted task user message this run's
 	// assistant and tool rows bind to, so incremental step persistence files
 	// them into the same history turn the runtime view names.
@@ -237,12 +239,13 @@ type resolvedSubagentModel struct {
 	// parent: a subagent may run a different model, whose advertised tiers and
 	// off-ability differ. Before #983 it was neither inherited nor resolved, so
 	// subagents ran with no thinking configuration at all.
-	ReasoningConfig       *models.ReasoningConfig
-	PromptCacheTTL        string
-	ChatCompletionsCompat string
-	SupportsImageInput    bool
-	SupportsFileInput     bool
-	SupportsToolCall      bool
+	ReasoningConfig        *models.ReasoningConfig
+	PromptCacheTTL         string
+	ChatCompletionsCompat  string
+	SupportsImageInput     bool
+	SupportsFileInput      bool
+	SupportsToolCall       bool
+	ContextBudgetMaxTokens int
 }
 
 type subagentModelCatalogItem struct {
@@ -482,15 +485,16 @@ type agentRunResult struct {
 }
 
 type agentRequest struct {
-	taskID           string
-	agentID          string
-	agentSessionID   string
-	message          string
-	messagePersisted bool
-	parentSession    SessionContext
-	config           sessionpkg.SubagentConfig
-	runtime          resolvedSubagentModel
-	systemPrompt     string
+	taskID                 string
+	agentID                string
+	agentSessionID         string
+	message                string
+	messagePersisted       bool
+	parentSession          SessionContext
+	config                 sessionpkg.SubagentConfig
+	runtime                resolvedSubagentModel
+	contextBudgetMaxTokens int
+	systemPrompt           string
 	// admission is the run identity the durable gate allocated; persistence
 	// files this task's messages under admission.TurnID.
 	admission SubagentAdmission
@@ -738,13 +742,14 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	}
 
 	req := &agentRequest{
-		agentID:        rec.AgentID,
-		agentSessionID: rec.SessionID,
-		message:        message,
-		parentSession:  session,
-		config:         config,
-		runtime:        runtime,
-		systemPrompt:   systemPrompt,
+		agentID:                rec.AgentID,
+		agentSessionID:         rec.SessionID,
+		message:                message,
+		parentSession:          session,
+		config:                 config,
+		runtime:                runtime,
+		contextBudgetMaxTokens: runtime.ContextBudgetMaxTokens,
+		systemPrompt:           systemPrompt,
 	}
 	description := truncateTitle(fmt.Sprintf("%s: %s", rec.AgentID, message), 120)
 
@@ -998,27 +1003,33 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		combined = append(combined, history...)
 		history = combined
 	}
+	contextBudgetMaxTokens := req.contextBudgetMaxTokens
+	if contextBudgetMaxTokens <= 0 {
+		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
+	}
 	cfg := SpawnRunConfig{
-		RunID:                    strings.TrimSpace(req.admission.RunID),
-		Model:                    req.runtime.Model,
-		ModelUUID:                req.runtime.UUID,
-		ModelID:                  req.runtime.ModelID,
-		ModelProvider:            req.runtime.ProviderName,
-		ReasoningConfig:          req.runtime.ReasoningConfig,
-		ReasoningStoredEffort:    req.parentSession.ReasoningStoredEffort,
-		ReasoningRequestedEffort: req.parentSession.ReasoningRequestedEffort,
-		System:                   req.systemPrompt,
-		Query:                    req.message,
-		SessionType:              sessionpkg.TypeSubagent,
-		PromptCacheTTL:           req.runtime.PromptCacheTTL,
-		ChatCompletionsCompat:    req.runtime.ChatCompletionsCompat,
-		SupportsImageInput:       req.runtime.SupportsImageInput,
-		SupportsFileInput:        req.runtime.SupportsFileInput,
-		SupportsToolCall:         req.runtime.SupportsToolCall,
-		Messages:                 history,
-		Skills:                   req.parentSession.Skills,
-		BackgroundManager:        p.bgManager,
-		TurnRequestMessageID:     req.requestMessageID,
+		RunID:                     strings.TrimSpace(req.admission.RunID),
+		Model:                     req.runtime.Model,
+		ModelUUID:                 req.runtime.UUID,
+		ModelID:                   req.runtime.ModelID,
+		ModelProvider:             req.runtime.ProviderName,
+		ReasoningConfig:           req.runtime.ReasoningConfig,
+		ReasoningStoredEffort:     req.parentSession.ReasoningStoredEffort,
+		ReasoningRequestedEffort:  req.parentSession.ReasoningRequestedEffort,
+		System:                    req.systemPrompt,
+		Query:                     req.message,
+		SessionType:               sessionpkg.TypeSubagent,
+		PromptCacheTTL:            req.runtime.PromptCacheTTL,
+		ChatCompletionsCompat:     req.runtime.ChatCompletionsCompat,
+		SupportsImageInput:        req.runtime.SupportsImageInput,
+		SupportsFileInput:         req.runtime.SupportsFileInput,
+		SupportsToolCall:          req.runtime.SupportsToolCall,
+		Messages:                  history,
+		Skills:                    req.parentSession.Skills,
+		BackgroundManager:         p.bgManager,
+		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
+		ContextToolExchangePolicy: req.parentSession.ContextToolExchangePolicy,
+		TurnRequestMessageID:      req.requestMessageID,
 		Identity: SpawnIdentity{
 			BotID:               req.parentSession.BotID,
 			ChatID:              req.parentSession.ChatID,
@@ -1846,15 +1857,16 @@ func (p *SpawnProvider) resolveModel(
 		ThinkingBudgetMax:     modelInfo.Config.ThinkingBudgetMax,
 	})
 	return resolvedSubagentModel{
-		Model:                 sdkModel,
-		ReasoningConfig:       reasoningConfig,
-		UUID:                  modelInfo.ID,
-		ModelID:               modelInfo.ModelID,
-		ProviderName:          provider.Name,
-		PromptCacheTTL:        providers.ProviderConfigString(provider, "prompt_cache_ttl"),
-		ChatCompletionsCompat: chatCompletionsCompat,
-		SupportsImageInput:    modelInfo.HasCompatibility(models.CompatVision),
-		SupportsToolCall:      modelInfo.HasCompatibility(models.CompatToolCall),
+		Model:                  sdkModel,
+		ReasoningConfig:        reasoningConfig,
+		UUID:                   modelInfo.ID,
+		ModelID:                modelInfo.ModelID,
+		ProviderName:           provider.Name,
+		PromptCacheTTL:         providers.ProviderConfigString(provider, "prompt_cache_ttl"),
+		ChatCompletionsCompat:  chatCompletionsCompat,
+		SupportsImageInput:     modelInfo.HasCompatibility(models.CompatVision),
+		SupportsToolCall:       modelInfo.HasCompatibility(models.CompatToolCall),
+		ContextBudgetMaxTokens: modelInfo.Config.ContextBudgetMaxTokens(),
 	}, nil
 }
 

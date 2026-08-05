@@ -76,9 +76,9 @@ func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
 		lastParams = params
 		return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		cfg.ContextMutations = ledger
-		return cfg
+		return cfg, nil
 	}})
 	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
 		Name: "hash_tool",

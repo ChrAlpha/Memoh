@@ -480,6 +480,54 @@ func TestSpawnAgentSessionInheritsParentUserIdentity(t *testing.T) {
 	}
 }
 
+func TestSpawnAgentPropagatesContextBudgetAndToolExchangePolicy(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	policy := &contextfrag.ToolExchangePolicy{MinMessages: 10}
+	session := SessionContext{
+		BotID:                     "bot1",
+		SessionID:                 "parent1",
+		ContextBudgetMaxTokens:    128000,
+		ContextToolExchangePolicy: policy,
+	}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"task": "alpha"})
+
+	call, ok := agent.callAt(0)
+	if !ok {
+		t.Fatal("expected spawn_agent call")
+	}
+	if call.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", call.ContextBudgetMaxTokens)
+	}
+	if call.ContextToolExchangePolicy != policy {
+		t.Fatalf("ContextToolExchangePolicy = %p, want same pointer %p", call.ContextToolExchangePolicy, policy)
+	}
+}
+
+func TestSpawnAgentUsesResolvedModelContextBudgetOverParent(t *testing.T) {
+	agent := &fakeSpawnAgent{}
+	p, _, _, _ := newAgentControlProvider(t, agent)
+	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+		return resolvedSubagentModel{Model: &sdk.Model{}, ModelID: "model-2", ContextBudgetMaxTokens: 64000}, nil
+	}
+	session := SessionContext{
+		BotID:                  "bot1",
+		SessionID:              "parent1",
+		ContextBudgetMaxTokens: 128000,
+	}
+
+	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"task": "alpha"})
+
+	call, ok := agent.callAt(0)
+	if !ok {
+		t.Fatal("expected spawn_agent call")
+	}
+	if call.ContextBudgetMaxTokens != 64000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want 64000 (the resolved subagent model's own context window, not the parent's 128000)", call.ContextBudgetMaxTokens)
+	}
+}
+
 func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 	p, _, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
 	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
