@@ -202,19 +202,22 @@ func TestHookSystemSectionsSitBetweenBuiltinsAndNonSystemSources(t *testing.T) {
 		}}},
 	}}, scope)
 	cfg := native.RunConfig{
-		Messages:     []sdk.Message{sdk.UserMessage("history")},
+		Messages:     []sdk.Message{sdk.UserMessage("history"), sdk.UserMessage("current")},
 		ContextScope: scope,
 	}
+	currentMessageIndex := 1
+	cfg.ContextCurrentUserMessageIndex = &currentMessageIndex
+	cfg.ContextQueryMaterialized = true
 	legacyHookText := formatServiceHookContext(hooks.EventBeforePromptBuild, "legacy append context")
+	cfg.ContextHookText = legacyHookText
 	frags := buildProviderSourceFrags(
 		context.Background(),
 		cfg,
 		sections,
 		hookBuild.Frags,
-		[]string{legacyHookText},
 	)
 
-	hookIndex, legacyHookIndex, historyIndex := -1, -1, -1
+	hookIndex, legacyHookIndex, historyIndex, currentFragIndex := -1, -1, -1, -1
 	lastBuiltinIndex := len(native.SystemSectionFrags(sections, scope)) - 1
 	for i, frag := range frags {
 		if frag.ID == "system.hook.policy.guardrail" {
@@ -223,23 +226,27 @@ func TestHookSystemSectionsSitBetweenBuiltinsAndNonSystemSources(t *testing.T) {
 				t.Fatalf("typed hook fragment authority = %#v", frag)
 			}
 		}
-		if frag.ID == "system.hook_context" {
+		if frag.ID == "hook_context.message" {
 			legacyHookIndex = i
-			if frag.Trust != contextfrag.TrustSystem || frag.Provenance.Source != "hook_context" {
+			if frag.Trust != contextfrag.TrustWorkspace || frag.Slot != contextfrag.SlotAfterHistoryBeforeCurrent || frag.Provenance.Source != "hook_context" {
 				t.Fatalf("legacy append_context authority changed: %#v", frag)
 			}
 		}
-		if frag.Slot == contextfrag.SlotHistory && historyIndex < 0 {
+		if frag.ID == "message.000" {
 			historyIndex = i
 		}
+		if frag.Kind == contextfrag.KindCurrentUserMessage {
+			currentFragIndex = i
+		}
 	}
-	if hookIndex <= lastBuiltinIndex || legacyHookIndex <= hookIndex || historyIndex <= legacyHookIndex {
+	if hookIndex <= lastBuiltinIndex || historyIndex <= hookIndex || legacyHookIndex <= historyIndex || currentFragIndex <= legacyHookIndex {
 		t.Fatalf(
-			"source order builtins=%d typed_hook=%d legacy_hook=%d history=%d",
+			"source order builtins=%d typed_hook=%d history=%d legacy_hook=%d current=%d",
 			lastBuiltinIndex,
 			hookIndex,
-			legacyHookIndex,
 			historyIndex,
+			legacyHookIndex,
+			currentFragIndex,
 		)
 	}
 }

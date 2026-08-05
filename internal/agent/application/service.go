@@ -1194,6 +1194,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
+	cfg.ContextHookText = ""
 	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
@@ -1242,23 +1243,24 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	var promptHookTexts []string
 	if beforePromptContext != "" {
 		text := formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
-		cfg.System += "\n\n" + text
 		promptHookTexts = append(promptHookTexts, text)
 	}
+	beforePromptObservedTexts := append([]string(nil), promptHookTexts...)
+	beforePromptObservedTexts = append(beforePromptObservedTexts, hookSystemSectionTexts(beforePromptResult)...)
 	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  afterPromptHookSystemBytes(cfg.System, hookSystemSectionTexts(beforePromptResult)),
+		SystemBytes:  afterPromptHookSystemBytes(cfg.System, beforePromptObservedTexts),
 	}, hooks.EventAfterPromptBuild)
 	afterPromptContext := afterPromptResult.AppendContext
 	if afterPromptContext != "" {
 		text := formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
-		cfg.System += "\n\n" + text
 		promptHookTexts = append(promptHookTexts, text)
 	}
+	cfg.ContextHookText = strings.Join(promptHookTexts, "\n\n")
 
 	if cfg.Query != "" {
 		var extra []sdk.MessagePart
@@ -1321,7 +1323,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		cfg,
 		native.GenerateSystemSections(systemParams),
 		hookBuild.Frags,
-		promptHookTexts,
 	)
 	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg.RefreshContextFrag()

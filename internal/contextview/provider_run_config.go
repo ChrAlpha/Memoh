@@ -126,17 +126,19 @@ func insertContextFragsBeforeCurrent(frags, dynamic []contextfrag.ContextFrag) [
 	if len(dynamic) == 0 {
 		return frags
 	}
-	index := len(frags)
-	for i, frag := range frags {
+	history := make([]contextfrag.ContextFrag, 0, len(frags))
+	current := make([]contextfrag.ContextFrag, 0, 1)
+	for _, frag := range frags {
 		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
-			index = i
-			break
+			current = append(current, frag)
+			continue
 		}
+		history = append(history, frag)
 	}
 	out := make([]contextfrag.ContextFrag, 0, len(frags)+len(dynamic))
-	out = append(out, frags[:index]...)
+	out = append(out, history...)
 	out = append(out, dynamic...)
-	out = append(out, frags[index:]...)
+	out = append(out, current...)
 	return out
 }
 
