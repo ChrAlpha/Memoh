@@ -104,6 +104,7 @@ import {
   Input,
 } from '@felinic/ui'
 import { Check, X, LoaderCircle } from 'lucide-vue-next'
+import { getBotsQueryKey } from '@memohai/sdk/colada'
 import { reactive, ref, computed, watch, onMounted, onActivated, nextTick } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
@@ -181,7 +182,7 @@ const { data: bot } = useQuery({
 })
 
 const { data: modelData } = useQuery({
-  key: ['all-models'],
+  key: ['models'],
   query: async () => {
     const { data } = await getModels({ throwOnError: true })
     return data
@@ -189,7 +190,7 @@ const { data: modelData } = useQuery({
 })
 
 const { data: providerData } = useQuery({
-  key: ['all-providers'],
+  key: ['providers'],
   query: async () => {
     const { data } = await getProviders({ throwOnError: true })
     return data
@@ -205,7 +206,7 @@ const { data: acpProfileData } = useQuery({
 })
 
 const { data: searchProviderData } = useQuery({
-  key: ['all-search-providers'],
+  key: ['search-providers'],
   query: async () => {
     const { data } = await getSearchProviders({ throwOnError: true })
     return data
@@ -213,7 +214,7 @@ const { data: searchProviderData } = useQuery({
 })
 
 const { data: fetchProviderData } = useQuery({
-  key: ['all-fetch-providers'],
+  key: ['fetch-providers'],
   query: async () => {
     const { data } = await getFetchProviders({ throwOnError: true })
     return data
@@ -221,7 +222,7 @@ const { data: fetchProviderData } = useQuery({
 })
 
 const { data: memoryProviderData } = useQuery({
-  key: ['all-memory-providers'],
+  key: ['memory-providers'],
   query: async () => {
     const { data } = await getMemoryProviders({ throwOnError: true })
     return data
@@ -281,7 +282,7 @@ const { mutateAsync: deleteBot, isLoading: deleteLoading } = useMutation({
     await deleteBotsById({ path: { id: botIdRef.value }, throwOnError: true })
   },
   onSettled: () => {
-    queryCache.invalidateQueries({ key: ['bots'] })
+    queryCache.invalidateQueries({ key: getBotsQueryKey() })
     queryCache.invalidateQueries({ key: ['bot'] })
   },
 })
@@ -557,7 +558,7 @@ function onDrained(savedKeys: Set<keyof SettingsForm>) {
   // The sidebar lists bots by name; nothing else on this page is visible
   // there, so the expensive full-list refetch only fires for renames.
   if (savedKeys.has('name')) {
-    queryCache.invalidateQueries({ key: ['bots'] })
+    queryCache.invalidateQueries({ key: getBotsQueryKey() })
     void chatStore.refreshBots().catch(() => {})
   }
 }
@@ -579,7 +580,7 @@ function isNameConflict(error: unknown): boolean {
 }
 
 function handleBackupImported(botId: string) {
-  queryCache.invalidateQueries({ key: ['bots'] })
+  queryCache.invalidateQueries({ key: getBotsQueryKey() })
   if (botId && botId !== props.botId) {
     router.push({ name: 'bot-detail', params: { botId } })
     return
