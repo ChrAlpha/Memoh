@@ -15,6 +15,20 @@ import (
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 )
 
+func contextWindowForDefaultOutputReserve(inputBudget int) int {
+	if inputBudget <= 0 {
+		return 0
+	}
+	window := inputBudget
+	for {
+		resolved := inputBudget + min(DefaultOutputReserveTokens, window/4)
+		if resolved == window {
+			return window
+		}
+		window = resolved
+	}
+}
+
 func TestProviderContextBudgetPlanAccountsForCurrentRequestAndTools(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +217,48 @@ func TestProviderBudgetPlanIsAppliedAndRetained(t *testing.T) {
 	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.SystemBudget != 6024 {
 		t.Fatalf("holder snapshot = %#v, %v", snapshot, ok)
 	}
+}
+
+func TestApplyProviderRunConfigSemanticCurrentIsNotDoubleCharged(t *testing.T) {
+	t.Parallel()
+
+	requiredSystem := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID:            "system.required",
+		Kind:          contextfrag.KindSystemPrompt,
+		Role:          sdk.MessageRoleSystem,
+		Slot:          contextfrag.SlotSystem,
+		Text:          "required system",
+		RetentionTier: contextfrag.RetentionRequired,
+		Trust:         contextfrag.TrustSystem,
+	})
+	requiredSystem.TokenEstimate = 200
+	semanticCurrent := contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:            "discuss.current",
+		Message:       sdk.UserMessage("current discuss request"),
+		Kind:          contextfrag.KindCurrentUserMessage,
+		Slot:          contextfrag.SlotHistory,
+		TokenEstimate: 100,
+		Trust:         contextfrag.TrustUser,
+		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+	})
+	cfg := agentpkg.RunConfig{
+		ContextSourceFrags:     []contextfrag.ContextFrag{requiredSystem, semanticCurrent},
+		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(356),
+	}
+
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("ApplyProviderRunConfig() error = %v, want payload that fits its provider envelope", err)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil ||
+		plan.CurrentRequestCost != 100 ||
+		plan.SystemBudget != 256 ||
+		plan.ActualSystemCost != 200 ||
+		plan.HistoryBudget != 56 {
+		t.Fatalf("budget plan = %#v, want current/system/actual/history = 100/256/200/56", plan)
+	}
+	assertMessagesEqual(t, out.Messages, []sdk.Message{sdk.UserMessage("current discuss request")})
 }
 
 func TestProviderBudgetFailureBypassesLegacyFallbackAndKeepsAudit(t *testing.T) {
