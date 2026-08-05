@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agenttools "github.com/memohai/memoh/internal/agent/tool"
 	"github.com/memohai/memoh/internal/models"
 )
@@ -68,6 +69,7 @@ type readMediaDecorationState struct {
 	pendingMedia map[string]sdk.MessagePart
 	prepareCalls int
 	injections   []readMediaInjection
+	ledger       *contextfrag.MutationLedger
 }
 
 type readMediaInjection struct {
@@ -105,6 +107,8 @@ func (s *readMediaDecorationState) prepareStep(params *sdk.GenerateParams) *sdk.
 	if len(parts) == 0 {
 		return nil
 	}
+
+	s.ledger.Record(contextfrag.MutationReadMedia, fmt.Sprintf("images=%d", len(parts)))
 
 	message := sdk.Message{
 		Role:    sdk.MessageRoleUser,

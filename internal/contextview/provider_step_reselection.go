@@ -82,7 +82,7 @@ func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.Co
 		if msg == nil || !isRole(msg.Role, sdk.MessageRoleUser) {
 			continue
 		}
-		if messageHasImagePart(*msg) {
+		if messageHasNativeMediaPart(*msg) {
 			frags[i].Kind = contextfrag.KindNativeImage
 			continue
 		}
@@ -96,9 +96,10 @@ func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.Co
 	return frags
 }
 
-func messageHasImagePart(msg sdk.Message) bool {
+func messageHasNativeMediaPart(msg sdk.Message) bool {
 	for _, part := range msg.Content {
-		if _, ok := part.(sdk.ImagePart); ok {
+		switch part.(type) {
+		case sdk.ImagePart, sdk.FilePart:
 			return true
 		}
 	}

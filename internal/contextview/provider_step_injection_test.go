@@ -97,10 +97,30 @@ func imageUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
 	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
 }
 
+func fileUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
+	parts := append([]sdk.MessagePart{sdk.FilePart{
+		Data:      strings.Repeat("A", size),
+		MediaType: "application/pdf",
+		Filename:  "report.pdf",
+	}}, extra...)
+	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
+}
+
 func selectionHasImagePart(messages []sdk.Message) bool {
 	for _, msg := range messages {
 		for _, part := range msg.Content {
 			if _, ok := part.(sdk.ImagePart); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectionHasFilePart(messages []sdk.Message) bool {
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if _, ok := part.(sdk.FilePart); ok {
 				return true
 			}
 		}
@@ -121,18 +141,20 @@ func collectLoopFrags(t *testing.T, messages []sdk.Message) []contextfrag.Contex
 	return frags
 }
 
-func TestMarkInjectedLoopUserFragsLeavesImagePayloadsDroppable(t *testing.T) {
+func TestMarkInjectedLoopUserFragsLeavesNativeMediaPayloadsDroppable(t *testing.T) {
 	t.Parallel()
 
 	messages := []sdk.Message{
 		imageUserMessage(64),
 		imageUserMessage(64, sdk.TextPart{Text: "look at this"}),
+		fileUserMessage(64),
 		sdk.UserMessage("<message sender=\"alice\">injected</message>"),
 		sdk.UserMessage("[Background tasks]\nCurrently running background tasks:\n- [task-1] build"),
 	}
 	marked := markInjectedLoopUserFrags(collectLoopFrags(t, messages))
 
 	wantKinds := []contextfrag.Kind{
+		contextfrag.KindNativeImage,
 		contextfrag.KindNativeImage,
 		contextfrag.KindNativeImage,
 		contextfrag.KindInjectedMessage,
@@ -201,6 +223,32 @@ func TestStepReselectionDropsBulkyImagePayloadsUnderBudgetPressure(t *testing.T)
 	}
 	if loopEstimate > budget {
 		t.Fatalf("loop span estimate = %d tokens, want within budget %d", loopEstimate, budget)
+	}
+}
+
+func TestStepReselectionDropsBulkyFilePayloadsUnderBudgetPressure(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage("task")}
+	messages := appendToolCycles(prefix, []string{"call-a"}, 800)
+	messages = append(messages, fileUserMessage(40000), fileUserMessage(40000), fileUserMessage(40000))
+	messages = appendToolCycles(messages, []string{"call-b"}, 800)
+	messages = append(messages, sdk.UserMessage("<message sender=\"alice\">injected instruction</message>"))
+
+	selection := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:               contextfrag.Scope{BotID: "bot-1"},
+		InitialMessageCount: len(prefix),
+		Messages:            messages,
+		BudgetMaxTokens:     500,
+	})
+	if selection.Messages == nil || selection.Dropped == 0 {
+		t.Fatalf("budget pressure must produce a reselection: %+v", selection)
+	}
+	if selectionHasFilePart(selection.Messages) {
+		t.Fatal("bulky file payloads must stay droppable under step budget pressure")
+	}
+	if !selectionHasUserText(selection.Messages, "injected instruction") {
+		t.Fatal("text injection must survive step budget pressure")
 	}
 }
 
