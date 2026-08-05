@@ -605,6 +605,8 @@
     "folderDetachDraft": "Start without a folder",
     "folderNewSession": "New session in {name}",
     "attachFiles": "Attach files",
+    "pdfTooLargeForNative": "This PDF exceeds 12MB, so it will be saved to the workspace as a path; the model can't view its content directly.",
+    "pdfUnsupportedByModel": "The current model can't read PDFs natively. The file will be saved to the workspace as a path, but the model won't be able to view its content.",
     "send": "Send",
     "sendFailed": "Message failed to send",
     "forkFailed": "Failed to fork session",
@@ -773,8 +775,8 @@
       "generic": "Tool",
       "approve": "Allow",
       "reject": "Reject",
-    "pendingApproval": "pending approval",
-    "executionLocation": "Execution location",
+      "pendingApproval": "pending approval",
+      "executionLocation": "Execution location",
       "pendingUserInput": "waiting for input",
       "userInputSubmitted": "answered",
       "userInputCanceled": "canceled",
@@ -1131,6 +1133,7 @@
     "compatibilities": "Compatibilities",
     "compatibility": {
       "vision": "Vision",
+      "file-input": "File Input (PDF)",
       "tool-call": "Tool Call",
       "image-output": "Image Output",
       "reasoning": "Reasoning"

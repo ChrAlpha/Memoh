@@ -576,6 +576,8 @@
     "folderDetachDraft": "フォルダに入れずに開始",
     "folderNewSession": "{name} で新しいセッション",
     "attachFiles": "ファイルを添付する",
+    "pdfTooLargeForNative": "PDF が 12MB を超えているため、ワークスペースにパスとして保存されます。モデルは内容を直接閲覧できません。",
+    "pdfUnsupportedByModel": "現在のモデルは PDF の読み取りに対応していません。ファイルはワークスペースにパスとして保存され、モデルは内容を閲覧できません。",
     "send": "送信",
     "sendFailed": "メッセージの送信に失敗しました",
     "forkFailed": "セッションのフォークに失敗しました",
@@ -1085,6 +1087,7 @@
     "compatibilities": "互換性",
     "compatibility": {
       "vision": "ビジョン",
+      "file-input": "ファイル入力(PDF)",
       "tool-call": "ツール呼び出し",
       "image-output": "画像出力",
       "reasoning": "推論"

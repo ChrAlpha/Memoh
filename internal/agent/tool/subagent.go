@@ -51,6 +51,7 @@ type SpawnRunConfig struct {
 	PromptCacheTTL        string
 	ChatCompletionsCompat string
 	SupportsImageInput    bool
+	SupportsFileInput     bool
 	SupportsToolCall      bool
 	Skills                map[string]SkillDetail
 	BackgroundManager     *background.Manager
@@ -198,6 +199,7 @@ type resolvedSubagentModel struct {
 	PromptCacheTTL        string
 	ChatCompletionsCompat string
 	SupportsImageInput    bool
+	SupportsFileInput     bool
 	SupportsToolCall      bool
 }
 
@@ -936,6 +938,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		PromptCacheTTL:        req.runtime.PromptCacheTTL,
 		ChatCompletionsCompat: req.runtime.ChatCompletionsCompat,
 		SupportsImageInput:    req.runtime.SupportsImageInput,
+		SupportsFileInput:     req.runtime.SupportsFileInput,
 		SupportsToolCall:      req.runtime.SupportsToolCall,
 		Messages:              history,
 		Skills:                req.parentSession.Skills,

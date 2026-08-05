@@ -605,6 +605,8 @@
     "folderDetachDraft": "不放入文件夹",
     "folderNewSession": "在 {name} 中新建会话",
     "attachFiles": "上传文件",
+    "pdfTooLargeForNative": "PDF 超过 12MB,将以路径形式存入工作区,模型无法直接查看其内容。",
+    "pdfUnsupportedByModel": "当前模型不支持读取 PDF,文件将以路径形式存入工作区,模型无法直接查看其内容。",
     "send": "发送",
     "sendFailed": "消息发送失败",
     "forkFailed": "分叉会话失败",
@@ -773,8 +775,8 @@
       "generic": "调用工具",
       "approve": "允许",
       "reject": "拒绝",
-    "pendingApproval": "等待审核",
-    "executionLocation": "执行位置",
+      "pendingApproval": "等待审核",
+      "executionLocation": "执行位置",
       "pendingUserInput": "等待输入",
       "userInputSubmitted": "已回答",
       "userInputCanceled": "已取消",
@@ -1131,6 +1133,7 @@
     "compatibilities": "兼容性",
     "compatibility": {
       "vision": "视觉",
+      "file-input": "文件输入(PDF)",
       "tool-call": "工具调用",
       "image-output": "图片生成",
       "reasoning": "推理"

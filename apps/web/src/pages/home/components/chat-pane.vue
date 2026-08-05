@@ -1642,6 +1642,34 @@ const activeModel = computed(() => {
   return models.value.find((m) => m.id === id)
 })
 
+// PDFs reach the model natively only when it carries the file-input
+// capability; without it the file lands in the workspace as a path the model
+// cannot open. Warn at attach time so the user is not surprised mid-turn.
+// ACP sessions are exempt — Claude Code / Codex read PDFs themselves.
+const isPdfFile = (file: File) =>
+  file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+
+// Mirrors the backend's nativeAttachmentMaxBinaryBytes: larger PDFs are demoted
+// to the workspace-path fallback even when the model supports file-input.
+const nativePdfMaxBytes = 12 * 1024 * 1024
+
+watch(() => pendingFiles.value.length, (len, prevLen) => {
+  if (len <= (prevLen ?? 0)) return
+  if (activeUsesACPComposer.value) return
+  const model = activeModel.value
+  if (!model) return
+  const added = pendingFiles.value.slice(prevLen ?? 0)
+  if (!model.config?.compatibilities?.includes('file-input')) {
+    if (added.some(isPdfFile)) {
+      toast.warning(t('chat.pdfUnsupportedByModel'))
+    }
+    return
+  }
+  if (added.some((file) => isPdfFile(file) && file.size > nativePdfMaxBytes)) {
+    toast.warning(t('chat.pdfTooLargeForNative'))
+  }
+})
+
 type DefaultACPSettings = {
   chat_runtime?: string
   chat_acp_agent_id?: string
