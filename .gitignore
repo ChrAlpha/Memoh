@@ -117,6 +117,7 @@ _main-ref/
 .cache/memoh/
 /scripts/vendor
 design-env/
+/benchout/
 GEMINI.md
 Design*.md
 design*.md
