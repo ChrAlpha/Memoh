@@ -316,6 +316,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, publicError)
 		return
 	}
+	cfg = captureProviderAttemptPrefix(cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -413,13 +414,16 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, StreamEvent{Type: EventError, Error: turnError})
 		return
 	}
+	installContextStepFailureHandler(&cfg, cancel)
 	opts := a.buildGenerateOptions(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
-	modelStepIndex := 0
-	opts = append(opts, sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
-		a.runAfterModelCallHook(streamCtx, cfg, step, modelStepIndex)
-		modelStepIndex++
-		return nil
-	}))
+	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
+		publicError := contextViewStreamError(stepErr)
+		turnError = publicError.Error
+		aborted = true
+		sendEvent(ctx, ch, publicError)
+		return
+	}
+	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
 
 	retryCfg := cfg.Retry
 	if retryCfg.MaxAttempts <= 0 {
@@ -662,6 +666,10 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 
 		case *sdk.ErrorPart:
+			if contextStepBudgetError(streamCtx) != nil {
+				aborted = true
+				break
+			}
 			errMsg := p.Error.Error()
 			if isAskUserArgumentParseError(errMsg) {
 				continue
@@ -696,6 +704,13 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		if aborted {
 			break
 		}
+	}
+
+	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
+		publicError := contextViewStreamError(stepErr)
+		turnError = publicError.Error
+		sendEvent(ctx, ch, publicError)
+		aborted = true
 	}
 
 	if aborted && !streamClosed {
@@ -853,6 +868,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if contextViewErr != nil {
 		return nil, contextViewErr
 	}
+	cfg = captureProviderAttemptPrefix(cfg)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -882,12 +898,13 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	if err != nil {
 		return nil, err
 	}
+	installContextStepFailureHandler(&cfg, cancel)
 	opts := a.buildGenerateOptions(genCtx, cfg, sdkTools, approvalTools, prepareStep)
-	modelStepIndex := 0
+	if stepErr := contextStepBudgetError(genCtx); stepErr != nil {
+		return nil, stepErr
+	}
 	opts = append(opts,
-		sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
-			a.runAfterModelCallHook(genCtx, cfg, step, modelStepIndex)
-			modelStepIndex++
+		a.onStepOption(genCtx, cfg, func(step *sdk.StepResult) *sdk.GenerateParams {
 			if cfg.LoopDetection.Enabled {
 				if toolLoopAbortCallIDs.Any() {
 					loopAbort.Set(ErrToolLoopDetected)
@@ -908,6 +925,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	)
 
 	genResult, err := a.client.GenerateTextResult(genCtx, opts...)
+	if stepErr := contextStepBudgetError(genCtx); stepErr != nil {
+		return nil, stepErr
+	}
 	if err != nil {
 		if loopErr := detectGenerateLoopAbort(genCtx, err); loopErr != nil {
 			return nil, loopErr
@@ -916,6 +936,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 	}
 	if loopErr := loopAbort.Err(); loopErr != nil {
 		return nil, loopErr
+	}
+	if len(genResult.Steps) > 0 {
+		genResult.Usage = aggregateStepUsage(genResult.Steps)
 	}
 
 	// Drain collected tool-emitted side effects into the result.
@@ -1222,6 +1245,54 @@ func publishContextCachePlan(cfg RunConfig, plan contextfrag.CachePlan) {
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(cfg.ContextManifest)
 	}
+}
+
+func (a *Agent) onStepOption(ctx context.Context, cfg RunConfig, after func(*sdk.StepResult) *sdk.GenerateParams) sdk.GenerateOption {
+	modelStepIndex := 0
+	return sdk.WithOnStep(func(step *sdk.StepResult) *sdk.GenerateParams {
+		recordContextCacheUsage(cfg.ContextMutations, modelStepIndex, step)
+		a.runAfterModelCallHook(ctx, cfg, step, modelStepIndex)
+		modelStepIndex++
+		if after != nil {
+			return after(step)
+		}
+		return nil
+	})
+}
+
+func recordContextCacheUsage(ledger *contextfrag.MutationLedger, stepIndex int, step *sdk.StepResult) {
+	if ledger == nil || step == nil {
+		return
+	}
+	detail := step.Usage.InputTokenDetails
+	if step.Usage.CachedInputTokens == 0 && detail.NoCacheTokens == 0 && detail.CacheReadTokens == 0 &&
+		detail.CacheWriteTokens == 0 && detail.CacheWrite5mTokens == 0 && detail.CacheWrite1hTokens == 0 {
+		return
+	}
+	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{
+		StepIndex: stepIndex, NoCacheTokens: detail.NoCacheTokens, CacheReadTokens: detail.CacheReadTokens,
+		CacheWriteTokens: detail.CacheWriteTokens, CacheWrite5mTokens: detail.CacheWrite5mTokens,
+		CacheWrite1hTokens: detail.CacheWrite1hTokens,
+	})
+}
+
+func aggregateStepUsage(steps []sdk.StepResult) sdk.Usage {
+	var total sdk.Usage
+	for _, step := range steps {
+		total.InputTokens += step.Usage.InputTokens
+		total.OutputTokens += step.Usage.OutputTokens
+		total.TotalTokens += step.Usage.TotalTokens
+		total.ReasoningTokens += step.Usage.ReasoningTokens
+		total.CachedInputTokens += step.Usage.CachedInputTokens
+		total.InputTokenDetails.NoCacheTokens += step.Usage.InputTokenDetails.NoCacheTokens
+		total.InputTokenDetails.CacheReadTokens += step.Usage.InputTokenDetails.CacheReadTokens
+		total.InputTokenDetails.CacheWriteTokens += step.Usage.InputTokenDetails.CacheWriteTokens
+		total.InputTokenDetails.CacheWrite5mTokens += step.Usage.InputTokenDetails.CacheWrite5mTokens
+		total.InputTokenDetails.CacheWrite1hTokens += step.Usage.InputTokenDetails.CacheWrite1hTokens
+		total.OutputTokenDetails.TextTokens += step.Usage.OutputTokenDetails.TextTokens
+		total.OutputTokenDetails.ReasoningTokens += step.Usage.OutputTokenDetails.ReasoningTokens
+	}
+	return total
 }
 
 // assembleTools collects tools from all registered ToolProviders, along with
@@ -1597,6 +1668,8 @@ func (a *Agent) runMidStreamRetry(
 		for range prevResult.Stream {
 		}
 	}
+	retryMessages := retryProviderAttemptMessages(cfg, prevResult)
+	accumulatedCount := len(prevResult.Messages)
 
 	retryCfg := DefaultRetryConfig()
 	for attempt := 0; attempt < retryCfg.MaxAttempts; attempt++ {
@@ -1622,13 +1695,17 @@ func (a *Agent) runMidStreamRetry(
 			}
 		}
 
-		// Re-invoke StreamText with accumulated messages.
-		// Use buildGenerateOptions so retry benefits from mid-task pruning,
-		// media resolution, and other prepare-step logic — same as initial stream.
-		retryCfgCopy := cfg
-		retryCfgCopy.Messages = prevResult.Messages
-		retryCfgCopy = retryCfgCopy.RefreshContextFrag()
+		// Re-invoke from the failed attempt's exact provider input plus its
+		// partial output, then run the same preflight as every other call.
+		retryCfgCopy := prepareMidStreamRetryConfigWithMessages(cfg, retryMessages, accumulatedCount, errMsg)
+		if a == nil || a.contextViewApplier == nil {
+			retryCfgCopy = retryCfgCopy.RefreshContextFrag()
+		}
 		retryOpts := a.buildGenerateOptions(streamCtx, retryCfgCopy, sdkTools, approvalTools, prepareStep)
+		retryOpts = append(retryOpts, a.onStepOption(streamCtx, retryCfgCopy, nil))
+		if contextStepBudgetError(streamCtx) != nil {
+			return prevResult, true
+		}
 
 		retryResult, retryErr := a.client.StreamText(streamCtx, retryOpts...)
 		if retryErr != nil {
