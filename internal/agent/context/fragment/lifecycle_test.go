@@ -99,3 +99,26 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycleHolderSnapshotOwnsStepDropReasons(t *testing.T) {
+	t.Parallel()
+
+	ledger := NewMutationLedger()
+	ledger.AppendStepSnapshot(StepSnapshot{
+		StepIndex:   0,
+		DropReasons: map[string]int{"budget": 1},
+	})
+	holder := NewLifecycleHolder()
+	holder.SetManifest(Manifest{View: ViewRunConfigPreProvider, Mutations: ledger})
+
+	first, ok := holder.Snapshot()
+	if !ok || len(first.Steps) != 1 {
+		t.Fatalf("snapshot = %#v, ok = %v", first, ok)
+	}
+	first.Steps[0].DropReasons["budget"] = 2
+
+	second, _ := holder.Snapshot()
+	if second.Steps[0].DropReasons["budget"] != 1 {
+		t.Fatalf("snapshot exposed mutable step audit: %#v", second.Steps[0].DropReasons)
+	}
+}

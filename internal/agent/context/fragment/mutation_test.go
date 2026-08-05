@@ -100,6 +100,26 @@ func TestMutationLedgerAppendStepSnapshotStampsCurrentAttempt(t *testing.T) {
 	}
 }
 
+func TestMutationLedgerStepSnapshotsOwnDropReasons(t *testing.T) {
+	t.Parallel()
+
+	dropReasons := map[string]int{"budget": 1}
+	ledger := NewMutationLedger()
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, DropReasons: dropReasons})
+
+	dropReasons["budget"] = 2
+	first := ledger.StepSnapshots()
+	if first[0].DropReasons["budget"] != 1 {
+		t.Fatalf("stored drop reasons = %#v, want defensive copy of appended snapshot", first[0].DropReasons)
+	}
+
+	first[0].DropReasons["budget"] = 3
+	second := ledger.StepSnapshots()
+	if second[0].DropReasons["budget"] != 1 {
+		t.Fatalf("stored drop reasons = %#v after returned snapshot mutation", second[0].DropReasons)
+	}
+}
+
 func TestMutationLedgerAdvanceAttemptStampsCacheUsageRecords(t *testing.T) {
 	t.Parallel()
 
