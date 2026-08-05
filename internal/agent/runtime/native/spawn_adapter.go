@@ -141,6 +141,10 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 				streamErr = errors.New(evt.Error)
 			}
 		case EventAgentEnd, EventAgentAbort:
+			if evt.Type == EventAgentEnd {
+				// A terminal success means an earlier retryable stream error recovered.
+				streamErr = nil
+			}
 			if evt.Messages != nil {
 				_ = json.Unmarshal(evt.Messages, &finalMessages)
 			}
