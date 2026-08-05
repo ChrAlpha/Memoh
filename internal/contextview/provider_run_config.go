@@ -59,6 +59,7 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
 		TokenEstimates:          cfg.ContextHistoryTokenEstimates,
 		TrimmablePrefix:         cfg.ContextTrimmableMessages,
+		RepairToolClosures:      true,
 	}
 	history, err := (&HistoryMessagesCollector{}).Collect(ctx, CollectRequest{
 		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider, Config: historyConfig,
