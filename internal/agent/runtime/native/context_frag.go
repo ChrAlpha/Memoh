@@ -5,6 +5,22 @@ import (
 	"github.com/memohai/memoh/internal/models"
 )
 
+// EffectiveHistoryBudgetTokens is the droppable-history budget after fixed
+// tool-definition overhead. Zero retains its unlimited-budget meaning.
+func (cfg RunConfig) EffectiveHistoryBudgetTokens() int {
+	budget := cfg.ContextBudgetMaxTokens
+	if budget <= 0 {
+		return budget
+	}
+	for _, def := range cfg.ContextToolDefs {
+		budget -= def.TokenEstimate
+	}
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
 // RefreshContextFrag rebuilds the typed context frag view from the legacy
 // RunConfig fields. The SDK-facing fields remain the source of truth in phase 1.
 func (cfg RunConfig) RefreshContextFrag() RunConfig {
