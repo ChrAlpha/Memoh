@@ -737,18 +737,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			finalMessages = annotateDeferredApproval(finalMessages, *streamResult.DeferredToolApproval)
 		}
 		finalMessages = toolExecutionMetadata.annotate(finalMessages)
-		for _, step := range streamResult.Steps {
-			totalUsage.InputTokens += step.Usage.InputTokens
-			totalUsage.OutputTokens += step.Usage.OutputTokens
-			totalUsage.TotalTokens += step.Usage.TotalTokens
-			totalUsage.ReasoningTokens += step.Usage.ReasoningTokens
-			totalUsage.CachedInputTokens += step.Usage.CachedInputTokens
-			totalUsage.InputTokenDetails.NoCacheTokens += step.Usage.InputTokenDetails.NoCacheTokens
-			totalUsage.InputTokenDetails.CacheReadTokens += step.Usage.InputTokenDetails.CacheReadTokens
-			totalUsage.InputTokenDetails.CacheWriteTokens += step.Usage.InputTokenDetails.CacheWriteTokens
-			totalUsage.OutputTokenDetails.TextTokens += step.Usage.OutputTokenDetails.TextTokens
-			totalUsage.OutputTokenDetails.ReasoningTokens += step.Usage.OutputTokenDetails.ReasoningTokens
-		}
+		totalUsage = aggregateStepUsage(streamResult.Steps)
 	}
 	usageJSON, _ := json.Marshal(totalUsage)
 
