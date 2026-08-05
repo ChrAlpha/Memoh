@@ -12,7 +12,6 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
-	"github.com/memohai/memoh/internal/agent/background"
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	userinput "github.com/memohai/memoh/internal/agent/decision/input"
 	tools "github.com/memohai/memoh/internal/agent/tool"
@@ -297,10 +296,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 					if !ok {
 						break
 					}
-					text := strings.TrimSpace(injected.HeaderifiedText)
-					if text == "" {
-						text = strings.TrimSpace(injected.Text)
-					}
+					text := injectedMessageText(injected)
 					if text != "" || (cfg.SupportsImageInput && len(injected.ImageParts) > 0) {
 						insertAfter := len(p.Messages) - initialMsgCount
 						var extra []sdk.MessagePart
@@ -891,18 +887,22 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 	}
 	if cfg.BackgroundManager != nil {
 		basePrepare := prepareStep
-		baseSystem := captureBackgroundSystem(system, messages)
-		logger := slog.Default()
-		if a != nil && a.logger != nil {
-			logger = a.logger
-		}
+		initialProviderMessageCount := len(messages)
 		prepareStep = func(p *sdk.GenerateParams) *sdk.GenerateParams {
+			if p == nil {
+				return nil
+			}
+			p.Messages = removeBackgroundSummaryMessages(p.Messages, initialProviderMessageCount)
 			if basePrepare != nil {
 				if override := basePrepare(p); override != nil {
 					p = override
 				}
 			}
-			return injectBackgroundTaskSummary(p, cfg.BackgroundManager, baseSystem, cfg.Identity.BotID, cfg.Identity.SessionID, logger)
+			if summary := strings.TrimSpace(cfg.BackgroundManager.RunningTasksSummary(cfg.Identity.BotID, cfg.Identity.SessionID)); summary != "" {
+				cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, fmt.Sprintf("bytes=%d", len(summary)))
+				p.Messages = append(p.Messages, backgroundSummaryMessage(summary))
+			}
+			return p
 		}
 	}
 	opts := []sdk.GenerateOption{
@@ -1188,119 +1188,45 @@ func toolStreamEventToAgentEvent(evt tools.ToolStreamEvent) StreamEvent {
 	}
 }
 
-// injectBackgroundTaskSummary refreshes the background task summary in the
-// system prompt at step boundaries.
-func injectBackgroundTaskSummary(
-	p *sdk.GenerateParams,
-	mgr *background.Manager,
-	baseSystem backgroundSystem,
-	botID, sessionID string,
-	logger *slog.Logger,
-) *sdk.GenerateParams {
-	// Inject running tasks summary into system prompt so the model
-	// knows about ongoing background work even after compaction.
-	// Always start from baseSystem to avoid accumulating summaries across steps.
-	injectBackgroundSummary(p, baseSystem, mgr.RunningTasksSummary(botID, sessionID))
-	if logger != nil {
-		logger.Debug("refreshed background task summary", slog.String("bot_id", botID), slog.String("session_id", sessionID))
-	}
-	return p
+func backgroundSummaryMessage(summary string) sdk.Message {
+	return sdk.UserMessage(contextfrag.BackgroundSummaryMessagePrefix + summary)
 }
 
-type backgroundSystem struct {
-	system             string
-	promotedSystemText string
-	hasPromotedSystem  bool
-}
-
-func captureBackgroundSystem(system string, messages []sdk.Message) backgroundSystem {
-	base := backgroundSystem{system: system}
-	if len(messages) == 0 || messages[0].Role != sdk.MessageRoleSystem || len(messages[0].Content) == 0 {
-		return base
+// removeBackgroundSummaryMessages strips summary carrier messages appended by
+// earlier steps so each step rebuilds exactly one fresh summary. keepPrefix
+// guards the compiled initial context: only loop-appended messages match.
+func removeBackgroundSummaryMessages(messages []sdk.Message, keepPrefix int) []sdk.Message {
+	if keepPrefix < 0 {
+		keepPrefix = 0
 	}
-	first, ok := messages[0].Content[0].(sdk.TextPart)
-	if !ok {
-		return base
-	}
-	base.promotedSystemText = first.Text
-	base.hasPromotedSystem = true
-	return base
-}
-
-func injectBackgroundSummary(p *sdk.GenerateParams, baseSystem backgroundSystem, summary string) {
-	summary = strings.TrimSpace(summary)
-	if strings.TrimSpace(baseSystem.system) != "" {
-		p.System = baseSystem.system
-		if summary != "" {
-			p.System += "\n\n" + summary
+	for i := keepPrefix; i < len(messages); i++ {
+		if !contextfrag.IsBackgroundSummaryCarrier(messages[i]) {
+			continue
 		}
-		return
-	}
-
-	if baseSystem.hasPromotedSystem {
-		text := strings.TrimSpace(baseSystem.promotedSystemText)
-		if len(p.Messages) == 0 || p.Messages[0].Role != sdk.MessageRoleSystem || len(p.Messages[0].Content) == 0 {
-			p.System = text
-			if summary != "" {
-				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
+		out := make([]sdk.Message, 0, len(messages)-1)
+		out = append(out, messages[:i]...)
+		for _, msg := range messages[i+1:] {
+			if !contextfrag.IsBackgroundSummaryCarrier(msg) {
+				out = append(out, msg)
 			}
-			return
 		}
-		first, ok := p.Messages[0].Content[0].(sdk.TextPart)
-		if !ok {
-			p.System = text
-			if summary != "" {
-				p.System = strings.TrimSpace(p.System + "\n\n" + summary)
-			}
-			return
-		}
-		first.Text = text
-		p.Messages[0].Content[0] = first
-		p.Messages = removeGeneratedBackgroundSystemMessages(p.Messages)
-		if summary != "" {
-			next := make([]sdk.Message, 0, len(p.Messages)+1)
-			next = append(next, p.Messages[0])
-			next = append(next, backgroundSummarySystemMessage(summary))
-			next = append(next, p.Messages[1:]...)
-			p.Messages = next
-		}
-		p.System = ""
-		return
+		return out
 	}
-
-	if summary != "" {
-		p.System = summary
-		return
-	}
-	p.System = ""
+	return messages
 }
 
-func backgroundSummarySystemMessage(summary string) sdk.Message {
-	return sdk.SystemMessage(summary)
-}
-
-func removeGeneratedBackgroundSystemMessages(messages []sdk.Message) []sdk.Message {
-	if len(messages) == 0 {
-		return messages
+// injectedMessageText prefers the headerified rendering; when it falls back to
+// raw text it guards the reserved background-summary prefix so an injected
+// user message can never masquerade as a summary carrier.
+func injectedMessageText(injected InjectMessage) string {
+	if text := strings.TrimSpace(injected.HeaderifiedText); text != "" {
+		return text
 	}
-	out := make([]sdk.Message, 0, len(messages))
-	for _, msg := range messages {
-		if !isBackgroundSummarySystemMessage(msg) {
-			out = append(out, msg)
-		}
+	text := strings.TrimSpace(injected.Text)
+	if strings.HasPrefix(text, contextfrag.BackgroundSummaryMessagePrefix) {
+		return "[injected]\n" + text
 	}
-	return out
-}
-
-func isBackgroundSummarySystemMessage(msg sdk.Message) bool {
-	if msg.Role != sdk.MessageRoleSystem || len(msg.Content) != 1 {
-		return false
-	}
-	part, ok := msg.Content[0].(sdk.TextPart)
-	return ok &&
-		part.CacheControl == nil &&
-		part.ProviderMetadata == nil &&
-		strings.HasPrefix(strings.TrimSpace(part.Text), "Currently running background tasks:")
+	return text
 }
 
 func wrapToolsWithLoopGuard(tools []sdk.Tool, guard *ToolLoopGuard, abortCallIDs *toolAbortRegistry) []sdk.Tool {
