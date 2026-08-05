@@ -152,6 +152,10 @@ type RunConfig struct {
 	ContextDynamicMutators         []contextfrag.DynamicMutator
 	ContextLifecycle               *contextfrag.LifecycleHolder
 	ContextStepReselector          ContextStepReselector
+	initialProviderMessageCount    int
+	initialProviderPrefixSet       bool
+	providerAttemptState           *providerAttemptState
+	contextStepFailure             func(error)
 	SessionType                    string
 	LiveToolStream                 bool
 	CanRequestUserInput            bool
