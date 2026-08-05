@@ -133,6 +133,7 @@ type RunConfig struct {
 	System                         string
 	ContextFrags                   []contextfrag.ContextFrag
 	ContextSourceFrags             []contextfrag.ContextFrag
+	ContextSourceWarnings          []contextfrag.ValidationWarning
 	ContextManifest                contextfrag.Manifest
 	ContextScope                   contextfrag.Scope
 	ContextCurrentUserMessageIndex *int

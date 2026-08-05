@@ -247,7 +247,7 @@ func TestHistoryContextFragsForMessagesCarriesActiveSummaryCoverage(t *testing.T
 	}
 
 	cfg.ContextQueryMaterialized = true
-	cfg.ContextSourceFrags = buildProviderSourceFrags(context.Background(), cfg, nil, nil)
+	cfg.ContextSourceFrags = buildProviderSourceFrags(context.Background(), cfg, nil, nil, nil)
 	providerCfg := contextview.ApplyProviderRunConfig(context.Background(), nil, cfg)
 	if !reflect.DeepEqual(providerCfg.Messages, cfg.Messages) {
 		t.Fatalf("provider messages changed: got %#v want %#v", providerCfg.Messages, cfg.Messages)
