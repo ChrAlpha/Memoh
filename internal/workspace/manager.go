@@ -548,7 +548,7 @@ func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, botID string,
 			Options:     []string{"rbind", "ro"},
 		},
 		{
-			Destination: "/opt/memoh/bridge",
+			Destination: WorkspaceBridgePath,
 			Type:        "bind",
 			Source:      bridgePath,
 			Options:     []string{"bind", "ro"},
@@ -594,7 +594,7 @@ func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, botID string,
 	env = append(env, skillEnv...)
 
 	return ctr.ContainerSpec{
-		Cmd:        []string{"/opt/memoh/bridge"},
+		Cmd:        []string{WorkspaceInitPath, "-g", "--", WorkspaceBridgePath},
 		Mounts:     mounts,
 		Env:        env,
 		CDIDevices: normalizeWorkspaceGPUDevices(gpu.Devices),
