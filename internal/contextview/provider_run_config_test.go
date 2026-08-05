@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -180,4 +181,78 @@ func TestProviderRunConfigApplierUsesInjectedLoggerShape(t *testing.T) {
 	if got.System != "system" || len(got.Messages) != 1 {
 		t.Fatalf("got = %#v", got)
 	}
+}
+
+func TestProviderRunConfigApplierInstallsStepReselectorOnlyOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		out, err := ProviderRunConfigApplier(nil)(context.Background(), fragsFirstFixture())
+		if err != nil {
+			t.Fatalf("applier error = %v", err)
+		}
+		if out.ContextStepReselector == nil {
+			t.Fatal("successful provider compilation did not install the step reselector")
+		}
+
+		prefix := []sdk.Message{sdk.UserMessage("provider-prefix")}
+		messages := append(append([]sdk.Message(nil), prefix...),
+			sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+				ToolCallID: "old-call", ToolName: "search", Input: map[string]any{"q": "old"},
+			}}},
+			sdk.ToolMessage(sdk.ToolResultPart{
+				ToolCallID: "old-call", ToolName: "search", Result: strings.Repeat("old ", 2048),
+			}),
+			sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+				ToolCallID: "new-call", ToolName: "search", Input: map[string]any{"q": "new"},
+			}}},
+			sdk.ToolMessage(sdk.ToolResultPart{
+				ToolCallID: "new-call", ToolName: "search", Result: "new",
+			}),
+		)
+		result := out.ContextStepReselector(context.Background(), agentpkg.ContextStepSelectionInput{
+			InitialMessageCount: len(prefix), Messages: messages, BudgetMaxTokens: 100,
+		})
+		if result.Dropped != 2 || len(result.Messages) != 4 {
+			t.Fatalf("step result = %#v, want the bulky old tool closure dropped", result)
+		}
+		if !reflect.DeepEqual(result.Messages[0], prefix[0]) {
+			t.Fatalf("step prefix = %#v, want %#v", result.Messages[0], prefix[0])
+		}
+		call, ok := result.Messages[2].Content[0].(sdk.ToolCallPart)
+		if !ok || call.ToolCallID != "new-call" {
+			t.Fatalf("surviving tool call = %#v, want new-call", result.Messages[2].Content[0])
+		}
+	})
+
+	t.Run("legacy fallback", func(t *testing.T) {
+		duplicate := systemTextFrag("duplicate", "source ignored", contextfrag.KindSystemPrompt, 20)
+		out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+			ContextSourceFrags: []contextfrag.ContextFrag{duplicate, duplicate},
+		})
+		if err != nil {
+			t.Fatalf("fallback error = %v", err)
+		}
+		if out.ContextStepReselector != nil {
+			t.Fatal("legacy fallback installed the step reselector")
+		}
+	})
+
+	t.Run("protected budget failure", func(t *testing.T) {
+		required := systemTextFrag("system.required", "required", contextfrag.KindSystemPrompt, 20)
+		required.RetentionTier = contextfrag.RetentionRequired
+		required.TokenEstimate = 930
+		current := currentMessageFrag("current", "current")
+		current.TokenEstimate = 10
+
+		out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+			ContextSourceFrags: []contextfrag.ContextFrag{required, current}, ContextBudgetMaxTokens: 400,
+		})
+		if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+			t.Fatalf("failure error = %v, want ErrProtectedContextOverflow", err)
+		}
+		if out.ContextStepReselector != nil {
+			t.Fatal("protected budget failure installed the step reselector")
+		}
+	})
 }
