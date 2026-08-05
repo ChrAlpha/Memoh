@@ -86,6 +86,77 @@ func TestDiscussEquivalence_RCBeforeTROnEqualTimestamp(t *testing.T) {
 	})
 }
 
+func TestDiscussSelector_ProfileMustKeepSystemAndCurrentUser(t *testing.T) {
+	t.Parallel()
+
+	profile := (&FragmentSelector{}).ProfileFor(contextfrag.IntentDiscussReply)
+
+	if profile.Intent != contextfrag.IntentDiscussReply {
+		t.Fatalf("Intent = %q, want %q", profile.Intent, contextfrag.IntentDiscussReply)
+	}
+	if !slotInProfile(profile, contextfrag.SlotSystem) {
+		t.Fatalf("MustKeepSlots = %#v, want system", profile.MustKeepSlots)
+	}
+	if !slotInProfile(profile, contextfrag.SlotCurrentUser) {
+		t.Fatalf("MustKeepSlots = %#v, want current_user", profile.MustKeepSlots)
+	}
+}
+
+func TestDiscussSelector_BudgetedSelectionDropsCanDropHistory(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		messageFrag("old-user", sdk.UserMessage("old question")),
+		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+		messageFrag("latest", sdk.UserMessage("latest question")),
+	}
+	selector := &FragmentSelector{}
+	profile := selector.ProfileFor(contextfrag.IntentDiscussReply)
+
+	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
+
+	assertSelectedIDs(t, result, []string{"latest"})
+	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
+	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
+}
+
+func TestDiscussSelector_BudgetedSelectionKeepsAllWhenWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		messageFrag("old-user", sdk.UserMessage("old question")),
+		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+		messageFrag("latest", sdk.UserMessage("latest question")),
+	}
+	selector := &FragmentSelector{}
+	profile := selector.ProfileFor(contextfrag.IntentDiscussReply)
+
+	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1000})
+
+	assertSelectedIDs(t, result, []string{"old-user", "old-assistant", "latest"})
+	if len(result.Dropped) != 0 {
+		t.Fatalf("dropped = %#v, want none", fragIDs(result.Dropped))
+	}
+}
+
+func TestSelector_ProviderBudgetedIntentDropsCanDropHistory(t *testing.T) {
+	t.Parallel()
+
+	frags := []contextfrag.ContextFrag{
+		messageFrag("old-user", sdk.UserMessage("old question")),
+		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+		messageFrag("latest", sdk.UserMessage("latest question")),
+	}
+	selector := &FragmentSelector{}
+	profile := selector.ProfileFor(contextfrag.IntentRunConfigPreProvider)
+
+	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
+
+	assertSelectedIDs(t, result, []string{"latest"})
+	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
+	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
+}
+
 type discussLegacyInput struct {
 	system  string
 	rc      timeline.RenderedContext
@@ -189,4 +260,11 @@ func renderedTextSegment(atMs int64, text string) timeline.RenderedSegment {
 		ReceivedAtMs: atMs,
 		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: text}},
 	}
+}
+
+func slotInProfile(profile IntentProfile, slot contextfrag.Slot) bool {
+	if slotInMustKeepSlots(profile, slot) {
+		return true
+	}
+	return profile.MustKeepFrag != nil && profile.MustKeepFrag(contextfrag.ContextFrag{Slot: slot})
 }
