@@ -1059,6 +1059,12 @@ func TestSessionCloseCancelsActivePrompt(t *testing.T) {
 func TestRunnerStartSessionCancellationStopsStartupProcess(t *testing.T) {
 	root := t.TempDir()
 	server := &startupCancelBridgeServer{
+		Server: bridgesvc.New(bridgesvc.Options{
+			DefaultWorkDir:    root,
+			WorkspaceRoot:     root,
+			DataMount:         config.DefaultDataMount,
+			AllowHostAbsolute: true,
+		}),
 		processStarted:   make(chan struct{}),
 		processCancelled: make(chan struct{}),
 	}
@@ -3041,7 +3047,7 @@ func newTestBridgeClient(t *testing.T, root string) *bridge.Client {
 }
 
 type startupCancelBridgeServer struct {
-	pb.UnimplementedContainerServiceServer
+	*bridgesvc.Server
 
 	mu               sync.Mutex
 	execs            int
@@ -3057,7 +3063,10 @@ func (s *startupCancelBridgeServer) Exec(stream grpc.BidiStreamingServer[pb.Exec
 	s.execs++
 	execNumber := s.execs
 	s.mu.Unlock()
-	if execNumber == 1 {
+	// RuntimeLease hardens its UUID directory before the existing command
+	// availability probe, so both setup commands complete before the long-lived
+	// ACP process starts.
+	if execNumber <= 2 {
 		return stream.Send(&pb.ExecOutput{Stream: pb.ExecOutput_EXIT, ExitCode: 0})
 	}
 	close(s.processStarted)
@@ -3253,6 +3262,16 @@ func (a *fakeACPAgent) NewSession(_ context.Context, p acp.NewSessionRequest) (a
 }
 
 func (a *fakeACPAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
+	if auth := os.Getenv("MEMOH_ACP_FAKE_AGENT_REFRESH_AUTH"); auth != "" {
+		home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		if home == "" {
+			return acp.PromptResponse{}, errors.New("fake Codex agent missing CODEX_HOME")
+		}
+		if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(auth), 0o600); err != nil { //nolint:gosec // test helper writes only to the lease-owned home.
+			return acp.PromptResponse{}, err
+		}
+		return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+	}
 	if os.Getenv("MEMOH_ACP_FAKE_AGENT_HANG_PROMPT") == "1" {
 		if path := os.Getenv("MEMOH_ACP_PROMPT_STARTED_FILE"); path != "" {
 			_ = os.WriteFile(path, []byte("started"), 0o600) //nolint:gosec // test helper writes to env-provided temp path.
