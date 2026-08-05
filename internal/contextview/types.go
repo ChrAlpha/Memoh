@@ -22,6 +22,11 @@ type BudgetEnvelope struct {
 	// Plan activates unified provider-envelope budgeting. Nil preserves the
 	// legacy unbudgeted provider selection path.
 	Plan *contextfrag.ContextBudgetPlan
+	// EnforceProtectedBudget makes MaxTokens a hard allowance that includes
+	// must-keep fragments without reactivating the turn-start system pass.
+	// Step reselection uses it to fail closed when newly injected protected
+	// context cannot fit the remaining provider envelope.
+	EnforceProtectedBudget bool
 	// RecentProtectTokens bands the newest droppable history within this many
 	// estimated tokens to drop last. Zero disables the window.
 	RecentProtectTokens int

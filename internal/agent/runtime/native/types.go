@@ -68,6 +68,33 @@ type LoopDetectionConfig struct {
 	Enabled bool
 }
 
+type ContextStepSelectionInput struct {
+	Scope               contextfrag.Scope
+	InitialMessageCount int
+	Messages            []sdk.Message
+	BudgetMaxTokens     int
+	// RecentProtectTokens carries the run's recent-protection window override
+	// so step reselection resolves the same window as the provider view. Nil
+	// uses the view default; a pointer to zero disables the window.
+	RecentProtectTokens *int
+	// KeepRecentToolResults keeps the newest N complete tool cycles intact
+	// and truncates older bulky tool results to a size summary; <= 0 disables
+	// content truncation.
+	KeepRecentToolResults int
+	// MinMessages gates content truncation on total provider message count.
+	MinMessages int
+}
+
+type ContextStepSelectionResult struct {
+	Messages    []sdk.Message
+	Dropped     int
+	Truncated   int
+	DropReasons map[string]int
+	FatalError  error
+}
+
+type ContextStepReselector func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult
+
 // InjectMessage carries a user message to be injected into a running agent
 // stream between tool rounds via the PrepareStep hook.
 type InjectMessage struct {
@@ -124,6 +151,7 @@ type RunConfig struct {
 	ContextMutations               *contextfrag.MutationLedger
 	ContextDynamicMutators         []contextfrag.DynamicMutator
 	ContextLifecycle               *contextfrag.LifecycleHolder
+	ContextStepReselector          ContextStepReselector
 	SessionType                    string
 	LiveToolStream                 bool
 	CanRequestUserInput            bool
