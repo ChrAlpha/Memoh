@@ -1747,12 +1747,202 @@ definitions:
         type: string
       usage: {}
     type: object
+  contextfrag.CacheClass:
+    enum:
+    - stable
+    - dynamic
+    - never
+    type: string
+    x-enum-varnames:
+    - CacheStable
+    - CacheDynamic
+    - CacheNever
+  contextfrag.CacheComparison:
+    properties:
+      first_step_cache_read_tokens:
+        type: integer
+      outcome:
+        type: string
+      prev_age_ms:
+        type: integer
+    type: object
+  contextfrag.CacheUsageRecord:
+    properties:
+      attempt:
+        type: integer
+      cache_read_tokens:
+        type: integer
+      cache_write_1h_tokens:
+        type: integer
+      cache_write_5m_tokens:
+        type: integer
+      cache_write_tokens:
+        type: integer
+      no_cache_tokens:
+        type: integer
+      step_index:
+        type: integer
+    type: object
+  contextfrag.ContentRange:
+    properties:
+      end:
+        type: integer
+      start:
+        type: integer
+    type: object
+  contextfrag.ContextBudgetPlan:
+    properties:
+      actual_system_cost:
+        type: integer
+      current_request_cost:
+        type: integer
+      estimator:
+        type: string
+      estimator_safety_factor_percent:
+        type: integer
+      history_budget:
+        type: integer
+      output_reserve:
+        type: integer
+      system_budget:
+        type: integer
+      tool_defs_cost:
+        type: integer
+      window:
+        type: integer
+    type: object
+  contextfrag.ContextRef:
+    properties:
+      content_hash:
+        type: string
+      durability:
+        $ref: '#/definitions/contextfrag.RefDurability'
+      hash_algo:
+        type: string
+      hash_scope:
+        type: string
+      id:
+        type: string
+      namespace:
+        type: string
+      range:
+        $ref: '#/definitions/contextfrag.ContentRange'
+      schema:
+        type: string
+      version:
+        type: integer
+    type: object
+  contextfrag.Kind:
+    enum:
+    - system_prompt
+    - system_policy
+    - bot_identity
+    - workspace_instruction
+    - platform_identity
+    - tool_usage
+    - conversation_event
+    - current_user_message
+    - attachment_ref
+    - native_image
+    - skills_catalog
+    - hook_context
+    - injected_message
+    - background_summary
+    - acp_context
+    - memory_recall
+    - conversation_summary
+    type: string
+    x-enum-varnames:
+    - KindSystemPrompt
+    - KindSystemPolicy
+    - KindBotIdentity
+    - KindWorkspaceInstruction
+    - KindPlatformIdentity
+    - KindToolUsage
+    - KindConversationEvent
+    - KindCurrentUserMessage
+    - KindAttachmentRef
+    - KindNativeImage
+    - KindSkillsCatalog
+    - KindHookContext
+    - KindInjectedMessage
+    - KindBackgroundSummary
+    - KindACPContext
+    - KindMemoryRecall
+    - KindConversationSummary
+  contextfrag.KindBreakdown:
+    properties:
+      fragments:
+        type: integer
+      images:
+        type: integer
+      kind:
+        $ref: '#/definitions/contextfrag.Kind'
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+    type: object
   contextfrag.LifecycleSnapshot:
     properties:
       assistant_message_id:
         type: string
+      breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.KindBreakdown'
+        type: array
+      budget_plan:
+        $ref: '#/definitions/contextfrag.ContextBudgetPlan'
+      cache_comparison:
+        $ref: '#/definitions/contextfrag.CacheComparison'
+      cache_read_tokens:
+        type: integer
+      cache_usage:
+        items:
+          $ref: '#/definitions/contextfrag.CacheUsageRecord'
+        type: array
+      cache_write_tokens:
+        type: integer
+      client_type:
+        type: string
       counts:
         $ref: '#/definitions/contextfrag.ManifestCounts'
+      final_input_hash:
+        type: string
+      loop_selection_mode:
+        type: string
+      memory_recall:
+        $ref: '#/definitions/contextfrag.MemoryRecallTrace'
+      model:
+        type: string
+      mutations:
+        items:
+          $ref: '#/definitions/contextfrag.MutationRecord'
+        type: array
+      selection:
+        $ref: '#/definitions/contextfrag.SelectionTrace'
+      selection_decisions:
+        items:
+          $ref: '#/definitions/contextfrag.SelectionDecision'
+        type: array
+      stable_message_count:
+        type: integer
+      stable_prefix_hash:
+        type: string
+      stable_prefix_token_estimate:
+        type: integer
+      steps:
+        items:
+          $ref: '#/definitions/contextfrag.StepSnapshot'
+        type: array
+      tool_defs:
+        items:
+          $ref: '#/definitions/contextfrag.ToolDefAccounting'
+        type: array
+      trust_breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.TrustBreakdown'
+        type: array
       version:
         type: integer
       view:
@@ -1768,13 +1958,230 @@ definitions:
         type: integer
       text_bytes:
         type: integer
+      token_estimate:
+        type: integer
     type: object
   contextfrag.ManifestView:
     enum:
     - run_config_pre_provider
+    - acp_runtime_prompt
     type: string
     x-enum-varnames:
     - ViewRunConfigPreProvider
+    - ViewACPRuntimePrompt
+  contextfrag.MemoryRecallQueryTrace:
+    properties:
+      recent_messages:
+        type: integer
+      source:
+        type: string
+      truncated:
+        type: boolean
+    type: object
+  contextfrag.MemoryRecallResultTrace:
+    properties:
+      context_bytes:
+        type: integer
+      count:
+        type: integer
+      refs:
+        items:
+          type: string
+        type: array
+    type: object
+  contextfrag.MemoryRecallTrace:
+    properties:
+      cache_state:
+        type: string
+      fallback_reason:
+        type: string
+      memory_version:
+        type: string
+      provider_id:
+        type: string
+      query:
+        $ref: '#/definitions/contextfrag.MemoryRecallQueryTrace'
+      result:
+        $ref: '#/definitions/contextfrag.MemoryRecallResultTrace'
+      retrieval_mode:
+        type: string
+    type: object
+  contextfrag.MutationKind:
+    enum:
+    - before_model_call_hook
+    - background_summary
+    - mid_task_prune
+    - loop_step_reselection
+    - injected_message
+    - context_view_fallback
+    - context_budget_failure
+    - context_budget_disabled
+    - capability_gate
+    - read_media
+    - mid_stream_retry
+    type: string
+    x-enum-varnames:
+    - MutationBeforeModelCallHook
+    - MutationBackgroundSummary
+    - MutationMidTaskPrune
+    - MutationLoopStepReselection
+    - MutationInjectedMessage
+    - MutationContextViewFallback
+    - MutationContextBudgetFailure
+    - MutationContextBudgetDisabled
+    - MutationCapabilityGate
+    - MutationReadMedia
+    - MutationMidStreamRetry
+  contextfrag.MutationRecord:
+    properties:
+      detail:
+        type: string
+      kind:
+        $ref: '#/definitions/contextfrag.MutationKind'
+    type: object
+  contextfrag.RefDurability:
+    enum:
+    - durable
+    - synthetic
+    - debug
+    type: string
+    x-enum-varnames:
+    - RefDurable
+    - RefSynthetic
+    - RefDebug
+  contextfrag.RetentionTier:
+    enum:
+    - ""
+    - required
+    - preferred
+    - optional
+    type: string
+    x-enum-varnames:
+    - RetentionUnspecified
+    - RetentionRequired
+    - RetentionPreferred
+    - RetentionOptional
+  contextfrag.SelectionDecision:
+    properties:
+      cache_class:
+        $ref: '#/definitions/contextfrag.CacheClass'
+      decision:
+        $ref: '#/definitions/contextfrag.SelectionDecisionKind'
+      id:
+        type: string
+      image_count:
+        type: integer
+      reason:
+        type: string
+      ref:
+        $ref: '#/definitions/contextfrag.ContextRef'
+      retention_tier:
+        $ref: '#/definitions/contextfrag.RetentionTier'
+      slot:
+        $ref: '#/definitions/contextfrag.Slot'
+      source:
+        type: string
+      source_id:
+        type: string
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+    type: object
+  contextfrag.SelectionDecisionKind:
+    enum:
+    - selected
+    - trimmed
+    - dropped
+    type: string
+    x-enum-varnames:
+    - DecisionSelected
+    - DecisionTrimmed
+    - DecisionDropped
+  contextfrag.SelectionTrace:
+    properties:
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      dropped:
+        type: integer
+      selected:
+        type: integer
+    type: object
+  contextfrag.Slot:
+    enum:
+    - system
+    - before_history
+    - history
+    - after_history_before_current
+    - current_user
+    - after_current
+    type: string
+    x-enum-varnames:
+    - SlotSystem
+    - SlotBeforeHistory
+    - SlotHistory
+    - SlotAfterHistoryBeforeCurrent
+    - SlotCurrentUser
+    - SlotAfterCurrent
+  contextfrag.StepSnapshot:
+    properties:
+      attempt:
+        type: integer
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      dropped:
+        type: integer
+      post_prepare_input_hash:
+        type: string
+      reselection_applied:
+        type: boolean
+      reselection_outcome:
+        type: string
+      step_index:
+        type: integer
+      truncated:
+        type: integer
+    type: object
+  contextfrag.ToolDefAccounting:
+    properties:
+      bytes:
+        type: integer
+      name:
+        type: string
+      provider:
+        type: string
+      token_estimate:
+        type: integer
+    type: object
+  contextfrag.TrustBreakdown:
+    properties:
+      fragments:
+        type: integer
+      images:
+        type: integer
+      text_bytes:
+        type: integer
+      token_estimate:
+        type: integer
+      trust:
+        $ref: '#/definitions/contextfrag.TrustLevel'
+    type: object
+  contextfrag.TrustLevel:
+    enum:
+    - system
+    - workspace
+    - user
+    - external
+    type: string
+    x-enum-varnames:
+    - TrustSystem
+    - TrustWorkspace
+    - TrustUser
+    - TrustExternal
   conversation.SkillActivation:
     properties:
       prompt:
@@ -2578,8 +2985,43 @@ definitions:
       used_bytes:
         type: integer
     type: object
+  handlers.ContextLifecycleAggregates:
+    properties:
+      cache_hit_rate:
+        type: number
+      cache_outcomes:
+        additionalProperties:
+          type: integer
+        type: object
+      cache_read_efficiency:
+        type: number
+      drop_reasons:
+        additionalProperties:
+          type: integer
+        type: object
+      mutation_kinds:
+        additionalProperties:
+          type: integer
+        type: object
+      tool_roster_change_details:
+        items:
+          $ref: '#/definitions/handlers.ToolRosterChange'
+        type: array
+      tool_roster_changes:
+        type: integer
+      total_cache_read_tokens:
+        type: integer
+      total_cache_write_tokens:
+        type: integer
+      total_expected_stable_tokens:
+        type: integer
+      turns:
+        type: integer
+    type: object
   handlers.ContextLifecycleResponse:
     properties:
+      aggregates:
+        $ref: '#/definitions/handlers.ContextLifecycleAggregates'
       turns:
         items:
           $ref: '#/definitions/handlers.ContextLifecycleTurn'
@@ -2602,8 +3044,16 @@ definitions:
     type: object
   handlers.ContextUsage:
     properties:
+      breakdown:
+        items:
+          $ref: '#/definitions/contextfrag.KindBreakdown'
+        type: array
       context_window:
         type: integer
+      tool_defs:
+        items:
+          $ref: '#/definitions/handlers.ToolDefBucket'
+        type: array
       used_tokens:
         type: integer
     type: object
@@ -3314,6 +3764,32 @@ definitions:
       reason:
         type: string
     type: object
+  handlers.ToolDefBucket:
+    properties:
+      provider:
+        type: string
+      token_estimate:
+        type: integer
+      tools:
+        type: integer
+    type: object
+  handlers.ToolRosterChange:
+    properties:
+      added:
+        items:
+          type: string
+        type: array
+      removed:
+        items:
+          type: string
+        type: array
+      resized:
+        items:
+          type: string
+        type: array
+      run_id:
+        type: string
+    type: object
   handlers.TriggerCompactResponse:
     properties:
       message_count:
@@ -3734,6 +4210,10 @@ definitions:
     properties:
       action_type:
         type: string
+      append_system_sections:
+        items:
+          $ref: '#/definitions/hooks.SystemSectionOutput'
+        type: array
       decision:
         type: string
       error:
@@ -3752,6 +4232,21 @@ definitions:
         type: string
       stdout:
         type: string
+      warnings:
+        items:
+          $ref: '#/definitions/hooks.OutputWarning'
+        type: array
+    type: object
+  hooks.OutputWarning:
+    properties:
+      code:
+        type: string
+      hook_name:
+        type: string
+      message:
+        type: string
+      section_id:
+        type: string
     type: object
   hooks.Result:
     properties:
@@ -3763,6 +4258,10 @@ definitions:
         type: integer
       append_context:
         type: string
+      append_system_sections:
+        items:
+          $ref: '#/definitions/hooks.SystemSectionOutput'
+        type: array
       decision:
         type: string
       hooks_matched:
@@ -3774,7 +4273,40 @@ definitions:
         type: string
       runtime_supported:
         type: boolean
+      warnings:
+        items:
+          $ref: '#/definitions/hooks.OutputWarning'
+        type: array
     type: object
+  hooks.SystemSectionCache:
+    enum:
+    - dynamic
+    - stable
+    type: string
+    x-enum-varnames:
+    - SystemSectionCacheDynamic
+    - SystemSectionCacheStable
+  hooks.SystemSectionOutput:
+    properties:
+      cache:
+        $ref: '#/definitions/hooks.SystemSectionCache'
+      hook_name:
+        type: string
+      id:
+        type: string
+      retention:
+        $ref: '#/definitions/hooks.SystemSectionRetention'
+      text:
+        type: string
+    type: object
+  hooks.SystemSectionRetention:
+    enum:
+    - optional
+    - preferred
+    type: string
+    x-enum-varnames:
+    - SystemSectionRetentionOptional
+    - SystemSectionRetentionPreferred
   hooks.ToolPayload:
     properties:
       call_id:
@@ -9728,9 +10260,9 @@ paths:
       - compaction
   /bots/{bot_id}/sessions/{session_id}/context-lifecycle:
     get:
-      description: List run-keyed context lifecycle snapshots for a chat session;
-        sessions predating run lifecycle persistence fall back to legacy assistant
-        metadata
+      description: List run-keyed context lifecycle snapshots and aggregate cache,
+        drop, mutation, and tool-roster diagnostics for a chat session; sessions predating
+        run lifecycle persistence fall back to legacy assistant metadata
       parameters:
       - description: Bot ID
         in: path

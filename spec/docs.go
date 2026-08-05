@@ -7065,7 +7065,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/sessions/{session_id}/context-lifecycle": {
             "get": {
-                "description": "List run-keyed context lifecycle snapshots for a chat session; sessions predating run lifecycle persistence fall back to legacy assistant metadata",
+                "description": "List run-keyed context lifecycle snapshots and aggregate cache, drop, mutation, and tool-roster diagnostics for a chat session; sessions predating run lifecycle persistence fall back to legacy assistant metadata",
                 "tags": [
                     "sessions"
                 ],
@@ -16408,14 +16408,284 @@ const docTemplate = `{
                 "usage": {}
             }
         },
+        "contextfrag.CacheClass": {
+            "type": "string",
+            "enum": [
+                "stable",
+                "dynamic",
+                "never"
+            ],
+            "x-enum-varnames": [
+                "CacheStable",
+                "CacheDynamic",
+                "CacheNever"
+            ]
+        },
+        "contextfrag.CacheComparison": {
+            "type": "object",
+            "properties": {
+                "first_step_cache_read_tokens": {
+                    "type": "integer"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "prev_age_ms": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.CacheUsageRecord": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
+                "cache_read_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_1h_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_5m_tokens": {
+                    "type": "integer"
+                },
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "no_cache_tokens": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContentRange": {
+            "type": "object",
+            "properties": {
+                "end": {
+                    "type": "integer"
+                },
+                "start": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContextBudgetPlan": {
+            "type": "object",
+            "properties": {
+                "actual_system_cost": {
+                    "type": "integer"
+                },
+                "current_request_cost": {
+                    "type": "integer"
+                },
+                "estimator": {
+                    "type": "string"
+                },
+                "estimator_safety_factor_percent": {
+                    "type": "integer"
+                },
+                "history_budget": {
+                    "type": "integer"
+                },
+                "output_reserve": {
+                    "type": "integer"
+                },
+                "system_budget": {
+                    "type": "integer"
+                },
+                "tool_defs_cost": {
+                    "type": "integer"
+                },
+                "window": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ContextRef": {
+            "type": "object",
+            "properties": {
+                "content_hash": {
+                    "type": "string"
+                },
+                "durability": {
+                    "$ref": "#/definitions/contextfrag.RefDurability"
+                },
+                "hash_algo": {
+                    "type": "string"
+                },
+                "hash_scope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "namespace": {
+                    "type": "string"
+                },
+                "range": {
+                    "$ref": "#/definitions/contextfrag.ContentRange"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.Kind": {
+            "type": "string",
+            "enum": [
+                "system_prompt",
+                "system_policy",
+                "bot_identity",
+                "workspace_instruction",
+                "platform_identity",
+                "tool_usage",
+                "conversation_event",
+                "current_user_message",
+                "attachment_ref",
+                "native_image",
+                "skills_catalog",
+                "hook_context",
+                "injected_message",
+                "background_summary",
+                "acp_context",
+                "memory_recall",
+                "conversation_summary"
+            ],
+            "x-enum-varnames": [
+                "KindSystemPrompt",
+                "KindSystemPolicy",
+                "KindBotIdentity",
+                "KindWorkspaceInstruction",
+                "KindPlatformIdentity",
+                "KindToolUsage",
+                "KindConversationEvent",
+                "KindCurrentUserMessage",
+                "KindAttachmentRef",
+                "KindNativeImage",
+                "KindSkillsCatalog",
+                "KindHookContext",
+                "KindInjectedMessage",
+                "KindBackgroundSummary",
+                "KindACPContext",
+                "KindMemoryRecall",
+                "KindConversationSummary"
+            ]
+        },
+        "contextfrag.KindBreakdown": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "integer"
+                },
+                "images": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.Kind"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
         "contextfrag.LifecycleSnapshot": {
             "type": "object",
             "properties": {
                 "assistant_message_id": {
                     "type": "string"
                 },
+                "breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.KindBreakdown"
+                    }
+                },
+                "budget_plan": {
+                    "$ref": "#/definitions/contextfrag.ContextBudgetPlan"
+                },
+                "cache_comparison": {
+                    "$ref": "#/definitions/contextfrag.CacheComparison"
+                },
+                "cache_read_tokens": {
+                    "type": "integer"
+                },
+                "cache_usage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.CacheUsageRecord"
+                    }
+                },
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "client_type": {
+                    "type": "string"
+                },
                 "counts": {
                     "$ref": "#/definitions/contextfrag.ManifestCounts"
+                },
+                "final_input_hash": {
+                    "type": "string"
+                },
+                "loop_selection_mode": {
+                    "type": "string"
+                },
+                "memory_recall": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallTrace"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "mutations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.MutationRecord"
+                    }
+                },
+                "selection": {
+                    "$ref": "#/definitions/contextfrag.SelectionTrace"
+                },
+                "selection_decisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.SelectionDecision"
+                    }
+                },
+                "stable_message_count": {
+                    "type": "integer"
+                },
+                "stable_prefix_hash": {
+                    "type": "string"
+                },
+                "stable_prefix_token_estimate": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.StepSnapshot"
+                    }
+                },
+                "tool_defs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.ToolDefAccounting"
+                    }
+                },
+                "trust_breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.TrustBreakdown"
+                    }
                 },
                 "version": {
                     "type": "integer"
@@ -16439,16 +16709,320 @@ const docTemplate = `{
                 },
                 "text_bytes": {
                     "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
                 }
             }
         },
         "contextfrag.ManifestView": {
             "type": "string",
             "enum": [
-                "run_config_pre_provider"
+                "run_config_pre_provider",
+                "acp_runtime_prompt"
             ],
             "x-enum-varnames": [
-                "ViewRunConfigPreProvider"
+                "ViewRunConfigPreProvider",
+                "ViewACPRuntimePrompt"
+            ]
+        },
+        "contextfrag.MemoryRecallQueryTrace": {
+            "type": "object",
+            "properties": {
+                "recent_messages": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "contextfrag.MemoryRecallResultTrace": {
+            "type": "object",
+            "properties": {
+                "context_bytes": {
+                    "type": "integer"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "contextfrag.MemoryRecallTrace": {
+            "type": "object",
+            "properties": {
+                "cache_state": {
+                    "type": "string"
+                },
+                "fallback_reason": {
+                    "type": "string"
+                },
+                "memory_version": {
+                    "type": "string"
+                },
+                "provider_id": {
+                    "type": "string"
+                },
+                "query": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallQueryTrace"
+                },
+                "result": {
+                    "$ref": "#/definitions/contextfrag.MemoryRecallResultTrace"
+                },
+                "retrieval_mode": {
+                    "type": "string"
+                }
+            }
+        },
+        "contextfrag.MutationKind": {
+            "type": "string",
+            "enum": [
+                "before_model_call_hook",
+                "background_summary",
+                "mid_task_prune",
+                "loop_step_reselection",
+                "injected_message",
+                "context_view_fallback",
+                "context_budget_failure",
+                "context_budget_disabled",
+                "capability_gate",
+                "read_media",
+                "mid_stream_retry"
+            ],
+            "x-enum-varnames": [
+                "MutationBeforeModelCallHook",
+                "MutationBackgroundSummary",
+                "MutationMidTaskPrune",
+                "MutationLoopStepReselection",
+                "MutationInjectedMessage",
+                "MutationContextViewFallback",
+                "MutationContextBudgetFailure",
+                "MutationContextBudgetDisabled",
+                "MutationCapabilityGate",
+                "MutationReadMedia",
+                "MutationMidStreamRetry"
+            ]
+        },
+        "contextfrag.MutationRecord": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.MutationKind"
+                }
+            }
+        },
+        "contextfrag.RefDurability": {
+            "type": "string",
+            "enum": [
+                "durable",
+                "synthetic",
+                "debug"
+            ],
+            "x-enum-varnames": [
+                "RefDurable",
+                "RefSynthetic",
+                "RefDebug"
+            ]
+        },
+        "contextfrag.RetentionTier": {
+            "type": "string",
+            "enum": [
+                "",
+                "required",
+                "preferred",
+                "optional"
+            ],
+            "x-enum-varnames": [
+                "RetentionUnspecified",
+                "RetentionRequired",
+                "RetentionPreferred",
+                "RetentionOptional"
+            ]
+        },
+        "contextfrag.SelectionDecision": {
+            "type": "object",
+            "properties": {
+                "cache_class": {
+                    "$ref": "#/definitions/contextfrag.CacheClass"
+                },
+                "decision": {
+                    "$ref": "#/definitions/contextfrag.SelectionDecisionKind"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "image_count": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "ref": {
+                    "$ref": "#/definitions/contextfrag.ContextRef"
+                },
+                "retention_tier": {
+                    "$ref": "#/definitions/contextfrag.RetentionTier"
+                },
+                "slot": {
+                    "$ref": "#/definitions/contextfrag.Slot"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_id": {
+                    "type": "string"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.SelectionDecisionKind": {
+            "type": "string",
+            "enum": [
+                "selected",
+                "trimmed",
+                "dropped"
+            ],
+            "x-enum-varnames": [
+                "DecisionSelected",
+                "DecisionTrimmed",
+                "DecisionDropped"
+            ]
+        },
+        "contextfrag.SelectionTrace": {
+            "type": "object",
+            "properties": {
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "dropped": {
+                    "type": "integer"
+                },
+                "selected": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.Slot": {
+            "type": "string",
+            "enum": [
+                "system",
+                "before_history",
+                "history",
+                "after_history_before_current",
+                "current_user",
+                "after_current"
+            ],
+            "x-enum-varnames": [
+                "SlotSystem",
+                "SlotBeforeHistory",
+                "SlotHistory",
+                "SlotAfterHistoryBeforeCurrent",
+                "SlotCurrentUser",
+                "SlotAfterCurrent"
+            ]
+        },
+        "contextfrag.StepSnapshot": {
+            "type": "object",
+            "properties": {
+                "attempt": {
+                    "type": "integer"
+                },
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "dropped": {
+                    "type": "integer"
+                },
+                "post_prepare_input_hash": {
+                    "type": "string"
+                },
+                "reselection_applied": {
+                    "type": "boolean"
+                },
+                "reselection_outcome": {
+                    "type": "string"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.ToolDefAccounting": {
+            "type": "object",
+            "properties": {
+                "bytes": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
+        "contextfrag.TrustBreakdown": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "integer"
+                },
+                "images": {
+                    "type": "integer"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                },
+                "trust": {
+                    "$ref": "#/definitions/contextfrag.TrustLevel"
+                }
+            }
+        },
+        "contextfrag.TrustLevel": {
+            "type": "string",
+            "enum": [
+                "system",
+                "workspace",
+                "user",
+                "external"
+            ],
+            "x-enum-varnames": [
+                "TrustSystem",
+                "TrustWorkspace",
+                "TrustUser",
+                "TrustExternal"
             ]
         },
         "conversation.SkillActivation": {
@@ -17667,9 +18241,62 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.ContextLifecycleAggregates": {
+            "type": "object",
+            "properties": {
+                "cache_hit_rate": {
+                    "type": "number"
+                },
+                "cache_outcomes": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "cache_read_efficiency": {
+                    "type": "number"
+                },
+                "drop_reasons": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "mutation_kinds": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "tool_roster_change_details": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ToolRosterChange"
+                    }
+                },
+                "tool_roster_changes": {
+                    "type": "integer"
+                },
+                "total_cache_read_tokens": {
+                    "type": "integer"
+                },
+                "total_cache_write_tokens": {
+                    "type": "integer"
+                },
+                "total_expected_stable_tokens": {
+                    "type": "integer"
+                },
+                "turns": {
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.ContextLifecycleResponse": {
             "type": "object",
             "properties": {
+                "aggregates": {
+                    "$ref": "#/definitions/handlers.ContextLifecycleAggregates"
+                },
                 "turns": {
                     "type": "array",
                     "items": {
@@ -17704,8 +18331,20 @@ const docTemplate = `{
         "handlers.ContextUsage": {
             "type": "object",
             "properties": {
+                "breakdown": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.KindBreakdown"
+                    }
+                },
                 "context_window": {
                     "type": "integer"
+                },
+                "tool_defs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ToolDefBucket"
+                    }
                 },
                 "used_tokens": {
                     "type": "integer"
@@ -18797,6 +19436,46 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.ToolDefBucket": {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                },
+                "tools": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ToolRosterChange": {
+            "type": "object",
+            "properties": {
+                "added": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "removed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "resized": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "run_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.TriggerCompactResponse": {
             "type": "object",
             "properties": {
@@ -19435,6 +20114,12 @@ const docTemplate = `{
                 "action_type": {
                     "type": "string"
                 },
+                "append_system_sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.SystemSectionOutput"
+                    }
+                },
                 "decision": {
                     "type": "string"
                 },
@@ -19460,6 +20145,29 @@ const docTemplate = `{
                 },
                 "stdout": {
                     "type": "string"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.OutputWarning"
+                    }
+                }
+            }
+        },
+        "hooks.OutputWarning": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "hook_name": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "section_id": {
+                    "type": "string"
                 }
             }
         },
@@ -19478,6 +20186,12 @@ const docTemplate = `{
                 "append_context": {
                     "type": "string"
                 },
+                "append_system_sections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.SystemSectionOutput"
+                    }
+                },
                 "decision": {
                     "type": "string"
                 },
@@ -19493,8 +20207,56 @@ const docTemplate = `{
                 },
                 "runtime_supported": {
                     "type": "boolean"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/hooks.OutputWarning"
+                    }
                 }
             }
+        },
+        "hooks.SystemSectionCache": {
+            "type": "string",
+            "enum": [
+                "dynamic",
+                "stable"
+            ],
+            "x-enum-varnames": [
+                "SystemSectionCacheDynamic",
+                "SystemSectionCacheStable"
+            ]
+        },
+        "hooks.SystemSectionOutput": {
+            "type": "object",
+            "properties": {
+                "cache": {
+                    "$ref": "#/definitions/hooks.SystemSectionCache"
+                },
+                "hook_name": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "retention": {
+                    "$ref": "#/definitions/hooks.SystemSectionRetention"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "hooks.SystemSectionRetention": {
+            "type": "string",
+            "enum": [
+                "optional",
+                "preferred"
+            ],
+            "x-enum-varnames": [
+                "SystemSectionRetentionOptional",
+                "SystemSectionRetentionPreferred"
+            ]
         },
         "hooks.ToolPayload": {
             "type": "object",
