@@ -42,24 +42,24 @@
                 <Spinner class="size-3.5" />
               </div>
 
-              <!-- Read-only sessions (subagent / system / synced channel
-                   threads) can't take new input, so an empty one states why it
-                   has nothing. A fresh, writable chat instead gets the centered
-                   welcome composer below, never a stray line in a blank pane. -->
+              <!-- A session with a live run but no messages yet (a subagent
+                   that has not produced output) reads as starting, not empty. -->
               <div
-                v-if="messages.length === 0 && !loadingChats && !loadingMessages && activeChatReadOnly"
+                v-if="messages.length === 0 && !loadingChats && !loadingMessages && streaming"
                 class="flex items-center justify-center min-h-75"
               >
-                <p
-                  v-if="activeSession?.type === 'subagent'"
-                  class="text-muted-foreground text-xs"
-                >
-                  {{ $t('chat.emptySubagent') }}
-                </p>
-                <p
-                  v-else
-                  class="text-muted-foreground text-xs"
-                >
+                <Spinner class="size-3.5" />
+              </div>
+
+              <!-- Read-only sessions (system / synced channel threads) can't
+                   take new input, so an empty one states why it has nothing.
+                   A fresh, writable chat instead gets the centered welcome
+                   composer below, never a stray line in a blank pane. -->
+              <div
+                v-else-if="messages.length === 0 && !loadingChats && !loadingMessages && activeChatReadOnly"
+                class="flex items-center justify-center min-h-75"
+              >
+                <p class="text-muted-foreground text-xs">
                   {{ $t('chat.emptySystemSession') }}
                 </p>
               </div>
@@ -97,7 +97,6 @@
                   >
                     <MessageItem
                       :message="msg"
-                      :session-type="activeSession?.type"
                       :bot-id="currentBotId"
                       :channel-thread="isChannelThread"
                       :channel-platform="channelPlatform"
@@ -761,7 +760,7 @@ import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useCom
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
 import { commandResultQuickActionText, isCommandResultItemSelectable } from './slash-command-result'
-import { captureChatPaneSendContext, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, shouldRefreshACPComposerConfig } from './chat-pane-send'
+import { captureChatPaneSendContext, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, acpAgentIcon, findMissingRequiredManagedField, isACPAgentEnabled, isACPNoProject, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
@@ -841,6 +840,9 @@ const activeChatReadOnly = computed(() => chatStore.chatReadOnlyFor(paneTarget.v
 const activeChatCanFork = computed(() => chatStore.chatCanForkFor(paneTarget.value))
 const overrideModelId = ref('')
 const overrideReasoningEffort = ref('')
+// Set once the user picks a model in this pane, so late-arriving defaults
+// (a subagent's pinned model, bot settings) never overwrite their choice.
+const userPickedModel = ref(false)
 const paneComposerScope = computed(() => {
   const botId = paneTarget.value.botId
   return botId ? `${botId}:${paneTarget.value.viewId}` : 'chat'
@@ -854,8 +856,8 @@ const hasRenderedSession = computed(() =>
 )
 
 // A fresh, writable chat opens with the composer centred and a greeting above
-// it. Read-only sessions (subagent / system / synced channel threads) hide the
-// composer entirely, so they never reach this state.
+// it. Read-only sessions (system / synced channel threads) hide the composer
+// entirely, so they never reach this state.
 const isWelcome = computed(() =>
   !!currentBotId.value
   && !hasRenderedSession.value
@@ -1692,10 +1694,21 @@ const modelTriggerLabel = computed(() =>
     : selectedModelLabel.value,
 )
 
+// A subagent runs on the model it was pinned to when it was spawned, recorded
+// on its session at creation. The composer has to open on that model: it sends
+// model_id with every message, so defaulting to the bot's chat model would move
+// the agent onto another model the moment a human talks to it — silently, since
+// the picker would still read as "the default".
+const pinnedSubagentModelId = computed(() => resolvePinnedSubagentModelId(
+  activeSession.value?.type,
+  activeSessionMetadata.value,
+  models.value.map(model => model.id),
+))
+
 function initFromBotSettings() {
   if (activeUsesACPComposer.value || !botSettings.value) return
   if (!overrideModelId.value) {
-    overrideModelId.value = botSettings.value.chat_model_id ?? ''
+    overrideModelId.value = pinnedSubagentModelId.value || botSettings.value.chat_model_id || ''
   }
   if (!overrideReasoningEffort.value) {
     // reasoning_effort is the bot's whole reasoning decision now, including
@@ -1706,6 +1719,20 @@ function initFromBotSettings() {
 }
 
 watch([botSettings, activeUsesACPComposer], () => initFromBotSettings(), { immediate: true })
+
+// The session summary and the model list are both fetched, so the pinned model
+// routinely lands after bot settings already seeded the default. Adopt it then
+// too — but never over a model the user picked themselves.
+watch(pinnedSubagentModelId, (pinned, previous) => {
+  if (userPickedModel.value || activeUsesACPComposer.value) return
+  if (pinned) {
+    overrideModelId.value = pinned
+    return
+  }
+  // Repointed off a subagent: hand the composer back to the bot's own default
+  // rather than leaving the agent's pinned model selected for a plain chat.
+  if (previous) overrideModelId.value = botSettings.value?.chat_model_id ?? ''
+}, { immediate: true })
 
 watch(availableReasoningEfforts, (efforts) => {
   if (activeUsesACPComposer.value) return
@@ -1722,12 +1749,21 @@ watch(availableReasoningEfforts, (efforts) => {
 watch(currentBotId, () => {
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
+  userPickedModel.value = false
+})
+
+// A pane can be repointed at another session without remounting, and the model
+// a user picked belongs to the session they picked it in — clear the flag so the
+// next session's pinned model can still seed the composer.
+watch(() => paneTarget.value.sessionId, () => {
+  userPickedModel.value = false
 })
 
 watch(activeUsesACPComposer, (usesACP, previouslyUsedACP) => {
   if (usesACP === previouslyUsedACP) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
+  userPickedModel.value = false
   if (!usesACP) initFromBotSettings()
 })
 
@@ -1959,6 +1995,7 @@ async function onComposerModelValueSelected(value: string) {
   if (activeUsesACPComposer.value && acpConfigChanging.value) return
   const previousModel = overrideModelId.value
   const previousReasoningEffort = overrideReasoningEffort.value
+  userPickedModel.value = true
   overrideModelId.value = value
   if (!activeUsesACPComposer.value) {
     onModelSelected()
