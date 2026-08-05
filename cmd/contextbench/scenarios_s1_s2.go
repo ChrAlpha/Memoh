@@ -313,6 +313,8 @@ func s2Payload(fixture benchFixture, history []sdk.Message, input s2TurnInput, v
 		messages := append(cloneMessages(history), memory, hookMessage, current)
 		return providerPayload{System: baseSystem, Messages: messages}, contextfrag.CachePlan{}
 	case "legacy-hooksys":
+		// This is the explicitly named true-upstream hook-authority emulation,
+		// separate from the tree's byte-equivalent legacy assembly baseline.
 		messages := append(cloneMessages(history), memory, current)
 		return providerPayload{System: baseSystem + "\n\n" + input.hook, Messages: messages}, contextfrag.CachePlan{}
 	case "typed":

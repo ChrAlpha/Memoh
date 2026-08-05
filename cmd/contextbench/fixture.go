@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -270,8 +271,9 @@ func seededText(rng *rand.Rand, size int, multilingual bool) string {
 	for out.Len()+len(pattern) <= size {
 		out.WriteString(pattern)
 	}
+	const alphabet = "abcdefghijklmnopqrstuvwxyz"
 	for out.Len() < size {
-		out.WriteByte(byte('a' + rng.Intn(26)))
+		out.WriteByte(alphabet[rng.Intn(len(alphabet))])
 	}
 	return out.String()
 }
@@ -290,9 +292,17 @@ func equalMessages(left, right sdk.Message) bool {
 }
 
 func twoDigits(value int) string {
-	return string([]byte{'0' + byte(value/10), '0' + byte(value%10)})
+	return paddedDecimal(value, 2)
 }
 
 func threeDigits(value int) string {
-	return string([]byte{'0' + byte(value/100), '0' + byte(value/10%10), '0' + byte(value%10)})
+	return paddedDecimal(value, 3)
+}
+
+func paddedDecimal(value, width int) string {
+	raw := strconv.Itoa(value)
+	if len(raw) >= width {
+		return raw
+	}
+	return strings.Repeat("0", width-len(raw)) + raw
 }

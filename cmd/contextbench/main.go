@@ -12,14 +12,23 @@ import (
 const (
 	s1OutputName = "s1-granularity.jsonl"
 	s2OutputName = "s2-prefix-stability.jsonl"
+	s3OutputName = "s3-step-governance.jsonl"
+	s4OutputName = "s4-overhead.jsonl"
 )
 
 func main() {
 	outDir := flag.String("out", "benchout", "directory for JSONL output")
+	benchInput := flag.String("bench-input", "", "go test -bench output to convert into S4 JSONL")
 	flag.Parse()
 	if err := runDeterministicScenarios(*outDir); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "contextbench: %v\n", err)
 		os.Exit(1)
+	}
+	if *benchInput != "" {
+		if err := writeS4Results(*outDir, *benchInput); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "contextbench: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -27,7 +36,7 @@ func runDeterministicScenarios(outDir string) error {
 	if outDir == "" {
 		return errors.New("output directory is required")
 	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	fixture := buildS1Fixture()
@@ -35,6 +44,9 @@ func runDeterministicScenarios(outDir string) error {
 		return err
 	}
 	if err := writeJSONL(filepath.Join(outDir, s2OutputName), runS2(fixture)); err != nil {
+		return err
+	}
+	if err := writeJSONL(filepath.Join(outDir, s3OutputName), runS3(fixture)); err != nil {
 		return err
 	}
 	return nil

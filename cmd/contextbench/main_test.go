@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,17 +15,25 @@ import (
 )
 
 func TestDeterministicScenarioRunsAreByteIdentical(t *testing.T) {
-	t.Parallel()
-
+	buildDir := t.TempDir()
+	binary := filepath.Join(buildDir, "contextbench")
+	build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, ".") //nolint:gosec // fixed local build command
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build contextbench: %v\n%s", err, output)
+	}
+	benchInput := filepath.Join(buildDir, "bench.txt")
+	if err := os.WriteFile(benchInput, []byte(testBenchmarkOutput()), 0o600); err != nil {
+		t.Fatalf("write fixed benchmark input: %v", err)
+	}
 	first := t.TempDir()
 	second := t.TempDir()
-	if err := runDeterministicScenarios(first); err != nil {
-		t.Fatalf("first run: %v", err)
+	for _, outDir := range []string{first, second} {
+		command := exec.CommandContext(context.Background(), binary, "-out", outDir, "-bench-input", benchInput) //nolint:gosec // binary and input are fixed files under t.TempDir
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("run contextbench: %v\n%s", err, output)
+		}
 	}
-	if err := runDeterministicScenarios(second); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	for _, name := range []string{s1OutputName, s2OutputName} {
+	for _, name := range []string{s1OutputName, s2OutputName, s3OutputName, s4OutputName} {
 		left, err := os.ReadFile(filepath.Join(first, name)) //nolint:gosec // fixed name under t.TempDir
 		if err != nil {
 			t.Fatalf("read first %s: %v", name, err)
@@ -33,6 +45,98 @@ func TestDeterministicScenarioRunsAreByteIdentical(t *testing.T) {
 		if !bytes.Equal(left, right) {
 			t.Fatalf("%s differs across full scenario runs", name)
 		}
+	}
+}
+
+func TestParseBenchmarkResultsUsesFiveSampleMedian(t *testing.T) {
+	t.Parallel()
+
+	records, err := parseBenchmarkResults(testBenchmarkOutput())
+	if err != nil {
+		t.Fatalf("parse benchmark output: %v", err)
+	}
+	if len(records) != len(benchmarkOrder) {
+		t.Fatalf("records = %d, want %d", len(records), len(benchmarkOrder))
+	}
+	for _, record := range records {
+		if record.Samples != 5 || record.NSPerOp != 300 || record.BytesPerOp != 12 || record.AllocsPerOp != 4 {
+			t.Fatalf("record = %#v", record)
+		}
+		if math.Abs(record.ProviderRoundTripPercent-0.00003) > 1e-12 {
+			t.Fatalf("provider percentage = %v", record.ProviderRoundTripPercent)
+		}
+	}
+}
+
+func testBenchmarkOutput() string {
+	var output strings.Builder
+	for _, benchmark := range benchmarkOrder {
+		for i, ns := range []int{500, 100, 300, 200, 400} {
+			_, _ = output.WriteString(benchmark + "-16 100 " + strconv.Itoa(ns) + " ns/op " + strconv.Itoa(10+i) + " B/op " + strconv.Itoa(2+i) + " allocs/op\n")
+		}
+	}
+	return output.String()
+}
+
+func TestS3TraceMeetsGovernanceContract(t *testing.T) {
+	t.Parallel()
+
+	records := runS3(buildS1Fixture())
+	if len(records) != s3StepCount*2 {
+		t.Fatalf("records = %d, want %d", len(records), s3StepCount*2)
+	}
+
+	counts := make(map[string]int)
+	hugeCounts := make(map[string]int)
+	imageCounts := make(map[string]int)
+	lastLegacyTokens := 0
+	typedFatals := 0
+	for _, record := range records {
+		counts[record.Variant]++
+		if record.HugeResult {
+			hugeCounts[record.Variant]++
+		}
+		if record.ImageStep {
+			imageCounts[record.Variant]++
+		}
+		if !record.ToolClosureValid || !record.PrefixIntact || !record.InjectedMessagesStillPresent {
+			t.Fatalf("%s step %d violated closure/prefix/injection: %#v", record.Variant, record.Step, record)
+		}
+		switch record.Variant {
+		case "legacy":
+			if record.PayloadTokens < lastLegacyTokens {
+				t.Fatalf("legacy payload fell at step %d: %d < %d", record.Step, record.PayloadTokens, lastLegacyTokens)
+			}
+			lastLegacyTokens = record.PayloadTokens
+			if record.AttemptPreflightAllowanceExact {
+				t.Fatalf("legacy step %d claims typed attempt-preflight allowance", record.Step)
+			}
+		case "typed":
+			if record.ProtectedContentViolations != 0 || !record.ProtectedContentIntact {
+				t.Fatalf("typed step %d lost protected content: %#v", record.Step, record)
+			}
+			if !record.AttemptPreflightAllowanceExact {
+				t.Fatalf("typed step %d did not mirror attempt-preflight allowance", record.Step)
+			}
+			if record.Fatal {
+				typedFatals++
+				if record.ProviderCallAllowed {
+					t.Fatalf("typed fatal step %d allowed a provider call", record.Step)
+				}
+			} else if !record.ProviderCallAllowed {
+				t.Fatalf("typed accepted step %d blocked the provider: %#v", record.Step, record)
+			}
+		default:
+			t.Fatalf("unexpected variant %q", record.Variant)
+		}
+	}
+	for _, variant := range []string{"legacy", "typed"} {
+		if counts[variant] != s3StepCount || hugeCounts[variant] != s3HugeResultCount || imageCounts[variant] != s3ImageStepCount {
+			t.Fatalf("%s counts: rows=%d huge=%d images=%d", variant, counts[variant], hugeCounts[variant], imageCounts[variant])
+		}
+	}
+	if typedFatals == 0 {
+		t.Fatal("typed trace did not exercise fail-closed protected overflow")
 	}
 }
 
