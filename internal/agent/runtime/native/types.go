@@ -141,6 +141,7 @@ type RunConfig struct {
 	ContextQueryMaterialized       bool
 	ContextToolUsage               string
 	ContextToolUsageFrags          []contextfrag.ContextFrag
+	ContextHookText                string
 	ContextToolDefs                []contextfrag.ToolDefAccounting
 	ContextToolDefsResolved        bool
 	ContextToolExchangePolicy      *contextfrag.ToolExchangePolicy
