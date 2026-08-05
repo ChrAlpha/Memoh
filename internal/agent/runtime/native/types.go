@@ -70,6 +70,12 @@ type ContextStepSelectionInput struct {
 	InitialMessageCount int
 	Messages            []sdk.Message
 	BudgetMaxTokens     int
+	// ProviderSystem, ProviderTools, and ProviderInputAllowanceTokens carry
+	// the complete provider envelope into step reselection. A zero allowance
+	// keeps the unlimited-window contract and disables serialized enforcement.
+	ProviderSystem               string
+	ProviderTools                []sdk.Tool
+	ProviderInputAllowanceTokens int
 	// RecentProtectTokens carries the run's recent-protection window override
 	// so step reselection resolves the same window as the provider view. Nil
 	// uses the view default; a pointer to zero disables the window.
@@ -133,6 +139,7 @@ type RunConfig struct {
 	ContextQueryMaterialized       bool
 	ContextToolUsage               string
 	ContextToolUsageFrags          []contextfrag.ContextFrag
+	ContextHookText                string
 	ContextToolDefs                []contextfrag.ToolDefAccounting
 	ContextToolDefsResolved        bool
 	ContextToolExchangePolicy      *contextfrag.ToolExchangePolicy

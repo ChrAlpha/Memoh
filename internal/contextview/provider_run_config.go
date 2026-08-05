@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -73,6 +74,13 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	if err != nil {
 		return nil
 	}
+	hook, err := (&HookContextCollector{}).Collect(ctx, CollectRequest{
+		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: HookContextConfig{Text: cfg.ContextHookText},
+	})
+	if err != nil {
+		return nil
+	}
 	var memory []contextfrag.ContextFrag
 	if index, ok := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex); ok {
 		message := cfg.Messages[index]
@@ -92,6 +100,7 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Provenance.Index < messages[j].Provenance.Index
 	})
+	messages = insertContextFragsBeforeCurrent(messages, hook)
 
 	if cfg.ContextQueryMaterialized {
 		return messages
@@ -111,6 +120,26 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	messages = append(messages, rawCurrent...)
 	messages = append(messages, images...)
 	return messages
+}
+
+func insertContextFragsBeforeCurrent(frags, dynamic []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	if len(dynamic) == 0 {
+		return frags
+	}
+	history := make([]contextfrag.ContextFrag, 0, len(frags))
+	current := make([]contextfrag.ContextFrag, 0, 1)
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
+			current = append(current, frag)
+			continue
+		}
+		history = append(history, frag)
+	}
+	out := make([]contextfrag.ContextFrag, 0, len(frags)+len(dynamic))
+	out = append(out, history...)
+	out = append(out, dynamic...)
+	out = append(out, current...)
+	return out
 }
 
 func preserveExplicitHistoryMetadata(collected []contextfrag.ContextFrag, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
@@ -214,14 +243,10 @@ func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*co
 	if err != nil {
 		return nil, err
 	}
-	toolDefsCost := 0
-	for _, def := range cfg.ContextToolDefs {
-		toolDefsCost += max(def.TokenEstimate, contextfrag.ProviderBudgetTokensFromBytes(def.Bytes))
-	}
 	return ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
 		min(DefaultOutputReserveTokens, cfg.ContextBudgetMaxTokens/4),
-		toolDefsCost,
+		providerToolDefsCost(cfg.ContextToolDefs),
 		currentRequestCost,
 	)
 }
@@ -306,11 +331,11 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		}
 		providerSourceFrags = frags
 	} else {
-		cfg = legacyMaterializeQuery(cfg)
 		frags = CollectProviderSourceFrags(ctx, cfg)
 		if frags == nil {
 			return providerViewFallback(logger, cfg, ledger, "collect_error", "context view collection failed", nil), nil
 		}
+		cfg = materializeLegacyQuery(cfg, false)
 	}
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
 	if cfg.ContextBudgetMaxTokens == 0 {
@@ -362,6 +387,10 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	if !ok {
 		return providerViewFallback(logger, fallbackCfg, ledger, "unexpected_payload", "context view rendered unexpected payload", nil), nil
 	}
+	if err := validateProviderRenderedEnvelope(payload, cfg.ContextToolDefs, budgetPlan); err != nil {
+		recordContextBudgetFailure(ledger, err)
+		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
+	}
 
 	plan := cachePlanFromPlacement(view.Placement)
 	plan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
@@ -389,6 +418,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		cfg.ContextCurrentUserMessageIndex = nil
 	}
 	cfg.ContextQueryMaterialized = true
+	cfg.ContextHookText = ""
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
@@ -557,14 +587,21 @@ func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Man
 }
 
 func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	return materializeLegacyQuery(cfg, true)
+}
+
+func materializeLegacyQuery(cfg agentpkg.RunConfig, includeHookContext bool) agentpkg.RunConfig {
 	if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" && !strings.Contains(cfg.System, usage) {
 		cfg.System = appendToolUsageLegacy(cfg.System, usage)
+	}
+	cfg.Messages = cloneMessages(cfg.Messages)
+	cfg.ForkContextSourceMessageIDs = append([]string(nil), cfg.ForkContextSourceMessageIDs...)
+	if includeHookContext {
+		cfg = insertFallbackHookContext(cfg)
 	}
 	if cfg.ContextQueryMaterialized {
 		return cfg
 	}
-	cfg.Messages = cloneMessages(cfg.Messages)
-	cfg.ForkContextSourceMessageIDs = append([]string(nil), cfg.ForkContextSourceMessageIDs...)
 	imageParts := make([]sdk.MessagePart, 0, len(cfg.InlineImages))
 	for _, image := range cfg.InlineImages {
 		if strings.TrimSpace(image.Image) != "" {
@@ -599,6 +636,82 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	cfg.ContextCurrentUserMessageIndex = intPointer(len(cfg.Messages) - 1)
 	cfg.ContextQueryMaterialized = true
 	return cfg
+}
+
+func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	text := strings.TrimSpace(cfg.ContextHookText)
+	cfg.ContextHookText = ""
+	if text == "" || utf8.RuneCountInString(text) > maxHookContextChars {
+		return cfg
+	}
+
+	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex)
+	currentIndex, hasCurrent := markedCurrentUserMessageIndex(
+		cfg.Messages,
+		cfg.ContextCurrentUserMessageIndex,
+		optionalIndex(memoryIndex, hasMemory)...,
+	)
+	if !hasCurrent {
+		currentIndex, hasCurrent = sourceCurrentUserMessageIndex(cfg, memoryIndex, hasMemory)
+	}
+	if !hasCurrent {
+		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+		if len(cfg.ForkContextSourceMessageIDs) == len(cfg.Messages)-1 {
+			cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+		}
+		return cfg
+	}
+
+	messageCount := len(cfg.Messages)
+	currentMessage := cfg.Messages[currentIndex]
+	messages := make([]sdk.Message, 0, messageCount+1)
+	messages = append(messages, cfg.Messages[:currentIndex]...)
+	messages = append(messages, cfg.Messages[currentIndex+1:]...)
+	messages = append(messages, sdk.UserMessage(text), currentMessage)
+	cfg.Messages = messages
+	if len(cfg.ForkContextSourceMessageIDs) == messageCount {
+		currentSourceID := cfg.ForkContextSourceMessageIDs[currentIndex]
+		sourceIDs := make([]string, 0, messageCount+1)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[:currentIndex]...)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[currentIndex+1:]...)
+		sourceIDs = append(sourceIDs, "", currentSourceID)
+		cfg.ForkContextSourceMessageIDs = sourceIDs
+	}
+	if len(cfg.ContextHistoryTokenEstimates) == messageCount {
+		currentEstimate := cfg.ContextHistoryTokenEstimates[currentIndex]
+		estimates := make([]int, 0, messageCount+1)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[:currentIndex]...)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[currentIndex+1:]...)
+		estimates = append(estimates, 0, currentEstimate)
+		cfg.ContextHistoryTokenEstimates = estimates
+	}
+	cfg.ContextCurrentUserMessageIndex = intPointer(messageCount)
+	if hasMemory {
+		if memoryIndex > currentIndex {
+			memoryIndex--
+		}
+		cfg.ContextMemoryMessageIndex = intPointer(memoryIndex)
+	}
+	return cfg
+}
+
+func sourceCurrentUserMessageIndex(cfg agentpkg.RunConfig, memoryIndex int, hasMemory bool) (int, bool) {
+	for i := len(cfg.ContextSourceFrags) - 1; i >= 0; i-- {
+		frag := cfg.ContextSourceFrags[i]
+		if frag.Kind != contextfrag.KindCurrentUserMessage && frag.Slot != contextfrag.SlotCurrentUser {
+			continue
+		}
+		index := frag.Provenance.Index
+		if index < 0 || index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser ||
+			hasMemory && index == memoryIndex {
+			continue
+		}
+		message, ok := singleSDKMessage(frag)
+		if ok && reflect.DeepEqual(message, cfg.Messages[index]) {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func appendToolUsageLegacy(system, usage string) string {

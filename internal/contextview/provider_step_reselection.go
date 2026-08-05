@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"fmt"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -42,32 +43,107 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		return agentpkg.ContextStepSelectionResult{}
 	}
 	frags = markInjectedLoopUserFrags(frags)
+	if input.ProviderInputAllowanceTokens > 0 {
+		frags = applyProviderStepSerializedCosts(frags, input)
+	}
 
 	selector := &FragmentSelector{}
-	selection := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), providerStepBudgetEnvelope(input))
-	if selection.FatalError != nil {
-		return agentpkg.ContextStepSelectionResult{FatalError: selection.FatalError}
-	}
+	budget := input.BudgetMaxTokens
+	for attempt := 0; attempt <= len(frags)+1; attempt++ {
+		attemptInput := input
+		attemptInput.BudgetMaxTokens = budget
+		selection := selector.Select(
+			frags,
+			selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
+			providerStepBudgetEnvelope(attemptInput),
+		)
+		if selection.FatalError != nil {
+			return agentpkg.ContextStepSelectionResult{FatalError: selection.FatalError}
+		}
 
-	selected := selectedProviderStepFrags(selection, input.Scope)
-	truncated := 0
-	if len(input.Messages) >= input.MinMessages {
-		selected, truncated = truncateOldToolResultFrags(selected, input.KeepRecentToolResults)
-	}
-	if len(selection.Dropped) == 0 && truncated == 0 {
-		return agentpkg.ContextStepSelectionResult{}
-	}
+		selected := selectedProviderStepFrags(selection, input.Scope)
+		truncated := 0
+		if len(input.Messages) >= input.MinMessages {
+			selected, truncated = truncateOldToolResultFrags(selected, input.KeepRecentToolResults)
+		}
+		changed := len(selection.Dropped) > 0 || truncated > 0
+		messages := input.Messages
+		if changed {
+			messages = make([]sdk.Message, 0, input.InitialMessageCount+len(selected))
+			messages = append(messages, cloneSDKMessages(input.Messages[:input.InitialMessageCount])...)
+			messages = append(messages, sdkMessagesFromFrags(selected)...)
+		}
 
-	messages := make([]sdk.Message, 0, input.InitialMessageCount+len(selected))
-	messages = append(messages, cloneSDKMessages(input.Messages[:input.InitialMessageCount])...)
-	messages = append(messages, sdkMessagesFromFrags(selected)...)
+		overflow := providerStepEnvelopeOverflow(input, messages)
+		if overflow <= 0 {
+			if !changed {
+				return agentpkg.ContextStepSelectionResult{}
+			}
+			return agentpkg.ContextStepSelectionResult{
+				Messages:    messages,
+				Dropped:     len(selection.Dropped),
+				Truncated:   truncated,
+				DropReasons: dropReasonHistogram(selection.Summary.DropReasons),
+			}
+		}
 
-	return agentpkg.ContextStepSelectionResult{
-		Messages:    messages,
-		Dropped:     len(selection.Dropped),
-		Truncated:   truncated,
-		DropReasons: dropReasonHistogram(selection.Summary.DropReasons),
+		nextBudget := budget - overflow
+		if nextBudget < 1 {
+			nextBudget = 1
+		}
+		if nextBudget >= budget {
+			break
+		}
+		budget = nextBudget
 	}
+	return agentpkg.ContextStepSelectionResult{FatalError: fmt.Errorf(
+		"%w: serialized provider step exceeds input allowance %d",
+		contextfrag.ErrBudgetUnsatisfied,
+		input.ProviderInputAllowanceTokens,
+	)}
+}
+
+func applyProviderStepSerializedCosts(
+	frags []contextfrag.ContextFrag,
+	input agentpkg.ContextStepSelectionInput,
+) []contextfrag.ContextFrag {
+	prefix := append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...)
+	_, runningBytes := contextfrag.ProviderPayloadHashAndBytes(input.ProviderSystem, prefix, input.ProviderTools)
+	runningTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
+	_, emptyEnvelopeBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{}, nil)
+	messageCount := len(prefix)
+	for i := range frags {
+		msg := providerStepFragMessage(frags[i])
+		if msg == nil {
+			continue
+		}
+		_, singletonBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{*msg}, nil)
+		messageBytes := singletonBytes - emptyEnvelopeBytes
+		if messageCount == 0 {
+			// The fixed-envelope measurement serializes an empty cloned prefix as
+			// null. The first message replaces those four bytes with [<message>].
+			messageBytes -= 2
+		} else {
+			messageBytes++ // comma before an appended array element
+		}
+		runningBytes += messageBytes
+		nextTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
+		serializedTokens := nextTokens - runningTokens
+		if serializedTokens > frags[i].TokenEstimate {
+			frags[i].TokenEstimate = serializedTokens
+		}
+		runningTokens = nextTokens
+		messageCount++
+	}
+	return frags
+}
+
+func providerStepEnvelopeOverflow(input agentpkg.ContextStepSelectionInput, messages []sdk.Message) int {
+	if input.ProviderInputAllowanceTokens <= 0 {
+		return 0
+	}
+	_, payloadBytes := contextfrag.ProviderPayloadHashAndBytes(input.ProviderSystem, messages, input.ProviderTools)
+	return contextfrag.ProviderBudgetTokensFromBytes(payloadBytes) - input.ProviderInputAllowanceTokens
 }
 
 // markInjectedLoopUserFrags types user-role messages appended during the tool

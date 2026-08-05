@@ -302,13 +302,16 @@ func (s *Service) collectDiscussSourceFrags(
 	inlineImages []sdk.ImagePart,
 ) []contextfrag.ContextFrag {
 	var systemFrags []contextfrag.ContextFrag
-	var appendedFrags []contextfrag.ContextFrag
+	var memoryFrags []contextfrag.ContextFrag
+	var hookFrags []contextfrag.ContextFrag
 	for _, frag := range runConfig.ContextSourceFrags {
 		switch {
 		case frag.Slot == contextfrag.SlotSystem:
 			systemFrags = append(systemFrags, frag)
-		case frag.Kind == contextfrag.KindMemoryRecall || frag.Kind == contextfrag.KindHookContext:
-			appendedFrags = append(appendedFrags, frag)
+		case frag.Kind == contextfrag.KindMemoryRecall:
+			memoryFrags = append(memoryFrags, frag)
+		case frag.Kind == contextfrag.KindHookContext:
+			hookFrags = append(hookFrags, frag)
 		}
 	}
 	frags, err := (&contextview.DiscussSDKContextBuilder{}).CollectDiscussSourceFrags(
@@ -327,7 +330,24 @@ func (s *Service) collectDiscussSourceFrags(
 		}
 		return nil
 	}
-	return append(frags, appendedFrags...)
+	dynamic := make([]contextfrag.ContextFrag, 0, len(memoryFrags)+len(hookFrags))
+	dynamic = append(dynamic, memoryFrags...)
+	dynamic = append(dynamic, hookFrags...)
+	if len(dynamic) == 0 {
+		return frags
+	}
+	currentIndex := len(frags)
+	for i, frag := range frags {
+		if frag.Kind == contextfrag.KindCurrentUserMessage {
+			currentIndex = i
+			break
+		}
+	}
+	out := make([]contextfrag.ContextFrag, 0, len(frags)+len(dynamic))
+	out = append(out, frags[:currentIndex]...)
+	out = append(out, dynamic...)
+	out = append(out, frags[currentIndex:]...)
+	return out
 }
 
 // maybeCompactDiscuss re-evaluates compaction pressure after a native discuss

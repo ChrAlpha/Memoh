@@ -260,6 +260,7 @@ func TestAgentGenerateRunsStepReselectorBeforeNextProviderCall(t *testing.T) {
 
 func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 	t.Parallel()
+	const budget = 1_000
 
 	modelProvider := &atomicMockProvider{
 		handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
@@ -295,7 +296,7 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 		SupportsToolCall:       true,
 		Identity:               SessionContext{BotID: "bot-1"},
 		ContextMutations:       contextfrag.NewMutationLedger(),
-		ContextBudgetMaxTokens: 20,
+		ContextBudgetMaxTokens: budget,
 		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
 			seenBudget = input.BudgetMaxTokens
 			return ContextStepSelectionResult{}
@@ -304,7 +305,7 @@ func TestAgentGeneratePassesRemainingBudgetToStepReselector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	if seenBudget <= 0 || seenBudget >= 20 {
+	if seenBudget <= 0 || seenBudget >= budget {
 		t.Fatalf("step budget = %d, want remaining budget below full run budget", seenBudget)
 	}
 }
@@ -365,6 +366,12 @@ func TestAgentGenerateActivePlanStepBudgetSubtractsFixedEnvelopeOnce(t *testing.
 			allowance := plan.Window - plan.OutputReserve
 			expectedBudget = remainingStepBudget(allowance, &firstParams, input.InitialMessageCount)
 			seenBudget = input.BudgetMaxTokens
+			if input.ProviderSystem != firstParams.System || len(input.ProviderTools) != len(firstParams.Tools) {
+				t.Fatalf("step provider envelope = system %q tools %d, want system %q tools %d", input.ProviderSystem, len(input.ProviderTools), firstParams.System, len(firstParams.Tools))
+			}
+			if input.ProviderInputAllowanceTokens != allowance {
+				t.Fatalf("step provider allowance = %d, want %d", input.ProviderInputAllowanceTokens, allowance)
+			}
 			return ContextStepSelectionResult{}
 		},
 	})
