@@ -317,6 +317,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		return
 	}
 	cfg = captureProviderAttemptPrefix(cfg)
+	if readMediaState != nil {
+		readMediaState.ledger = cfg.ContextMutations
+	}
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
@@ -859,6 +862,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (result *Generat
 		return nil, contextViewErr
 	}
 	cfg = captureProviderAttemptPrefix(cfg)
+	if readMediaState != nil {
+		readMediaState.ledger = cfg.ContextMutations
+	}
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, limit)
 	approvalTools := append([]sdk.Tool(nil), sdkTools...)
 	sdkTools = a.wrapToolsWithHooks(ctx, cfg, sdkTools)
