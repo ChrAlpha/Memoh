@@ -17,6 +17,7 @@ import (
 	sdk "github.com/memohai/twilight-ai/sdk"
 
 	"github.com/memohai/memoh/internal/agent/background"
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	dbstore "github.com/memohai/memoh/internal/db/store"
@@ -36,23 +37,25 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
-	Model                 *sdk.Model
-	ModelUUID             string
-	ModelID               string
-	ModelProvider         string
-	System                string
-	Query                 string
-	SessionType           string
-	Identity              SpawnIdentity
-	LoopDetection         SpawnLoopConfig
-	Messages              []sdk.Message
-	ReasoningEffort       string
-	PromptCacheTTL        string
-	ChatCompletionsCompat string
-	SupportsImageInput    bool
-	SupportsToolCall      bool
-	Skills                map[string]SkillDetail
-	BackgroundManager     *background.Manager
+	Model                     *sdk.Model
+	ModelUUID                 string
+	ModelID                   string
+	ModelProvider             string
+	System                    string
+	Query                     string
+	SessionType               string
+	Identity                  SpawnIdentity
+	LoopDetection             SpawnLoopConfig
+	Messages                  []sdk.Message
+	ReasoningEffort           string
+	PromptCacheTTL            string
+	ChatCompletionsCompat     string
+	SupportsImageInput        bool
+	SupportsToolCall          bool
+	Skills                    map[string]SkillDetail
+	BackgroundManager         *background.Manager
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 }
 
 // SpawnIdentity mirrors agent.SessionContext fields needed by subagent controls.
@@ -177,14 +180,15 @@ type agentSessionService interface {
 }
 
 type resolvedSubagentModel struct {
-	Model                 *sdk.Model
-	UUID                  string
-	ModelID               string
-	ProviderName          string
-	PromptCacheTTL        string
-	ChatCompletionsCompat string
-	SupportsImageInput    bool
-	SupportsToolCall      bool
+	Model                  *sdk.Model
+	UUID                   string
+	ModelID                string
+	ProviderName           string
+	PromptCacheTTL         string
+	ChatCompletionsCompat  string
+	SupportsImageInput     bool
+	SupportsToolCall       bool
+	ContextBudgetMaxTokens int
 }
 
 type subagentModelCatalogItem struct {
@@ -417,15 +421,16 @@ type agentRunResult struct {
 }
 
 type agentRequest struct {
-	taskID           string
-	agentID          string
-	agentSessionID   string
-	message          string
-	messagePersisted bool
-	parentSession    SessionContext
-	config           sessionpkg.SubagentConfig
-	runtime          resolvedSubagentModel
-	systemPrompt     string
+	taskID                 string
+	agentID                string
+	agentSessionID         string
+	message                string
+	messagePersisted       bool
+	parentSession          SessionContext
+	config                 sessionpkg.SubagentConfig
+	runtime                resolvedSubagentModel
+	contextBudgetMaxTokens int
+	systemPrompt           string
 }
 
 type agentCoordinator struct {
@@ -663,13 +668,14 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 	}
 
 	req := &agentRequest{
-		agentID:        rec.AgentID,
-		agentSessionID: rec.SessionID,
-		message:        message,
-		parentSession:  session,
-		config:         config,
-		runtime:        runtime,
-		systemPrompt:   systemPrompt,
+		agentID:                rec.AgentID,
+		agentSessionID:         rec.SessionID,
+		message:                message,
+		parentSession:          session,
+		config:                 config,
+		runtime:                runtime,
+		contextBudgetMaxTokens: runtime.ContextBudgetMaxTokens,
+		systemPrompt:           systemPrompt,
 	}
 	description := truncateTitle(fmt.Sprintf("%s: %s", rec.AgentID, message), 120)
 
@@ -890,21 +896,27 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		combined = append(combined, history...)
 		history = combined
 	}
+	contextBudgetMaxTokens := req.contextBudgetMaxTokens
+	if contextBudgetMaxTokens <= 0 {
+		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
+	}
 	cfg := SpawnRunConfig{
-		Model:                 req.runtime.Model,
-		ModelUUID:             req.runtime.UUID,
-		ModelID:               req.runtime.ModelID,
-		ModelProvider:         req.runtime.ProviderName,
-		System:                req.systemPrompt,
-		Query:                 req.message,
-		SessionType:           sessionpkg.TypeSubagent,
-		PromptCacheTTL:        req.runtime.PromptCacheTTL,
-		ChatCompletionsCompat: req.runtime.ChatCompletionsCompat,
-		SupportsImageInput:    req.runtime.SupportsImageInput,
-		SupportsToolCall:      req.runtime.SupportsToolCall,
-		Messages:              history,
-		Skills:                req.parentSession.Skills,
-		BackgroundManager:     p.bgManager,
+		Model:                     req.runtime.Model,
+		ModelUUID:                 req.runtime.UUID,
+		ModelID:                   req.runtime.ModelID,
+		ModelProvider:             req.runtime.ProviderName,
+		System:                    req.systemPrompt,
+		Query:                     req.message,
+		SessionType:               sessionpkg.TypeSubagent,
+		PromptCacheTTL:            req.runtime.PromptCacheTTL,
+		ChatCompletionsCompat:     req.runtime.ChatCompletionsCompat,
+		SupportsImageInput:        req.runtime.SupportsImageInput,
+		SupportsToolCall:          req.runtime.SupportsToolCall,
+		Messages:                  history,
+		Skills:                    req.parentSession.Skills,
+		BackgroundManager:         p.bgManager,
+		ContextBudgetMaxTokens:    contextBudgetMaxTokens,
+		ContextToolExchangePolicy: req.parentSession.ContextToolExchangePolicy,
 		Identity: SpawnIdentity{
 			BotID:               req.parentSession.BotID,
 			ChatID:              req.parentSession.ChatID,
@@ -1548,14 +1560,15 @@ func (p *SpawnProvider) resolveModel(
 		ChatCompletionsCompat: chatCompletionsCompat,
 	})
 	return resolvedSubagentModel{
-		Model:                 sdkModel,
-		UUID:                  modelInfo.ID,
-		ModelID:               modelInfo.ModelID,
-		ProviderName:          provider.Name,
-		PromptCacheTTL:        providers.ProviderConfigString(provider, "prompt_cache_ttl"),
-		ChatCompletionsCompat: chatCompletionsCompat,
-		SupportsImageInput:    modelInfo.HasCompatibility(models.CompatVision),
-		SupportsToolCall:      modelInfo.HasCompatibility(models.CompatToolCall),
+		Model:                  sdkModel,
+		UUID:                   modelInfo.ID,
+		ModelID:                modelInfo.ModelID,
+		ProviderName:           provider.Name,
+		PromptCacheTTL:         providers.ProviderConfigString(provider, "prompt_cache_ttl"),
+		ChatCompletionsCompat:  chatCompletionsCompat,
+		SupportsImageInput:     modelInfo.HasCompatibility(models.CompatVision),
+		SupportsToolCall:       modelInfo.HasCompatibility(models.CompatToolCall),
+		ContextBudgetMaxTokens: modelInfo.Config.ContextBudgetMaxTokens(),
 	}, nil
 }
 

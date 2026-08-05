@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/sessionmode"
 	"github.com/memohai/memoh/internal/agent/tool/internal/toolset"
 )
@@ -320,13 +321,15 @@ type SessionContext struct {
 	ForkContext          *MessageSnapshot
 	// WorkspaceTargetID is the request-scoped default for file and command
 	// tools. An explicit tool target_id still takes precedence.
-	WorkspaceTargetID   string
-	WorkspaceTargetKind string
-	WorkspaceTargetName string
-	Skills              map[string]SkillDetail
-	TimezoneLocation    *time.Location
-	Emitter             StreamEmitter
-	LiveStream          bool
+	WorkspaceTargetID         string
+	WorkspaceTargetKind       string
+	WorkspaceTargetName       string
+	Skills                    map[string]SkillDetail
+	TimezoneLocation          *time.Location
+	Emitter                   StreamEmitter
+	LiveStream                bool
+	ContextBudgetMaxTokens    int
+	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
 }
 
 // CanAskUser reports whether ask_user can be both shown to the model and
