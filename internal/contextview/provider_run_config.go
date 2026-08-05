@@ -214,14 +214,10 @@ func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*co
 	if err != nil {
 		return nil, err
 	}
-	toolDefsCost := 0
-	for _, def := range cfg.ContextToolDefs {
-		toolDefsCost += max(def.TokenEstimate, contextfrag.ProviderBudgetTokensFromBytes(def.Bytes))
-	}
 	return ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
 		min(DefaultOutputReserveTokens, cfg.ContextBudgetMaxTokens/4),
-		toolDefsCost,
+		providerToolDefsCost(cfg.ContextToolDefs),
 		currentRequestCost,
 	)
 }
@@ -361,6 +357,10 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
 		return providerViewFallback(logger, fallbackCfg, ledger, "unexpected_payload", "context view rendered unexpected payload", nil), nil
+	}
+	if err := validateProviderRenderedEnvelope(payload, cfg.ContextToolDefs, budgetPlan); err != nil {
+		recordContextBudgetFailure(ledger, err)
+		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)

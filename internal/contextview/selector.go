@@ -86,7 +86,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 
 	if drops, dropReasons := trimDrops(tagged, historyBudget, budget.RecentProtectTokens); len(drops) > 0 {
 		if budget.Plan != nil && hasSpatialBudgetDrop(dropReasons) {
-			noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
+			noticeCost := contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 			if noticeCost > historyBudget {
 				result := selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
 				result.FatalError = contextfrag.ErrProtectedContextOverflow

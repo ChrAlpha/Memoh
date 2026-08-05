@@ -364,7 +364,7 @@ func TestSystemBudgetActualCostShrinksHistoryBudgetAndChargesProtectedHistory(t 
 		t.Fatalf("plan-disabled selection dropped %v, want none", fragIDs(withoutPlan.Dropped))
 	}
 
-	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
+	noticeCost := contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 	plan := &contextfrag.ContextBudgetPlan{
 		Window:       1000,
 		SystemBudget: 150 + 40 + noticeCost + 1,
