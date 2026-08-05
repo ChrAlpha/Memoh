@@ -1111,10 +1111,14 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, mode LoopReselec
 	}
 
 	beforeMessages := append([]sdk.Message(nil), params.Messages...)
+	inputAllowance := stepReselectionAllowance(cfg)
 	selection := reselector(ctx, ContextStepSelectionInput{
 		Scope: cfg.ContextScope, InitialMessageCount: prefixCount, Messages: params.Messages,
-		BudgetMaxTokens:     remainingStepBudget(stepReselectionAllowance(cfg), params, prefixCount),
-		RecentProtectTokens: cfg.ContextRecentProtectTokens, KeepRecentToolResults: stepReselectKeepRecentToolResults,
+		BudgetMaxTokens:              remainingStepBudget(inputAllowance, params, prefixCount),
+		ProviderSystem:               params.System,
+		ProviderTools:                params.Tools,
+		ProviderInputAllowanceTokens: inputAllowance,
+		RecentProtectTokens:          cfg.ContextRecentProtectTokens, KeepRecentToolResults: stepReselectKeepRecentToolResults,
 		MinMessages: stepReselectMinMessages,
 	})
 	if mode == LoopReselectShadow {
@@ -1135,13 +1139,7 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, mode LoopReselec
 
 	switch {
 	case selection.FatalError != nil:
-		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
-		params.Messages = append([]sdk.Message(nil), params.Messages[:prefixCount]...)
-		cfg.ContextMutations.AppendStepSnapshot(snapshot)
-		if cfg.contextStepFailure != nil {
-			cfg.contextStepFailure(selection.FatalError)
-		}
-		return params
+		return failPreparedProviderAttempt(cfg, params, snapshot, prefixCount, selection.FatalError)
 	case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, prefixCount):
 		params.Messages = selection.Messages
 		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeApplied
@@ -1149,13 +1147,46 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, mode LoopReselec
 		snapshot.Dropped = selection.Dropped
 		snapshot.Truncated = selection.Truncated
 		snapshot.DropReasons = copyDropReasons(selection.DropReasons)
-		if selection.Dropped > 0 || selection.Truncated > 0 {
-			cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
-		}
 	default:
 		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 	}
+	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {
+		return failPreparedProviderAttempt(cfg, params, snapshot, prefixCount, fmt.Errorf(
+			"%w: serialized_input_overflow=%d allowance=%d",
+			contextfrag.ErrBudgetUnsatisfied,
+			overflow,
+			inputAllowance,
+		))
+	}
+	if snapshot.ReselectionApplied && (selection.Dropped > 0 || selection.Truncated > 0) {
+		cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, contextStepSelectionDetail(selection))
+	}
 	recordPreparedProviderAttempt(cfg, params, snapshot, systemPrepended)
+	return params
+}
+
+func providerAttemptEnvelopeOverflow(params *sdk.GenerateParams, allowance int) int {
+	if params == nil || allowance <= 0 {
+		return 0
+	}
+	_, payloadBytes := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
+	return contextfrag.ProviderBudgetTokensFromBytes(payloadBytes) - allowance
+}
+
+func failPreparedProviderAttempt(
+	cfg RunConfig,
+	params *sdk.GenerateParams,
+	snapshot contextfrag.StepSnapshot,
+	prefixCount int,
+	err error,
+) *sdk.GenerateParams {
+	snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
+	snapshot.ReselectionApplied = false
+	params.Messages = append([]sdk.Message(nil), params.Messages[:prefixCount]...)
+	cfg.ContextMutations.AppendStepSnapshot(snapshot)
+	if cfg.contextStepFailure != nil {
+		cfg.contextStepFailure(err)
+	}
 	return params
 }
 
