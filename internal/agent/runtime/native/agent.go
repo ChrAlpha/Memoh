@@ -388,6 +388,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 							}
 						}
 						p.Messages = append(p.Messages, sdk.UserMessage(text, extra...))
+						cfg.ContextMutations.Record(contextfrag.MutationInjectedMessage, fmt.Sprintf("bytes=%d", len(text)))
 						if cfg.InjectedRecorder != nil {
 							cfg.InjectedRecorder(text, insertAfter)
 						}
