@@ -136,13 +136,7 @@ func (s *readMediaDecorationState) mergeMessages(steps []sdk.StepResult, fallbac
 		return fallback
 	}
 	if len(steps) == 0 {
-		merged := append([]sdk.Message(nil), fallback...)
-		for _, injection := range injections {
-			if shouldMergeReadMediaInjection(injection, interruptedDurableStep) {
-				merged = append(merged, injection.message)
-			}
-		}
-		return merged
+		return fallback
 	}
 
 	merged := make([]sdk.Message, 0, len(fallback)+len(injections))
@@ -150,14 +144,14 @@ func (s *readMediaDecorationState) mergeMessages(steps []sdk.StepResult, fallbac
 	for stepIndex, step := range steps {
 		merged = append(merged, step.Messages...)
 		for injectionIndex < len(injections) && injections[injectionIndex].afterStep == stepIndex {
-			if shouldMergeReadMediaInjection(injections[injectionIndex], interruptedDurableStep) {
+			if shouldMergeReadMediaInjection(injections[injectionIndex], len(steps), interruptedDurableStep) {
 				merged = append(merged, injections[injectionIndex].message)
 			}
 			injectionIndex++
 		}
 	}
 	for injectionIndex < len(injections) {
-		if shouldMergeReadMediaInjection(injections[injectionIndex], interruptedDurableStep) {
+		if shouldMergeReadMediaInjection(injections[injectionIndex], len(steps), interruptedDurableStep) {
 			merged = append(merged, injections[injectionIndex].message)
 		}
 		injectionIndex++
@@ -165,10 +159,11 @@ func (s *readMediaDecorationState) mergeMessages(steps []sdk.StepResult, fallbac
 	return merged
 }
 
-func shouldMergeReadMediaInjection(injection readMediaInjection, interruptedDurableStep int) bool {
+func shouldMergeReadMediaInjection(injection readMediaInjection, completedStepCount, interruptedDurableStep int) bool {
 	// A persisted interrupted checkpoint is decorated with the same admitted
 	// input, so terminal fallback must not add that carrier a second time.
-	return injection.admitted && injection.afterStep+1 != interruptedDurableStep
+	targetStep := injection.afterStep + 1
+	return injection.admitted && targetStep >= 0 && targetStep < completedStepCount && targetStep != interruptedDurableStep
 }
 
 func (s *readMediaDecorationState) reconcilePreparedMessages(step int, admissions []admittedPreparedMessage) {
@@ -185,7 +180,7 @@ func (s *readMediaDecorationState) reconcilePreparedMessages(step int, admission
 	}
 }
 
-func (s *readMediaDecorationState) admittedInjections() []readMediaInjection {
+func (s *readMediaDecorationState) durableInjections(completedStepCount, interruptedDurableStep int) []readMediaInjection {
 	if s == nil {
 		return nil
 	}
@@ -193,7 +188,7 @@ func (s *readMediaDecorationState) admittedInjections() []readMediaInjection {
 	defer s.mu.Unlock()
 	out := make([]readMediaInjection, 0, len(s.injections))
 	for _, injection := range s.injections {
-		if injection.admitted {
+		if shouldMergeReadMediaInjection(injection, completedStepCount, interruptedDurableStep) {
 			out = append(out, injection)
 		}
 	}

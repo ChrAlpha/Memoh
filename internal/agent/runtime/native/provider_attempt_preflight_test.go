@@ -305,6 +305,7 @@ func TestPrepareProviderAttemptStepZeroWindowZeroAppliesSuffixHygiene(t *testing
 		false,
 		len(prefix),
 		0,
+		preparedMessageProvenance{},
 		&sdk.GenerateParams{Messages: messages},
 	)
 	if err := handoff.publish(*params); err != nil {

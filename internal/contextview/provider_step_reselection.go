@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -68,10 +69,12 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		}
 		changed := len(selection.Dropped) > 0 || truncated > 0
 		messages := input.Messages
+		var messageSourceIndexes []int
 		if changed {
 			messages = make([]sdk.Message, 0, input.InitialMessageCount+len(selected))
 			messages = append(messages, cloneSDKMessages(input.Messages[:input.InitialMessageCount])...)
 			messages = append(messages, sdkMessagesFromFrags(selected)...)
+			messageSourceIndexes = providerStepMessageSourceIndexes(input.Messages, input.InitialMessageCount, selected)
 		}
 
 		overflow := providerStepEnvelopeOverflow(input, messages)
@@ -80,10 +83,12 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 				return agentpkg.ContextStepSelectionResult{}
 			}
 			return agentpkg.ContextStepSelectionResult{
-				Messages:    messages,
-				Dropped:     len(selection.Dropped),
-				Truncated:   truncated,
-				DropReasons: dropReasonHistogram(selection.Summary.DropReasons),
+				Messages:                  messages,
+				MessageSourceIndexes:      messageSourceIndexes,
+				MessageSourceIndexesKnown: true,
+				Dropped:                   len(selection.Dropped),
+				Truncated:                 truncated,
+				DropReasons:               dropReasonHistogram(selection.Summary.DropReasons),
 			}
 		}
 
@@ -258,6 +263,28 @@ func sdkMessagesFromFrags(frags []contextfrag.ContextFrag) []sdk.Message {
 		}
 	}
 	return messages
+}
+
+func providerStepMessageSourceIndexes(inputMessages []sdk.Message, prefixCount int, frags []contextfrag.ContextFrag) []int {
+	indexes := make([]int, 0, prefixCount+len(frags))
+	for i := 0; i < prefixCount; i++ {
+		indexes = append(indexes, i)
+	}
+	for _, frag := range frags {
+		for _, part := range frag.Parts {
+			if part.Type != contextfrag.PartSDKMessage || sdkMessagePart(part) == nil {
+				continue
+			}
+			sourceIndex := prefixCount + frag.Provenance.Index
+			if frag.Provenance.Collector != historyMessagesCollectorName ||
+				sourceIndex < prefixCount || sourceIndex >= len(inputMessages) ||
+				!reflect.DeepEqual(inputMessages[sourceIndex], *sdkMessagePart(part)) {
+				sourceIndex = -1
+			}
+			indexes = append(indexes, sourceIndex)
+		}
+	}
+	return indexes
 }
 
 func cloneSDKMessages(messages []sdk.Message) []sdk.Message {

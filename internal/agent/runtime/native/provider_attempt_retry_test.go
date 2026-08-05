@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -369,7 +370,11 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 		toolCall,
 		toolResult,
 		sdk.UserMessage("dynamic hook"),
-	}}, 1, true)
+	}}, 1, true, preparedMessageProvenance{
+		step:           1,
+		messageIndexes: []int{-1, 0, 1, 2, 3},
+		known:          true,
+	})
 	previous := &sdk.StreamResult{Steps: []sdk.StepResult{
 		{Messages: []sdk.Message{toolCall, toolResult}},
 		{Messages: []sdk.Message{sdk.AssistantMessage("partial retry tail")}},
@@ -404,5 +409,13 @@ func TestProviderAttemptStateBuildsRawRetryMessages(t *testing.T) {
 	}
 	if textOfMessage(messages[len(messages)-1]) != "partial retry tail" {
 		t.Fatalf("current partial output was not appended: %#v", messages)
+	}
+	retryInput, ok := state.retryInput(previous)
+	if !ok {
+		t.Fatal("retry provenance input was not available")
+	}
+	wantSources := []int{0, 1, 2, 3, -1}
+	if !retryInput.provenance.known || !reflect.DeepEqual(retryInput.provenance.messageIndexes, wantSources) {
+		t.Fatalf("retry provenance = %#v/%t, want %#v", retryInput.provenance.messageIndexes, retryInput.provenance.known, wantSources)
 	}
 }

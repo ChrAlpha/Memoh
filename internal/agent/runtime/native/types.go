@@ -92,11 +92,20 @@ type ContextStepSelectionInput struct {
 }
 
 type ContextStepSelectionResult struct {
-	Messages    []sdk.Message
-	Dropped     int
-	Truncated   int
-	DropReasons map[string]int
-	FatalError  error
+	Messages []sdk.Message
+	// MessageSourceIndexes maps each returned message to its absolute index in
+	// ContextStepSelectionInput.Messages. Synthetic messages use -1. A
+	// normalized byte-identical unchanged output can inherit every input
+	// origin. Otherwise a missing or invalid vector preserves only verified
+	// protected-prefix origins and treats every suffix origin as unknown.
+	// Custom reselectors that need dynamic carriers to become durable must
+	// return a complete, exact source-index vector.
+	MessageSourceIndexes      []int
+	MessageSourceIndexesKnown bool
+	Dropped                   int
+	Truncated                 int
+	DropReasons               map[string]int
+	FatalError                error
 }
 
 type ContextStepReselector func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult
@@ -163,6 +172,7 @@ type RunConfig struct {
 	initialProviderMessageCount    int
 	initialProviderPrefixSet       bool
 	providerAttemptState           *providerAttemptState
+	providerMessageProvenance      preparedMessageProvenance
 	preparedStepMessages           *stepMessageCapture
 	contextStepFailure             func(error)
 	SessionType                    string

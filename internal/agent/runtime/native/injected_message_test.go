@@ -472,7 +472,18 @@ func TestAgentStreamRecordsOnlyAdmittedDuplicateInjection(t *testing.T) {
 			for i := len(selected) - 1; i >= input.InitialMessageCount; i-- {
 				if providerAttemptContainsText([]sdk.Message{selected[i]}, marker) {
 					selected = append(selected[:i], selected[i+1:]...)
-					return ContextStepSelectionResult{Messages: selected, Dropped: 1}
+					sourceIndexes := make([]int, 0, len(selected))
+					for sourceIndex := range input.Messages {
+						if sourceIndex != i {
+							sourceIndexes = append(sourceIndexes, sourceIndex)
+						}
+					}
+					return ContextStepSelectionResult{
+						Messages:                  selected,
+						MessageSourceIndexes:      sourceIndexes,
+						MessageSourceIndexesKnown: true,
+						Dropped:                   1,
+					}
 				}
 			}
 			t.Fatal("selector did not find duplicate injection")

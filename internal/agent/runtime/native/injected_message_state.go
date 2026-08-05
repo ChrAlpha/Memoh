@@ -76,21 +76,15 @@ func (s *injectedMessageState) flush(
 		outputCounts[i+1] = outputCounts[i] + len(steps[i].Messages)
 	}
 	for _, record := range records {
-		if record.admitted {
-			step := record.step
-			if step < 0 {
-				step = 0
-			}
-			if step > len(steps) {
-				step = len(steps)
-			}
-			insertAfter := outputCounts[step]
-			for _, injection := range readMediaInjections {
-				if injection.admitted && injection.afterStep < step {
-					insertAfter++
-				}
-			}
-			recorder(record.text, insertAfter)
+		if !record.admitted || record.step < 0 || record.step >= len(steps) {
+			continue
 		}
+		insertAfter := outputCounts[record.step]
+		for _, injection := range readMediaInjections {
+			if injection.afterStep < record.step {
+				insertAfter++
+			}
+		}
+		recorder(record.text, insertAfter)
 	}
 }

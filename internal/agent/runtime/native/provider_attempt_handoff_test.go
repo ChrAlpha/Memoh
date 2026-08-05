@@ -32,7 +32,7 @@ func TestProviderAttemptHandoffRejectsCanceledDispatch(t *testing.T) {
 			ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: oldHash})
 			fork := agenttools.NewMessageSnapshot(oldParams.Messages)
 			attemptState := &providerAttemptState{}
-			attemptState.store(&oldParams, 0, false)
+			attemptState.store(&oldParams, 0, false, preparedMessageProvenance{})
 
 			prepare, capture := capturePreparedStepMessages(func(params *sdk.GenerateParams) *sdk.GenerateParams {
 				params.Messages = append(params.Messages, sdk.UserMessage("not dispatched"))
@@ -51,7 +51,12 @@ func TestProviderAttemptHandoffRejectsCanceledDispatch(t *testing.T) {
 				preparedStepMessages: capture,
 			}
 			handoff := newProviderAttemptHandoff(cfg)
-			handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, "dropped=1")
+			handoff.stage(
+				contextfrag.StepSnapshot{StepIndex: 1},
+				false,
+				"dropped=1",
+				capture.latestProvenance(newParams.Messages),
+			)
 
 			var calls atomic.Int32
 			provider := &atomicMockProvider{
@@ -101,7 +106,7 @@ func TestProviderAttemptHandoffRejectsCanceledDispatch(t *testing.T) {
 				t.Fatalf("retry messages = %#v, %t; want prior dispatched messages %#v", retryMessages, ok, oldParams.Messages)
 			}
 			if got := capture.messages(1); len(got) != 0 {
-				t.Fatalf("captured messages = %#v, want canceled attempt revoked", got)
+				t.Fatalf("captured messages = %#v, want rejected admission revoked", got)
 			}
 			if _, err := guard.DoGenerate(context.Background(), newParams); !errors.Is(err, errProviderAttemptNotPrepared) {
 				t.Fatalf("second guard call error = %v, want stale handoff cleared", err)
@@ -144,7 +149,12 @@ func TestProviderAttemptHandoffPublishesBeforeProviderEntry(t *testing.T) {
 				preparedStepMessages: capture,
 			}
 			handoff := newProviderAttemptHandoff(cfg)
-			handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, "dropped=1")
+			handoff.stage(
+				contextfrag.StepSnapshot{StepIndex: 1},
+				false,
+				"dropped=1",
+				capture.latestProvenance(params.Messages),
+			)
 
 			var calls atomic.Int32
 			inspect := func(got sdk.GenerateParams) {

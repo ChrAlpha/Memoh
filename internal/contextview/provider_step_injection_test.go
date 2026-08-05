@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -214,6 +215,25 @@ func TestStepReselectionDropsBulkyImagePayloadsUnderBudgetPressure(t *testing.T)
 	}
 	if !selectionHasUserText(selection.Messages, "injected instruction") {
 		t.Fatal("text injection must survive step budget pressure")
+	}
+	if !selection.MessageSourceIndexesKnown || len(selection.MessageSourceIndexes) != len(selection.Messages) {
+		t.Fatalf("message provenance = %#v/%t, want one source per selected message", selection.MessageSourceIndexes, selection.MessageSourceIndexesKnown)
+	}
+	if selection.MessageSourceIndexes[0] != 0 {
+		t.Fatalf("fixed prefix source = %d, want input index 0", selection.MessageSourceIndexes[0])
+	}
+	foundSynthetic := false
+	for i, sourceIndex := range selection.MessageSourceIndexes {
+		if sourceIndex < 0 {
+			foundSynthetic = true
+			continue
+		}
+		if sourceIndex >= len(messages) || !reflect.DeepEqual(selection.Messages[i], messages[sourceIndex]) {
+			t.Fatalf("selected message %d source = %d, want exact input message", i, sourceIndex)
+		}
+	}
+	if !foundSynthetic {
+		t.Fatal("budget drop provenance omitted the synthetic trim notice")
 	}
 	loopEstimate := 0
 	for _, msg := range selection.Messages[len(prefix):] {

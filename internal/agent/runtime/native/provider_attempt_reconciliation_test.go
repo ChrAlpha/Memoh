@@ -308,6 +308,73 @@ func TestAgentStreamRetryRevokesReadMediaAdmission(t *testing.T) {
 	}
 }
 
+func TestAgentStreamProviderStartFailureDoesNotPersistReadMedia(t *testing.T) {
+	t.Parallel()
+
+	pdfBytes := []byte("%PDF-1.4\nfailed provider start\n%%EOF\n")
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		switch call {
+		case 1:
+			return &sdk.GenerateResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-failed-start-pdf",
+					ToolName:   "read",
+					Input:      map[string]any{"path": "/data/failed-start.pdf"},
+				}},
+			}, nil
+		case 2:
+			if !messagesHaveFilePart(params.Messages) {
+				t.Fatal("failed provider start did not receive admitted file")
+			}
+			return nil, errors.New("invalid provider request")
+		default:
+			t.Fatalf("provider call %d crossed the nonretryable start failure", call)
+			return nil, nil
+		}
+	}}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		agenttools.NewContainerProvider(nil, newAgentReadMediaBridgeProvider(t, map[string][]byte{
+			"failed-start.pdf": pdfBytes,
+		}), nil, "/data"),
+	})
+
+	var committed []sdk.StepResult
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:          []sdk.Message{sdk.UserMessage("inspect the document")},
+		SupportsFileInput: true,
+		SupportsToolCall:  true,
+		Identity:          SessionContext{BotID: "bot-1"},
+		ContextMutations:  contextfrag.NewMutationLedger(),
+		OnStepCommitted: func(_ context.Context, _ int, step *sdk.StepResult) error {
+			committed = append(committed, *step)
+			return nil
+		},
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+
+	if modelProvider.calls.Load() != 2 {
+		t.Fatalf("provider calls = %d, want 2", modelProvider.calls.Load())
+	}
+	if len(committed) != 1 || messagesHaveFilePart(committed[0].Messages) {
+		t.Fatalf("committed steps = %#v, want only completed step zero without file", committed)
+	}
+	var terminalMessages []sdk.Message
+	if !terminal.IsTerminal() || json.Unmarshal(terminal.Messages, &terminalMessages) != nil {
+		t.Fatalf("terminal event/messages = %#v / %#v", terminal, terminalMessages)
+	}
+	if messagesHaveFilePart(terminalMessages) {
+		t.Fatal("terminal messages persisted read_media from a failed provider start")
+	}
+}
+
 func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -360,7 +427,6 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 		SupportsToolCall:  true,
 		Identity:          SessionContext{BotID: "bot-1"},
 		ContextMutations:  contextfrag.NewMutationLedger(),
-		OnStepCommitted:   func(context.Context, int, *sdk.StepResult) error { return nil },
 		OnStepInterrupted: func(_ context.Context, stepIndex int, step *sdk.StepResult) error {
 			if stepIndex != 1 {
 				t.Errorf("interrupted step index = %d, want 1", stepIndex)
@@ -391,7 +457,10 @@ func TestAgentStreamInterruptedReadMediaIsNotDuplicatedInTerminal(t *testing.T) 
 	}
 
 streamClosed:
-	if interrupted == nil || countFileParts(interrupted.Messages) != 1 {
+	if interrupted == nil {
+		t.Fatal("interrupted step was not persisted")
+	}
+	if countFileParts(interrupted.Messages) != 1 {
 		t.Fatalf("interrupted step file parts = %d, want 1", countFileParts(interrupted.Messages))
 	}
 	var terminalMessages []sdk.Message

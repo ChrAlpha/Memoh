@@ -463,17 +463,16 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	opts = append(opts, a.onStepOption(streamCtx, cfg, nil))
 	var nextDurableStep int
-	var onStepCommitted func(context.Context, int, *sdk.StepResult) error
-	if cfg.OnStepCommitted != nil {
-		onStepCommitted = func(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
+	onStepCommitted := func(ctx context.Context, stepIndex int, step *sdk.StepResult) error {
+		if cfg.OnStepCommitted != nil {
 			if err := cfg.OnStepCommitted(ctx, stepIndex, committedStepMessages.decorate(stepIndex, step, toolExecutionMetadata)); err != nil {
 				return err
 			}
-			nextDurableStep = stepIndex + 1
-			return nil
 		}
-		opts = append(opts, sdk.WithOnStepCommitted(onStepCommitted))
+		nextDurableStep = stepIndex + 1
+		return nil
 	}
+	opts = append(opts, sdk.WithOnStepCommitted(onStepCommitted))
 
 	retryCfg := cfg.Retry
 	if retryCfg.MaxAttempts <= 0 {
@@ -858,12 +857,17 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 	// The legacy recorder is append-only durability state. Flush only messages
-	// admitted by the final provider handoff so rejected or retry-revoked
-	// PrepareStep additions cannot be persisted as provider-visible input.
+	// admitted by the final provider handoff whose target provider step also
+	// completed, so provider-start failures and retry-revoked PrepareStep
+	// additions cannot be persisted as durable input.
 	// StreamResult is written by the SDK goroutine, so read it only after the
 	// stream has closed and published its final Steps slice.
 	if streamClosed && streamResult != nil {
-		injectedMessages.flush(streamResult.Steps, readMediaState.admittedInjections(), cfg.InjectedRecorder)
+		injectedMessages.flush(
+			streamResult.Steps,
+			readMediaState.durableInjections(len(streamResult.Steps), interruptedDurableStep),
+			cfg.InjectedRecorder,
+		)
 	}
 	// Deliver the terminal event using a context that is NOT cancelled when
 	// the parent ctx is cancelled (user abort / idle timeout / loop-detect).
@@ -1105,6 +1109,10 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	system, messages, tools, systemPrepended, actualStableCount := models.ApplyPromptCacheWithPlan(
 		cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, tools,
 	)
+	providerProvenance := clonePreparedMessageProvenance(cfg.providerMessageProvenance)
+	if systemPrepended {
+		providerProvenance = providerProvenance.prependSynthetic()
+	}
 	plan.StableMessageCount = actualStableCount
 	if systemPrepended {
 		providerAttemptPrefixCount++
@@ -1116,7 +1124,7 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 	if len(tools) > 0 && cfg.SupportsToolCall {
 		providerTools = tools
 	}
-	initialParams := prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, 0, &sdk.GenerateParams{
+	initialParams := prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, 0, providerProvenance, &sdk.GenerateParams{
 		System: system, Messages: messages, Tools: providerTools,
 	})
 	system = initialParams.System
@@ -1170,7 +1178,8 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 			return nil
 		}
 		defer func() { prepareIndex++ }()
-		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, prepareIndex+1, p)
+		stepProvenance := cfg.preparedStepMessages.latestProvenance(p.Messages)
+		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, prepareIndex+1, stepProvenance, p)
 	}
 	opts = append(opts, sdk.WithPrepareStep(stepPrepare))
 
@@ -1192,7 +1201,17 @@ func clampStableMessageCount(count, total int) int {
 	return count
 }
 
-func prepareProviderAttempt(ctx context.Context, cfg RunConfig, handoff *providerAttemptHandoff, mode LoopReselectMode, systemPrepended bool, prefixCount, stepIndex int, params *sdk.GenerateParams) *sdk.GenerateParams {
+func prepareProviderAttempt(
+	ctx context.Context,
+	cfg RunConfig,
+	handoff *providerAttemptHandoff,
+	mode LoopReselectMode,
+	systemPrepended bool,
+	prefixCount,
+	stepIndex int,
+	provenance preparedMessageProvenance,
+	params *sdk.GenerateParams,
+) *sdk.GenerateParams {
 	if params == nil {
 		return nil
 	}
@@ -1204,7 +1223,7 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, handoff *provide
 		reselector = nil
 	}
 	if reselector == nil || prefixCount >= len(params.Messages) {
-		stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, "")
+		stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, "", provenance)
 		return params
 	}
 
@@ -1231,15 +1250,27 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, handoff *provide
 		default:
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 		}
-		stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, "")
+		stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, "", provenance)
 		return params
 	}
 
 	switch {
 	case selection.FatalError != nil:
-		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, selection.FatalError)
+		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, provenance, selection.FatalError)
 	case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, prefixCount):
+		sourceIndexes, valid := selectionMessageSourceIndexes(beforeMessages, selection.Messages, prefixCount, selection)
+		if !valid {
+			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, provenance, fmt.Errorf(
+				"%w: invalid provider step message provenance",
+				contextfrag.ErrBudgetUnsatisfied,
+			))
+		}
+		composed, composedOK := composePreparedMessageProvenance(provenance, len(beforeMessages), sourceIndexes)
+		if !composedOK {
+			composed = failClosedPreparedMessageProvenance(provenance, len(selection.Messages), prefixCount)
+		}
 		params.Messages = selection.Messages
+		provenance = composed
 		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeApplied
 		snapshot.ReselectionApplied = true
 		snapshot.Dropped = selection.Dropped
@@ -1249,7 +1280,7 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, handoff *provide
 		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 	}
 	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {
-		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, fmt.Errorf(
+		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, provenance, fmt.Errorf(
 			"%w: serialized_input_overflow=%d allowance=%d",
 			contextfrag.ErrBudgetUnsatisfied,
 			overflow,
@@ -1260,7 +1291,7 @@ func prepareProviderAttempt(ctx context.Context, cfg RunConfig, handoff *provide
 	if snapshot.ReselectionApplied && (selection.Dropped > 0 || selection.Truncated > 0) {
 		reselectionDetail = contextStepSelectionDetail(selection)
 	}
-	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, reselectionDetail)
+	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, reselectionDetail, provenance)
 	return params
 }
 
@@ -1270,12 +1301,13 @@ func stagePreparedProviderAttempt(
 	snapshot contextfrag.StepSnapshot,
 	systemPrepended bool,
 	reselectionDetail string,
+	provenance preparedMessageProvenance,
 ) {
 	if !providerAttemptDispatchAllowed(ctx) {
-		handoff.reject()
+		handoff.reject(provenance)
 		return
 	}
-	handoff.stage(snapshot, systemPrepended, reselectionDetail)
+	handoff.stage(snapshot, systemPrepended, reselectionDetail, provenance)
 }
 
 func providerAttemptEnvelopeOverflow(params *sdk.GenerateParams, allowance int) int {
@@ -1292,12 +1324,13 @@ func failPreparedProviderAttempt(
 	params *sdk.GenerateParams,
 	snapshot contextfrag.StepSnapshot,
 	prefixCount int,
+	provenance preparedMessageProvenance,
 	err error,
 ) *sdk.GenerateParams {
 	snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
 	snapshot.ReselectionApplied = false
 	params.Messages = append([]sdk.Message(nil), params.Messages[:prefixCount]...)
-	handoff.reject()
+	handoff.reject(provenance)
 	cfg.ContextMutations.AppendStepSnapshot(snapshot)
 	if cfg.contextStepFailure != nil {
 		cfg.contextStepFailure(err)
@@ -1832,7 +1865,7 @@ func (a *Agent) runMidStreamRetry(
 	// committed boundary, so it must not survive as a checkpoint. Retried
 	// steps are numbered from the offset the commit barrier already uses.
 	interruptedStep.rebase(stepOffset)
-	retryMessages := retryProviderAttemptMessages(cfg, prevResult)
+	retryInput := retryProviderAttemptMessages(cfg, prevResult)
 	accumulatedCount := len(prevResult.Messages)
 
 	retryCfg := DefaultRetryConfig()
@@ -1861,7 +1894,13 @@ func (a *Agent) runMidStreamRetry(
 
 		// Re-invoke from the failed attempt's exact provider input plus its
 		// partial output, then run the same preflight as every other call.
-		retryCfgCopy := prepareMidStreamRetryConfigWithMessages(cfg, retryMessages, accumulatedCount, errMsg)
+		retryCfgCopy := prepareMidStreamRetryConfigWithMessages(
+			cfg,
+			retryInput.messages,
+			retryInput.provenance,
+			accumulatedCount,
+			errMsg,
+		)
 		if a == nil || a.contextViewApplier == nil {
 			retryCfgCopy = retryCfgCopy.RefreshContextFrag()
 		}
@@ -2040,11 +2079,24 @@ func prepareMidStreamRetryConfig(cfg RunConfig, accumulated []sdk.Message, errMs
 	merged := make([]sdk.Message, 0, len(cfg.Messages)+len(accumulated))
 	merged = append(merged, cfg.Messages...)
 	merged = append(merged, accumulated...)
-	return prepareMidStreamRetryConfigWithMessages(cfg, merged, len(accumulated), errMsg)
+	provenance := clonePreparedMessageProvenance(cfg.providerMessageProvenance)
+	if provenance.known {
+		for range accumulated {
+			provenance.messageIndexes = append(provenance.messageIndexes, -1)
+		}
+	}
+	return prepareMidStreamRetryConfigWithMessages(cfg, merged, provenance, len(accumulated), errMsg)
 }
 
-func prepareMidStreamRetryConfigWithMessages(cfg RunConfig, messages []sdk.Message, accumulatedCount int, errMsg string) RunConfig {
+func prepareMidStreamRetryConfigWithMessages(
+	cfg RunConfig,
+	messages []sdk.Message,
+	provenance preparedMessageProvenance,
+	accumulatedCount int,
+	errMsg string,
+) RunConfig {
 	cfg.Messages = append([]sdk.Message(nil), messages...)
+	cfg.providerMessageProvenance = clonePreparedMessageProvenance(provenance)
 	attempt := cfg.ContextMutations.AdvanceAttempt()
 	errorHash := sha256.Sum256([]byte(strings.TrimSpace(errMsg)))
 	cfg.ContextMutations.Record(contextfrag.MutationMidStreamRetry,

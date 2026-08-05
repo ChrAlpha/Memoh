@@ -335,7 +335,9 @@ func (s *Service) collectDiscussSourceFrags(
 		}
 		return nil
 	}
-	dynamic := append(memoryFrags, hookFrags...)
+	dynamic := make([]contextfrag.ContextFrag, 0, len(memoryFrags)+len(hookFrags))
+	dynamic = append(dynamic, memoryFrags...)
+	dynamic = append(dynamic, hookFrags...)
 	if len(dynamic) == 0 {
 		return frags
 	}

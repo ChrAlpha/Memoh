@@ -69,6 +69,63 @@ func TestStepReselectionTruncatesOldToolResultsKeepsRecent(t *testing.T) {
 	}
 }
 
+func TestStepReselectionTruncationPreservesExactLaterCarrierOrigin(t *testing.T) {
+	t.Parallel()
+
+	prefix := []sdk.Message{sdk.UserMessage("task")}
+	messages := loopSpanWithToolCycles(prefix, 3, 1000)
+	const marker = "<message sender=\"alice\">keep this injected carrier</message>"
+	messages = append(messages, sdk.UserMessage(marker))
+
+	selection := SelectProviderStepMessages(context.Background(), agentpkg.ContextStepSelectionInput{
+		Scope:                 contextfrag.Scope{BotID: "bot-1"},
+		InitialMessageCount:   len(prefix),
+		Messages:              messages,
+		KeepRecentToolResults: 1,
+	})
+	if selection.Messages == nil || selection.Truncated != 2 {
+		t.Fatalf("selection = %+v, want two rewritten tool results", selection)
+	}
+	if !selection.MessageSourceIndexesKnown || len(selection.MessageSourceIndexes) != len(selection.Messages) {
+		t.Fatalf("message origins = %#v/%t, want one exact origin per selected message", selection.MessageSourceIndexes, selection.MessageSourceIndexesKnown)
+	}
+
+	truncated := 0
+	carrierIndex := -1
+	for i, message := range selection.Messages {
+		for _, part := range message.Content {
+			if text, ok := part.(sdk.TextPart); ok && text.Text == marker {
+				carrierIndex = i
+			}
+		}
+		if message.Role != sdk.MessageRoleTool {
+			continue
+		}
+		for _, part := range message.Content {
+			result, ok := part.(sdk.ToolResultPart)
+			if !ok {
+				continue
+			}
+			text, _ := result.Result.(string)
+			if strings.Contains(text, "pruned") {
+				truncated++
+				if selection.MessageSourceIndexes[i] != -1 {
+					t.Fatalf("rewritten tool result origin = %d, want -1", selection.MessageSourceIndexes[i])
+				}
+			}
+		}
+	}
+	if truncated != 2 {
+		t.Fatalf("rewritten tool results = %d, want 2", truncated)
+	}
+	if carrierIndex < 0 {
+		t.Fatal("selected messages lost the later injected carrier")
+	}
+	if got, want := selection.MessageSourceIndexes[carrierIndex], len(messages)-1; got != want {
+		t.Fatalf("injected carrier origin = %d, want exact input index %d", got, want)
+	}
+}
+
 func TestStepReselectionSkipsTruncationForSmallResults(t *testing.T) {
 	t.Parallel()
 
