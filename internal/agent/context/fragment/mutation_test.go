@@ -51,8 +51,10 @@ func TestProviderPayloadHashTracksTools(t *testing.T) {
 
 	withoutTools, withoutToolsBytes := ProviderPayloadHashAndBytes("system", []string{"a"}, nil)
 	withEmptyTools, withEmptyToolsBytes := ProviderPayloadHashAndBytes("system", []string{"a"}, []string(nil))
+	withAllocatedEmptyTools, withAllocatedEmptyToolsBytes := ProviderPayloadHashAndBytes("system", []string{"a"}, []string{})
 	withTools, withToolsBytes := ProviderPayloadHashAndBytes("system", []string{"a"}, []string{"tool"})
-	if withoutTools != withEmptyTools || withoutToolsBytes != withEmptyToolsBytes {
+	if withoutTools != withEmptyTools || withoutToolsBytes != withEmptyToolsBytes ||
+		withoutTools != withAllocatedEmptyTools || withoutToolsBytes != withAllocatedEmptyToolsBytes {
 		t.Fatal("empty tools must preserve the legacy payload identity")
 	}
 	if withTools == withoutTools || withToolsBytes <= withoutToolsBytes {

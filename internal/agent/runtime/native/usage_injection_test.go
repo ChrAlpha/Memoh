@@ -320,14 +320,18 @@ func TestAssembleToolsOmitsUsageWhenProviderEmitsNoTools(t *testing.T) {
 
 func TestAssembleToolsUsesProviderAccountingLabel(t *testing.T) {
 	t.Parallel()
-	a := newTestAgent(labeledTestProvider{label: "mcp"})
-
-	_, _, toolDefs, err := a.assembleTools(context.Background(), RunConfig{}, nil, false)
-	if err != nil {
-		t.Fatalf("assembleTools error: %v", err)
-	}
-	if len(toolDefs) != 1 || toolDefs[0].Provider != "mcp" || toolDefs[0].Name != "remote_tool" {
-		t.Fatalf("tool definitions = %#v, want mcp remote_tool", toolDefs)
+	for _, tc := range []struct{ label, want string }{
+		{label: " mcp ", want: "mcp"},
+		{label: " ", want: "native"},
+	} {
+		a := newTestAgent(labeledTestProvider{label: tc.label})
+		_, _, toolDefs, err := a.assembleTools(context.Background(), RunConfig{}, nil, false)
+		if err != nil {
+			t.Fatalf("assembleTools error: %v", err)
+		}
+		if len(toolDefs) != 1 || toolDefs[0].Provider != tc.want || toolDefs[0].Name != "remote_tool" {
+			t.Fatalf("tool definitions = %#v, want %s remote_tool", toolDefs, tc.want)
+		}
 	}
 }
 

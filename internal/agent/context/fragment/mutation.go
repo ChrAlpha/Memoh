@@ -105,7 +105,11 @@ func nilIfEmptyValue(value any) any {
 	}
 	rv := reflect.ValueOf(value)
 	switch rv.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+	case reflect.Map, reflect.Slice:
+		if rv.IsNil() || rv.Len() == 0 {
+			return nil
+		}
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Pointer:
 		if rv.IsNil() {
 			return nil
 		}

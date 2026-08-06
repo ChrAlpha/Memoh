@@ -51,6 +51,43 @@ func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
 	}
 }
 
+func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
+	t.Parallel()
+	ledger := contextfrag.NewMutationLedger()
+	var lastParams sdk.GenerateParams
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+		if call == 1 {
+			return &sdk.GenerateResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls:    []sdk.ToolCall{{ToolCallID: "hash-call", ToolName: "hash_tool"}},
+			}, nil
+		}
+		lastParams = params
+		return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+	}}
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+		cfg.ContextMutations = ledger
+		return cfg
+	}})
+	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []sdk.Tool{{
+		Name: "hash_tool",
+		Execute: func(*sdk.ToolExecContext, any) (any, error) {
+			return "ok", nil
+		},
+	}}}})
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model:    &sdk.Model{ID: "hash-model", Provider: modelProvider, Type: sdk.ModelTypeChat},
+		Messages: []sdk.Message{sdk.UserMessage("run the tool")}, SupportsToolCall: true,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	wantHash, _ := contextfrag.ProviderPayloadHashAndBytes(lastParams.System, lastParams.Messages, lastParams.Tools)
+	if ledger.FinalInputHash() != wantHash {
+		t.Fatalf("final input hash = %q, want last provider step %q", ledger.FinalInputHash(), wantHash)
+	}
+}
+
 func TestStreamAppliesContextViewOnce(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageStreamRecordingProvider{}

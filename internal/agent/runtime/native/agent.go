@@ -927,6 +927,7 @@ func (a *Agent) buildGenerateOptions(cfg RunConfig, tools []sdk.Tool, approvalTo
 	}
 
 	prepareStep = wrapPrepareStepWithForkSnapshot(prepareStep, cfg.ForkContext)
+	prepareStep = wrapPrepareStepWithFinalInputHash(prepareStep, cfg.ContextMutations)
 	if prepareStep != nil {
 		opts = append(opts, sdk.WithPrepareStep(prepareStep))
 	}
@@ -1030,7 +1031,9 @@ func (a *Agent) assembleTools(ctx context.Context, cfg RunConfig, emitter tools.
 		}
 		label := "native"
 		if labeler, ok := provider.(tools.ProviderLabeler); ok {
-			label = labeler.ProviderLabel()
+			if providerLabel := strings.TrimSpace(labeler.ProviderLabel()); providerLabel != "" {
+				label = providerLabel
+			}
 		}
 		for _, tool := range providerTools {
 			toolDefs = append(toolDefs, contextfrag.ToolDefAccountingFor(label, tool))
@@ -1355,6 +1358,29 @@ func wrapPrepareStepWithForkSnapshot(
 		}
 		_ = forkContext.Store(p.Messages)
 		return p
+	}
+}
+
+func wrapPrepareStepWithFinalInputHash(
+	prepareStep func(*sdk.GenerateParams) *sdk.GenerateParams,
+	ledger *contextfrag.MutationLedger,
+) func(*sdk.GenerateParams) *sdk.GenerateParams {
+	if ledger == nil {
+		return prepareStep
+	}
+	return func(p *sdk.GenerateParams) *sdk.GenerateParams {
+		var override *sdk.GenerateParams
+		if prepareStep != nil {
+			override = prepareStep(p)
+			if override != nil {
+				p = override
+			}
+		}
+		if p != nil {
+			hash, _ := contextfrag.ProviderPayloadHashAndBytes(p.System, p.Messages, p.Tools)
+			ledger.SetFinalInputHash(hash)
+		}
+		return override
 	}
 }
 
