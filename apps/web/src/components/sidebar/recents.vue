@@ -114,6 +114,7 @@ import { useChatStore } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { normalizedSessionMode, sortByRecency } from '@/store/chat-list.utils'
+import { measureVirtualRow } from '@/utils/virtual-row-measure'
 import type { SessionSummary } from '@/composables/api/useChat'
 import {
   didLoadMoreMakeProgress,
@@ -199,6 +200,12 @@ const virtualizer = useVirtualizer<HTMLElement, HTMLElement>(
     estimateSize: () => 36,
     overscan: 10,
     getItemKey: (index: number) => visibleSessions.value[index]?.id ?? index,
+    // Rows can be (re)measured while this pane is display:none (v-show'd
+    // sidebar view) or mid-unmount, where they report height 0 —
+    // measureVirtualRow keeps the last real size so those bogus zeros
+    // can't desync the virtualizer's offset (the "dead gap above Recents,
+    // newest sessions invisible" bug).
+    measureElement: measureVirtualRow,
   })),
 )
 const totalSize = computed(() => virtualizer.value.getTotalSize())
