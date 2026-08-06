@@ -2059,6 +2059,10 @@ definitions:
     type: object
   conversation.UIUserInput:
     properties:
+      answers:
+        items:
+          $ref: '#/definitions/userinput.UIAnswer'
+        type: array
       can_respond:
         type: boolean
       questions:
@@ -4966,6 +4970,9 @@ definitions:
       heartbeat_interval:
         type: integer
       heartbeat_model_id:
+        description: |-
+          HeartbeatModelID joins the pointer group above (nil/""/value) so the
+          heartbeat tab's autosave can clear a model override.
         type: string
       image_model_id:
         type: string
@@ -5013,6 +5020,23 @@ definitions:
       source_kind:
         type: string
       state:
+        type: string
+    type: object
+  userinput.UIAnswer:
+    properties:
+      custom_text:
+        type: string
+      question:
+        type: string
+      question_id:
+        type: string
+      selected:
+        items:
+          $ref: '#/definitions/userinput.UIOption'
+        type: array
+      skipped:
+        type: boolean
+      text:
         type: string
     type: object
   userinput.UIOption:

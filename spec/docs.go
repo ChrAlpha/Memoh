@@ -17569,6 +17569,12 @@ const docTemplate = `{
         "conversation.UIUserInput": {
             "type": "object",
             "properties": {
+                "answers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIAnswer"
+                    }
+                },
                 "can_respond": {
                     "type": "boolean"
                 },
@@ -21950,6 +21956,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "heartbeat_model_id": {
+                    "description": "HeartbeatModelID joins the pointer group above (nil/\"\"/value) so the\nheartbeat tab's autosave can clear a model override.",
                     "type": "string"
                 },
                 "image_model_id": {
@@ -22017,6 +22024,32 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "userinput.UIAnswer": {
+            "type": "object",
+            "properties": {
+                "custom_text": {
+                    "type": "string"
+                },
+                "question": {
+                    "type": "string"
+                },
+                "question_id": {
+                    "type": "string"
+                },
+                "selected": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/userinput.UIOption"
+                    }
+                },
+                "skipped": {
+                    "type": "boolean"
+                },
+                "text": {
                     "type": "string"
                 }
             }
