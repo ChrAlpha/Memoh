@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
+	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	"github.com/memohai/memoh/internal/agent/event"
 	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
@@ -43,7 +44,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 		// than retried here.
 		return schedule.TriggerResult{}, err
 	}
-	defer func() { finish(err) }()
+	defer func() { finish(triggeredRunTerminal{cause: err}) }()
 	ctx = runCtx
 
 	// Sessions with an ACP runtime execute through the session pool; the
@@ -158,6 +159,18 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 		Command:     payload.Command,
 	})
 	contextMarkdown := s.buildACPContextMarkdown(ctx, req, info.AgentID, info.ProjectPath)
+	contextLifecycle := contextfrag.NewLifecycleHolder()
+	contextLifecycle.SetManifest(contextfrag.BuildManifest(nil))
+	terminal := s.contextLifecycleTerminal(ctx, native.RunConfig{
+		RunID: runID,
+		Identity: native.SessionContext{
+			BotID:     botID,
+			SessionID: payload.SessionID,
+		},
+		ContextLifecycle: contextLifecycle,
+	})
+	var lifecycleCause error
+	defer func() { terminal(lifecycleCause) }()
 
 	req, _ = s.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
 
@@ -183,18 +196,22 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 		RuntimeOwnerAccountID: runtimeOwner,
 		Sink:                  acpclient.EventSinkFunc(func(event.StreamEvent) {}),
 	})
+	lifecycleCause = promptErr
 	if promptErr != nil {
 		s.cancelPendingACPApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")
 		failedResult, _ := acpFailureResult(ensureACPPromptOutput(result), promptErr)
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr); err != nil {
+		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr, contextLifecycle); err != nil {
+			lifecycleCause = runtimeHistoryError(err)
 			s.logger.Error("ACP schedule failure persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
 		}
 		return schedule.TriggerResult{}, promptErr
 	}
 
 	result = ensureACPPromptOutput(result)
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil); err != nil {
+	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil, contextLifecycle); err != nil {
+		lifecycleCause = runtimeHistoryError(err)
 		s.logger.Error("ACP schedule persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
+		return schedule.TriggerResult{}, err
 	}
 
 	var usageJSON []byte
@@ -228,7 +245,7 @@ func (s *Service) TriggerHeartbeat(ctx context.Context, botID string, payload he
 		// already scheduled and a stale check has nothing to report.
 		return heartbeat.TriggerResult{}, err
 	}
-	defer func() { finish(err) }()
+	defer func() { finish(triggeredRunTerminal{cause: err}) }()
 	ctx = runCtx
 
 	var heartbeatModel string
