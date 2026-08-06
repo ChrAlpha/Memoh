@@ -285,10 +285,19 @@ func TestDiscussACPSkipsWhenNotAddressed(t *testing.T) {
 
 func TestDiscussRefreshesContextFragWithoutLateBindingMessage(t *testing.T) {
 	agent := &fakeAgentStreamer{}
+	staleIndex := 0
+	staleMemoryIndex := 0
 	resolver := &fakeDiscussService{
 		resolveResult: ResolveRunConfigResult{
-			RunConfig: native.RunConfig{System: "base system"},
-			ModelID:   "model-1",
+			RunConfig: native.RunConfig{
+				System:                         "base system",
+				ContextCurrentUserMessageIndex: &staleIndex,
+				ContextMemoryMessageIndex:      &staleMemoryIndex,
+				ContextSourceFrags: []contextfrag.ContextFrag{{
+					ID: "stale-system-only-source", Slot: contextfrag.SlotSystem,
+				}},
+			},
+			ModelID: "model-1",
 		},
 	}
 	a := newDiscussTestService(&fakeRunner{}, agent, resolver)
@@ -310,6 +319,12 @@ func TestDiscussRefreshesContextFragWithoutLateBindingMessage(t *testing.T) {
 	}
 	if len(cfg.Messages) != 1 {
 		t.Fatalf("messages = %d, want only composed discuss context", len(cfg.Messages))
+	}
+	if cfg.ContextSourceFrags != nil {
+		t.Fatalf("discuss retained stale authoritative source: %#v", cfg.ContextSourceFrags)
+	}
+	if cfg.ContextCurrentUserMessageIndex != nil || cfg.ContextMemoryMessageIndex != nil {
+		t.Fatalf("discuss retained stale message markers: current=%#v memory=%#v", cfg.ContextCurrentUserMessageIndex, cfg.ContextMemoryMessageIndex)
 	}
 	if lastMessageFragContains(cfg.ContextFrags, "Current time:") ||
 		lastMessageFragContains(cfg.ContextFrags, "MUST use the `send` tool") {
