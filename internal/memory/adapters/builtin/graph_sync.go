@@ -151,13 +151,14 @@ func formatNodeTime(t time.Time) string {
 // shape used by the Runtime interface and search responses.
 func nodeSpecToMemoryItem(n migrate.NodeSpec) adapters.MemoryItem {
 	return adapters.MemoryItem{
-		ID:        n.ID,
-		Memory:    n.Body,
-		Hash:      n.Hash,
-		CreatedAt: formatNodeTime(n.CapturedAt),
-		UpdatedAt: formatNodeTime(n.CapturedAt),
-		Score:     0,
-		Metadata:  buildNodeMetadata(n),
-		BotID:     n.BotID,
+		ID:               n.ID,
+		Memory:           n.Body,
+		Hash:             n.Hash,
+		CreatedAt:        formatNodeTime(n.CapturedAt),
+		UpdatedAt:        formatNodeTime(n.CapturedAt),
+		Score:            0,
+		Metadata:         buildNodeMetadata(n),
+		BotID:            n.BotID,
+		SourceMessageIDs: n.SourceMessageIDs,
 	}
 }

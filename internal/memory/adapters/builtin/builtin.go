@@ -18,7 +18,29 @@ const (
 
 	defaultMemoryToolLimit = 8
 	maxMemoryToolLimit     = 50
+	maxSourceRefsPerResult = 8
 )
+
+// sourceRefsPayload renders the most recent source refs of a memory item as
+// tool-facing {session_id, message_id} objects.
+func sourceRefsPayload(refs []string) []map[string]any {
+	if len(refs) > maxSourceRefsPerResult {
+		refs = refs[len(refs)-maxSourceRefsPerResult:]
+	}
+	out := make([]map[string]any, 0, len(refs))
+	for _, ref := range refs {
+		sessionID, messageID := adapters.ParseSourceRef(ref)
+		if messageID == "" {
+			continue
+		}
+		entry := map[string]any{"message_id": messageID}
+		if sessionID != "" {
+			entry["session_id"] = sessionID
+		}
+		out = append(out, entry)
+	}
+	return out
+}
 
 // BuiltinProvider wraps the existing Service as a Provider.
 type BuiltinProvider struct {
@@ -280,10 +302,11 @@ func (p *BuiltinProvider) OnAfterChat(ctx context.Context, req adapters.AfterCha
 	}
 	metadata := adapters.BuildProfileMetadata(req.UserID, req.ChannelIdentityID, req.DisplayName)
 	if _, err := p.service.Add(ctx, adapters.AddRequest{
-		Messages: req.Messages,
-		BotID:    botID,
-		Metadata: metadata,
-		Filters:  filters,
+		Messages:         req.Messages,
+		BotID:            botID,
+		Metadata:         metadata,
+		Filters:          filters,
+		SourceMessageIDs: req.SourceMessageIDs,
 	}); err != nil {
 		p.logger.Warn("store memory failed", slog.String("bot_id", botID), slog.Any("error", err))
 	}
@@ -372,11 +395,15 @@ func (p *BuiltinProvider) CallTool(ctx context.Context, session mcp.ToolSessionC
 
 	results := make([]map[string]any, 0, len(allResults))
 	for _, item := range allResults {
-		results = append(results, map[string]any{
+		entry := map[string]any{
 			"id":     item.ID,
 			"memory": item.Memory,
 			"score":  item.Score,
-		})
+		}
+		if refs := sourceRefsPayload(item.SourceMessageIDs); len(refs) > 0 {
+			entry["source_refs"] = refs
+		}
+		results = append(results, entry)
 	}
 
 	return mcp.BuildToolSuccessResult(map[string]any{

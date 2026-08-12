@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	"github.com/memohai/memoh/internal/hooks"
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 )
@@ -213,7 +214,7 @@ func (s *Service) effectiveMemorySearchTimeout() time.Duration {
 	return s.memorySearchTimeout
 }
 
-func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []ModelMessage) {
+func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []ModelMessage, sourceRefs []string) {
 	botID := strings.TrimSpace(req.BotID)
 	if botID == "" {
 		return
@@ -247,6 +248,7 @@ func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []M
 		ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
 		DisplayName:       s.resolveDisplayName(ctx, req),
 		TimezoneLocation:  tzLoc,
+		SourceMessageIDs:  sourceRefs,
 	}); err != nil {
 		s.logger.Warn("memory provider OnAfterChat failed", slog.String("bot_id", botID), slog.Any("error", err))
 		return
@@ -265,6 +267,25 @@ func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []M
 	}); err != nil {
 		s.logHookWarn(hooks.EventAfterMemoryWrite, botID, req.ThreadID, err)
 	}
+}
+
+func roundSourceRefs(req ChatRequest, persisted []messagepkg.Message) []string {
+	refs := make([]string, 0, len(persisted)+1)
+	if req.UserMessagePersisted || req.ReusePersistedUserMessage {
+		if ref := memprovider.EncodeSourceRef(req.ThreadID, req.PersistedUserMessageID); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	for _, msg := range persisted {
+		sessionID := msg.SessionID
+		if strings.TrimSpace(sessionID) == "" {
+			sessionID = req.ThreadID
+		}
+		if ref := memprovider.EncodeSourceRef(sessionID, msg.ID); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
 }
 
 func toProviderMessages(messages []ModelMessage) []memprovider.Message {

@@ -27,6 +27,7 @@ type AfterChatRequest struct {
 	ChannelIdentityID string
 	DisplayName       string
 	TimezoneLocation  *time.Location
+	SourceMessageIDs  []string
 }
 
 // LLM is the interface for LLM operations needed by memory service.
@@ -51,6 +52,7 @@ type AddRequest struct {
 	Filters          map[string]any `json:"filters,omitempty"`
 	Infer            *bool          `json:"infer,omitempty"`
 	EmbeddingEnabled *bool          `json:"embedding_enabled,omitempty"`
+	SourceMessageIDs []string       `json:"source_message_ids,omitempty"`
 }
 
 type SearchRequest struct {
@@ -66,9 +68,10 @@ type SearchRequest struct {
 }
 
 type UpdateRequest struct {
-	MemoryID         string `json:"memory_id"`
-	Memory           string `json:"memory"`
-	EmbeddingEnabled *bool  `json:"embedding_enabled,omitempty"`
+	MemoryID         string   `json:"memory_id"`
+	Memory           string   `json:"memory"`
+	EmbeddingEnabled *bool    `json:"embedding_enabled,omitempty"`
+	SourceMessageIDs []string `json:"source_message_ids,omitempty"`
 }
 
 type GetAllRequest struct {
@@ -88,16 +91,17 @@ type DeleteAllRequest struct {
 }
 
 type MemoryItem struct {
-	ID        string         `json:"id"`
-	Memory    string         `json:"memory"`
-	Hash      string         `json:"hash,omitempty"`
-	CreatedAt string         `json:"created_at,omitempty"`
-	UpdatedAt string         `json:"updated_at,omitempty"`
-	Score     float64        `json:"score,omitempty"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	BotID     string         `json:"bot_id,omitempty"`
-	AgentID   string         `json:"agent_id,omitempty"`
-	RunID     string         `json:"run_id,omitempty"`
+	ID               string         `json:"id"`
+	Memory           string         `json:"memory"`
+	Hash             string         `json:"hash,omitempty"`
+	CreatedAt        string         `json:"created_at,omitempty"`
+	UpdatedAt        string         `json:"updated_at,omitempty"`
+	Score            float64        `json:"score,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
+	BotID            string         `json:"bot_id,omitempty"`
+	AgentID          string         `json:"agent_id,omitempty"`
+	RunID            string         `json:"run_id,omitempty"`
+	SourceMessageIDs []string       `json:"source_message_ids,omitempty"`
 }
 
 type SearchResponse struct {
