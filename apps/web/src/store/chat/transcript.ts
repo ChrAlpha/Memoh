@@ -31,6 +31,10 @@ export interface TranscriptDeps {
   bumpFsChangedAtIfFsMutation: (message: UIMessage) => void
   fetchMessages: (botId: string, sessionId: string, options?: FetchMessagesOptions) => Promise<UITurn[]>
   locateMessage: (botId: string, sessionId: string, externalMessageId: string, before?: number, after?: number) => Promise<LocateMessageResult>
+  // Wired from the session runtime projection: does an active run still own
+  // this turn? Settled reconciliation uses it to tell an in-flight boundary
+  // turn (retain) from a vanished one (drop).
+  isTurnLive?: (sessionId: string, turnId: string) => boolean
 }
 
 type RefreshAppliedHook = (targetSessionId: string, latestTimestamp?: string) => void
@@ -54,6 +58,7 @@ export function createTranscriptController({
   bumpFsChangedAtIfFsMutation,
   fetchMessages,
   locateMessage,
+  isTurnLive: isTurnLiveDep,
 }: TranscriptDeps) {
   const messages = reactive<ChatMessage[]>([])
   const loadingMessages = ref(false)
@@ -82,6 +87,11 @@ export function createTranscriptController({
     messages,
     rememberBackgroundTask,
     applyPendingBackgroundEventsToTool,
+    isTurnLive: (turnId) => {
+      const sid = sessionId.value?.trim()
+      if (!sid || !isTurnLiveDep) return false
+      return isTurnLiveDep(sid, turnId)
+    },
   })
   const {
     normalizeUIMessage,
@@ -113,7 +123,7 @@ export function createTranscriptController({
     loadingMessagesVersion += 1
     loadingOlderVersion += 1
     refreshPromise = null
-    replaceMessages([])
+    replaceMessages([], undefined, { preserveLive: false })
     hasMoreOlder.value = options.hasMoreOlder === true
     hasLoadedOlder.value = false
     loadingMessages.value = false
@@ -139,7 +149,7 @@ export function createTranscriptController({
     historyGeneration += 1
     loadingOlderVersion += 1
     refreshPromise = null
-    replaceMessages(items, targetSessionId)
+    replaceMessages(items, targetSessionId, { preserveLive: false })
     hasMoreOlder.value = true
     hasLoadedOlder.value = false
     loadingOlder.value = false
@@ -433,6 +443,18 @@ export function createTranscriptController({
     const turn = turnId.trim()
     const run = runId.trim()
     if (!invocation || !turn || !run) return
+    // The screen already knows this turn under a render identity that is not
+    // this invocation's — it settled from history or arrived from another
+    // device before this binding showed up. Binding the invocation's leftover
+    // turns now would duplicate the turn, so they are retired and the existing
+    // identity keeps the seat. The guard must exclude the invocation's own
+    // turns: bindRunId stamps this turnId onto the invocation's assistant turn
+    // before this runs (run_accepted handler order), so counting it would fire
+    // on every normal acceptance.
+    if (messages.some(message => message.role !== 'system' && message.turnId === turn && message.invocationId !== invocation)) {
+      messages.splice(0, messages.length, ...messages.filter(message => message.role === 'system' || message.invocationId !== invocation))
+      return
+    }
     for (const message of messages) {
       if (message.role === 'system' || message.invocationId !== invocation) continue
       message.turnId = turn
@@ -451,8 +473,15 @@ export function createTranscriptController({
     return normalized
   }
 
-  function applyRuntimeTranscript(slice: RuntimeTranscriptSlice): boolean {
+  function applyRuntimeTranscript(
+    slice: RuntimeTranscriptSlice,
+  ): boolean {
     if (!slice.turnId || slice.turns.length === 0) return true
+    // A frame that names its originating invocation IS the live twin of that
+    // local send: bind the optimistic pair before merging so the merge below
+    // finds it by turnId. The frame itself is the pairing — correct no matter
+    // how it interleaves with run_accepted, with no grace window to guess in.
+    if (slice.invocationId) bindRuntimeTurn(slice.invocationId, slice.turnId, slice.runId)
     const incoming = slice.turns
       .map(normalizeTurn)
       .filter((turn): turn is ChatUserTurn | ChatAssistantTurn => turn.role !== 'system')
