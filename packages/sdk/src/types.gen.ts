@@ -2607,6 +2607,10 @@ export type ProvidersGetResponse = {
     updated_at?: string;
 };
 
+export type ProvidersImportModelsRequest = {
+    default_compatibilities?: Array<string>;
+};
+
 export type ProvidersImportModelsResponse = {
     created?: number;
     models?: Array<string>;
@@ -12876,7 +12880,10 @@ export type PutProvidersByIdResponses = {
 export type PutProvidersByIdResponse = PutProvidersByIdResponses[keyof PutProvidersByIdResponses];
 
 export type PostProvidersByIdImportModelsData = {
-    body?: never;
+    /**
+     * Explicit defaults for unknown custom chat models
+     */
+    body?: ProvidersImportModelsRequest;
     path: {
         /**
          * Provider ID (UUID)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/providers"
 )
 
 func descriptionPointer(value string) *string { return &value }
@@ -43,6 +44,28 @@ func TestMergeDiscoveredConfigFillsOnlyMissingDescription(t *testing.T) {
 				t.Fatalf("description = %v, want %q", got.Description, *tt.want)
 			}
 		})
+	}
+}
+
+func TestImportedCompatibilitiesRequireExplicitDefaultsForUnknownModels(t *testing.T) {
+	t.Parallel()
+
+	unknown := providers.RemoteModel{ID: "custom-chat"}
+	if got := importedCompatibilities(unknown, models.ModelTypeChat, nil, true); len(got) != 0 {
+		t.Fatalf("unknown capabilities = %#v, want none", got)
+	}
+	if got := importedCompatibilities(unknown, models.ModelTypeChat, []string{models.CompatToolCall}, true); len(got) != 1 || got[0] != models.CompatToolCall {
+		t.Fatalf("explicit defaults = %#v", got)
+	}
+
+	trusted := providers.RemoteModel{
+		ID: "template-chat", CapabilitiesKnown: true, Compatibilities: []string{models.CompatToolCall},
+	}
+	if got := importedCompatibilities(trusted, models.ModelTypeChat, []string{models.CompatVision}, false); len(got) != 1 || got[0] != models.CompatToolCall {
+		t.Fatalf("trusted capabilities = %#v, want template values", got)
+	}
+	if got := importedCompatibilities(providers.RemoteModel{ID: "template-without-capabilities"}, models.ModelTypeChat, []string{models.CompatVision}, false); len(got) != 0 {
+		t.Fatalf("template without capabilities = %#v, want none", got)
 	}
 }
 

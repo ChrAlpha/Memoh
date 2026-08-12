@@ -2238,7 +2238,14 @@ export const putProvidersById = <ThrowOnError extends boolean = false>(options: 
  *
  * Fetch models from provider and import them
  */
-export const postProvidersByIdImportModels = <ThrowOnError extends boolean = false>(options: Options<PostProvidersByIdImportModelsData, ThrowOnError>): RequestResult<PostProvidersByIdImportModelsResponses, PostProvidersByIdImportModelsErrors, ThrowOnError> => (options.client ?? client).post<PostProvidersByIdImportModelsResponses, PostProvidersByIdImportModelsErrors, ThrowOnError>({ url: '/providers/{id}/import-models', ...options });
+export const postProvidersByIdImportModels = <ThrowOnError extends boolean = false>(options: Options<PostProvidersByIdImportModelsData, ThrowOnError>): RequestResult<PostProvidersByIdImportModelsResponses, PostProvidersByIdImportModelsErrors, ThrowOnError> => (options.client ?? client).post<PostProvidersByIdImportModelsResponses, PostProvidersByIdImportModelsErrors, ThrowOnError>({
+    url: '/providers/{id}/import-models',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * List provider models

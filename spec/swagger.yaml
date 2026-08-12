@@ -4400,6 +4400,13 @@ definitions:
       updated_at:
         type: string
     type: object
+  providers.ImportModelsRequest:
+    properties:
+      default_compatibilities:
+        items:
+          type: string
+        type: array
+    type: object
   providers.ImportModelsResponse:
     properties:
       created:
@@ -13268,6 +13275,11 @@ paths:
         name: id
         required: true
         type: string
+      - description: Explicit defaults for unknown custom chat models
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/providers.ImportModelsRequest'
       produces:
       - application/json
       responses:

@@ -22,8 +22,12 @@
     <template #body>
       <div class="flex flex-col gap-3 mt-4">
         <p class="text-xs text-muted-foreground">
-          {{ $t(isRefresh ? 'models.refreshConfirmHint' : 'models.importConfirmHint') }}
+          {{ $t(isRefresh ? 'models.refreshConfirmHint' : isCustom ? 'models.customImportConfirmHint' : 'models.importConfirmHint') }}
         </p>
+        <DefaultModelCapabilities
+          v-if="isCustom"
+          v-model="defaultCapabilities"
+        />
       </div>
     </template>
   </FormDialogShell>
@@ -39,11 +43,15 @@ import { Button } from '@felinic/ui'
 import type { ButtonVariants } from '@felinic/ui'
 import { useDialogMutation } from '@/composables/useDialogMutation'
 import { useProviderModelCatalog } from '@/composables/useProviderModelCatalog'
+import DefaultModelCapabilities from '@/components/default-model-capabilities/index.vue'
+import { suggestedModelCompatibilities } from '@/constants/client-types'
 
 const props = withDefaults(defineProps<{
   providerId: string
   size?: ButtonVariants['size']
   mode?: 'import' | 'refresh'
+  custom?: boolean
+  clientType?: string
 }>(), {
   size: 'default',
   mode: 'import',
@@ -54,9 +62,14 @@ const { t } = useI18n()
 const { run } = useDialogMutation()
 const { syncProviderModelCatalog } = useProviderModelCatalog()
 const isRefresh = computed(() => props.mode === 'refresh')
+const isCustom = computed(() => props.custom === true)
+const defaultCapabilities = ref<string[]>(suggestedModelCompatibilities(props.clientType))
 
 const { mutateAsync: importModelsMutation, isLoading } = useMutation({
-  mutation: () => syncProviderModelCatalog(props.providerId),
+  mutation: () => syncProviderModelCatalog(
+    props.providerId,
+    isCustom.value ? defaultCapabilities.value : undefined,
+  ),
 })
 
 async function handleImport() {

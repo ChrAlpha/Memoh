@@ -4,6 +4,7 @@ import {
   isManagedOAuthClientType,
   LLM_CLIENT_TYPE_LIST,
   MANUAL_LLM_CLIENT_TYPE_LIST,
+  suggestedModelCompatibilities,
 } from './client-types'
 
 describe('LLM client type lists', () => {
@@ -28,5 +29,20 @@ describe('LLM client type lists', () => {
     expect(isManagedModelCatalogClientType('openai-codex')).toBe(true)
     expect(isManagedModelCatalogClientType('github-copilot')).toBe(true)
     expect(isManagedModelCatalogClientType('anthropic-messages')).toBe(false)
+  })
+
+  it('suggests tool calls only for manual agent protocol client types', () => {
+    for (const clientType of [
+      'openai-responses',
+      'openai-completions',
+      'anthropic-messages',
+      'google-generative-ai',
+    ]) {
+      expect(suggestedModelCompatibilities(clientType)).toEqual(['tool-call'])
+    }
+
+    expect(suggestedModelCompatibilities('openai-codex')).toEqual([])
+    expect(suggestedModelCompatibilities('edge-speech')).toEqual([])
+    expect(suggestedModelCompatibilities('unknown')).toEqual([])
   })
 })

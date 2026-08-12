@@ -12081,6 +12081,14 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "description": "Explicit defaults for unknown custom chat models",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/providers.ImportModelsRequest"
+                        }
                     }
                 ],
                 "responses": {
@@ -21120,6 +21128,17 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "providers.ImportModelsRequest": {
+            "type": "object",
+            "properties": {
+                "default_compatibilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

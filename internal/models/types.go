@@ -159,6 +159,16 @@ var validCompatibilities = map[string]struct{}{
 	CompatFileInput: {},
 }
 
+// ValidateCompatibilities validates capability tokens supplied by a client.
+func ValidateCompatibilities(compatibilities []string) error {
+	for _, compatibility := range compatibilities {
+		if _, ok := validCompatibilities[compatibility]; !ok {
+			return errors.New("invalid compatibility: " + compatibility)
+		}
+	}
+	return nil
+}
+
 var validReasoningEfforts = map[string]struct{}{
 	ReasoningEffortNone:    {},
 	ReasoningEffortMinimal: {},
@@ -243,10 +253,8 @@ func (m *Model) Validate() error {
 			return errors.New("dimensions must be greater than 0 for embedding models")
 		}
 	}
-	for _, c := range m.Config.Compatibilities {
-		if _, ok := validCompatibilities[c]; !ok {
-			return errors.New("invalid compatibility: " + c)
-		}
+	if err := ValidateCompatibilities(m.Config.Compatibilities); err != nil {
+		return err
 	}
 	for _, effort := range m.Config.ReasoningEfforts {
 		if !IsValidReasoningEffort(effort) {

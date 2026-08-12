@@ -326,6 +326,7 @@ func (h *ProvidersHandler) Test(c echo.Context) error {
 // @Accept json
 // @Produce json
 // @Param id path string true "Provider ID (UUID)"
+// @Param request body providers.ImportModelsRequest false "Explicit defaults for unknown custom chat models"
 // @Success 200 {object} providers.ImportModelsResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
@@ -335,6 +336,15 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 	id := c.Param("id")
 	if id == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
+	}
+	var req providers.ImportModelsRequest
+	if c.Request().ContentLength > 0 {
+		if err := c.Bind(&req); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+	}
+	if err := models.ValidateCompatibilities(req.DefaultCompatibilities); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	ctx := c.Request().Context()
@@ -372,16 +382,12 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 		if strings.TrimSpace(m.Type) == string(models.ModelTypeEmbedding) {
 			modelType = models.ModelTypeEmbedding
 		}
-		compatibilities := m.Compatibilities
-		if len(compatibilities) == 0 && modelType == models.ModelTypeChat && !m.CapabilitiesKnown {
-			// No capability info at all (no upstream claim, no registry match):
-			// fall back to a permissive default, but respect an explicit
-			// "no reasoning" discovery so we don't advertise thinking falsely.
-			compatibilities = []string{models.CompatVision, models.CompatToolCall}
-			if m.ThinkingMode != models.ThinkingModeNone {
-				compatibilities = append(compatibilities, models.CompatReasoning)
-			}
-		}
+		compatibilities := importedCompatibilities(
+			m,
+			modelType,
+			req.DefaultCompatibilities,
+			provider.ProviderTemplateID == "",
+		)
 		name := strings.TrimSpace(m.Name)
 		if name == "" {
 			name = m.ID
@@ -429,6 +435,15 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, resp)
+}
+
+func importedCompatibilities(remote providers.RemoteModel, modelType models.ModelType, defaults []string, allowCustomDefaults bool) []string {
+	if len(remote.Compatibilities) > 0 || modelType != models.ModelTypeChat || remote.CapabilitiesKnown || !allowCustomDefaults {
+		return remote.Compatibilities
+	}
+	// Unknown means unknown. Custom-provider defaults are a user choice from
+	// the request, never an inference from the client protocol.
+	return append([]string(nil), defaults...)
 }
 
 func (h *ProvidersHandler) markUnavailableManagedModels(ctx context.Context, providerID string, available map[string]struct{}) {

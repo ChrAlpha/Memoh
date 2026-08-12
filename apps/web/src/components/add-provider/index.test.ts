@@ -105,6 +105,7 @@ vi.mock('@felinic/ui', async () => {
     FormControl: Passthrough,
     FormItem: Passthrough,
     Label: Passthrough,
+    Checkbox: Passthrough,
     Switch: () => h('span'),
     Separator: () => h('hr'),
   }

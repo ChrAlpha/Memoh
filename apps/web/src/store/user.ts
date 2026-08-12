@@ -8,7 +8,8 @@ import { notifyAuthSessionCleared, onAuthSessionCleared, type AuthSessionClearRe
 import { cancelPendingQueryCacheSave, removeQueryCacheFromDisk } from '@/lib/query-cache-persistence'
 import { resetOnboardingState } from '@/composables/useOnboarding'
 import { ONBOARDING_KEYS } from '@/pages/onboarding/constants'
-import { safeLocalRemove, safeSessionRemove } from '@/utils/safe-storage'
+import { resetOnboardingRuntimeState } from '@/pages/onboarding/state'
+import { safeLocalRemove } from '@/utils/safe-storage'
 
 export interface UserInfo {
   id: string;
@@ -122,12 +123,7 @@ export const useUserStore = defineStore(
       _meChecked = false
       _pendingFetch = null
       safeLocalRemove(ONBOARDING_KEYS.introSeen)
-      // Clear per-session onboarding artifacts too: createdBotId / providerAddedCount
-      // live in sessionStorage and survive logout within the same tab, so without
-      // this the next user to onboard in this tab would be redirected to the previous
-      // user's bot (complete() consumes createdBotId) and see stale provider state.
-      safeSessionRemove(ONBOARDING_KEYS.createdBotId)
-      safeSessionRemove(ONBOARDING_KEYS.providerAddedCount)
+      resetOnboardingRuntimeState()
       resetOnboardingState()
     }
 

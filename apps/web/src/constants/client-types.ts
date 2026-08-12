@@ -6,6 +6,23 @@ export interface ClientTypeMeta {
 
 const MANAGED_OAUTH_CLIENT_TYPES = new Set(['openai-codex', 'github-copilot'])
 
+// These API protocols can carry tool calls for agent models. This is only a
+// visible suggestion for custom providers: individual models may still lack
+// tool support, and no protocol-level suggestion implies vision or reasoning.
+const AGENT_PROTOCOL_CLIENT_TYPES = new Set([
+  'openai-responses',
+  'openai-completions',
+  'anthropic-messages',
+  'google-generative-ai',
+])
+
+export function suggestedModelCompatibilities(clientType: unknown): string[] {
+  if (typeof clientType === 'string' && AGENT_PROTOCOL_CLIENT_TYPES.has(clientType)) {
+    return ['tool-call']
+  }
+  return []
+}
+
 export function isManagedOAuthClientType(clientType: unknown): boolean {
   return typeof clientType === 'string' && MANAGED_OAUTH_CLIENT_TYPES.has(clientType)
 }
