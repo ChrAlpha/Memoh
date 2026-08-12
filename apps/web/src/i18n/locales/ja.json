@@ -195,8 +195,9 @@
     "webSearch": "ウェブ検索",
     "memory": "メモリ",
     "group": {
-      "integrations": "連携",
-      "account": "アカウント"
+      "capabilities": "モデルと機能",
+      "team": "チーム",
+      "preferences": "環境設定"
     },
     "network": "ネットワーク",
     "speech": "音声合成",
@@ -208,7 +209,6 @@
     "profile": "プロフィール",
     "home": "ホーム",
     "mcp": "MCP",
-    "platform": "プラットフォーム",
     "usage": "使用状況",
     "people": "メンバー",
     "appearance": "外観",
@@ -3268,18 +3268,6 @@
       "fieldRequired": "{field}を入力してください",
       "fieldInvalid": "{field}の形式が正しくありません"
     }
-  },
-  "platform": {
-    "addTitle": "プラットフォームの追加",
-    "addDescription": "新しいプラットフォーム接続を追加します。",
-    "name": "名前",
-    "namePlaceholder": "プラットフォーム名を入力してください",
-    "nameRequired": "名前を入力してください",
-    "config": "構成",
-    "configPlaceholder": "設定を入力（key:value）",
-    "active": "アクティブ",
-    "platformLabel": "プラットフォーム",
-    "running": "実行中"
   },
   "languages": {
     "auto": "自動"
