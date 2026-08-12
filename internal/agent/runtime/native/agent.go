@@ -860,11 +860,11 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// The legacy recorder is append-only durability state. Flush only messages
 	// admitted by the final provider handoff so rejected or retry-revoked
 	// PrepareStep additions cannot be persisted as provider-visible input.
-	var completedSteps []sdk.StepResult
-	if streamResult != nil {
-		completedSteps = streamResult.Steps
+	// StreamResult is written by the SDK goroutine, so read it only after the
+	// stream has closed and published its final Steps slice.
+	if streamClosed && streamResult != nil {
+		injectedMessages.flush(streamResult.Steps, readMediaState.admittedInjections(), cfg.InjectedRecorder)
 	}
-	injectedMessages.flush(completedSteps, readMediaState.admittedInjections(), cfg.InjectedRecorder)
 	// Deliver the terminal event using a context that is NOT cancelled when
 	// the parent ctx is cancelled (user abort / idle timeout / loop-detect).
 	// Otherwise sendEvent would short-circuit on <-ctx.Done() and the consumer

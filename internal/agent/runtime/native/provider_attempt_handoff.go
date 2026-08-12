@@ -64,6 +64,7 @@ func (h *providerAttemptHandoff) publish(params sdk.GenerateParams) error {
 		return errProviderAttemptNotPrepared
 	}
 
+	pending := *h.pending
 	if h.cfg.ForkContext != nil {
 		if err := h.cfg.ForkContext.Store(params.Messages); err != nil {
 			h.pending = nil
@@ -72,7 +73,6 @@ func (h *providerAttemptHandoff) publish(params sdk.GenerateParams) error {
 		}
 	}
 
-	pending := *h.pending
 	h.cfg.preparedStepMessages.reconcileLast(params.Messages)
 	hash, _ := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
 	h.cfg.providerAttemptState.store(&params, pending.snapshot.StepIndex, pending.systemPrepended)
@@ -82,5 +82,6 @@ func (h *providerAttemptHandoff) publish(params sdk.GenerateParams) error {
 	if pending.reselectionDetail != "" {
 		h.cfg.ContextMutations.Record(contextfrag.MutationLoopStepReselection, pending.reselectionDetail)
 	}
+	h.pending = nil
 	return nil
 }

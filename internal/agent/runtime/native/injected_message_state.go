@@ -13,7 +13,6 @@ type injectedMessageState struct {
 	mu           sync.Mutex
 	prepareCalls int
 	records      []injectedMessageAdmission
-	flushed      bool
 }
 
 type injectedMessageAdmission struct {
@@ -69,11 +68,6 @@ func (s *injectedMessageState) flush(
 		return
 	}
 	s.mu.Lock()
-	if s.flushed {
-		s.mu.Unlock()
-		return
-	}
-	s.flushed = true
 	records := append([]injectedMessageAdmission(nil), s.records...)
 	s.mu.Unlock()
 

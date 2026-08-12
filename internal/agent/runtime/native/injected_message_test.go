@@ -455,7 +455,11 @@ func TestAgentStreamRecordsOnlyAdmittedDuplicateInjection(t *testing.T) {
 		},
 	}}}})
 
-	var recorded []string
+	type recordedInjection struct {
+		text        string
+		insertAfter int
+	}
+	var recorded []recordedInjection
 	for range a.Stream(context.Background(), RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:         []sdk.Message{sdk.UserMessage("start")},
@@ -474,13 +478,16 @@ func TestAgentStreamRecordsOnlyAdmittedDuplicateInjection(t *testing.T) {
 			t.Fatal("selector did not find duplicate injection")
 			return ContextStepSelectionResult{}
 		},
-		InjectedRecorder: func(text string, _ int) {
-			recorded = append(recorded, text)
+		InjectedRecorder: func(text string, insertAfter int) {
+			recorded = append(recorded, recordedInjection{text: text, insertAfter: insertAfter})
 		},
 	}) {
 	}
 
-	if len(recorded) != 1 || recorded[0] != marker {
+	if len(recorded) != 1 || recorded[0].text != marker {
 		t.Fatalf("recorded injections = %#v, want exactly one admitted duplicate", recorded)
+	}
+	if recorded[0].insertAfter != 2 {
+		t.Fatalf("recorded insertion boundary = %d, want after first tool pair", recorded[0].insertAfter)
 	}
 }
