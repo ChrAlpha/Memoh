@@ -35,10 +35,11 @@ type runtimeConnectTestStore struct {
 func newRuntimeConnectTestStore() *runtimeConnectTestStore {
 	return &runtimeConnectTestStore{
 		runtime: dbstore.UserRuntimeRecord{
-			ID:       runtimeConnectTestID,
-			UserID:   "user-1",
-			Name:     "Workstation",
-			APIToken: runtimeConnectTestKey,
+			ID:               runtimeConnectTestID,
+			UserID:           "user-1",
+			Name:             "Workstation",
+			APIToken:         runtimeConnectTestKey,
+			PendingExpiresAt: time.Now().UTC().Add(15 * time.Minute),
 		},
 	}
 }
@@ -47,6 +48,24 @@ func (s *runtimeConnectTestStore) GetUserRuntimeByAPIToken(context.Context, stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.runtime, nil
+}
+
+func (s *runtimeConnectTestStore) ActivateUserRuntime(_ context.Context, _, _ string) (dbstore.UserRuntimeRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runtime.ActivatedAt = time.Now().UTC()
+	s.runtime.PendingExpiresAt = time.Time{}
+	return s.runtime, nil
+}
+
+func (s *runtimeConnectTestStore) BackfillUserRuntimeName(_ context.Context, _, _, name, defaultName string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime.Name != "" && s.runtime.Name != defaultName {
+		return false, nil
+	}
+	s.runtime.Name = name
+	return true, nil
 }
 
 type runtimeConnectTestService struct {
