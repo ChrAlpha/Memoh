@@ -529,6 +529,7 @@
     "license": "AGPLv3 · © 2026 MemohAI"
   },
   "chat": {
+    "selectSession": "Select a session",
     "welcome": {
       "folder": "What can I do in {name}?",
       "g1": "Where should we begin?",
@@ -3030,6 +3031,7 @@
       "title": "Schedule",
       "loadFailed": "Load failed",
       "empty": "No tasks scheduled",
+      "emptyDescription": "Give this bot a prompt to run on its own, on a schedule you set.",
       "name": "Name",
       "pattern": "Pattern",
       "enabled": "Enabled",
@@ -3054,6 +3056,28 @@
       "sortName": "By name",
       "sortStatus": "By status",
       "sortNextRun": "By next run",
+      "nextRun": "Next run {time}",
+      "execution": {
+        "runsIn": "Runs in",
+        "newSession": "A new session each run",
+        "existingSession": "An existing session",
+        "session": "Session",
+        "sessionPlaceholder": "Pick a session",
+        "sessionRuntimeNative": "This session uses the built-in model runtime; its workdir is kept.",
+        "sessionRuntimeAcp": "This session runs through {agent}; its workdir is kept.",
+        "model": "Model",
+        "botDefault": "Bot default",
+        "pickModel": "Pick a model",
+        "noBotDefaultModel": "This bot has no default model, so the task runs on the one you pick here.",
+        "noModelAvailable": "This bot has no default model and there is no chat model to pick. Add one first.",
+        "sessionDefault": "Session default",
+        "acpAgents": "Coding agents",
+        "agentDefaultModel": "Agent default",
+        "loadingAgentModels": "Starting agent to load models…",
+        "agentModelsFailed": "Could not load the agent's models",
+        "workdir": "Folder",
+        "noWorkdir": "No folder"
+      },
       "picker": {
         "every": "Every",
         "minutes": "minutes",

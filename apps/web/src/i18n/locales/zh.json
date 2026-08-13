@@ -529,6 +529,7 @@
     "license": "AGPLv3 · © 2026 MemohAI"
   },
   "chat": {
+    "selectSession": "选择会话",
     "welcome": {
       "folder": "要在 {name} 里做点什么？",
       "g1": "我们从哪里开始？",
@@ -3030,6 +3031,7 @@
       "title": "定时任务",
       "loadFailed": "加载失败",
       "empty": "暂无定时任务",
+      "emptyDescription": "让这个 Bot 按你设定的时间自动执行一段指令。",
       "name": "名称",
       "pattern": "表达式",
       "enabled": "启用",
@@ -3054,6 +3056,28 @@
       "sortName": "按名称",
       "sortStatus": "按状态",
       "sortNextRun": "按下次触发",
+      "nextRun": "下次运行 {time}",
+      "execution": {
+        "runsIn": "运行位置",
+        "newSession": "每次运行新建会话",
+        "existingSession": "在已有会话中",
+        "session": "会话",
+        "sessionPlaceholder": "选择会话",
+        "sessionRuntimeNative": "该会话使用内置模型运行时，沿用其文件夹。",
+        "sessionRuntimeAcp": "该会话通过 {agent} 运行，沿用其文件夹。",
+        "model": "模型",
+        "botDefault": "Bot 默认",
+        "pickModel": "选择模型",
+        "noBotDefaultModel": "该 Bot 没有设置默认模型，任务会使用这里选择的模型运行。",
+        "noModelAvailable": "该 Bot 没有默认模型，也没有可选的对话模型，请先添加一个。",
+        "sessionDefault": "会话默认",
+        "acpAgents": "编码 Agent",
+        "agentDefaultModel": "Agent 默认",
+        "loadingAgentModels": "正在启动 Agent 获取模型…",
+        "agentModelsFailed": "获取 Agent 模型失败",
+        "workdir": "文件夹",
+        "noWorkdir": "不指定文件夹"
+      },
       "picker": {
         "every": "每",
         "minutes": "分钟",
