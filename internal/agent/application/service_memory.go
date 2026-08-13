@@ -214,12 +214,12 @@ func (s *Service) effectiveMemorySearchTimeout() time.Duration {
 	return s.memorySearchTimeout
 }
 
-func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []ModelMessage, sourceRefs []string) {
+func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []ModelMessage, persisted []messagepkg.Message) {
 	botID := strings.TrimSpace(req.BotID)
 	if botID == "" {
 		return
 	}
-	memMsgs := toProviderMessages(messages)
+	memMsgs := toProviderMessages(req, messages, persisted)
 	if len(memMsgs) == 0 {
 		return
 	}
@@ -248,7 +248,6 @@ func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []M
 		ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
 		DisplayName:       s.resolveDisplayName(ctx, req),
 		TimezoneLocation:  tzLoc,
-		SourceMessageIDs:  sourceRefs,
 	}); err != nil {
 		s.logger.Warn("memory provider OnAfterChat failed", slog.String("bot_id", botID), slog.Any("error", err))
 		return
@@ -269,37 +268,42 @@ func (s *Service) storeMemory(ctx context.Context, req ChatRequest, messages []M
 	}
 }
 
-func roundSourceRefs(req ChatRequest, persisted []messagepkg.Message) []string {
-	refs := make([]string, 0, len(persisted)+1)
+func toProviderMessages(req ChatRequest, messages []ModelMessage, persisted []messagepkg.Message) []memprovider.Message {
+	out := make([]memprovider.Message, 0, len(messages)+1)
 	if req.UserMessagePersisted || req.ReusePersistedUserMessage {
 		if ref := memprovider.EncodeSourceRef(req.ThreadID, req.PersistedUserMessageID); ref != "" {
-			refs = append(refs, ref)
+			if _, _, ok := memprovider.ParseScopedSourceRef(ref); !ok {
+				ref = ""
+			}
+			if content := strings.TrimSpace(req.Query); content != "" {
+				if ref != "" {
+					out = append(out, memprovider.Message{Role: "user", Content: content, SourceMessageID: ref})
+				}
+			}
 		}
 	}
-	for _, msg := range persisted {
-		sessionID := msg.SessionID
-		if strings.TrimSpace(sessionID) == "" {
-			sessionID = req.ThreadID
+	for i, msg := range messages {
+		if i >= len(persisted) {
+			break
 		}
-		if ref := memprovider.EncodeSourceRef(sessionID, msg.ID); ref != "" {
-			refs = append(refs, ref)
-		}
-	}
-	return refs
-}
-
-func toProviderMessages(messages []ModelMessage) []memprovider.Message {
-	out := make([]memprovider.Message, 0, len(messages))
-	for _, msg := range messages {
 		text := strings.TrimSpace(msg.TextContent())
 		if text == "" {
+			continue
+		}
+		stored := persisted[i]
+		sessionID := strings.TrimSpace(stored.SessionID)
+		if sessionID == "" {
+			sessionID = strings.TrimSpace(req.ThreadID)
+		}
+		ref := memprovider.EncodeSourceRef(sessionID, stored.ID)
+		if _, _, ok := memprovider.ParseScopedSourceRef(ref); !ok {
 			continue
 		}
 		role := strings.TrimSpace(msg.Role)
 		if role == "" {
 			role = "assistant"
 		}
-		out = append(out, memprovider.Message{Role: role, Content: text})
+		out = append(out, memprovider.Message{Role: role, Content: text, SourceMessageID: ref})
 	}
 	return out
 }

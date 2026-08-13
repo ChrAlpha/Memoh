@@ -11,6 +11,7 @@ import (
 
 	dbpkg "github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
+	adapters "github.com/memohai/memoh/internal/memory/adapters"
 	"github.com/memohai/memoh/internal/memory/migrate"
 )
 
@@ -103,5 +104,23 @@ func TestPostgresUpsertNodeConcurrentlyUnionsSourceRefs(t *testing.T) {
 	sort.Strings(want)
 	if fmt.Sprint(got.SourceMessageIDs) != fmt.Sprint(want) {
 		t.Fatalf("source refs = %v, want %v", got.SourceMessageIDs, want)
+	}
+
+	for i := 0; i < adapters.MaxSourceRefsPerMemory+20; i++ {
+		node := base
+		node.SourceMessageIDs = []string{fmt.Sprintf("session/capped-%03d", i)}
+		if _, err := store.UpsertNode(ctx, node); err != nil {
+			t.Fatalf("bounded upsert %d: %v", i, err)
+		}
+	}
+	got, err = store.GetNode(ctx, botID, nodeID)
+	if err != nil {
+		t.Fatalf("get bounded node: %v", err)
+	}
+	if len(got.SourceMessageIDs) != adapters.MaxSourceRefsPerMemory {
+		t.Fatalf("bounded source refs = %d, want %d", len(got.SourceMessageIDs), adapters.MaxSourceRefsPerMemory)
+	}
+	if got.SourceMessageIDs[0] != "session/capped-020" || got.SourceMessageIDs[len(got.SourceMessageIDs)-1] != "session/capped-083" {
+		t.Fatalf("bounded refs retained range = %q...%q", got.SourceMessageIDs[0], got.SourceMessageIDs[len(got.SourceMessageIDs)-1])
 	}
 }
