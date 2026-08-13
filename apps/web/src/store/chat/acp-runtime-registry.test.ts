@@ -29,6 +29,7 @@ function makeRegistry() {
   const sessionId = ref<string | null>('session-1')
   const transport: ACPRuntimeRegistryTransport = {
     ensureACPRuntime: vi.fn(),
+    setACPRuntimeMode: vi.fn(),
     setACPRuntimeModel: vi.fn(),
     setACPRuntimeReasoning: vi.fn(),
   }

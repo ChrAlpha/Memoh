@@ -185,12 +185,20 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 			status = "pending"
 		}
 		state.Message.Running = uiBoolPtr(false)
-		state.Message.Approval = &UIToolApproval{
+		approval := &UIToolApproval{
 			ApprovalID: strings.TrimSpace(event.ApprovalID),
 			ShortID:    event.ShortID,
 			Status:     status,
 			CanApprove: strings.EqualFold(status, "pending"),
 		}
+		// The agent's own permission options ride the event metadata; without
+		// them a live card can only offer a binary answer and the user can
+		// never pick the agent's session/always scope.
+		if obj, ok := event.Metadata["approval"].(map[string]any); ok {
+			approval.Options = approvalOptionsFromAny(obj["options"])
+			approval.SelectedOptionID = stringFromAny(obj["selected_option_id"])
+		}
+		state.Message.Approval = approval
 		return []UIMessage{cloneToolStreamMessage(state.Message)}
 
 	case "user_input_request":

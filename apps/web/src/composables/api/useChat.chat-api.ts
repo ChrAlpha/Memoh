@@ -10,8 +10,10 @@ import {
   postBotsByBotIdSessionsBySessionIdAcpRuntime,
   deleteBotsByBotIdSessionsBySessionId,
   patchBotsByBotIdAcpRuntimesByRuntimeIdModel,
+  patchBotsByBotIdAcpRuntimesByRuntimeIdMode,
   patchBotsByBotIdAcpRuntimesByRuntimeIdReasoning,
   patchBotsByBotIdSessionsBySessionId,
+  patchBotsByBotIdSessionsBySessionIdAcpRuntimeMode,
   patchBotsByBotIdSessionsBySessionIdAcpRuntimeModel,
   patchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoning,
 } from '@memohai/sdk'
@@ -194,6 +196,15 @@ export async function setACPRuntimeModel(botId: string, sessionId: string, model
   return data as AcpagentRuntimeStatus
 }
 
+export async function setACPRuntimeMode(botId: string, sessionId: string, modeId: string): Promise<AcpagentRuntimeStatus> {
+  const { data } = await patchBotsByBotIdSessionsBySessionIdAcpRuntimeMode({
+    path: { bot_id: botId.trim(), session_id: sessionId.trim() },
+    body: { mode_id: modeId },
+    throwOnError: true,
+  })
+  return data as AcpagentRuntimeStatus
+}
+
 export async function setACPRuntimeReasoning(botId: string, sessionId: string, effort: string): Promise<AcpagentRuntimeStatus> {
   const { data } = await patchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoning({
     path: { bot_id: botId.trim(), session_id: sessionId.trim() },
@@ -228,6 +239,15 @@ export async function setACPRuntimeModelByID(botId: string, runtimeId: string, m
     path: { bot_id: botId.trim(), runtime_id: runtimeId.trim() },
     // An empty model_id resets the runtime to the agent default model.
     body: { model_id: modelId.trim() },
+    throwOnError: true,
+  })
+  return data as AcpagentRuntimeStatus
+}
+
+export async function setACPRuntimeModeByID(botId: string, runtimeId: string, modeId: string): Promise<AcpagentRuntimeStatus> {
+  const { data } = await patchBotsByBotIdAcpRuntimesByRuntimeIdMode({
+    path: { bot_id: botId.trim(), runtime_id: runtimeId.trim() },
+    body: { mode_id: modeId },
     throwOnError: true,
   })
   return data as AcpagentRuntimeStatus

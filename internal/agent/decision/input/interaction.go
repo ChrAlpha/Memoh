@@ -180,8 +180,7 @@ func ApplyInteractionOp(payload UIPayload, state TextInteractionState, op Intera
 	case OpSetText:
 		return applySetText(payload, state, op)
 	case OpSubmit:
-		state.Answers = fillSkippedAnswers(payload, state.Answers)
-		state.Completed = true
+		state = completeOrFocusRequired(payload, state)
 		return state, InteractionOutcome{Changed: true}
 	default:
 		return state, InteractionOutcome{Reject: RejectInvalidOp}
@@ -209,9 +208,8 @@ func applySelectOption(payload UIPayload, state TextInteractionState, op Interac
 		state.QuestionIndex = op.QuestionIndex + 1
 	} else {
 		// Answering the last question completes the set; earlier questions
-		// deliberately left blank become skips, same as plain-text "skip".
-		state.Answers = fillSkippedAnswers(payload, state.Answers)
-		state.Completed = true
+		// deliberately left blank become skips unless ACP marked one required.
+		state = completeOrFocusRequired(payload, state)
 	}
 	return state, InteractionOutcome{Changed: true}
 }
@@ -225,6 +223,9 @@ func applyToggleOption(payload UIPayload, state TextInteractionState, op Interac
 	answer, _ := state.Answer(question.ID)
 	answer.QuestionID = question.ID
 	answer.Skipped = false
+	if question.CustomExclusive {
+		answer.CustomText = ""
+	}
 	answer.OptionIDs = toggleOptionID(answer.OptionIDs, question.Options[op.OptionIndex].ID)
 	if len(answer.OptionIDs) == 0 && strings.TrimSpace(answer.CustomText) == "" {
 		state.Answers = removeTextAnswer(state.Answers, question.ID)
@@ -263,11 +264,14 @@ func applySetText(payload UIPayload, state TextInteractionState, op InteractionO
 		if !question.AllowCustom {
 			return state, InteractionOutcome{Reject: RejectCustomNotAllowed}
 		}
-		// Custom text joins any options already toggled; the user may keep
-		// toggling, so multi-select never auto-advances on text.
+		// Custom text normally joins toggled options. ACP can explicitly mark
+		// the companion field exclusive, in which case it replaces them.
 		answer, _ := state.Answer(question.ID)
 		answer.QuestionID = question.ID
 		answer.Skipped = false
+		if question.CustomExclusive {
+			answer.OptionIDs = nil
+		}
 		answer.CustomText = text
 		state.Answers = putTextAnswer(state.Answers, answer)
 		return state, InteractionOutcome{Changed: true}
@@ -277,26 +281,9 @@ func applySetText(payload UIPayload, state TextInteractionState, op InteractionO
 	if questionIndex < len(payload.Questions)-1 {
 		state.QuestionIndex = questionIndex + 1
 	} else {
-		state.Answers = fillSkippedAnswers(payload, state.Answers)
-		state.Completed = true
+		state = completeOrFocusRequired(payload, state)
 	}
 	return state, InteractionOutcome{Changed: true}
-}
-
-// fillSkippedAnswers appends explicit skip entries for unanswered questions so
-// the completed set satisfies Submit's every-question-answered contract.
-func fillSkippedAnswers(payload UIPayload, answers []QuestionAnswer) []QuestionAnswer {
-	out := append([]QuestionAnswer(nil), answers...)
-	have := make(map[string]struct{}, len(out))
-	for _, answer := range out {
-		have[answer.QuestionID] = struct{}{}
-	}
-	for _, question := range payload.Questions {
-		if _, ok := have[question.ID]; !ok {
-			out = append(out, QuestionAnswer{QuestionID: question.ID, Skipped: true})
-		}
-	}
-	return out
 }
 
 func removeTextAnswer(answers []QuestionAnswer, questionID string) []QuestionAnswer {

@@ -12,6 +12,7 @@ export interface WSUserInputAnswer {
   option_ids?: string[]
   custom_text?: string
   text?: string
+  skipped?: boolean
 }
 
 interface WSTurnOptions {
@@ -57,6 +58,8 @@ export type WSClientMessage =
       decision_id: string
       control_id: string
       decision: 'approve' | 'reject'
+      /** Agent-provided permission option id, when the user picked one. */
+      option_id?: string
       reason?: string
     }
   | {

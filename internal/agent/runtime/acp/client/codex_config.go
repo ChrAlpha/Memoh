@@ -31,6 +31,15 @@ model_reasoning_summary = "detailed"
 model_supports_reasoning_summaries = true
 hide_agent_reasoning = false
 show_raw_agent_reasoning = false
+# Permission posture is pinned so it cannot drift with adapter defaults: an
+# on-request policy inside a network-isolated writable workspace makes exec
+# escalations and network access surface as ACP permission requests, which
+# Memoh's approval flow routes to the user (or auto-answers per bot policy).
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = false
 
 [model_providers.{{ .ProviderID }}]
 name = {{ tomlString .ProviderName }}

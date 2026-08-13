@@ -861,6 +861,8 @@ type ToolApprovalRequest struct {
 	ToolName                     string             `json:"tool_name"`
 	Operation                    string             `json:"operation"`
 	ToolInput                    []byte             `json:"tool_input"`
+	Options                      []byte             `json:"options"`
+	SelectedOptionID             string             `json:"selected_option_id"`
 	ShortID                      int32              `json:"short_id"`
 	Status                       string             `json:"status"`
 	RuntimeFencingToken          pgtype.Int8        `json:"runtime_fencing_token"`

@@ -769,42 +769,6 @@ func TestServiceResolveTargetKeepsClaimedRequestRespondableAfterExpiry(t *testin
 	}
 }
 
-func TestServiceACPMCPMarkerRoundtrip(t *testing.T) {
-	t.Parallel()
-
-	svc := newStoreUserInputService(t)
-	marked, err := svc.CreatePending(context.Background(), CreatePendingInput{
-		BotID:            storeTestBotID,
-		SessionID:        storeTestSessionID,
-		ToolCallID:       "acp-mcp-call",
-		ProviderMetadata: map[string]any{"source": ProviderSourceACPMCP},
-		Input: map[string]any{
-			"questions": []any{
-				map[string]any{"text": "Proceed?", "kind": QuestionKindText},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("create acp pending: %v", err)
-	}
-	got, err := svc.Get(context.Background(), marked.ID)
-	if err != nil {
-		t.Fatalf("get acp pending: %v", err)
-	}
-	if !IsACPMCPRequest(got) {
-		t.Fatalf("IsACPMCPRequest = false after round trip, metadata = %#v", got.ProviderMetadata)
-	}
-
-	plain := createStorePending(t, svc, nil, "native-call")
-	gotPlain, err := svc.Get(context.Background(), plain.ID)
-	if err != nil {
-		t.Fatalf("get native pending: %v", err)
-	}
-	if IsACPMCPRequest(gotPlain) {
-		t.Fatalf("native request misclassified as ACP/MCP: %#v", gotPlain.ProviderMetadata)
-	}
-}
-
 func TestServiceAdvanceTextPersistsWizardState(t *testing.T) {
 	t.Parallel()
 

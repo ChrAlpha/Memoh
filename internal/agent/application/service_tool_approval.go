@@ -19,15 +19,18 @@ import (
 )
 
 type ToolApprovalResponseInput struct {
-	ControlID                  string
-	BotID                      string
-	ThreadID                   string
-	ActorChannelIdentityID     string
-	ActorUserID                string
-	ApprovalID                 string
-	ExplicitID                 string
-	ReplyExternalMessageID     string
-	Decision                   string
+	ControlID              string
+	BotID                  string
+	ThreadID               string
+	ActorChannelIdentityID string
+	ActorUserID            string
+	ApprovalID             string
+	ExplicitID             string
+	ReplyExternalMessageID string
+	Decision               string
+	// OptionID names the agent-provided permission option the decider picked;
+	// empty means the plain binary decision.
+	OptionID                   string
 	Reason                     string
 	ChatToken                  string
 	SuppressActivePromptAttach bool
@@ -80,6 +83,18 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		}
 		return CommittedToolApprovalResponse{request: target, input: input, isACP: true, ackOnly: true}, nil
 	}
+	decision := strings.ToLower(strings.TrimSpace(input.Decision))
+	optionID := input.OptionID
+	if optionID == "" && len(target.Options) > 0 {
+		// Older Web/Desktop clients only send approve/reject. Preserve that
+		// contract without inventing a durable choice: a binary response maps
+		// only to the agent's one-shot option. Session/always options must be
+		// selected explicitly by a client that can show their semantics.
+		optionID, err = legacyPermissionOptionID(target.Options, decision)
+	}
+	if err != nil {
+		return CommittedToolApprovalResponse{}, err
+	}
 	var activePrompt *acpActivePromptSubscription
 	if isACP && !input.SuppressActivePromptAttach {
 		activePrompt, _ = s.subscribeACPActivePrompt(
@@ -87,14 +102,36 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 			firstNonEmpty(target.SessionID, input.ThreadID),
 		)
 	}
-
-	switch strings.ToLower(strings.TrimSpace(input.Decision)) {
-	case "approve", "approved":
-		target, err = s.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
-	case "reject", "rejected":
-		target, err = s.toolApproval.Reject(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
-	default:
-		err = fmt.Errorf("unknown tool approval decision %q", input.Decision)
+	if optionID != "" {
+		// The decider picked one of the agent's own options. Its kind is
+		// authoritative for approve-vs-reject; a contradicting decision label
+		// is an error rather than a silent reinterpretation.
+		option, ok := toolapproval.FindOption(target.Options, optionID)
+		switch {
+		case !ok:
+			err = fmt.Errorf("%w: unknown option %q", toolapproval.ErrOptionUnavailable, optionID)
+		case option.Approves():
+			if decision != "" && decision != "approve" && decision != "approved" {
+				err = fmt.Errorf("%w: decision %q does not match allow option %q", toolapproval.ErrOptionUnavailable, input.Decision, optionID)
+				break
+			}
+			target, err = s.toolApproval.ApproveOption(ctx, target.ID, input.ActorChannelIdentityID, input.Reason, optionID)
+		default:
+			if decision != "" && decision != "reject" && decision != "rejected" {
+				err = fmt.Errorf("%w: decision %q does not match reject option %q", toolapproval.ErrOptionUnavailable, input.Decision, optionID)
+				break
+			}
+			target, err = s.toolApproval.RejectOption(ctx, target.ID, input.ActorChannelIdentityID, input.Reason, optionID)
+		}
+	} else {
+		switch decision {
+		case "approve", "approved":
+			target, err = s.toolApproval.Approve(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
+		case "reject", "rejected":
+			target, err = s.toolApproval.Reject(ctx, target.ID, input.ActorChannelIdentityID, input.Reason)
+		default:
+			err = fmt.Errorf("unknown tool approval decision %q", input.Decision)
+		}
 	}
 	if err != nil {
 		if activePrompt != nil {
@@ -108,6 +145,50 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		isACP:        isACP,
 		activePrompt: activePrompt,
 	}, nil
+}
+
+func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision string) (string, error) {
+	wantKind := ""
+	switch decision {
+	case "approve", "approved":
+		wantKind = toolapproval.OptionKindAllowOnce
+	case "reject", "rejected":
+		wantKind = toolapproval.OptionKindRejectOnce
+	default:
+		// Preserve the existing unknown-decision error below.
+		return "", nil
+	}
+	match := ""
+	matches := 0
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Kind), wantKind) {
+			matches++
+			if matches > 1 {
+				match = ""
+				break
+			}
+			match = option.ID
+		}
+	}
+	if matches == 1 {
+		return match, nil
+	}
+	if wantKind == toolapproval.OptionKindRejectOnce {
+		// A binary rejection is always safe. With no reject_once option — or
+		// an ambiguous set of several — the ACP adapter converts the rejected
+		// result to a cancelled outcome instead of guessing an option or
+		// selecting a broader reject_always scope.
+		return "", nil
+	}
+	if matches > 1 {
+		return "", fmt.Errorf("%w: legacy %s matches more than one %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
+	}
+	// No allow_once option exists, so a binary approve cannot be honored:
+	// Memoh never persists ACP permission grants on the user's behalf, and
+	// every remaining allow option carries always/session persistence the
+	// binary surface could not show. The decider gets an explicit error and
+	// must approve from a surface that renders the agent's options.
+	return "", fmt.Errorf("%w: legacy %s requires an agent-provided %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
 }
 
 func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
@@ -189,9 +270,6 @@ func (s *Service) authorizeACPToolApprovalResponse(ctx context.Context, target t
 	if s == nil || s.sessionService == nil {
 		return errors.New("session service not configured")
 	}
-	if s.botPermissions == nil {
-		return errors.New("bot permission checker not configured")
-	}
 	sessionID := firstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
@@ -214,9 +292,12 @@ func (s *Service) authorizeACPToolApprovalResponse(ctx context.Context, target t
 	}
 	acpMeta := mergeACPRuntimeMetadata(sess.Metadata, sess.RuntimeMetadata)
 	runtimeOwnerID := metadataString(acpMeta, "runtime_owner_account_id")
-	if runtimeOwnerID == "" || runtimeOwnerID != actorID {
+	if runtimeOwnerID == "" {
 		return toolapproval.ErrForbidden
 	}
+	// The runtime owner has no standing beyond their live grants: a revoked
+	// or offboarded owner must lose approval authority at decision time, so
+	// every actor — owner included — passes the permission check.
 	return s.authorizeToolApprovalResponse(ctx, target, input)
 }
 
@@ -225,6 +306,9 @@ func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target tool
 		return errors.New("bot permission checker not configured")
 	}
 	botID := firstNonEmpty(target.BotID, input.BotID)
+	// Channel deciders without a bound account carry only their channel
+	// identity; grants are keyed on that identity, so it stays a valid
+	// authorization subject (base behavior).
 	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	permission, ok := toolApprovalPermission(target.Operation)
 	if strings.TrimSpace(botID) == "" || strings.TrimSpace(actorID) == "" || !ok {
@@ -245,6 +329,11 @@ func toolApprovalPermission(operation string) (string, bool) {
 	case toolapproval.OperationWrite:
 		return bots.PermissionWorkspaceWrite, true
 	case toolapproval.OperationExec:
+		return bots.PermissionWorkspaceExec, true
+	case toolapproval.OperationPermission:
+		// A generic agent permission request (network grant, mode switch)
+		// authorizes the agent to act, so it sits at the same authority as
+		// running the agent's own commands.
 		return bots.PermissionWorkspaceExec, true
 	default:
 		return "", false

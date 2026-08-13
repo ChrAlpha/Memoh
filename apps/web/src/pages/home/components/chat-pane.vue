@@ -290,7 +290,33 @@
                         </span>
                       </CommandItem>
                     </CommandGroup>
-                    <CommandSeparator v-if="visibleSlashQuickActions.length && visibleSlashSkills.length" />
+                    <CommandSeparator
+                      v-if="visibleSlashQuickActions.length && (visibleACPAgentCommands.length || visibleSlashSkills.length)"
+                    />
+                    <CommandGroup
+                      v-if="visibleACPAgentCommands.length"
+                      :heading="$t('chat.slash.agentCommands')"
+                    >
+                      <CommandItem
+                        v-for="command in visibleACPAgentCommands"
+                        :key="command.name"
+                        :value="`/${command.name}`"
+                        @select="selectACPAgentCommand(command)"
+                      >
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate text-control">/{{ command.name }}</span>
+                          <span
+                            v-if="command.description"
+                            class="block truncate text-caption text-muted-foreground"
+                          >{{ command.description }}</span>
+                          <span
+                            v-if="command.input_hint"
+                            class="block truncate text-caption text-muted-foreground"
+                          >{{ $t('chat.slash.agentCommandInputHint', { hint: command.input_hint }) }}</span>
+                        </span>
+                      </CommandItem>
+                    </CommandGroup>
+                    <CommandSeparator v-if="visibleACPAgentCommands.length && visibleSlashSkills.length" />
                     <CommandGroup
                       v-if="visibleSlashSkills.length"
                       :heading="$t('chat.slash.skills')"
@@ -666,6 +692,45 @@
                         v-else
                         :class="menuChromeClass"
                       >
+                        <div
+                          v-if="activeUsesACPComposer && !activeIsPendingACP && acpModes.length"
+                          class="border-b border-border p-3"
+                        >
+                          <div class="mb-2 text-label text-foreground">
+                            {{ $t('chat.sessionMode') }}
+                          </div>
+                          <Select
+                            :model-value="currentACPModeId"
+                            :disabled="activeChatReadOnly || streaming || acpConfigChanging"
+                            @update:model-value="onACPModeSelected"
+                          >
+                            <SelectTrigger class="w-full">
+                              <SelectValue :placeholder="$t('chat.sessionModePlaceholder')" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem
+                                v-for="mode in acpModes"
+                                :key="mode.id"
+                                :value="mode.id"
+                              >
+                                <div class="min-w-0">
+                                  <div class="truncate">
+                                    {{ mode.name?.trim() || mode.id }}
+                                  </div>
+                                  <div
+                                    v-if="mode.description?.trim()"
+                                    class="text-caption text-muted-foreground"
+                                  >
+                                    {{ mode.description }}
+                                  </div>
+                                </div>
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p class="mt-2 rounded-md border border-warning-border bg-warning-soft p-2 text-caption text-warning-foreground">
+                            {{ $t('chat.sessionModeCaution') }}
+                          </p>
+                        </div>
                         <ModelOptions
                           :model-value="overrideModelId"
                           :reasoning-effort="overrideReasoningEffort"
@@ -763,10 +828,11 @@ import {
   Minimize2,
   Package,
   SquarePen,
+  ShieldCheck,
   Monitor,
   Server,
 } from 'lucide-vue-next'
-import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Spinner, menuChromeClass, toast } from '@felinic/ui'
+import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Spinner, menuChromeClass, toast } from '@felinic/ui'
 import { useChatStore, type ACPAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
@@ -798,7 +864,7 @@ import { useComposerDrafts } from '../composables/useComposerDrafts'
 import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useComposerLayout'
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
-import { commandResultQuickActionText, isCommandResultItemSelectable } from './slash-command-result'
+import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
 import { captureChatPaneSendContext, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
@@ -808,6 +874,13 @@ import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, acpAgentIcon, findM
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { findLatestPendingChatDecision } from './chat-pending-decision'
+import {
+  acpSlashCommandComposerText,
+  composerLocalQuickActionID,
+  isBoundACPRuntimeForTarget,
+  visibleACPSlashCommands,
+  type ACPAvailableCommand,
+} from '@/utils/acp-slash-commands'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -1324,6 +1397,7 @@ function showForkSourceDividerBefore(index: number): boolean {
 
 const activeSessionId = computed(() => paneTarget.value.sessionId ?? activeSession.value?.id ?? '')
 const requestedSkills = ref<RequestedSkillSelection[]>([])
+const slashPanelSuppressedPrefix = ref('')
 const skillSlashEnabled = computed(() => !activeIsACP.value && !activeIsPendingACP.value)
 const { data: safeSkillCatalog, isLoading: safeSkillCatalogLoading } = useQuery({
   key: () => ['bot-safe-skills-catalog', currentBotId.value ?? ''],
@@ -1366,6 +1440,7 @@ function removeRequestedSkill(skill: RequestedSkillSelection) {
 
 watch([currentBotId, activeSessionId], () => {
   requestedSkills.value = []
+  slashPanelSuppressedPrefix.value = ''
   clearCurrentCommandEvent()
 })
 
@@ -1396,6 +1471,15 @@ const slashQuickActions = computed(() => [
     description: t('chat.slash.newDescription'),
     icon: SquarePen,
   },
+  ...((boundLiveACPRuntime.value || activeIsPendingACP.value)
+    && acpModes.value.length > 0
+    ? [{
+        id: 'permission',
+        label: '/permission',
+        description: t('chat.slash.permissionDescription'),
+        icon: ShieldCheck,
+      }]
+    : []),
   ...(canCompactViaSlash.value
     ? [{
         id: 'compact',
@@ -1428,6 +1512,7 @@ const slashPanelOpen = computed(() =>
   && !activeChatReadOnly.value
   && !loadingMessages.value
   && inputText.value.trimStart().startsWith('/')
+  && !slashPanelSuppressedPrefix.value
   && !inputText.value.includes('\n'),
 )
 function slashMatches(label: string, description = ''): boolean {
@@ -1442,8 +1527,18 @@ const visibleSlashQuickActions = computed(() =>
 const visibleSlashSkills = computed(() =>
   safeSkills.value.filter(skill => slashMatches(skill.name, skill.description ?? '')),
 )
+const composerACPAvailableCommands = computed(() => (
+  (boundLiveACPRuntime.value || activeIsPendingACP.value)
+    ? acpAvailableCommands.value
+    : []
+))
+const visibleACPAgentCommands = computed(() =>
+  visibleACPSlashCommands(composerACPAvailableCommands.value, slashQuery.value),
+)
 const slashPanelHasResults = computed(() =>
-  visibleSlashQuickActions.value.length > 0 || visibleSlashSkills.value.length > 0,
+  visibleSlashQuickActions.value.length > 0
+  || visibleACPAgentCommands.value.length > 0
+  || visibleSlashSkills.value.length > 0,
 )
 
 // Session usage for the /compact quick action's live description ("42% full")
@@ -1472,7 +1567,37 @@ const canCompactViaSlash = computed(() =>
 // panel's compaction, /model opens the composer's model picker. Everything
 // else keeps the type-and-send flow (the store intercepts /new; /help and
 // /skill list execute server-side).
-function runLocalQuickAction(id: string): boolean {
+async function runPendingPermission(text: string) {
+  const modeId = text.trim().replace(/^\/permission(?:\s+|$)/i, '').trim()
+  try {
+    const runtime = modeId ? await setACPMode(modeId) : await ensureACPRuntime()
+    if (!runtime?.modes) return
+    const currentModeId = runtime.modes.current_mode_id ?? ''
+    chatStore.rememberCommandEvent({
+      type: 'command_result',
+      composer_scope: paneComposerScope.value,
+      action_id: 'permission',
+      terminal: true,
+      result: {
+        kind: modeId ? 'permission_mode_changed' : 'permission_modes',
+        items: (runtime.modes.available_modes ?? []).flatMap((mode): CommandActionListItem[] => {
+          const id = mode.id ?? ''
+          if (!id) return []
+          return [{
+            id,
+            title: mode.name || id,
+            description: mode.description,
+            kind: id === currentModeId ? 'acp_mode_current' : 'acp_mode',
+          }]
+        }),
+      },
+    }, currentPaneCommandScope())
+  } catch (error) {
+    composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
+  }
+}
+
+function runLocalQuickAction(id: string, text = ''): boolean {
   if (id === 'compact') {
     if (!canCompactViaSlash.value) {
       composerError.value = t('chat.slash.compactUnavailable')
@@ -1485,37 +1610,65 @@ function runLocalQuickAction(id: string): boolean {
     modelPopoverOpen.value = true
     return true
   }
+  if (id === 'permission' && activeIsPendingACP.value) {
+    void runPendingPermission(text || '/permission')
+    return true
+  }
+  return false
+}
+
+function localQuickActionBlocked(): boolean {
+  if (pendingFiles.value.length > 0) {
+    composerError.value = t('chat.slash.attachmentsUnsupported')
+    return true
+  }
+  if (requestedSkills.value.length > 0) {
+    composerError.value = t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+    return true
+  }
   return false
 }
 
 function selectSlashQuickAction(action: { id: string, label: string }) {
-  if (runLocalQuickAction(action.id)) {
+  slashPanelSuppressedPrefix.value = ''
+  if (localQuickActionBlocked()) return
+  if (runLocalQuickAction(action.id, action.label)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
     void nextTick(focusTextarea)
     return
   }
-  inputText.value = action.label
-  saveInputDraft(inputDraftKey.value, action.label)
+  sendSlashCommandText(action.label)
+}
+
+function sendSlashCommandText(text: string) {
+  slashPanelSuppressedPrefix.value = ''
+  inputText.value = text
+  saveInputDraft(inputDraftKey.value, text)
   void nextTick(() => {
     focusTextarea()
     void handleSend()
   })
 }
 
+function selectACPAgentCommand(command: ACPAvailableCommand) {
+  const text = acpSlashCommandComposerText(command)
+  if (!text) return
+  slashPanelSuppressedPrefix.value = text.trimEnd()
+  inputText.value = text
+  saveInputDraft(inputDraftKey.value, text)
+  void nextTick(focusTextarea)
+}
+
 // Typed forms of the client-side quick actions ("/compact", "/model") — must
 // be intercepted before the store send path, which would otherwise classify
 // them as skill activation and fail with requested_skill_not_found.
 function localQuickActionIDForSlash(text: string): string {
-  switch (text.trim().toLowerCase()) {
-    case '/compact':
-      return 'compact'
-    case '/model':
-    case '/models':
-      return 'model'
-    default:
-      return ''
-  }
+  if (activeIsPendingACP.value && /^\/permission(?:\s|$)/i.test(text.trim())) return 'permission'
+  return composerLocalQuickActionID(
+    text,
+    activeIsACP.value || activeIsPendingACP.value,
+  )
 }
 
 function currentPaneCommandScope() {
@@ -1536,9 +1689,18 @@ const commandResult = computed(() => commandPanelEvent.value?.type === 'command_
 const commandError = computed(() => commandPanelEvent.value?.type === 'command_error' ? commandPanelEvent.value.error : null)
 const commandPanelActionID = computed(() => commandPanelEvent.value?.action_id?.trim() ?? '')
 const commandPanelIsError = computed(() => !!commandError.value)
+const presentedCommandResult = computed(() => commandResult.value
+  ? commandResultPresentation(commandResult.value, {
+      modesTitle: t('chat.slash.permissionModesTitle'),
+      modesText: t('chat.slash.permissionModesText'),
+      changedTitle: t('chat.slash.permissionModeChangedTitle'),
+      changedText: t('chat.slash.permissionModeChangedText'),
+      currentMode: t('chat.slash.permissionCurrentMode'),
+    })
+  : null)
 const commandPanelTitle = computed(() => {
   if (commandError.value) return t('chat.slash.commandError')
-  return commandResult.value?.title || t('chat.slash.commandResult')
+  return presentedCommandResult.value?.title || t('chat.slash.commandResult')
 })
 function localizedCommandErrorMessage(error: CommandActionError): string {
   const code = error.code.trim()
@@ -1550,9 +1712,9 @@ function localizedCommandErrorMessage(error: CommandActionError): string {
   return error.message || t('chat.slash.errorMessages.generic')
 }
 
-const commandPanelText = computed(() => commandError.value ? localizedCommandErrorMessage(commandError.value) : commandResult.value?.text || '')
+const commandPanelText = computed(() => commandError.value ? localizedCommandErrorMessage(commandError.value) : presentedCommandResult.value?.text || '')
 const commandResultItems = computed(() =>
-  (commandResult.value?.items ?? []).filter(item => isCommandResultItemSelectable(item, commandPanelActionID.value)),
+  (presentedCommandResult.value?.items ?? []).filter(item => isCommandResultItemVisible(item, commandPanelActionID.value)),
 )
 
 // Pre-digested view model for the panel's command section; the raw event and
@@ -1569,27 +1731,33 @@ const composerCommandPanel = computed(() => {
 })
 
 function selectCommandResultItem(item: CommandActionListItem) {
-  const kind = item.kind?.trim().toLowerCase()
-  if (kind === 'quick_action') {
-    const label = commandResultQuickActionText(item, commandPanelActionID.value)
-    if (!label) return
+  const selection = resolveCommandResultSelection(item, commandPanelActionID.value)
+  if (!selection) return
+  if (selection.kind === 'quick_action') {
     clearCurrentCommandEvent()
     selectSlashQuickAction({
-      id: item.id?.trim() || label,
-      label,
+      id: selection.id,
+      label: selection.text,
     })
     return
   }
+  if (selection.kind === 'acp_permission') {
+    clearCurrentCommandEvent()
+    void onACPModeSelected(selection.modeId)
+    return
+  }
   if (!skillSlashEnabled.value) return
-  if (kind !== 'skill' || !item.id?.trim() || !item.title.trim()) return
   addRequestedSkill({
-    name: item.id.trim(),
-    display_name: item.title,
-    description: item.description,
+    name: selection.id,
+    display_name: selection.title,
+    description: selection.description,
   })
 }
 const {
   runtime: acpCapabilityRuntime,
+  availableCommands: acpAvailableCommands,
+  modes: acpModes,
+  currentModeId: currentACPModeId,
   models: acpModels,
   currentModelId: currentACPModelId,
   reasoningEfforts: acpReasoningEfforts,
@@ -1597,6 +1765,7 @@ const {
   isEnsuring: acpRuntimeEnsuring,
   isPreparing: acpConfigPreparing,
   ensure: ensureACPRuntime,
+  setMode: setACPMode,
   setModel: setACPModel,
   setReasoning: setACPReasoning,
 } = useACPRuntime({
@@ -1605,6 +1774,15 @@ const {
   enabled: computed(() => activeUsesACPComposer.value && !!currentBotId.value),
   agentId: activeACPAgentId,
   projectPath: activeACPProjectPath,
+})
+const boundLiveACPRuntime = computed(() => {
+  return activeIsACP.value
+    && !activeIsPendingACP.value
+    && isBoundACPRuntimeForTarget(acpCapabilityRuntime.value, {
+      sessionId: paneTarget.value.sessionId ?? '',
+      agentId: activeACPAgentId.value,
+      projectPath: activeACPProjectPath.value,
+    })
 })
 
 const models = computed<ModelsGetResponse[]>(() => modelData.value ?? [])
@@ -1615,7 +1793,7 @@ const acpModelsLoading = computed(() =>
   && (agentChanging.value || acpRuntimeEnsuring.value),
 )
 const composerConfigPending = computed(() => activeUsesACPComposer.value && (
-  agentChanging.value || acpConfigChanging.value
+  agentChanging.value || acpConfigChanging.value || acpConfigPreparing.value
 ))
 const canChangeAgent = computed(() => !streaming.value
   && !creatingSession.value
@@ -2029,6 +2207,13 @@ watch([modelPopoverOpen, activeUsesACPComposer, acpOperationScope], ([open, uses
   })
 })
 
+watch([slashPanelOpen, activeUsesACPComposer, acpOperationScope], ([open, usesACP]) => {
+  if (!open || !usesACP) return
+  void ensureACPRuntime().catch((error) => {
+    composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
+  })
+})
+
 function normalizedProfileID(value: unknown): string {
   return normalizeACPAgentID(value)
 }
@@ -2152,6 +2337,32 @@ async function onComposerModelValueSelected(value: string) {
   }
 }
 
+async function onACPModeSelected(value: unknown) {
+  if (typeof value !== 'string') return
+  if (acpConfigChanging.value) return
+  if (!value || value === currentACPModeId.value) return
+  const previousMode = currentACPModeId.value
+  const operationScope = acpOperationScope.value
+  acpConfigChangeScope.value = operationScope
+  composerError.value = ''
+  try {
+    const runtime = await setACPMode(value)
+    if (
+      runtime
+      && acpOperationScope.value === operationScope
+      && runtime.modes?.current_mode_id !== previousMode
+    ) {
+      toast.warning(t('chat.sessionModeChanged'))
+    }
+  } catch (error) {
+    if (activeUsesACPComposer.value && acpOperationScope.value === operationScope) {
+      composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
+    }
+  } finally {
+    if (acpConfigChangeScope.value === operationScope) acpConfigChangeScope.value = ''
+  }
+}
+
 async function onComposerReasoningEffortSelected(value: string) {
   if (activeUsesACPComposer.value && acpConfigChanging.value) return
   const previousEffort = overrideReasoningEffort.value
@@ -2191,6 +2402,11 @@ const {
 } = useMediaGallery(messages)
 
 const inputText = ref('')
+watch(inputText, (text) => {
+  const prefix = slashPanelSuppressedPrefix.value
+  if (!prefix || text === prefix || text.startsWith(`${prefix} `)) return
+  slashPanelSuppressedPrefix.value = ''
+})
 const isMobile = useIsMobile()
 const {
   textareaEl,
@@ -2555,17 +2771,9 @@ async function handleSend() {
     // repeated here rather than living only on the control.
     || composerHasNoModel.value
   ) return
-  if (text.startsWith('/') && files.length) {
-    composerError.value = ''
-    chatStore.showCommandError('slash_attachments_unsupported', t('chat.slash.attachmentsUnsupported'), {
-      botId: currentBotId.value ?? undefined,
-      sessionId: activeSessionId.value || undefined,
-      composerScope: inputDraftKey.value || 'chat',
-    })
-    return
-  }
   const localAction = localQuickActionIDForSlash(text)
-  if (localAction && runLocalQuickAction(localAction)) {
+  if (localAction && localQuickActionBlocked()) return
+  if (localAction && runLocalQuickAction(localAction, text)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
     return

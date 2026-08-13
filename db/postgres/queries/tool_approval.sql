@@ -36,6 +36,7 @@ INSERT INTO tool_approval_requests (
   tool_name,
   operation,
   tool_input,
+  options,
   short_id,
   runtime_fencing_token,
   requested_by_channel_identity_id,
@@ -55,6 +56,7 @@ INSERT INTO tool_approval_requests (
   sqlc.arg(tool_name),
   sqlc.arg(operation),
   sqlc.arg(tool_input),
+  COALESCE(sqlc.arg(options)::jsonb, '[]'::jsonb),
   next_short_id.short_id,
   sqlc.narg(runtime_fencing_token),
   sqlc.narg(requested_by_channel_identity_id),
@@ -74,6 +76,7 @@ WHERE tool_approval_requests.status = 'pending'
   AND tool_approval_requests.tool_name = EXCLUDED.tool_name
   AND tool_approval_requests.operation = EXCLUDED.operation
   AND tool_approval_requests.tool_input = EXCLUDED.tool_input
+  AND tool_approval_requests.options = EXCLUDED.options
   AND tool_approval_requests.workspace_target_id = EXCLUDED.workspace_target_id
 RETURNING *;
 
@@ -143,6 +146,7 @@ RETURNING *;
 UPDATE tool_approval_requests
 SET status = 'approved',
     decision_reason = sqlc.arg(reason),
+    selected_option_id = sqlc.arg(selected_option_id),
     decided_by_channel_identity_id = sqlc.narg(decided_by_channel_identity_id),
     response_control_id = sqlc.narg(response_control_id)::text,
     response_payload_hash = sqlc.narg(response_payload_hash)::text,
@@ -157,6 +161,7 @@ RETURNING *;
 UPDATE tool_approval_requests
 SET status = 'rejected',
     decision_reason = sqlc.arg(reason),
+    selected_option_id = sqlc.arg(selected_option_id),
     decided_by_channel_identity_id = sqlc.narg(decided_by_channel_identity_id),
     response_control_id = sqlc.narg(response_control_id)::text,
     response_payload_hash = sqlc.narg(response_payload_hash)::text,

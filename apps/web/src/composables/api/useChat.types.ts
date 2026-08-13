@@ -198,12 +198,21 @@ export interface UIBackgroundTask {
   stalled?: boolean
 }
 
+/** One agent-provided answer to a permission request, preserved verbatim. */
+export interface UIToolApprovalOption {
+  id: string
+  name?: string
+  kind?: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' | (string & {})
+}
+
 export interface UIToolApproval {
   approval_id: string
   short_id?: number
   status: string
   decision_reason?: string
   can_approve?: boolean
+  options?: UIToolApprovalOption[]
+  selected_option_id?: string
 }
 
 export interface UIUserInput {
@@ -230,6 +239,8 @@ export interface UIUserInputQuestion {
   kind: 'single_select' | 'multi_select' | 'text'
   options?: UIUserInputOption[]
   allow_custom?: boolean
+  custom_exclusive?: boolean
+  required?: boolean
   placeholder?: string
 }
 

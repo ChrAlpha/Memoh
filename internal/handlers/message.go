@@ -472,14 +472,31 @@ func mergeToolApprovals(turns []chatview.UITurn, approvals []toolapproval.Reques
 			running := false
 			msg.Running = &running
 			msg.Approval = &chatview.UIToolApproval{
-				ApprovalID:     approval.ID,
-				ShortID:        approval.ShortID,
-				Status:         approval.Status,
-				DecisionReason: approval.DecisionReason,
-				CanApprove:     canApproveFn(approval),
+				ApprovalID:       approval.ID,
+				ShortID:          approval.ShortID,
+				Status:           approval.Status,
+				DecisionReason:   approval.DecisionReason,
+				CanApprove:       canApproveFn(approval),
+				Options:          uiToolApprovalOptions(approval.Options),
+				SelectedOptionID: approval.SelectedOptionID,
 			}
 		}
 	}
+}
+
+func uiToolApprovalOptions(options []toolapproval.PermissionOption) []chatview.UIToolApprovalOption {
+	if len(options) == 0 {
+		return nil
+	}
+	converted := make([]chatview.UIToolApprovalOption, 0, len(options))
+	for _, option := range options {
+		converted = append(converted, chatview.UIToolApprovalOption{
+			ID:   option.ID,
+			Name: option.Name,
+			Kind: option.Kind,
+		})
+	}
+	return converted
 }
 
 func mergeUserInputs(turns []chatview.UITurn, requests []userinput.Request, canRespondFn func(userinput.Request) bool) {

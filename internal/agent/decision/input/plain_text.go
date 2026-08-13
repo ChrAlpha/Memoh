@@ -76,6 +76,9 @@ func advanceTextState(payload UIPayload, state TextInteractionState, raw string)
 	question := payload.Questions[state.QuestionIndex]
 	answer := QuestionAnswer{QuestionID: question.ID}
 	if isSkipCommand(command) {
+		if questionIsExplicitlyRequired(question) {
+			return state, true, false, nil
+		}
 		answer.Skipped = true
 	} else {
 		var err error
@@ -86,7 +89,7 @@ func advanceTextState(payload UIPayload, state TextInteractionState, raw string)
 	}
 	state.Answers = putTextAnswer(state.Answers, answer)
 	if state.QuestionIndex == len(payload.Questions)-1 {
-		state.Completed = true
+		state = completeOrFocusRequired(payload, state)
 	} else {
 		state.QuestionIndex++
 	}
@@ -118,6 +121,35 @@ func normalizeTextInteraction(payload UIPayload, state TextInteractionState) Tex
 	}
 	state.Answers = answers
 	return state
+}
+
+func completeOrFocusRequired(payload UIPayload, state TextInteractionState) TextInteractionState {
+	for index, question := range payload.Questions {
+		if !questionIsExplicitlyRequired(question) {
+			continue
+		}
+		answer, ok := state.Answer(question.ID)
+		if !ok || answer.Skipped {
+			state.QuestionIndex = index
+			state.Completed = false
+			return state
+		}
+	}
+	have := make(map[string]struct{}, len(state.Answers))
+	for _, answer := range state.Answers {
+		have[answer.QuestionID] = struct{}{}
+	}
+	for _, question := range payload.Questions {
+		if _, ok := have[question.ID]; !ok && !questionIsExplicitlyRequired(question) {
+			state.Answers = append(state.Answers, QuestionAnswer{QuestionID: question.ID, Skipped: true})
+		}
+	}
+	state.Completed = true
+	return state
+}
+
+func questionIsExplicitlyRequired(question UIQuestion) bool {
+	return question.Required != nil && *question.Required
 }
 
 func parseTextAnswer(question UIQuestion, raw string) (QuestionAnswer, error) {
@@ -156,6 +188,9 @@ func parseTextAnswer(question UIQuestion, raw string) (QuestionAnswer, error) {
 				continue
 			}
 			return QuestionAnswer{}, fmt.Errorf("selection %q does not match an option", part)
+		}
+		if question.CustomExclusive && len(answer.OptionIDs) > 0 && answer.CustomText != "" {
+			return QuestionAnswer{}, errors.New("options and a custom answer are mutually exclusive")
 		}
 	default:
 		return QuestionAnswer{}, fmt.Errorf("unsupported question kind %q", question.Kind)

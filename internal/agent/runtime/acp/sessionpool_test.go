@@ -2928,6 +2928,22 @@ type fakeUserInputCanceller struct {
 	cancelStarted   chan<- struct{}
 }
 
+func (*fakeUserInputCanceller) CreatePending(context.Context, userinput.CreatePendingInput) (userinput.Request, error) {
+	return userinput.Request{}, nil
+}
+
+func (*fakeUserInputCanceller) Cancel(context.Context, userinput.CancelInput) (userinput.Request, error) {
+	return userinput.Request{}, nil
+}
+
+func (*fakeUserInputCanceller) WaitForRegisteredResponse(context.Context, string) (userinput.Request, error) {
+	return userinput.Request{}, nil
+}
+
+func (*fakeUserInputCanceller) RegisterWaiter(string) func() {
+	return func() {}
+}
+
 func (f *fakeUserInputCanceller) CancelPendingForSession(ctx context.Context, botID, sessionID, reason string) ([]userinput.Request, error) {
 	if f.cancelStarted != nil {
 		f.cancelStarted <- struct{}{}

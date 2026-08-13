@@ -70,7 +70,7 @@ func (s *Service) CanRespond(req Request) bool {
 	if req.Status != StatusPending {
 		return false
 	}
-	if IsACPMCPRequest(req) {
+	if IsProcessLocalACPRequest(req) {
 		return s.HasWaiter(req.ID)
 	}
 	return true
@@ -770,6 +770,9 @@ func answerEntry(question UIQuestion, answer QuestionAnswer) (map[string]any, er
 		if len(optionIDs) > 0 || customText != "" || text != "" {
 			return nil, fmt.Errorf("question %q cannot be skipped and answered", question.ID)
 		}
+		if questionIsExplicitlyRequired(question) {
+			return nil, fmt.Errorf("question %q is required and cannot be skipped", question.ID)
+		}
 		entry["skipped"] = true
 		return entry, nil
 	}
@@ -790,6 +793,9 @@ func answerEntry(question UIQuestion, answer QuestionAnswer) (map[string]any, er
 	}
 	if customText != "" && !question.AllowCustom {
 		return nil, fmt.Errorf("question %q does not allow a custom answer", question.ID)
+	}
+	if question.CustomExclusive && len(optionIDs) > 0 && customText != "" {
+		return nil, fmt.Errorf("question %q accepts options or a custom answer, not both", question.ID)
 	}
 	if question.Kind == QuestionKindSingleSelect {
 		if len(optionIDs) > 1 {
@@ -837,11 +843,19 @@ func canceledResult(reason string) map[string]any {
 	}
 }
 
-func IsACPMCPRequest(req Request) bool {
+// IsProcessLocalACPRequest reports whether the blocked consumer is an ACP
+// JSON-RPC request in this server process. Its durable row may outlive a browser
+// refresh, but it cannot outlive the ACP process and its registered waiter.
+func IsProcessLocalACPRequest(req Request) bool {
 	if req.ProviderMetadata == nil {
 		return false
 	}
-	return strings.TrimSpace(stringValue(req.ProviderMetadata["source"])) == ProviderSourceACPMCP
+	switch strings.TrimSpace(stringValue(req.ProviderMetadata["source"])) {
+	case ProviderSourceACPMCP, ProviderSourceACPElicitation:
+		return true
+	default:
+		return false
+	}
 }
 
 func cleanIDs(values []string) []string {

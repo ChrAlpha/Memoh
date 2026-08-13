@@ -75,7 +75,7 @@ func (f *fakeUserInputService) CanRespond(req userinput.Request) bool {
 	if f.canRespondSet {
 		return f.canRespond
 	}
-	if userinput.IsACPMCPRequest(req) {
+	if userinput.IsProcessLocalACPRequest(req) {
 		return false
 	}
 	return req.Status == userinput.StatusPending

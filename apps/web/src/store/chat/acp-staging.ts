@@ -5,6 +5,7 @@ import {
   fetchACPRuntimeByID as requestFetchACPRuntimeByID,
   closeACPRuntime as requestCloseACPRuntime,
   setACPRuntimeModelByID as requestSetACPRuntimeModelByID,
+  setACPRuntimeModeByID as requestSetACPRuntimeModeByID,
   setACPRuntimeReasoningByID as requestSetACPRuntimeReasoningByID,
 } from '@/composables/api/useChat'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH } from '@/utils/acp'
@@ -311,6 +312,13 @@ export function createACPStaging(deps: ACPStagingDeps) {
     return setPendingACPConfig((botId, runtimeId) => requestSetACPRuntimeReasoningByID(botId, runtimeId, value))
   }
 
+  async function setPendingACPMode(modeId: string): Promise<AcpagentRuntimeStatus | undefined> {
+    if (!pendingACPSessionInput.value) return
+    if (!modeId.trim()) throw new Error('ACP mode is not selected')
+
+    return setPendingACPConfig((botId, runtimeId) => requestSetACPRuntimeModeByID(botId, runtimeId, modeId))
+  }
+
   async function setPendingACPConfig(
     update: (botId: string, runtimeId: string) => Promise<AcpagentRuntimeStatus>,
   ): Promise<AcpagentRuntimeStatus | undefined> {
@@ -437,6 +445,7 @@ export function createACPStaging(deps: ACPStagingDeps) {
     resetToEmptyComposer,
     ensurePendingACPRuntime,
     setPendingACPModel,
+    setPendingACPMode,
     setPendingACPReasoning,
     clearPendingACPSession,
     detachPendingACPSession,

@@ -130,6 +130,19 @@
       "upstream_unavailable": "Connect-It 暂时无法完成请求，请稍后重试。",
       "operation_failed": "连接器操作失败，请重试。"
     },
+    "tool_approval": {
+      "forbidden": "你没有权限处理这条审批请求。",
+      "not_found": "找不到这条审批请求。",
+      "expired": "这条审批请求已过期或已被处理。",
+      "ambiguous": "匹配到多条审批请求。",
+      "request_invalid": "审批响应格式无效，请刷新后重试。",
+      "operation_failed": "审批响应处理失败。"
+    },
+    "user_input": {
+      "forbidden": "你没有权限回答这个问题。",
+      "expired": "这个问题已过期或已被回答。",
+      "operation_failed": "答案处理失败。"
+    },
     "workspace": {
       "unreachable": "暂时无法连接工作区，请稍后重试。",
       "image_incompatible": "工作区镜像与当前版本不兼容，请基于最新 Memoh Workspace 镜像重建后重试。",
@@ -137,7 +150,12 @@
       "display_prepare_failed": "显示环境准备失败，请稍后重试。"
     },
     "acp": {
+      "request_invalid": "Agent 运行实例请求无效，请检查后重试。",
+      "access_forbidden": "你没有权限控制这个 Agent 运行实例。",
       "runtime_not_found": "这个 Agent 运行实例已失效，将重新启动。",
+      "runtime_conflict": "Agent 运行实例尚未准备好执行此操作，请刷新后重试。",
+      "runtime_limit_reached": "当前运行的 Agent 实例过多，请关闭一个后重试。",
+      "operation_failed": "Agent 运行实例操作失败，请重试。",
       "turn_replacement_unsupported": "外部 Agent 会话不支持重试或编辑，请改为发送一条新消息。",
       "model_selection_unsupported": "这个外部 Agent 不支持切换模型。",
       "model_id_required": "请选择模型后重试。",
@@ -145,6 +163,9 @@
       "reasoning_selection_unsupported": "这个外部 Agent 不支持选择推理强度。",
       "reasoning_effort_required": "请选择推理强度后重试。",
       "reasoning_effort_unavailable": "所选推理强度已不再可用于这个外部 Agent。",
+      "mode_selection_unsupported": "这个外部 Agent 不支持切换会话模式。",
+      "mode_id_required": "请选择会话模式后重试。",
+      "mode_unavailable": "所选会话模式已不再可用于这个外部 Agent。",
       "config_update_failed": "外部 Agent 无法应用所选设置，请重试。"
     },
     "session_runtime": {
@@ -650,7 +671,18 @@
     "unknownMessage": "消息",
     "approval": {
       "region": "审批请求",
+      "permissionRequest": "权限请求",
       "moreInQueue": "还有 {count} 项",
+      "rejectReasonLabel": "拒绝理由",
+      "rejectReasonPlaceholder": "填写理由（可选）",
+      "confirmReject": "拒绝",
+      "agentOption": "Agent 选项",
+      "option": {
+        "allowOnce": "仅允许本次",
+        "allowAlways": "允许后续使用",
+        "rejectOnce": "仅拒绝本次",
+        "rejectAlways": "始终拒绝"
+      },
       "action": {
         "exec": "运行命令",
         "write": "写入文件",
@@ -774,6 +806,7 @@
         "close": "关闭会话",
         "status": "会话状态"
       },
+      "permission": "权限请求",
       "generic": "调用工具",
       "approve": "允许",
       "reject": "拒绝",
@@ -877,6 +910,11 @@
     "agentSwitchFailed": "切换 ACP Agent 失败",
     "modelSwitchFailed": "切换模型失败",
     "reasoningSwitchFailed": "切换推理强度失败",
+    "modeSwitchFailed": "切换会话模式失败",
+    "sessionMode": "会话模式",
+    "sessionModePlaceholder": "选择会话模式",
+    "sessionModeCaution": "切换会话模式可能改变外部 Agent 可执行的操作。工具授权仍需单独确认。",
+    "sessionModeChanged": "会话模式已切换。工具授权仍需单独确认。",
     "agentSwitchTimeout": "切换耗时过长，请重试。",
     "modelOptions": "选项",
     "modelEffort": "强度",
@@ -889,6 +927,7 @@
     "defaultACPAgentNotConfigured": "已启用默认 Agent，但选中的 Agent 尚未配置完成。",
     "acp": {
       "agentNotConfigured": "该 Bot 的外部 Agent 配置尚未完成。",
+      "agentCommandStale": "Agent 已不再提供该命令。请重新打开命令面板后重试。",
       "agentNotFound": "选中的外部 Agent 不可用。",
       "agentNotEnabled": "该 Bot 已停用选中的外部 Agent。",
       "codexOAuthIncomplete": "该 Bot 工作区尚未完成 Codex ChatGPT 登录。",
@@ -939,10 +978,18 @@
     "sessionStreaming": "生成中",
     "slash": {
       "quickActions": "快捷操作",
+      "agentCommands": "Agent 命令",
+      "agentCommandInputHint": "输入：{hint}",
       "skills": "Skills",
       "helpDescription": "显示可用的快捷操作",
       "skillListDescription": "显示本轮可用的 Skills",
       "newDescription": "开始新会话",
+      "permissionDescription": "查看或切换当前 Agent 会话的权限模式",
+      "permissionModesTitle": "权限模式",
+      "permissionModesText": "请选择该 Agent 声明的模式。更改仅作用于当前会话。",
+      "permissionModeChangedTitle": "权限模式已切换",
+      "permissionModeChangedText": "当前 Agent 会话已使用所选权限模式。工具授权仍需单独确认。",
+      "permissionCurrentMode": "当前模式",
       "compactDescription": "压缩当前会话上下文（已用 {percent}%）",
       "compactDescriptionNoStats": "压缩当前会话上下文",
       "compactUnavailable": "当前会话暂无可压缩的内容。",
@@ -971,6 +1018,10 @@
         "unsupported_legacy_endpoint": "Skill 激活需要 WebSocket。请重连后再试。",
         "invalid_quick_action_scope": "该快捷操作不能绑定到 session。",
         "permission_denied": "你没有权限使用该 slash 命令。",
+        "permission_session_required": "请先进入一个外部 Agent 会话，再使用 /permission。",
+        "permission_mode_unsupported": "这个 Agent 没有声明可切换的会话模式。",
+        "permission_mode_unavailable": "这个模式不适用于当前 Agent 会话。",
+        "permission_mode_failed": "无法读取或切换 Agent 会话模式。",
         "reserved_skill_metadata": "不能提交保留的 skill metadata。",
         "generic": "slash 命令失败。"
       }

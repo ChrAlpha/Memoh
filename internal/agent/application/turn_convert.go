@@ -81,6 +81,7 @@ func toolApprovalInputFromResponse(in turn.ToolApprovalResponse) ToolApprovalRes
 		ExplicitID:                 in.ExplicitID,
 		ReplyExternalMessageID:     in.ReplyExternalMessageID,
 		Decision:                   in.Decision,
+		OptionID:                   in.OptionID,
 		Reason:                     in.Reason,
 		ChatToken:                  in.ChatToken,
 		SuppressActivePromptAttach: in.SuppressActivePromptAttach,

@@ -37,6 +37,7 @@ export function createACPOrchestration(deps: ACPOrchestrationDeps) {
     resetToEmptyComposer: resetFocusedEmptyComposer,
     ensurePendingACPRuntime: ensureFocusedPendingACPRuntime,
     setPendingACPModel: setFocusedPendingACPModel,
+    setPendingACPMode: setFocusedPendingACPMode,
     setPendingACPReasoning: setFocusedPendingACPReasoning,
     detachPendingACPSession,
     restorePendingACPSession,
@@ -243,6 +244,17 @@ export function createACPOrchestration(deps: ACPOrchestrationDeps) {
     }
   }
 
+  async function setPendingACPMode(modeId: string, target?: ChatViewTarget) {
+    const draft = targetDraft(target)
+    deps.invalidateDraftCommand(draft)
+    activateDraftStage(draft)
+    try {
+      return await setFocusedPendingACPMode(modeId)
+    } finally {
+      syncLiveDraftStage()
+    }
+  }
+
   function pendingACPMatchesInput(input: ACPAgentSessionInput, target?: ChatViewTarget) {
     if (!target) return focusedPendingACPMatchesInput(input)
     const state = pendingACPStateFor(target)
@@ -272,6 +284,7 @@ export function createACPOrchestration(deps: ACPOrchestrationDeps) {
     resetToEmptyComposer,
     ensurePendingACPRuntime,
     setPendingACPModel,
+    setPendingACPMode,
     setPendingACPReasoning,
     pendingACPMatchesInput,
     sameDraftACPStage: isLiveDraft,

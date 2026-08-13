@@ -223,10 +223,13 @@ func (s *Service) subscribeACPActivePrompt(botID, sessionID string) (*acpActiveP
 }
 
 func forwardACPActivePrompt(ctx context.Context, sub *acpActivePromptSubscription, eventCh chan<- WSStreamEvent, opts acpActivePromptForwardOptions) error {
-	if sub == nil || eventCh == nil {
+	if sub == nil {
 		return emitApprovalAck(ctx, eventCh)
 	}
 	defer sub.release()
+	if eventCh == nil {
+		return nil
+	}
 	if err := sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventStart}); err != nil {
 		return err
 	}

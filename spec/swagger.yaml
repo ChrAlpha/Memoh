@@ -233,10 +233,16 @@ definitions:
         type: string
       agent_id:
         type: string
+      available_commands:
+        items:
+          $ref: '#/definitions/acpclient.AvailableCommandInfo'
+        type: array
       default_model_id:
         type: string
       models:
         $ref: '#/definitions/acpclient.ModelState'
+      modes:
+        $ref: '#/definitions/acpclient.ModeState'
       project_path:
         type: string
       reasoning:
@@ -247,6 +253,35 @@ definitions:
         type: string
       state:
         type: string
+    type: object
+  acpclient.AvailableCommandInfo:
+    properties:
+      description:
+        type: string
+      input_hint:
+        type: string
+      name:
+        type: string
+    type: object
+  acpclient.ModeInfo:
+    properties:
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+    type: object
+  acpclient.ModeState:
+    properties:
+      available_modes:
+        items:
+          $ref: '#/definitions/acpclient.ModeInfo'
+        type: array
+      current_mode_id:
+        type: string
+      supported:
+        type: boolean
     type: object
   acpclient.ModelInfo:
     properties:
@@ -1999,9 +2034,27 @@ definitions:
         type: boolean
       decision_reason:
         type: string
+      options:
+        description: |-
+          Options are the agent-provided permission options, verbatim; the client
+          renders one action per option and answers with the chosen option id.
+        items:
+          $ref: '#/definitions/conversation.UIToolApprovalOption'
+        type: array
+      selected_option_id:
+        type: string
       short_id:
         type: integer
       status:
+        type: string
+    type: object
+  conversation.UIToolApprovalOption:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      name:
         type: string
     type: object
   conversation.UITurn:
@@ -3390,6 +3443,14 @@ definitions:
   handlers.ToolApprovalDecisionRequest:
     properties:
       control_id:
+        description: |-
+          ControlID is the stable identity of one client mutation. New clients send
+          it for exact retries; it remains optional for older Web/Desktop clients.
+        type: string
+      option_id:
+        description: |-
+          OptionID selects one of the agent-provided permission options carried on
+          the approval request; empty keeps the plain binary decision.
         type: string
       reason:
         type: string
@@ -3448,6 +3509,13 @@ definitions:
         type: string
       project_path:
         type: string
+    type: object
+  handlers.acpRuntimeModeRequest:
+    properties:
+      mode_id:
+        type: string
+    required:
+    - mode_id
     type: object
   handlers.acpRuntimeModelRequest:
     properties:
@@ -5173,6 +5241,8 @@ definitions:
     properties:
       allow_custom:
         type: boolean
+      custom_exclusive:
+        type: boolean
       id:
         type: string
       kind:
@@ -5183,6 +5253,12 @@ definitions:
         type: array
       placeholder:
         type: string
+      required:
+        description: |-
+          Required is tri-state for compatibility. Legacy/native ask_user payloads
+          omit it and keep their existing surface semantics; ACP forms set it
+          explicitly so false means an optional schema property.
+        type: boolean
       text:
         type: string
     type: object
@@ -5912,15 +5988,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "429":
           description: Too Many Requests
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Create an unbound ACP runtime (pre-session model picker)
       tags:
       - acp
@@ -5943,15 +6027,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Close an ACP runtime
       tags:
       - acp
@@ -5975,16 +6067,77 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
             $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Get ACP runtime state by runtime ID
+      tags:
+      - acp
+  /bots/{bot_id}/acp-runtimes/{runtime_id}/mode:
+    patch:
+      description: Sends the selected agent-declared mode ID unchanged to session/set_mode
+        before the first chat message binds this runtime to a Session.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Runtime ID
+        in: path
+        name: runtime_id
+        required: true
+        type: string
+      - description: Mode selection
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.acpRuntimeModeRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Set an unbound ACP runtime's mode
       tags:
       - acp
   /bots/{bot_id}/acp-runtimes/{runtime_id}/model:
@@ -6019,7 +6172,7 @@ paths:
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
@@ -6027,7 +6180,11 @@ paths:
         "409":
           description: Conflict
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "502":
           description: Bad Gateway
           schema:
@@ -6066,7 +6223,7 @@ paths:
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
@@ -6074,7 +6231,11 @@ paths:
         "409":
           description: Conflict
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "502":
           description: Bad Gateway
           schema:
@@ -10186,15 +10347,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Get ACP session runtime state
       tags:
       - acp
@@ -10218,16 +10387,81 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
       summary: Ensure ACP session runtime is started
+      tags:
+      - acp
+  /bots/{bot_id}/sessions/{session_id}/acp-runtime/mode:
+    patch:
+      description: Sends the selected agent-declared mode ID unchanged to session/set_mode.
+        The selection applies only to this live session.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: ACP session mode selection
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.acpRuntimeModeRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/acpagent.RuntimeStatus'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Set ACP session runtime mode
       tags:
       - acp
   /bots/{bot_id}/sessions/{session_id}/acp-runtime/model:
@@ -10261,11 +10495,19 @@ paths:
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "502":
           description: Bad Gateway
           schema:
@@ -10304,11 +10546,19 @@ paths:
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "502":
           description: Bad Gateway
           schema:
@@ -10810,15 +11060,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
       summary: Approve a pending tool call
       tags:
       - tool-approvals
@@ -10850,15 +11108,23 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
         "403":
           description: Forbidden
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apperror.Problem'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/apperror.Problem'
       summary: Reject a pending tool call
       tags:
       - tool-approvals

@@ -626,6 +626,40 @@ func TestActiveCommandPayloadHashUsesResponseSemantics(t *testing.T) {
 	}
 }
 
+// Rows decided by pre-option_id binaries keep their persisted payload hashes,
+// so the canonical form of a payload without the new fields must stay
+// byte-identical to what those binaries computed. Zero values (empty
+// option_id, skipped=false) must not change a legacy hash; only real
+// selections and real skips may.
+func TestActiveCommandPayloadHashKeepsLegacyCanonicalForm(t *testing.T) {
+	t.Parallel()
+
+	legacyApproval := activeCommandPayloadHash(CommandToolApprovalResponse, []byte(`{"decision":"approve"}`))
+	if want := commandPayloadHash([]byte(`{"decision":"approved","reason":""}`)); legacyApproval != want {
+		t.Fatalf("legacy approval canonical form changed: %q != %q", legacyApproval, want)
+	}
+	if zeroOption := activeCommandPayloadHash(CommandToolApprovalResponse, []byte(`{"decision":"approve","option_id":""}`)); zeroOption != legacyApproval {
+		t.Fatalf("empty option_id changed the legacy hash: %q != %q", zeroOption, legacyApproval)
+	}
+	if blankOption := activeCommandPayloadHash(CommandToolApprovalResponse, []byte(`{"decision":"approve","option_id":"  "}`)); blankOption != legacyApproval {
+		t.Fatalf("whitespace option_id changed the legacy hash: %q != %q", blankOption, legacyApproval)
+	}
+	if selected := activeCommandPayloadHash(CommandToolApprovalResponse, []byte(`{"decision":"approve","option_id":"allow-once"}`)); selected == legacyApproval {
+		t.Fatal("a selected option must change the payload hash")
+	}
+
+	legacyAnswer := activeCommandPayloadHash(CommandUserInputResponse, []byte(`{"answers":[{"question_id":"q1","option_ids":["o1"]}]}`))
+	if want := commandPayloadHash([]byte(`{"answers":[{"custom_text":"","option_ids":["o1"],"question_id":"q1","text":""}],"canceled":false}`)); legacyAnswer != want {
+		t.Fatalf("legacy answer canonical form changed: %q != %q", legacyAnswer, want)
+	}
+	if zeroSkip := activeCommandPayloadHash(CommandUserInputResponse, []byte(`{"answers":[{"question_id":"q1","option_ids":["o1"],"skipped":false}]}`)); zeroSkip != legacyAnswer {
+		t.Fatalf("skipped=false changed the legacy hash: %q != %q", zeroSkip, legacyAnswer)
+	}
+	if skipped := activeCommandPayloadHash(CommandUserInputResponse, []byte(`{"answers":[{"question_id":"q1","option_ids":["o1"],"skipped":true}]}`)); skipped == legacyAnswer {
+		t.Fatal("a real skip must change the payload hash")
+	}
+}
+
 func TestActiveCommandContextAccountsForBackendTimeLatency(t *testing.T) {
 	t.Parallel()
 

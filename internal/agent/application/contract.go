@@ -22,48 +22,53 @@ type ChatRequest struct {
 	// the id the client was handed at run_accepted, instead of the history layer
 	// minting a second one (SR-TURN-001). Empty means no admission decided the
 	// turn — channel inbound, schedules, heartbeats — and history allocates it.
-	TurnID                       string                `json:"-"`
-	TurnPosition                 *int64                `json:"-"`
-	Token                        string                `json:"-"`
-	UserID                       string                `json:"-"`
-	SourceChannelIdentityID      string                `json:"-"`
-	DisplayName                  string                `json:"-"`
-	RouteID                      string                `json:"-"`
-	ChatToken                    string                `json:"-"`
-	ExternalMessageID            string                `json:"-"`
-	ReplyTarget                  string                `json:"-"`
-	ConversationType             string                `json:"-"`
-	ConversationName             string                `json:"-"`
-	SourceReplyToMessageID       string                `json:"-"`
-	ReplySender                  string                `json:"-"`
-	ReplyPreview                 string                `json:"-"`
-	ReplyAttachments             []turn.Attachment     `json:"-"`
-	MentionsBot                  bool                  `json:"-"`
-	RepliesToBot                 bool                  `json:"-"`
-	ForwardMessageID             string                `json:"-"`
-	ForwardFromUserID            string                `json:"-"`
-	ForwardFromConversationID    string                `json:"-"`
-	ForwardSender                string                `json:"-"`
-	ForwardDate                  int64                 `json:"-"`
-	UserMessagePersisted         bool                  `json:"-"`
-	PersistedUserMessageID       string                `json:"-"`
-	ReusePersistedUserMessage    bool                  `json:"-"`
-	EventID                      string                `json:"-"`
-	RawQuery                     string                `json:"-"`
-	ModelQuery                   string                `json:"-"`
-	UserMessageKind              string                `json:"-"`
-	UserVisibleText              string                `json:"-"`
-	SkillActivation              *turn.SkillActivation `json:"-"`
-	ToolHTTPURL                  string                `json:"-"`
-	SessionType                  string                `json:"-"`
-	RuntimeType                  string                `json:"-"`
-	SkipMemoryExtraction         bool                  `json:"-"`
-	SkipHistoryTurn              bool                  `json:"-"`
-	SkipTitleGeneration          bool                  `json:"-"`
-	ForceFreshRuntime            bool                  `json:"-"`
-	HistoryCutoffBeforeMessageID string                `json:"-"`
-	RequiredHistoryMessageID     string                `json:"-"`
-	WorkspaceTarget              *WorkspaceTarget      `json:"-"`
+	TurnID                    string                `json:"-"`
+	TurnPosition              *int64                `json:"-"`
+	Token                     string                `json:"-"`
+	UserID                    string                `json:"-"`
+	SourceChannelIdentityID   string                `json:"-"`
+	DisplayName               string                `json:"-"`
+	RouteID                   string                `json:"-"`
+	ChatToken                 string                `json:"-"`
+	ExternalMessageID         string                `json:"-"`
+	ReplyTarget               string                `json:"-"`
+	ConversationType          string                `json:"-"`
+	ConversationName          string                `json:"-"`
+	SourceReplyToMessageID    string                `json:"-"`
+	ReplySender               string                `json:"-"`
+	ReplyPreview              string                `json:"-"`
+	ReplyAttachments          []turn.Attachment     `json:"-"`
+	MentionsBot               bool                  `json:"-"`
+	RepliesToBot              bool                  `json:"-"`
+	ForwardMessageID          string                `json:"-"`
+	ForwardFromUserID         string                `json:"-"`
+	ForwardFromConversationID string                `json:"-"`
+	ForwardSender             string                `json:"-"`
+	ForwardDate               int64                 `json:"-"`
+	UserMessagePersisted      bool                  `json:"-"`
+	PersistedUserMessageID    string                `json:"-"`
+	ReusePersistedUserMessage bool                  `json:"-"`
+	EventID                   string                `json:"-"`
+	RawQuery                  string                `json:"-"`
+	ModelQuery                string                `json:"-"`
+	UserMessageKind           string                `json:"-"`
+	UserVisibleText           string                `json:"-"`
+	SkillActivation           *turn.SkillActivation `json:"-"`
+	ToolHTTPURL               string                `json:"-"`
+	SessionType               string                `json:"-"`
+	RuntimeType               string                `json:"-"`
+	SkipMemoryExtraction      bool                  `json:"-"`
+	SkipHistoryTurn           bool                  `json:"-"`
+	SkipTitleGeneration       bool                  `json:"-"`
+	ForceFreshRuntime         bool                  `json:"-"`
+	// AgentCommand is the exact agent-command selector the Web admission layer
+	// matched against a live ACP runtime. The session pool re-validates it
+	// against the final session at prompt time; it never crosses the turn
+	// transport (Web admission runs in-process).
+	AgentCommand                 string           `json:"-"`
+	HistoryCutoffBeforeMessageID string           `json:"-"`
+	RequiredHistoryMessageID     string           `json:"-"`
+	WorkspaceTarget              *WorkspaceTarget `json:"-"`
 
 	// OutboundAssetCollector returns asset refs accumulated during outbound
 	// streaming. It is never serialized across the turn transport.

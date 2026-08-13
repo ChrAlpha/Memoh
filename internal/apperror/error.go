@@ -35,7 +35,12 @@ const (
 	CodeProfileRequestInvalid            Code = "profile.request_invalid"
 	CodeProfileTitleModelInvalid         Code = "profile.title_model_invalid"
 	CodeProfileUpdateFailed              Code = "profile.update_failed"
+	CodeACPRequestInvalid                Code = "acp.request_invalid"
+	CodeACPAccessForbidden               Code = "acp.access_forbidden"
 	CodeACPRuntimeNotFound               Code = "acp.runtime_not_found"
+	CodeACPRuntimeConflict               Code = "acp.runtime_conflict"
+	CodeACPRuntimeLimitReached           Code = "acp.runtime_limit_reached"
+	CodeACPOperationFailed               Code = "acp.operation_failed"
 	CodeACPTurnReplacementUnsupported    Code = "acp.turn_replacement_unsupported"
 	CodeACPModelSelectionUnsupported     Code = "acp.model_selection_unsupported"
 	CodeACPModelIDRequired               Code = "acp.model_id_required"
@@ -43,7 +48,19 @@ const (
 	CodeACPReasoningUnsupported          Code = "acp.reasoning_selection_unsupported"
 	CodeACPReasoningEffortRequired       Code = "acp.reasoning_effort_required"
 	CodeACPReasoningUnavailable          Code = "acp.reasoning_effort_unavailable"
+	CodeACPModeSelectionUnsupported      Code = "acp.mode_selection_unsupported"
+	CodeACPModeIDRequired                Code = "acp.mode_id_required"
+	CodeACPModeUnavailable               Code = "acp.mode_unavailable"
 	CodeACPConfigUpdateFailed            Code = "acp.config_update_failed"
+	CodeToolApprovalForbidden            Code = "tool_approval.forbidden"
+	CodeToolApprovalNotFound             Code = "tool_approval.not_found"
+	CodeToolApprovalExpired              Code = "tool_approval.expired"
+	CodeToolApprovalAmbiguous            Code = "tool_approval.ambiguous"
+	CodeToolApprovalRequestInvalid       Code = "tool_approval.request_invalid"
+	CodeToolApprovalOperationFailed      Code = "tool_approval.operation_failed"
+	CodeUserInputForbidden               Code = "user_input.forbidden"
+	CodeUserInputExpired                 Code = "user_input.expired"
+	CodeUserInputOperationFailed         Code = "user_input.operation_failed"
 	CodeSessionBusy                      Code = "session_runtime.session_busy"
 	CodeSessionInvocationConflict        Code = "session_runtime.invocation_conflict"
 	CodeSessionHistoryInconsistent       Code = "session_runtime.history_inconsistent"
@@ -161,9 +178,29 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The profile could not be updated.",
 	},
+	CodeACPRequestInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The Agent runtime request is invalid. Check the request and try again.",
+	},
+	CodeACPAccessForbidden: {
+		HTTPStatus: http.StatusForbidden,
+		Detail:     "You do not have permission to control this Agent runtime.",
+	},
 	CodeACPRuntimeNotFound: {
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "The ACP runtime is no longer available.",
+	},
+	CodeACPRuntimeConflict: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The Agent runtime is not ready for this operation. Refresh and try again.",
+	},
+	CodeACPRuntimeLimitReached: {
+		HTTPStatus: http.StatusTooManyRequests,
+		Detail:     "Too many Agent runtimes are active. Close one and try again.",
+	},
+	CodeACPOperationFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The Agent runtime operation failed. Please try again.",
 	},
 	CodeACPTurnReplacementUnsupported: {
 		HTTPStatus: http.StatusBadRequest,
@@ -193,9 +230,57 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "The selected reasoning effort is no longer available for this external agent.",
 	},
+	CodeACPModeSelectionUnsupported: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "This external agent does not support session mode selection.",
+	},
+	CodeACPModeIDRequired: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "Choose a session mode and try again.",
+	},
+	CodeACPModeUnavailable: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The selected session mode is no longer available for this external agent.",
+	},
 	CodeACPConfigUpdateFailed: {
 		HTTPStatus: http.StatusBadGateway,
 		Detail:     "The external agent could not apply the selected settings. Please retry.",
+	},
+	CodeToolApprovalForbidden: {
+		HTTPStatus: http.StatusForbidden,
+		Detail:     "You do not have permission to answer this approval request.",
+	},
+	CodeToolApprovalNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Detail:     "This approval request could not be found.",
+	},
+	CodeToolApprovalExpired: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This approval request has expired or was already answered.",
+	},
+	CodeToolApprovalAmbiguous: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "More than one approval request matches this response.",
+	},
+	CodeToolApprovalRequestInvalid: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The approval response is invalid.",
+	},
+	CodeToolApprovalOperationFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The approval response could not be processed.",
+	},
+	CodeUserInputForbidden: {
+		HTTPStatus: http.StatusForbidden,
+		Detail:     "You do not have permission to answer this question.",
+	},
+	CodeUserInputExpired: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This question has expired or was already answered.",
+	},
+	CodeUserInputOperationFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The answer could not be processed.",
 	},
 	// A session runs one turn at a time, so this is ordinary backpressure and
 	// the same submission succeeds once the session frees up. It is the one

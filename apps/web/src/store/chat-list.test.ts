@@ -30,6 +30,7 @@ const api = vi.hoisted(() => ({
   ensureACPRuntime: vi.fn(),
   createACPRuntime: vi.fn(),
   fetchACPRuntimeByID: vi.fn(),
+  setACPRuntimeMode: vi.fn(),
   setACPRuntimeModel: vi.fn(),
   setACPRuntimeModelByID: vi.fn(),
   setACPRuntimeReasoning: vi.fn(),
@@ -3385,43 +3386,71 @@ describe('chat-list store', () => {
       expect(h.sentWSMessages[0]?.requested_skills).toBeUndefined()
     })
 
-  it('rejects direct skill activation in pending ACP drafts before sending websocket chat', async () => {
+  it('forwards a non-Memoh slash in a pending ACP draft to backend command authority', async () => {
       h.sendUpdates = []
       const store = useChatStore()
+      const attachment = {
+        type: 'file',
+        base64: 'data:text/plain;base64,aGVsbG8=',
+        mime: 'text/plain',
+        name: 'note.txt',
+      }
 
       await store.selectBot('bot-1')
       store.stageACPSession({ agentId: 'codex' })
-      const result = await store.sendMessage('/flutter-adding-home-screen-widgets', undefined, {
+      const sending = store.sendMessage('/flutter-adding-home-screen-widgets', [attachment], {
         composerScope: 'bot-1:draft-a',
       })
+      await flushPromises()
+
+      expect(h.sentWSMessages[0]).toMatchObject({
+        type: 'message',
+        session_id: 'session-1',
+        text: '/flutter-adding-home-screen-widgets',
+        composer_scope: 'bot-1:draft-a',
+        attachments: [attachment],
+      })
+      expect(h.sentWSMessages[0]?.requested_skills).toBeUndefined()
+      const invocationId = wsInvocationId(0)
+      h.streamHandler?.({
+        type: 'command_error',
+        invocation_id: invocationId,
+        session_id: 'session-1',
+        composer_scope: 'bot-1:draft-a',
+        terminal: true,
+        error: { code: 'unknown_slash', message: 'Unknown slash command.' },
+      })
+      const result = await sending
 
       expect(result).toMatchObject({
         ok: false,
         stage: 'startup',
         restoreInput: '/flutter-adding-home-screen-widgets',
       })
-      expect(h.sentWSMessages).toHaveLength(0)
-      expect(api.createSession).not.toHaveBeenCalled()
       expect(store.streaming).toBe(false)
-      const commandEvent = store.commandEventForScope({ botId: 'bot-1', composerScope: 'bot-1:draft-a' })
+      const commandEvent = store.commandEventForScope({
+        botId: 'bot-1',
+        sessionId: 'session-1',
+        composerScope: 'bot-1:draft-a',
+      })
       expect(commandEvent).toMatchObject({
         type: 'command_error',
-        error: { code: 'unsupported_skill_slash_context' },
+        error: { code: 'unknown_slash' },
       })
     })
 
-  it('rejects skill list quick action in pending ACP drafts without reading the catalog', async () => {
-      api.executeQuickAction.mockResolvedValueOnce({
-        type: 'command_error',
-        terminal: true,
-        composer_scope: 'bot-1:draft-a',
-        error: { code: 'unsupported_skill_slash_context', message: 'unsupported' },
-      })
+  it('rejects attachments on Memoh quick actions in pending ACP drafts', async () => {
       const store = useChatStore()
+      const attachment = {
+        type: 'file',
+        base64: 'data:text/plain;base64,aGVsbG8=',
+        mime: 'text/plain',
+        name: 'note.txt',
+      }
 
       await store.selectBot('bot-1')
       store.stageACPSession({ agentId: 'codex' })
-      const result = await store.sendMessage('/skill list', undefined, {
+      const result = await store.sendMessage('/skill list', [attachment], {
         composerScope: 'bot-1:draft-a',
       })
 
@@ -3429,17 +3458,15 @@ describe('chat-list store', () => {
         ok: false,
         stage: 'startup',
         restoreInput: '/skill list',
+        restoreAttachments: [attachment],
       })
-      expect(api.executeQuickAction).toHaveBeenCalledWith('bot-1', 'skill.list', expect.objectContaining({
-        composerScope: 'bot-1:draft-a',
-        skillActivationAllowed: false,
-      }))
+      expect(api.executeQuickAction).not.toHaveBeenCalled()
       expect(h.sentWSMessages).toHaveLength(0)
       expect(store.streaming).toBe(false)
       const commandEvent = store.commandEventForScope({ botId: 'bot-1', composerScope: 'bot-1:draft-a' })
       expect(commandEvent).toMatchObject({
         type: 'command_error',
-        error: { code: 'unsupported_skill_slash_context' },
+        error: { code: 'slash_attachments_unsupported' },
       })
     })
 

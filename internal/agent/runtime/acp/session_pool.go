@@ -45,6 +45,11 @@ const (
 	// single caller cannot spawn unbounded agent processes.
 	maxUnboundRuntimesPerBot = 4
 
+	// decisionQuiesceTimeout bounds how long a cancelled prompt waits for
+	// in-flight permission/Form callbacks to unwind before the runtime is
+	// reused; past it the runtime is recycled instead (see promptOnHandle).
+	decisionQuiesceTimeout = 3 * time.Second
+
 	runtimeIDPrefix = "rt_"
 )
 
@@ -89,7 +94,7 @@ type SessionPool struct {
 	tools     *mcp.ToolGatewayService
 	contexts  *mcp.ToolSessionContextStore
 	approval  client.ToolApprovalService
-	userInput pendingUserInputCanceller
+	userInput sessionUserInputService
 	timeout   time.Duration
 
 	adapterMu                  sync.Mutex
@@ -110,7 +115,8 @@ type workspaceClientRunner interface {
 	MCPClient(ctx context.Context, botID string) (*bridge.Client, error)
 }
 
-type pendingUserInputCanceller interface {
+type sessionUserInputService interface {
+	client.UserInputService
 	CancelPendingForSession(context.Context, string, string, string) ([]userinput.Request, error)
 }
 
@@ -201,7 +207,18 @@ type PromptInput struct {
 	ForceFreshRuntime     bool
 	Sink                  client.EventSink
 	RuntimeGuard          func(context.Context) error
+	// RequiredCommand is the exact agent-command selector the admission layer
+	// matched against a live runtime. After applying per-prompt configuration,
+	// the client Session re-validates it against its latest command snapshot at
+	// the dispatch boundary: a runtime replaced or updated between admission
+	// and prompt must still advertise the command, or the turn fails with
+	// ErrAgentCommandUnavailable instead of delivering stale slash text.
+	RequiredCommand string
 }
+
+// ErrAgentCommandUnavailable reports that PromptInput.RequiredCommand is not
+// advertised by the session that would actually receive the prompt.
+var ErrAgentCommandUnavailable = client.ErrAgentCommandUnavailable
 
 // CreateRuntimeInput describes a pre-session runtime creation request.
 type CreateRuntimeInput struct {
@@ -216,16 +233,18 @@ type CreateRuntimeInput struct {
 // RuntimeStatus describes the live state of a pooled ACP runtime as exposed
 // over the HTTP API.
 type RuntimeStatus struct {
-	RuntimeID             string                 `json:"runtime_id,omitempty"`
-	SessionID             string                 `json:"session_id,omitempty"`
-	AgentID               string                 `json:"agent_id,omitempty"`
-	ProjectPath           string                 `json:"project_path,omitempty"`
-	RuntimeOwnerAccountID string                 `json:"-"`
-	State                 string                 `json:"state"`
-	ACPSession            string                 `json:"acp_session_id,omitempty"`
-	Models                *client.ModelState     `json:"models,omitempty"`
-	Reasoning             *client.ReasoningState `json:"reasoning,omitempty"`
-	DefaultModelID        string                 `json:"default_model_id,omitempty"`
+	RuntimeID             string                        `json:"runtime_id,omitempty"`
+	SessionID             string                        `json:"session_id,omitempty"`
+	AgentID               string                        `json:"agent_id,omitempty"`
+	ProjectPath           string                        `json:"project_path,omitempty"`
+	RuntimeOwnerAccountID string                        `json:"-"`
+	State                 string                        `json:"state"`
+	ACPSession            string                        `json:"acp_session_id,omitempty"`
+	Models                *client.ModelState            `json:"models,omitempty"`
+	Reasoning             *client.ReasoningState        `json:"reasoning,omitempty"`
+	Modes                 *client.ModeState             `json:"modes,omitempty"`
+	AvailableCommands     []client.AvailableCommandInfo `json:"available_commands,omitempty"`
+	DefaultModelID        string                        `json:"default_model_id,omitempty"`
 } // @name acpagent.RuntimeStatus
 
 func NewSessionPool(log *slog.Logger, runner *client.Runner, botService *bots.Service, sessionServices ...SessionDescriptorReader) *SessionPool {
@@ -273,7 +292,7 @@ func (p *SessionPool) SetToolApprovalService(service client.ToolApprovalService)
 	}
 }
 
-func (p *SessionPool) SetUserInputService(service pendingUserInputCanceller) {
+func (p *SessionPool) SetUserInputService(service sessionUserInputService) {
 	if p != nil {
 		p.userInput = service
 	}
@@ -480,6 +499,16 @@ func (p *SessionPool) SetRuntimeReasoning(ctx context.Context, botID, runtimeID,
 	return p.setReasoningOnHandle(ctx, h, effort)
 }
 
+// SetRuntimeMode switches the mode of an unbound runtime before its first
+// chat message creates and binds a Session.
+func (p *SessionPool) SetRuntimeMode(ctx context.Context, botID, runtimeID, modeID string) (RuntimeStatus, error) {
+	h, err := p.owned(botID, runtimeID)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	return p.setModeOnHandle(ctx, h, modeID)
+}
+
 func (p *SessionPool) setModelOnHandle(ctx context.Context, h *runtimeHandle, modelID string) (RuntimeStatus, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
@@ -513,6 +542,21 @@ func (p *SessionPool) setReasoningOnHandle(ctx context.Context, h *runtimeHandle
 		},
 		func(ctx context.Context, sess *client.Session) error {
 			_, err := sess.SetReasoningEffort(ctx, effort)
+			return err
+		},
+	)
+}
+
+func (p *SessionPool) setModeOnHandle(ctx context.Context, h *runtimeHandle, modeID string) (RuntimeStatus, error) {
+	if strings.TrimSpace(modeID) == "" {
+		return RuntimeStatus{}, client.ErrModeIDRequired
+	}
+	return p.updateConfigOnHandle(ctx, h,
+		func(sess *client.Session) bool {
+			return sess.ModeState().CurrentModeID == modeID
+		},
+		func(ctx context.Context, sess *client.Session) error {
+			_, err := sess.SetMode(ctx, modeID)
 			return err
 		},
 	)
@@ -710,22 +754,80 @@ func (p *SessionPool) promptOnHandle(ctx context.Context, h *runtimeHandle, inpu
 	unregisterToolSink := p.registerToolEventSink(input, toolSink)
 	defer unregisterToolSink()
 
+	// An aborted turn triggers the ACP cancellation handshake, but the agent
+	// cannot finish a cancelled prompt while one of its permission requests is
+	// still blocked on a user decision. Cancelling the pending rows wakes those
+	// waiters (per ACP, pending request_permission resolves with the cancelled
+	// outcome once the turn is cancelled), letting the handshake complete
+	// inside its grace window so the runtime survives the Stop.
+	promptDone := make(chan struct{})
+	defer close(promptDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-promptDone:
+			// SendRequest may return immediately after cancellation while an ACP
+			// permission/Form callback is still unwinding. If both channels are
+			// ready, select is intentionally nondeterministic; recheck the context
+			// so the promptDone arm cannot skip waiter cleanup.
+			if ctx.Err() == nil {
+				return
+			}
+		}
+		p.cancelPendingDecisions(context.WithoutCancel(ctx), toolCtx.BotID, toolCtx.SessionID,
+			"decision cancelled: the turn was aborted before a response arrived")
+	}()
+
 	resources := promptResources(input)
 	options := client.PromptOptions{
 		ToolOutputLimit:   input.ToolOutputLimit,
 		Images:            input.Images,
 		AllowResourceOnly: len(input.AttachmentReferences) > 0 && len(resources) > 0,
+		RequiredCommand:   input.RequiredCommand,
 	}
 	result, err := sess.PromptWithToolContextOptions(ctx, input.Prompt, resources, toolCtx, options, toolSink)
 	if errors.Is(err, client.ErrImagePromptUnsupported) && len(options.Images) > 0 && input.CanFallbackImagesToFiles {
 		options.Images = nil
 		result, err = sess.PromptWithToolContextOptions(ctx, input.Prompt, resources, toolCtx, options, toolSink)
 	}
+	// Stop MCP deliveries and wait for any event already inside the store's
+	// read-side critical section before taking the durable result snapshot.
+	unregisterToolSink()
 	toolSink.ApplyToResult(&result)
 	if err != nil {
 		if errors.Is(err, client.ErrImagePromptUnsupported) ||
 			errors.Is(err, client.ErrInvalidPromptImage) ||
-			errors.Is(err, client.ErrPromptRequired) {
+			errors.Is(err, client.ErrPromptRequired) ||
+			errors.Is(err, client.ErrAgentCommandUnavailable) {
+			return result, false, err
+		}
+		if ctx.Err() != nil {
+			// The caller aborted (user Stop / turn cancel). Cancellation says
+			// nothing about the Agent process health - the same principle the
+			// config-apply path applies - so keep the runtime: connection.Prompt
+			// already sent session/cancel to wind the turn down, and the next
+			// prompt reuses the warm session instead of a cold restart that
+			// would lose the agent-side conversation. Genuine transport/agent
+			// failures (ctx still live) fall through to teardown below.
+			//
+			// Reuse is gated on quiescence: ACP dispatches permission/Form
+			// callbacks on connection-scoped goroutines that survive prompt
+			// cancellation, so wait for them to unwind while h.op is still
+			// held. Waiting here also extends the between-turns window in
+			// which a late-dispatched stale callback auto-cancels instead of
+			// attaching to the next turn. A callback that outlives the grace
+			// window means the runtime's unwinding state is unknown - recycle
+			// it rather than hand the next turn a session with a live stale
+			// callback.
+			if errors.Is(err, client.ErrPromptCancellationUnconfirmed) ||
+				!sess.WaitDecisionCallbacksIdle(decisionQuiesceTimeout) {
+				// An unknown cancellation state can include a SendNotification
+				// blocked in the connection write lock. Break the transport first;
+				// graceful teardown would otherwise block trying session/close behind
+				// that same writer and never reach the process close.
+				_ = sess.ForceClose() //nolint:contextcheck // forced lifecycle teardown must outlive the cancelled turn.
+				_ = p.teardown(h)     //nolint:contextcheck // lifecycle close uses background ctx.
+			}
 			return result, false, err
 		}
 		// Prompt failures usually indicate the ACP process is in a bad state
@@ -763,7 +865,10 @@ func isPromptConfigSelectionError(err error) bool {
 		errors.Is(err, client.ErrModelUnavailable) ||
 		errors.Is(err, client.ErrReasoningEffortRequired) ||
 		errors.Is(err, client.ErrReasoningSelectionUnsupported) ||
-		errors.Is(err, client.ErrReasoningEffortUnavailable)
+		errors.Is(err, client.ErrReasoningEffortUnavailable) ||
+		errors.Is(err, client.ErrModeIDRequired) ||
+		errors.Is(err, client.ErrModeSelectionUnsupported) ||
+		errors.Is(err, client.ErrModeUnavailable)
 }
 
 // Ensure starts (or reuses) the runtime for a session without prompting it.
@@ -820,6 +925,26 @@ func (p *SessionPool) SetReasoning(ctx context.Context, input PromptInput, effor
 		return RuntimeStatus{}, err
 	}
 	return p.setReasoningOnHandle(ctx, h, effort)
+}
+
+// SetMode switches the agent-declared mode of the runtime bound to a session,
+// cold starting one when needed. The mode remains process/session local.
+//
+//nolint:contextcheck // lifecycle close intentionally uses background ctx.
+func (p *SessionPool) SetMode(ctx context.Context, input PromptInput, modeID string) (RuntimeStatus, error) {
+	if strings.TrimSpace(modeID) == "" {
+		return RuntimeStatus{}, client.ErrModeIDRequired
+	}
+	input, err := p.prepareInput(ctx, input)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	p.reapIdle(time.Now())
+	h, err := p.runtimeForSession(ctx, input)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	return p.setModeOnHandle(ctx, h, modeID)
 }
 
 // runtimeForSession resolves the runtime bound to a session, cold starting
@@ -926,8 +1051,8 @@ func (p *SessionPool) startRuntime(ctx context.Context, h *runtimeHandle, opts s
 	h.state.Unlock()
 
 	fail := func(err error) error {
-		// The HTTP layer returns a short, redacted acp_runtime_start_failed body,
-		// so the underlying cause must be recorded here or it is lost entirely.
+		// Public surfaces return a stable, redacted runtime-operation error, so
+		// the underlying cause must be recorded here or it is lost entirely.
 		if err != nil {
 			p.logger.Warn("ACP runtime start failed",
 				slog.String("bot_id", h.botID),
@@ -993,6 +1118,7 @@ func (p *SessionPool) startRuntime(ctx context.Context, h *runtimeHandle, opts s
 		ToolGateway:     p.tools,
 		ToolSession:     h.stableToolIdentity(),
 		ToolApproval:    p.approval,
+		UserInput:       p.userInput,
 	}
 
 	var sess *client.Session
@@ -1073,6 +1199,7 @@ func (p *SessionPool) sessionHandle(sessionID string) *runtimeHandle {
 func (*SessionPool) statusOf(h *runtimeHandle) RuntimeStatus {
 	h.state.Lock()
 	sess := h.session
+	closed := h.closed
 	status := RuntimeStatus{
 		RuntimeID:             h.id,
 		SessionID:             h.boundSession,
@@ -1083,6 +1210,17 @@ func (*SessionPool) statusOf(h *runtimeHandle) RuntimeStatus {
 		DefaultModelID:        h.defaultModelID,
 	}
 	h.state.Unlock()
+	// closeHandle marks the handle closed before stopping the Agent and waiting
+	// for the serialized operation lock. During that interval the Session
+	// pointer is intentionally still present so Close can cancel an active
+	// prompt, but it is no longer authoritative runtime state. Never project its
+	// ACP session ID or capabilities: callers use their presence to authorize
+	// Agent-declared slash commands, and a replacement runtime may belong to a
+	// different Agent or project.
+	if closed {
+		sess = nil
+		status.DefaultModelID = ""
+	}
 	switch status.State {
 	case stateStarting:
 		status.State = stateActive
@@ -1091,9 +1229,26 @@ func (*SessionPool) statusOf(h *runtimeHandle) RuntimeStatus {
 	}
 	if sess != nil {
 		status.ACPSession = sess.ID()
-		modelState, reasoningState := sess.ConfigurationState()
+		modelState, reasoningState, modeState, availableCommands := sess.ConfigurationState()
 		status.Models = &modelState
 		status.Reasoning = &reasoningState
+		status.Modes = &modeState
+		status.AvailableCommands = availableCommands
+		// Session configuration has its own lock, so it cannot be read while
+		// holding handle.state (the handle lock is the innermost leaf). Fence the
+		// completed projection instead: if closing or replacement began while the
+		// Session snapshot was being copied, discard every derived capability.
+		h.state.Lock()
+		stillLive := !h.closed && h.session == sess
+		h.state.Unlock()
+		if !stillLive {
+			status.ACPSession = ""
+			status.DefaultModelID = ""
+			status.Models = nil
+			status.Reasoning = nil
+			status.Modes = nil
+			status.AvailableCommands = nil
+		}
 	}
 	return status
 }
@@ -1801,6 +1956,22 @@ func (s *promptToolEventSink) EmitStreamEvent(ev event.StreamEvent) {
 	if s.next != nil {
 		s.next.EmitStreamEvent(ev)
 	}
+}
+
+// RecordTerminalDecision updates the prompt's final snapshot without
+// forwarding a late frame to the cancelled live stream. EventAbort will carry
+// this corrected transcript as the one authoritative terminal event.
+func (s *promptToolEventSink) RecordTerminalDecision(ev event.StreamEvent) {
+	if s == nil {
+		return
+	}
+	ev = client.LimitStreamEvent(ev, s.limit)
+	s.mu.Lock()
+	s.events = appendBoundedPromptEvents(s.events, ev)
+	if s.transcript != nil {
+		s.transcript.Add(ev)
+	}
+	s.mu.Unlock()
 }
 
 func (s *promptToolEventSink) EmitToolStreamEvent(toolEvent mcp.ToolStreamEvent) {

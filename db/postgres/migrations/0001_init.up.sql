@@ -739,6 +739,8 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   tool_name TEXT NOT NULL,
   operation TEXT NOT NULL,
   tool_input JSONB NOT NULL,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  selected_option_id TEXT NOT NULL DEFAULT '',
   short_id INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   runtime_fencing_token BIGINT,
@@ -755,7 +757,7 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   conversation_type TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   decided_at TIMESTAMPTZ,
-  CONSTRAINT tool_approval_operation_check CHECK (operation IN ('read', 'write', 'exec')),
+  CONSTRAINT tool_approval_operation_check CHECK (operation IN ('read', 'write', 'exec', 'permission')),
   CONSTRAINT tool_approval_status_check CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')),
   CONSTRAINT tool_approval_response_identity_check CHECK (
     (response_control_id IS NULL) = (response_payload_hash IS NULL)

@@ -59,18 +59,6 @@ func acpNoWorkspaceExecFeedback(reason, message string) *acpfeedback.Error {
 	)
 }
 
-func acpRuntimeStartFailedFeedback(_ string) *acpfeedback.Error {
-	message := "ACP runtime failed to start. Check the agent configuration and workspace runtime, then retry."
-	return acpfeedback.New(
-		acpfeedback.CodeRuntimeStartFailed,
-		"runtime_start_failed",
-		http.StatusInternalServerError,
-		"chat.acp.runtimeStartFailed",
-		message,
-		nil,
-	)
-}
-
 func acpAgentSetupHTTPError(metadata map[string]any, agentID string) error {
 	profile, ok := acpprofile.Lookup(agentID)
 	if !ok {

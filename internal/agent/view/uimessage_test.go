@@ -1117,6 +1117,24 @@ func TestUIMessageStreamConverterUpdatesToolApprovalDecision(t *testing.T) {
 	}
 }
 
+func TestUIMessageStreamConverterCarriesApprovalOptions(t *testing.T) {
+	t.Parallel()
+
+	messages := NewUIMessageStreamConverter().HandleEvent(UIMessageStreamEvent{
+		Type: "tool_approval_request", ToolName: "permission", ToolCallID: "call-net-1",
+		ApprovalID: "approval-net-1", Status: "pending",
+		Metadata: map[string]any{"approval": map[string]any{"options": []any{
+			map[string]any{"id": "allow-session", "name": "Allow for Session", "kind": "allow_always"},
+		}}},
+	})
+	if len(messages) != 1 || messages[0].Approval == nil ||
+		len(messages[0].Approval.Options) != 1 || messages[0].Approval.Options[0] != (UIToolApprovalOption{
+		ID: "allow-session", Name: "Allow for Session", Kind: "allow_always",
+	}) {
+		t.Fatalf("approval snapshot = %#v", messages)
+	}
+}
+
 func TestUIMessageStreamConverterMergesRepeatedToolCallStart(t *testing.T) {
 	t.Parallel()
 

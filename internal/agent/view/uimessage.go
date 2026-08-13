@@ -78,7 +78,17 @@ type UIToolApproval struct {
 	Status         string `json:"status"`
 	DecisionReason string `json:"decision_reason,omitempty"`
 	CanApprove     bool   `json:"can_approve,omitempty"`
+	// Options are the agent-provided permission options, verbatim; the client
+	// renders one action per option and answers with the chosen option id.
+	Options          []UIToolApprovalOption `json:"options,omitempty"`
+	SelectedOptionID string                 `json:"selected_option_id,omitempty"`
 } // @name conversation.UIToolApproval
+
+type UIToolApprovalOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	Kind string `json:"kind,omitempty"`
+} // @name conversation.UIToolApprovalOption
 
 type UIUserInput struct {
 	UserInputID string                 `json:"user_input_id"`

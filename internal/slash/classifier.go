@@ -44,6 +44,11 @@ type Decision struct {
 	Command     Command
 	SkillIntent SkillIntent
 	Invocation  *commandsyntax.Invocation
+	// AgentCommand is the exact ACP agent-command selector a live-runtime
+	// admission check matched for a NormalChat decision. Carried so the
+	// session pool can re-validate it against the final runtime at prompt
+	// time; empty for every other decision source.
+	AgentCommand string
 }
 
 type ClassifyInput struct {

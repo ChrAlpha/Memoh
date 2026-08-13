@@ -45,6 +45,7 @@ import {
   Search,
   SearchCheck,
   Send,
+  ShieldQuestion,
   Smile,
   Sparkles,
   Square,
@@ -753,6 +754,21 @@ export function getToolDisplay(block: ToolCallBlock): ToolDisplay {
         ...resolved,
         target: pickString(input, 'session_id'),
         detail: ToolCallDetailRemoteSession,
+      }
+    }
+    case 'permission': {
+      // An agent permission question that maps to no concrete tool (network
+      // access, mode switch, elicitation fallback): the agent's own title is
+      // the subject, so show it rather than the synthetic tool name.
+      const title = pickString(input, 'title')
+      const request = pickString(input, 'request')
+      return {
+        icon: ShieldQuestion,
+        actionKey: 'permission',
+        target: truncate(title || request, 80),
+        fullTarget: title || request,
+        expandable: true,
+        detailVariant: 'inline',
       }
     }
     default:

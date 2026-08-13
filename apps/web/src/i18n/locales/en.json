@@ -130,6 +130,19 @@
       "upstream_unavailable": "Connect-It could not complete the request. Please try again shortly.",
       "operation_failed": "The connector operation failed. Please try again."
     },
+    "tool_approval": {
+      "forbidden": "You do not have permission to answer this approval request.",
+      "not_found": "This approval request could not be found.",
+      "expired": "This approval request has expired or was already answered.",
+      "ambiguous": "More than one approval request matches this response.",
+      "request_invalid": "The approval response is invalid.",
+      "operation_failed": "The approval response could not be processed."
+    },
+    "user_input": {
+      "forbidden": "You do not have permission to answer this question.",
+      "expired": "This question has expired or was already answered.",
+      "operation_failed": "The answer could not be processed."
+    },
     "workspace": {
       "unreachable": "The workspace could not be reached.",
       "image_incompatible": "This workspace image is incompatible. Rebuild it from the current Memoh workspace image and try again.",
@@ -137,7 +150,12 @@
       "display_prepare_failed": "Display preparation failed."
     },
     "acp": {
+      "request_invalid": "The Agent runtime request is invalid. Check the request and try again.",
+      "access_forbidden": "You do not have permission to control this Agent runtime.",
       "runtime_not_found": "That Agent runtime is no longer available. It will be started again.",
+      "runtime_conflict": "The Agent runtime is not ready for this operation. Refresh and try again.",
+      "runtime_limit_reached": "Too many Agent runtimes are active. Close one and try again.",
+      "operation_failed": "The Agent runtime operation failed. Please try again.",
       "turn_replacement_unsupported": "Retry and edit are unavailable for external agent sessions. Send a new message instead.",
       "model_selection_unsupported": "This external agent does not support model selection.",
       "model_id_required": "Choose a model and try again.",
@@ -145,6 +163,9 @@
       "reasoning_selection_unsupported": "This external agent does not support reasoning effort selection.",
       "reasoning_effort_required": "Choose a reasoning effort and try again.",
       "reasoning_effort_unavailable": "The selected reasoning effort is no longer available for this external agent.",
+      "mode_selection_unsupported": "This external agent does not support session mode selection.",
+      "mode_id_required": "Choose a session mode and try again.",
+      "mode_unavailable": "The selected session mode is no longer available for this external agent.",
       "config_update_failed": "The external agent could not apply the selected settings. Please retry."
     },
     "session_runtime": {
@@ -650,7 +671,18 @@
     "unknownMessage": "message",
     "approval": {
       "region": "Approval request",
+      "permissionRequest": "Permission request",
       "moreInQueue": "+{count} more",
+      "rejectReasonLabel": "Reason for rejection",
+      "rejectReasonPlaceholder": "Add a reason (optional)",
+      "confirmReject": "Reject",
+      "agentOption": "Agent option",
+      "option": {
+        "allowOnce": "Allow once",
+        "allowAlways": "Allow beyond this request",
+        "rejectOnce": "Reject once",
+        "rejectAlways": "Always reject"
+      },
       "action": {
         "exec": "Run a command",
         "write": "Write a file",
@@ -774,6 +806,7 @@
         "close": "Close session",
         "status": "Session status"
       },
+      "permission": "Permission request",
       "generic": "Tool",
       "approve": "Allow",
       "reject": "Reject",
@@ -877,6 +910,11 @@
     "agentSwitchFailed": "Failed to switch agent",
     "modelSwitchFailed": "Failed to switch model",
     "reasoningSwitchFailed": "Failed to switch reasoning effort",
+    "modeSwitchFailed": "Failed to switch session mode",
+    "sessionMode": "Session mode",
+    "sessionModePlaceholder": "Choose a session mode",
+    "sessionModeCaution": "Changing the session mode can alter what the external agent may do. Tool consent remains a separate decision.",
+    "sessionModeChanged": "Session mode changed. Tool consent remains a separate decision.",
     "agentSwitchTimeout": "Switching is taking too long. Try again.",
     "modelOptions": "Options",
     "modelEffort": "Effort",
@@ -889,6 +927,7 @@
     "defaultACPAgentNotConfigured": "Default Agent is enabled, but the selected agent is not configured.",
     "acp": {
       "agentNotConfigured": "External agent setup is incomplete for this bot.",
+      "agentCommandStale": "The agent no longer offers this command. Reopen the command picker and try again.",
       "agentNotFound": "The selected external agent is unavailable.",
       "agentNotEnabled": "The selected external agent is disabled for this bot.",
       "codexOAuthIncomplete": "Codex ChatGPT sign-in is not complete for this bot workspace.",
@@ -939,10 +978,18 @@
     "sessionStreaming": "Generating",
     "slash": {
       "quickActions": "Quick actions",
+      "agentCommands": "Agent commands",
+      "agentCommandInputHint": "Input: {hint}",
       "skills": "Skills",
       "helpDescription": "Show available quick actions",
       "skillListDescription": "Show skills available for this turn",
       "newDescription": "Start a new session",
+      "permissionDescription": "View or change this Agent session's permission mode",
+      "permissionModesTitle": "Permission modes",
+      "permissionModesText": "Choose a mode declared by this Agent. The change applies only to this session.",
+      "permissionModeChangedTitle": "Permission mode changed",
+      "permissionModeChangedText": "This Agent session now uses the selected permission mode. Tool consent remains a separate decision.",
+      "permissionCurrentMode": "Current mode",
       "compactDescription": "Compact this session's context ({percent}% full)",
       "compactDescriptionNoStats": "Compact this session's context",
       "compactUnavailable": "Nothing to compact in this session yet.",
@@ -971,6 +1018,10 @@
         "unsupported_legacy_endpoint": "Skill activation requires WebSocket. Reconnect and try again.",
         "invalid_quick_action_scope": "This quick action cannot be scoped to a session.",
         "permission_denied": "You do not have permission to use that slash command.",
+        "permission_session_required": "Open an external-Agent session before using /permission.",
+        "permission_mode_unsupported": "This Agent does not declare selectable session modes.",
+        "permission_mode_unavailable": "That mode is not available for this Agent session.",
+        "permission_mode_failed": "The Agent session mode could not be loaded or changed.",
         "reserved_skill_metadata": "Reserved skill metadata cannot be supplied.",
         "generic": "Slash command failed."
       }

@@ -1154,6 +1154,10 @@ func approvalResultMetadata(req toolapproval.Request) map[string]any {
 		"tool_name":    req.ToolName,
 		"operation":    req.Operation,
 		"tool_call_id": req.ToolCallID,
+		// The nested approval payload is what the stream converter reads for
+		// option-aware cards; without it the committed-decision publish path
+		// drops the agent's options and the recorded selection.
+		"approval": toolapproval.RequestMetadata(req),
 	}
 	if req.ExecutionLocation != nil {
 		metadata[toolapproval.ExecutionLocationMetadataKey] = req.ExecutionLocation

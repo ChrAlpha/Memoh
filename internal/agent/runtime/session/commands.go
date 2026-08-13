@@ -802,6 +802,12 @@ func activeCommandPayloadHash(commandType string, payload []byte) string {
 			decision = "rejected"
 		}
 		canonical["decision"] = decision
+		// Zero values stay out of the canonical form so hashes of pre-option_id
+		// payloads keep matching rows persisted by earlier binaries; only a real
+		// selection adds new semantics (and therefore a new hash).
+		if optionID := runtimeCommandExactString(runtimeCommandMapValue(raw, "option_id")); strings.TrimSpace(optionID) != "" {
+			canonical["option_id"] = optionID
+		}
 		canonical["reason"] = runtimeCommandString(runtimeCommandMapValue(raw, "reason"))
 	case CommandUserInputResponse:
 		canceled, _ := runtimeCommandMapValue(raw, "canceled").(bool)
@@ -843,6 +849,13 @@ func runtimeCommandString(value any) string {
 	return strings.TrimSpace(fmt.Sprint(value))
 }
 
+func runtimeCommandExactString(value any) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
 func canonicalRuntimeAnswers(value any) []map[string]any {
 	items, _ := value.([]any)
 	answers := make([]map[string]any, 0, len(items))
@@ -856,12 +869,18 @@ func canonicalRuntimeAnswers(value any) []map[string]any {
 		for _, optionID := range optionValues {
 			optionIDs = append(optionIDs, runtimeCommandString(optionID))
 		}
-		answers = append(answers, map[string]any{
+		answer := map[string]any{
 			"question_id": runtimeCommandString(runtimeCommandMapValue(raw, "question_id")),
 			"option_ids":  optionIDs,
 			"custom_text": runtimeCommandString(runtimeCommandMapValue(raw, "custom_text")),
 			"text":        runtimeCommandString(runtimeCommandMapValue(raw, "text")),
-		})
+		}
+		// skipped=false is the legacy default; keep it out of the canonical form
+		// (see the option_id note above) so only a real skip changes the hash.
+		if skipped, _ := runtimeCommandMapValue(raw, "skipped").(bool); skipped {
+			answer["skipped"] = true
+		}
+		answers = append(answers, answer)
 	}
 	sort.SliceStable(answers, func(i, j int) bool {
 		return answers[i]["question_id"].(string) < answers[j]["question_id"].(string)

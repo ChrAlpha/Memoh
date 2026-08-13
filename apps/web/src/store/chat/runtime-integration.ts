@@ -1,7 +1,5 @@
 import { ref, type Ref } from 'vue'
-import type {
-  UIStreamEvent,
-} from '@/composables/api/useChat'
+import type { UIStreamEvent } from '@/composables/api/useChat'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { isGuiToolName } from '@/utils/gui-tools'
 import { createInvocationId } from '../chat-list.normalize'

@@ -300,16 +300,16 @@ export const useChatStore = defineStore('chat', () => {
     draftWorkdirIdFor: (botId, opts) => workdirsStore.sessionWorkdirIdFor(botId, opts),
   })
   const {
-    acpRuntimeStatuses, acpRuntimePending, acpRuntimeKey,
-    clearACPRuntimeStatus, ensureACPRuntime,
-    setACPRuntimeModel, setACPRuntimeReasoning,
+    acpRuntimeStatuses, acpRuntimePending, acpRuntimeKey, clearACPRuntimeStatus, ensureACPRuntime,
+    refreshACPRuntimeFor,
+    setACPRuntimeMode, setACPRuntimeModel, setACPRuntimeReasoning,
   } = acp.runtimeRegistry
   const { cacheDefaultACPSession, clearPendingACPSession } = acp.staging
   const {
     pendingACPSessionInput, pendingACPRuntimeId, pendingACPSessionMetadata,
     pendingACPRuntimeStatus, pendingACPRuntimeEnsuring, pendingACPStateFor,
     stageACPSession, stageDefaultACPSession, resetToEmptyComposer,
-    ensurePendingACPRuntime, setPendingACPModel, setPendingACPReasoning,
+    ensurePendingACPRuntime, setPendingACPModel, setPendingACPMode, setPendingACPReasoning,
     saveLiveDraftACPStage, activateDraftACPStage, discardEvictedDraft,
   } = acp.orchestration
   const {
@@ -519,6 +519,7 @@ export const useChatStore = defineStore('chat', () => {
     commandErrorMessage,
     showCommandError,
     rememberCommandEvent,
+    refreshACPRuntime: refreshACPRuntimeFor,
   })
 
   const { sendMessage, retryLatestAssistant, editLatestUser } = createChatSend({
@@ -532,6 +533,7 @@ export const useChatStore = defineStore('chat', () => {
     transcriptForTarget,
     isWebSlashInput,
     quickActionIDForSlash,
+    isACPTarget: target => chatTargetFor(normalizedChatViewTarget(target)).isACP,
     handleWebNewCommand,
     handleWebSlashCommand,
     commandErrorMessage,
@@ -592,16 +594,16 @@ export const useChatStore = defineStore('chat', () => {
     _hasLoadedOlder: hasLoadedOlder,
     overrideModelId, overrideReasoningEffort,
     startupSendFailure, startupSendFailureFor,
-    commandEvent, commandEventForScope, showCommandError,
+    commandEvent, commandEventForScope, rememberCommandEvent, showCommandError,
     fsChangedAt, markFsChanged, affectsPath, fsEventForPath,
     initialize, refreshBots, selectBot, selectSession, createNewSession,
     selectDraft, userSentInSession, draftViewRequested, applyDraftViewRequest,
     forkedSessionRequested, guiToolUseRequested, deletedSession,
     stageACPSession, stageDefaultACPSession, cacheDefaultACPSession,
     resetToEmptyComposer, ensurePendingACPRuntime,
-    setPendingACPModel, setPendingACPReasoning, clearPendingACPSession,
+    setPendingACPModel, setPendingACPMode, setPendingACPReasoning, clearPendingACPSession,
     createACPSession, updateCurrentSessionAgent, updateCurrentSessionToMemoh,
-    acpRuntimeKey, ensureACPRuntime, setACPRuntimeModel, setACPRuntimeReasoning,
+    acpRuntimeKey, ensureACPRuntime, setACPRuntimeMode, setACPRuntimeModel, setACPRuntimeReasoning,
     removeSession, renameSession, forkMessage,
     sendMessage, retryLatestAssistant, editLatestUser,
     respondToolApproval, respondUserInput,

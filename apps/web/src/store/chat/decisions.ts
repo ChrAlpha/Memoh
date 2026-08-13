@@ -154,6 +154,8 @@ export function createChatDecisions(deps: ChatDecisionDeps) {
     approval: UIToolApproval,
     decision: 'approve' | 'reject',
     target?: ChatViewTarget,
+    optionId?: string,
+    reason?: string,
   ): Promise<boolean> {
     const viewTarget = deps.normalizeTarget(target)
     const botId = viewTarget.botId.trim()
@@ -196,7 +198,8 @@ export function createChatDecisions(deps: ChatDecisionDeps) {
         decision_id: decisionId,
         control_id: controlId,
         decision,
-        reason: undefined,
+        option_id: optionId,
+        reason: reason?.trim() || undefined,
       })) throw new Error('WebSocket is not connected')
     } catch (error) {
       finish(controlId, true)

@@ -144,13 +144,33 @@ export type AclUpdateRuleRequest = {
 export type AcpagentRuntimeStatus = {
     acp_session_id?: string;
     agent_id?: string;
+    available_commands?: Array<AcpclientAvailableCommandInfo>;
     default_model_id?: string;
     models?: AcpclientModelState;
+    modes?: AcpclientModeState;
     project_path?: string;
     reasoning?: AcpclientReasoningState;
     runtime_id?: string;
     session_id?: string;
     state?: string;
+};
+
+export type AcpclientAvailableCommandInfo = {
+    description?: string;
+    input_hint?: string;
+    name?: string;
+};
+
+export type AcpclientModeInfo = {
+    description?: string;
+    id?: string;
+    name?: string;
+};
+
+export type AcpclientModeState = {
+    available_modes?: Array<AcpclientModeInfo>;
+    current_mode_id?: string;
+    supported?: boolean;
 };
 
 export type AcpclientModelInfo = {
@@ -1157,8 +1177,20 @@ export type ConversationUiToolApproval = {
     approval_id?: string;
     can_approve?: boolean;
     decision_reason?: string;
+    /**
+     * Options are the agent-provided permission options, verbatim; the client
+     * renders one action per option and answers with the chosen option id.
+     */
+    options?: Array<ConversationUiToolApprovalOption>;
+    selected_option_id?: string;
     short_id?: number;
     status?: string;
+};
+
+export type ConversationUiToolApprovalOption = {
+    id?: string;
+    kind?: string;
+    name?: string;
 };
 
 export type ConversationUiTurn = {
@@ -2000,7 +2032,16 @@ export type HandlersTokenUsageResponse = {
 };
 
 export type HandlersToolApprovalDecisionRequest = {
+    /**
+     * ControlID is the stable identity of one client mutation. New clients send
+     * it for exact retries; it remains optional for older Web/Desktop clients.
+     */
     control_id?: string;
+    /**
+     * OptionID selects one of the agent-provided permission options carried on
+     * the approval request; empty keeps the plain binary decision.
+     */
+    option_id?: string;
     reason?: string;
 };
 
@@ -2033,6 +2074,10 @@ export type HandlersUpdateContainerResourceLimitsRequest = {
 export type HandlersAcpRuntimeCreateRequest = {
     acp_agent_id?: string;
     project_path?: string;
+};
+
+export type HandlersAcpRuntimeModeRequest = {
+    mode_id: string;
 };
 
 export type HandlersAcpRuntimeModelRequest = {
@@ -3116,10 +3161,17 @@ export type UserinputUiOption = {
 
 export type UserinputUiQuestion = {
     allow_custom?: boolean;
+    custom_exclusive?: boolean;
     id?: string;
     kind?: string;
     options?: Array<UserinputUiOption>;
     placeholder?: string;
+    /**
+     * Required is tri-state for compatibility. Legacy/native ask_user payloads
+     * omit it and keep their existing surface semantics; ACP forms set it
+     * explicitly so false means an optional schema property.
+     */
+    required?: boolean;
     text?: string;
 };
 
@@ -3975,15 +4027,23 @@ export type PostBotsByBotIdAcpRuntimesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
     /**
      * Too Many Requests
      */
-    429: HandlersErrorResponse;
+    429: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
 };
 
 export type PostBotsByBotIdAcpRuntimesError = PostBotsByBotIdAcpRuntimesErrors[keyof PostBotsByBotIdAcpRuntimesErrors];
@@ -4017,15 +4077,23 @@ export type DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
 };
 
 export type DeleteBotsByBotIdAcpRuntimesByRuntimeIdError = DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors[keyof DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors];
@@ -4057,15 +4125,23 @@ export type GetBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
     404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
 };
 
 export type GetBotsByBotIdAcpRuntimesByRuntimeIdError = GetBotsByBotIdAcpRuntimesByRuntimeIdErrors[keyof GetBotsByBotIdAcpRuntimesByRuntimeIdErrors];
@@ -4078,6 +4154,63 @@ export type GetBotsByBotIdAcpRuntimesByRuntimeIdResponses = {
 };
 
 export type GetBotsByBotIdAcpRuntimesByRuntimeIdResponse = GetBotsByBotIdAcpRuntimesByRuntimeIdResponses[keyof GetBotsByBotIdAcpRuntimesByRuntimeIdResponses];
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeData = {
+    /**
+     * Mode selection
+     */
+    body: HandlersAcpRuntimeModeRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Runtime ID
+         */
+        runtime_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/acp-runtimes/{runtime_id}/mode';
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeError = PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors];
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeResponse = PatchBotsByBotIdAcpRuntimesByRuntimeIdModeResponses[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModeResponses];
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelData = {
     /**
@@ -4106,7 +4239,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
@@ -4114,7 +4247,11 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
@@ -4159,7 +4296,7 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
@@ -4167,7 +4304,11 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
@@ -9214,15 +9355,23 @@ export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeError = GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
@@ -9256,15 +9405,27 @@ export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeError = PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
@@ -9277,6 +9438,63 @@ export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses = {
 };
 
 export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponse = PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeResponses];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeData = {
+    /**
+     * ACP session mode selection
+     */
+    body: HandlersAcpRuntimeModeRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/acp-runtime/mode';
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ApperrorProblem;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors];
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeResponses = {
+    /**
+     * OK
+     */
+    200: AcpagentRuntimeStatus;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeResponses];
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelData = {
     /**
@@ -9305,11 +9523,19 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
@@ -9354,11 +9580,19 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ApperrorProblem;
     /**
      * Bad Gateway
      */
@@ -9917,15 +10151,23 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ApperrorProblem;
 };
 
 export type PostBotsByBotIdToolApprovalsByApprovalIdApproveError = PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors[keyof PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors];
@@ -9964,15 +10206,23 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ApperrorProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ApperrorProblem;
 };
 
 export type PostBotsByBotIdToolApprovalsByApprovalIdRejectError = PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors[keyof PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors];

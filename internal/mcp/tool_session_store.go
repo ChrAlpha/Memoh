@@ -16,7 +16,30 @@ type ToolSessionContextStore struct {
 }
 
 type toolEventSinkEntry struct {
+	mu   sync.RWMutex
 	sink func(ToolStreamEvent)
+}
+
+func (e *toolEventSinkEntry) emit(event ToolStreamEvent) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.sink == nil {
+		return false
+	}
+	e.sink(event)
+	return true
+}
+
+func (e *toolEventSinkEntry) close() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	e.sink = nil
+	e.mu.Unlock()
 }
 
 func NewToolSessionContextStore() *ToolSessionContextStore {
@@ -129,6 +152,7 @@ func (s *ToolSessionContextStore) CloseSession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
+	removedSinks := make([]*toolEventSinkEntry, 0)
 	s.mu.Lock()
 	for key := range s.sessions {
 		if toolSessionKeyHasSessionID(key, sessionID) {
@@ -137,10 +161,14 @@ func (s *ToolSessionContextStore) CloseSession(sessionID string) {
 	}
 	for key := range s.sinks {
 		if toolStreamEventKeyHasSessionID(key, sessionID) {
+			removedSinks = append(removedSinks, s.sinks[key])
 			delete(s.sinks, key)
 		}
 	}
 	s.mu.Unlock()
+	for _, entry := range removedSinks {
+		entry.close()
+	}
 }
 
 func (s *ToolSessionContextStore) AppendToolEvent(session ToolSessionContext, event ToolStreamEvent) bool {
@@ -160,11 +188,7 @@ func (s *ToolSessionContextStore) AppendToolEvent(session ToolSessionContext, ev
 	s.mu.RLock()
 	entry := s.sinks[key]
 	s.mu.RUnlock()
-	if entry != nil && entry.sink != nil {
-		entry.sink(event)
-		return true
-	}
-	return false
+	return entry.emit(event)
 }
 
 func (s *ToolSessionContextStore) RegisterToolEventSink(session ToolSessionContext, sink func(ToolStreamEvent)) func() {
@@ -177,14 +201,17 @@ func (s *ToolSessionContextStore) RegisterToolEventSink(session ToolSessionConte
 	}
 	entry := &toolEventSinkEntry{sink: sink}
 	s.mu.Lock()
+	previous := s.sinks[key]
 	s.sinks[key] = entry
 	s.mu.Unlock()
+	previous.close()
 	return func() {
 		s.mu.Lock()
 		if current := s.sinks[key]; current == entry {
 			delete(s.sinks, key)
 		}
 		s.mu.Unlock()
+		entry.close()
 	}
 }
 

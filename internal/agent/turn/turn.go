@@ -153,15 +153,18 @@ type DiscussRunResolvedPayload struct {
 // ToolApprovalResponse resumes a thread's turn deferred on tool approval
 // (RFC ResumeApprovalCommand).
 type ToolApprovalResponse struct {
-	ControlID                  string
-	BotID                      string
-	ThreadID                   string
-	ActorChannelIdentityID     string
-	ActorUserID                string
-	ApprovalID                 string
-	ExplicitID                 string
-	ReplyExternalMessageID     string
-	Decision                   string
+	ControlID              string
+	BotID                  string
+	ThreadID               string
+	ActorChannelIdentityID string
+	ActorUserID            string
+	ApprovalID             string
+	ExplicitID             string
+	ReplyExternalMessageID string
+	Decision               string
+	// OptionID is the opaque agent-provided permission option selected by the
+	// Web client. Empty retains the legacy binary approve/reject behavior.
+	OptionID                   string
 	Reason                     string
 	ChatToken                  string
 	SuppressActivePromptAttach bool

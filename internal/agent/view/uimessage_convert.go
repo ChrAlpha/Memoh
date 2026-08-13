@@ -773,12 +773,44 @@ func extractApprovalMetadata(metadata map[string]any) *UIToolApproval {
 		status = "pending"
 	}
 	return &UIToolApproval{
-		ApprovalID:     approvalID,
-		ShortID:        intFromAny(obj["short_id"]),
-		Status:         status,
-		DecisionReason: stringFromAny(obj["decision_reason"]),
-		CanApprove:     boolFromAny(obj["can_approve"], true),
+		ApprovalID:       approvalID,
+		ShortID:          intFromAny(obj["short_id"]),
+		Status:           status,
+		DecisionReason:   stringFromAny(obj["decision_reason"]),
+		CanApprove:       boolFromAny(obj["can_approve"], true),
+		Options:          approvalOptionsFromAny(obj["options"]),
+		SelectedOptionID: stringFromAny(obj["selected_option_id"]),
 	}
+}
+
+// approvalOptionsFromAny decodes the agent-provided permission options out of
+// approval event metadata. In process the value is a typed
+// []approval.PermissionOption; after a JSON round trip (persisted metadata,
+// split-mode gRPC) it is []any of map[string]any. Both share the id/name/kind
+// tags, so one marshal/unmarshal handles either shape.
+func approvalOptionsFromAny(raw any) []UIToolApprovalOption {
+	if raw == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var decoded []UIToolApprovalOption
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil
+	}
+	options := make([]UIToolApprovalOption, 0, len(decoded))
+	for _, option := range decoded {
+		if strings.TrimSpace(option.ID) == "" {
+			continue
+		}
+		options = append(options, option)
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	return options
 }
 
 func extractExecutionLocationMetadata(metadata map[string]any) *UIExecutionLocation {

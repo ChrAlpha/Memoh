@@ -85,16 +85,16 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 		return CommittedUserInputResponse{}, err
 	}
 
-	isACPMCP := userinput.IsACPMCPRequest(target)
-	if isACPMCP {
+	isProcessLocalACP := userinput.IsProcessLocalACPRequest(target)
+	if isProcessLocalACP {
 		if err := s.authorizeACPUserInputResponse(ctx, target, input); err != nil {
 			return CommittedUserInputResponse{}, err
 		}
 	}
-	if !isACPMCP {
+	if !isProcessLocalACP {
 		ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
 	}
-	if isACPMCP && !s.userInput.CanRespond(target) {
+	if isProcessLocalACP && !s.userInput.CanRespond(target) {
 		if _, err := s.userInput.Cancel(ctx, userinput.CancelInput{
 			RequestID:              target.ID,
 			ActorChannelIdentityID: input.ActorChannelIdentityID,
@@ -105,7 +105,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 		return CommittedUserInputResponse{request: target, input: input, ackOnly: true}, nil
 	}
 	var activePrompt *acpActivePromptSubscription
-	if isACPMCP && !input.SuppressActivePromptAttach {
+	if isProcessLocalACP && !input.SuppressActivePromptAttach {
 		activePrompt, _ = s.subscribeACPActivePrompt(
 			firstNonEmpty(target.BotID, input.BotID),
 			firstNonEmpty(target.SessionID, input.ThreadID),
@@ -140,7 +140,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 		if activePrompt != nil {
 			activePrompt.release()
 		}
-		if isACPMCP && errors.Is(err, userinput.ErrAlreadyDecided) {
+		if isProcessLocalACP && errors.Is(err, userinput.ErrAlreadyDecided) {
 			return CommittedUserInputResponse{request: target, input: input, ackOnly: true}, nil
 		}
 		return CommittedUserInputResponse{}, err
@@ -160,7 +160,7 @@ func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, commit
 	if committed.ackOnly {
 		return emitApprovalAck(ctx, eventCh)
 	}
-	if userinput.IsACPMCPRequest(resolved) {
+	if userinput.IsProcessLocalACPRequest(resolved) {
 		// An ACP/MCP waiter is blocked on this request and resumes the run
 		// itself. When this response stream has reattached to the active ACP
 		// prompt, forward that live continuation so refreshes observe the same
@@ -191,9 +191,6 @@ func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target user
 	if s == nil || s.sessionService == nil {
 		return errors.New("session service not configured")
 	}
-	if s.botPermissions == nil {
-		return errors.New("bot permission checker not configured")
-	}
 	sessionID := firstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
@@ -209,6 +206,9 @@ func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target user
 	if strings.TrimSpace(botID) == "" {
 		botID = sess.BotID
 	}
+	// Channel responders without a bound account carry only their channel
+	// identity; grants are keyed on that identity, so it stays a valid
+	// authorization subject (base behavior).
 	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	if actorID == "" {
 		return userinput.ErrForbidden
@@ -218,12 +218,15 @@ func (s *Service) authorizeACPUserInputResponse(ctx context.Context, target user
 	if runtimeOwnerID == "" {
 		return userinput.ErrForbidden
 	}
-	if ok, err := s.botPermissions.HasBotPermission(ctx, botID, runtimeOwnerID, bots.PermissionWorkspaceExec); err != nil {
+	// The runtime owner has no standing beyond their live grants: a revoked
+	// or offboarded owner must lose response authority at decision time, so
+	// every actor — owner included — passes the permission check.
+	if s.botPermissions == nil {
+		return errors.New("bot permission checker not configured")
+	}
+	if ok, err := s.botPermissions.HasBotPermission(ctx, botID, actorID, bots.PermissionWorkspaceExec); err != nil {
 		return err
 	} else if !ok {
-		return userinput.ErrForbidden
-	}
-	if actorID != runtimeOwnerID {
 		return userinput.ErrForbidden
 	}
 	return nil

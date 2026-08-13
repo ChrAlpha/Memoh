@@ -41,6 +41,7 @@ export interface ChatCommandDeps {
     event: CommandEventResponse,
     scope: { botId: string; sessionId?: string; composerScope?: string },
   ) => void
+  refreshACPRuntime: (botId: string, sessionId: string) => Promise<unknown>
 }
 
 function parseWebNewCommand(
@@ -70,6 +71,7 @@ export function createChatCommands(deps: ChatCommandDeps) {
     const action = parts[1]?.toLowerCase() ?? ''
     if (command === '/help' && !action) return 'help'
     if (command === '/skill' && (!action || action === 'list')) return 'skill.list'
+    if (command === '/permission') return 'permission'
     return ''
   }
 
@@ -154,6 +156,9 @@ export function createChatCommands(deps: ChatCommandDeps) {
         composerScope: scope,
         sessionId: sessionId || undefined,
         skillActivationAllowed,
+        modeId: actionId === 'permission'
+          ? text.trim().replace(/^\/permission(?:\s+|$)/i, '').trim() || undefined
+          : undefined,
       })
     } catch (error) {
       const message = resolveApiErrorMessage(error, deps.commandErrorMessage('generic'))
@@ -168,6 +173,13 @@ export function createChatCommands(deps: ChatCommandDeps) {
         kind: 'error',
         message: event.error?.message || deps.commandErrorMessage('generic'),
       }
+    }
+    if (actionId === 'permission' && sessionId) {
+      // The command endpoint returns a presentation envelope, while the
+      // registry owns the full runtime status used by the composer controls.
+      // Refresh after both list and set so the mode selector cannot remain on
+      // the pre-command snapshot.
+      await deps.refreshACPRuntime(botId, sessionId).catch(() => undefined)
     }
     return { kind: 'handled' }
   }

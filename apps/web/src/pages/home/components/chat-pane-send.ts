@@ -62,6 +62,10 @@ export function pinnedSubagentModelId(
 const ACP_STALE_CONFIG_CODES = new Set([
   'acp.model_unavailable',
   'acp.reasoning_effort_unavailable',
+  // Feedback-family code (underscore form): the runtime dropped or replaced
+  // the command set between admission and prompt; refresh the registry so the
+  // picker stops offering the stale command.
+  'acp_agent_command_stale',
 ])
 
 export function shouldRefreshACPComposerConfig(

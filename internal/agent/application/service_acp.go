@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
 	"github.com/memohai/memoh/internal/agent/event"
@@ -21,6 +23,12 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	session "github.com/memohai/memoh/internal/chat/thread"
 )
+
+// acpSinkStallTimeout bounds how long a live-turn event delivery may wait on
+// a WS consumer that is connected but not draining. Reaching it cancels the
+// stream (client-disconnect semantics) so the adapter callback — and the
+// prompt's runtime slot behind it — cannot stall indefinitely.
+const acpSinkStallTimeout = 30 * time.Second
 
 type acpPrompter interface {
 	Prompt(ctx context.Context, input acpagent.PromptInput) (acpclient.PromptResult, error)
@@ -143,13 +151,32 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	defer cancel()
 	activePrompt := s.registerACPActivePrompt(req.BotID, req.ThreadID)
 	defer s.unregisterACPActivePrompt(req.BotID, req.ThreadID, activePrompt)
+	// userAborted distinguishes an explicit Stop from an ordinary client
+	// disconnect: both cancel streamCtx, but only a Stop may downgrade a
+	// completed prompt to an aborted round.
+	var userAborted atomic.Bool
 	go func() {
 		select {
 		case <-abortCh:
+			userAborted.Store(true)
 			cancel()
 		case <-streamCtx.Done():
 		}
 	}()
+	userStopped := func() bool {
+		if userAborted.Load() {
+			return true
+		}
+		select {
+		case <-abortCh:
+			// The watcher lost the race for the buffered signal; consume it
+			// here so the stop is still honored.
+			userAborted.Store(true)
+			return true
+		default:
+			return false
+		}
+	}
 
 	var (
 		projectedMu       sync.Mutex
@@ -199,7 +226,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		s.cleanupReplacementMessages(context.WithoutCancel(ctx), projectedSnapshot())
 	}
 
-	emit := func(ev native.StreamEvent) {
+	emitWithContext := func(deliveryCtx context.Context, ev native.StreamEvent) {
 		if isACPDecisionProjectionEvent(ev) && recordProjection(ev) {
 			completeProjection(ev.ToolCallID, s.persistACPDecisionProjection(context.WithoutCancel(ctx), req, ev))
 		}
@@ -210,10 +237,30 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if err != nil {
 			return
 		}
+		// Prefer an immediately available receiver before consulting cancellation.
+		// This keeps a final buffered frame deterministic when cancellation and
+		// delivery become ready together.
 		select {
 		case eventCh <- json.RawMessage(data):
-		case <-streamCtx.Done():
+			return
+		default:
 		}
+		stall := time.NewTimer(acpSinkStallTimeout)
+		defer stall.Stop()
+		select {
+		case eventCh <- json.RawMessage(data):
+		case <-deliveryCtx.Done():
+		case <-stall.C:
+			// A live stream that has not accepted a single event for this long
+			// has a dead consumer (e.g. a WS client that stopped draining
+			// without disconnecting). Cancel the stream so the turn tears down
+			// like a client disconnect instead of blocking the adapter callback
+			// — and with it the prompt's runtime slot — indefinitely.
+			cancel()
+		}
+	}
+	emit := func(ev native.StreamEvent) {
+		emitWithContext(streamCtx, ev)
 	}
 
 	emit(native.StreamEvent{Type: native.EventStart})
@@ -251,6 +298,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		ContextMarkdown:       contextMarkdown,
 		RuntimeOwnerAccountID: runtimeOwnerAccountID,
 		ForceFreshRuntime:     req.ForceFreshRuntime,
+		RequiredCommand:       req.AgentCommand,
 		Sink:                  acpclient.EventSinkFunc(emit),
 	})
 	if err != nil {
@@ -277,6 +325,21 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			return feedbackErr
 		}
 		result = ensureACPPromptOutput(result)
+		if streamCtx.Err() != nil {
+			// A user-initiated stop is not an agent failure: keep the partial
+			// output unannotated instead of persisting a misleading
+			// "agent failed to complete the turn" marker.
+			abortedReq := req
+			abortedReq.SkipMemoryExtraction = true
+			if err := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil); err != nil {
+				s.logger.Error("ACP abort persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+			} else {
+				cleanupProjections()
+			}
+			emitWithContext(ctx, native.StreamEvent{Type: native.EventTextEnd})
+			emitWithContext(ctx, acpTerminalStreamEvent(native.EventAbort, result))
+			return nil
+		}
 		failedResult, failureDelta := acpFailureResult(result, err)
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
@@ -291,8 +354,26 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		return nil
 	}
 
-	emit(native.StreamEvent{Type: native.EventTextEnd})
 	result = ensureACPPromptOutput(result)
+	if streamCtx.Err() != nil && userStopped() {
+		// The prompt finished in the same instant the user stopped it (the
+		// SDK's response/ctx select is nondeterministic). Stop wins: keep the
+		// completed output, but persist the round as an abort - no memory
+		// extraction, EventAbort instead of EventEnd - so a user's stop is
+		// never recorded as a completed turn. A mere client disconnect is not
+		// a stop: the completed turn persists normally below.
+		abortedReq := req
+		abortedReq.SkipMemoryExtraction = true
+		if err := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil); err != nil {
+			s.logger.Error("ACP abort persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
+		} else {
+			cleanupProjections()
+		}
+		emitWithContext(ctx, native.StreamEvent{Type: native.EventTextEnd})
+		emitWithContext(ctx, acpTerminalStreamEvent(native.EventAbort, result))
+		return nil
+	}
+	emit(native.StreamEvent{Type: native.EventTextEnd})
 	if err := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil); err != nil {
 		s.logger.Error("ACP persist failed", slog.Any("error", err), slog.String("session_id", req.ThreadID))
 	} else {
@@ -393,6 +474,18 @@ func acpPromptImageFromDataURL(payload, fallbackMime string) (acpclient.PromptIm
 
 func acpPromptInputFeedback(err error) *acpfeedback.Error {
 	switch {
+	case errors.Is(err, acpagent.ErrAgentCommandUnavailable):
+		// The runtime that admission matched was replaced (or updated its
+		// command set) before the prompt; the turn fails closed exactly like
+		// admission would have.
+		return acpfeedback.New(
+			acpfeedback.CodeAgentCommandStale,
+			"agent_command_stale",
+			http.StatusConflict,
+			"chat.acp.agentCommandStale",
+			"The agent no longer offers this command. Reopen the command picker and try again.",
+			nil,
+		)
 	case errors.Is(err, acpclient.ErrImagePromptUnsupported):
 		return acpfeedback.New(
 			acpfeedback.CodeImageInputUnsupported,
