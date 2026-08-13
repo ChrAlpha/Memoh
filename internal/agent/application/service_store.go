@@ -72,7 +72,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 		return persisted, fmt.Errorf("persisted %d of %d messages", len(persisted), len(filtered))
 	}
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
-		go s.storeMemory(context.WithoutCancel(ctx), req, filtered)
+		go s.storeMemory(context.WithoutCancel(ctx), req, filtered, roundSourceRefs(req, persisted))
 	}
 
 	return persisted, nil

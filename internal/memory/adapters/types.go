@@ -27,6 +27,7 @@ type AfterChatRequest struct {
 	ChannelIdentityID string
 	DisplayName       string
 	TimezoneLocation  *time.Location
+	SourceMessageIDs  []string
 }
 
 // LLM is the interface for LLM operations needed by memory service.
@@ -51,6 +52,7 @@ type AddRequest struct {
 	Filters          map[string]any `json:"filters,omitempty"`
 	Infer            *bool          `json:"infer,omitempty"`
 	EmbeddingEnabled *bool          `json:"embedding_enabled,omitempty"`
+	SourceMessageIDs []string       `json:"source_message_ids,omitempty"`
 }
 
 type SearchRequest struct {
@@ -66,9 +68,10 @@ type SearchRequest struct {
 }
 
 type UpdateRequest struct {
-	MemoryID         string `json:"memory_id"`
-	Memory           string `json:"memory"`
-	EmbeddingEnabled *bool  `json:"embedding_enabled,omitempty"`
+	MemoryID         string   `json:"memory_id"`
+	Memory           string   `json:"memory"`
+	EmbeddingEnabled *bool    `json:"embedding_enabled,omitempty"`
+	SourceMessageIDs []string `json:"source_message_ids,omitempty"`
 }
 
 type GetAllRequest struct {
@@ -98,6 +101,10 @@ type MemoryItem struct {
 	BotID     string         `json:"bot_id,omitempty"`
 	AgentID   string         `json:"agent_id,omitempty"`
 	RunID     string         `json:"run_id,omitempty"`
+	// SourceMessageIDs is internal provenance. Public HTTP responses must not
+	// expose raw session/message locators; tool projections authorize and render
+	// them explicitly at the request boundary.
+	SourceMessageIDs []string `json:"-"`
 }
 
 type SearchResponse struct {

@@ -5682,12 +5682,13 @@ LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.t
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = $1
-  AND ($2::uuid IS NULL OR m.session_id = $2::uuid)
-  AND ($3::uuid IS NULL OR m.sender_channel_identity_id = $3::uuid)
-  AND ($4::timestamptz IS NULL OR m.created_at >= $4::timestamptz)
-  AND ($5::timestamptz IS NULL OR m.created_at <= $5::timestamptz)
-  AND ($6::text IS NULL OR m.role = $6::text)
-  AND ($7::text IS NULL OR (
+  AND m.session_id = ANY($2::uuid[])
+  AND ($3::uuid IS NULL OR m.session_id = $3::uuid)
+  AND ($4::uuid IS NULL OR m.sender_channel_identity_id = $4::uuid)
+  AND ($5::timestamptz IS NULL OR m.created_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR m.created_at <= $6::timestamptz)
+  AND ($7::text IS NULL OR m.role = $7::text)
+  AND ($8::text IS NULL OR (
     CASE
       WHEN jsonb_typeof(m.content->'content') = 'string'
         THEN m.content->>'content'
@@ -5697,20 +5698,21 @@ WHERE m.team_id = public.memoh_current_team_id()
               WHERE elem->>'type' = 'text')
       ELSE ''
     END
-  ) ILIKE '%' || $7::text || '%')
+  ) ILIKE '%' || $8::text || '%')
 ORDER BY m.created_at DESC, m.id DESC
-LIMIT $8
+LIMIT $9
 `
 
 type SearchMessagesParams struct {
-	BotID     pgtype.UUID        `json:"bot_id"`
-	SessionID pgtype.UUID        `json:"session_id"`
-	ContactID pgtype.UUID        `json:"contact_id"`
-	StartTime pgtype.Timestamptz `json:"start_time"`
-	EndTime   pgtype.Timestamptz `json:"end_time"`
-	Role      pgtype.Text        `json:"role"`
-	Keyword   pgtype.Text        `json:"keyword"`
-	MaxCount  int32              `json:"max_count"`
+	BotID      pgtype.UUID        `json:"bot_id"`
+	SessionIds []pgtype.UUID      `json:"session_ids"`
+	SessionID  pgtype.UUID        `json:"session_id"`
+	ContactID  pgtype.UUID        `json:"contact_id"`
+	StartTime  pgtype.Timestamptz `json:"start_time"`
+	EndTime    pgtype.Timestamptz `json:"end_time"`
+	Role       pgtype.Text        `json:"role"`
+	Keyword    pgtype.Text        `json:"keyword"`
+	MaxCount   int32              `json:"max_count"`
 }
 
 type SearchMessagesRow struct {
@@ -5728,6 +5730,7 @@ type SearchMessagesRow struct {
 func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) ([]SearchMessagesRow, error) {
 	rows, err := q.db.Query(ctx, searchMessages,
 		arg.BotID,
+		arg.SessionIds,
 		arg.SessionID,
 		arg.ContactID,
 		arg.StartTime,

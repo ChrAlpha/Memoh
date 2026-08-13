@@ -72,7 +72,7 @@ func runFormation(ctx context.Context, logger *slog.Logger, llm adapters.LLM, ru
 	}
 	metadata := adapters.BuildProfileMetadata(req.UserID, req.ChannelIdentityID, req.DisplayName)
 
-	applyActions(ctx, logger, runtime, botID, decided.Actions, filters, metadata, &result)
+	applyActions(ctx, logger, runtime, botID, decided.Actions, filters, metadata, req.SourceMessageIDs, &result)
 	return result
 }
 
@@ -157,7 +157,7 @@ func gatherCandidates(ctx context.Context, logger *slog.Logger, runtime Runtime,
 }
 
 // applyActions executes the decided CRUD actions against the runtime.
-func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, botID string, actions []adapters.DecisionAction, filters map[string]any, metadata map[string]any, result *formationResult) {
+func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, botID string, actions []adapters.DecisionAction, filters map[string]any, metadata map[string]any, sourceMessageIDs []string, result *formationResult) {
 	deleted := make(map[string]struct{})
 	updated := make(map[string]struct{})
 
@@ -172,10 +172,11 @@ func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, bot
 				continue
 			}
 			if _, err := runtime.Add(ctx, adapters.AddRequest{
-				Message:  text,
-				BotID:    botID,
-				Metadata: metadata,
-				Filters:  filters,
+				Message:          text,
+				BotID:            botID,
+				Metadata:         metadata,
+				Filters:          filters,
+				SourceMessageIDs: sourceMessageIDs,
 			}); err != nil {
 				logger.Warn("memory formation: ADD failed", slog.String("bot_id", botID), slog.Any("error", err))
 			} else {
@@ -195,8 +196,9 @@ func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, bot
 				continue
 			}
 			if _, err := runtime.Update(ctx, adapters.UpdateRequest{
-				MemoryID: id,
-				Memory:   text,
+				MemoryID:         id,
+				Memory:           text,
+				SourceMessageIDs: sourceMessageIDs,
 			}); err != nil {
 				logger.Warn("memory formation: UPDATE failed", slog.String("bot_id", botID), slog.String("memory_id", id), slog.Any("error", err))
 			} else {

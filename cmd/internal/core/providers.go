@@ -696,6 +696,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		assetResolver = &mediaAssetResolverAdapter{media: mediaService}
 	}
 	channelMessaging := channelmessagingadapter.New(channelRuntime, registry, assetResolver)
+	historySessions := channelthreadadapter.NewLister(sessionService, routeService)
 	fedSource := mcpfederation.NewSource(log, fedGateway, mcpConnService, mcpfederation.WithReservedToolName(agenttools.IsBuiltInToolName))
 	return []agenttools.ToolProvider{
 		agenttools.NewAskUserProvider(log),
@@ -704,7 +705,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		agenttools.NewScheduleProvider(log, scheduleService),
 		agenttools.NewWorkdirProvider(log, workdirService),
 		agenttools.NewACPAgentsProvider(log, &acpRuntimePoolAdapter{pool: acpPool}, queries),
-		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService),
+		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService, historySessions),
 		agenttools.NewWebProvider(log, settingsService, searchProviderService),
 		agenttools.NewContainerProvider(log, manager, bgManager, config.DefaultDataMount, hookService),
 		agenttools.NewBackgroundProvider(log, bgManager),
@@ -719,7 +720,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		agenttools.NewVideoGenProvider(log, settingsService, videoService, bgManager, manager, config.DefaultDataMount),
 		agenttools.NewFederationProvider(log, connectorSource),
 		agenttools.NewFederationProvider(log, fedSource),
-		agenttools.NewHistoryProvider(log, channelthreadadapter.NewLister(sessionService, routeService), messageService, queries),
+		agenttools.NewHistoryProvider(log, historySessions, messageService, queries),
 	}
 }
 

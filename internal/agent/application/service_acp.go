@@ -820,14 +820,14 @@ func (s *Service) persistACPRound(ctx context.Context, req ChatRequest, agentID,
 		}
 	}
 	skipMemory := promptErr != nil || req.UserMessagePersisted || req.SkipMemoryExtraction
-	err := s.storeRoundWithOptions(ctx, req, round, "", storeRoundOptions{
+	persisted, err := s.storeRoundWithOptionsResult(ctx, req, round, "", storeRoundOptions{
 		SkipMemory:              skipMemory,
 		AllowEmptyAssistantText: true,
 		MessageMetadataByIndex:  metadataByIndex,
 		RequireCompletePersist:  true,
 	})
 	if err == nil && promptErr == nil && req.UserMessagePersisted && !req.SkipMemoryExtraction {
-		go s.storeMemory(context.WithoutCancel(ctx), req, round)
+		go s.storeMemory(context.WithoutCancel(ctx), req, round, roundSourceRefs(req, persisted))
 	}
 	return err
 }
