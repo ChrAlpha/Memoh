@@ -728,7 +728,7 @@ func TestSpeakToolPromptMetadataGatesCurrentConversationTarget(t *testing.T) {
 func TestMemoryProviderUsageGatesSearchMemory(t *testing.T) {
 	t.Parallel()
 
-	provider := NewMemoryProvider(nil, nil, nil)
+	provider := NewMemoryProvider(nil, nil, nil, nil)
 	if got := provider.Usage(context.Background(), SessionContext{}, AvailableTools{}); got != "" {
 		t.Fatalf("Usage without search_memory = %q, want empty", got)
 	}

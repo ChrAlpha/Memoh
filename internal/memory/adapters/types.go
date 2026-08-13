@@ -91,17 +91,20 @@ type DeleteAllRequest struct {
 }
 
 type MemoryItem struct {
-	ID               string         `json:"id"`
-	Memory           string         `json:"memory"`
-	Hash             string         `json:"hash,omitempty"`
-	CreatedAt        string         `json:"created_at,omitempty"`
-	UpdatedAt        string         `json:"updated_at,omitempty"`
-	Score            float64        `json:"score,omitempty"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
-	BotID            string         `json:"bot_id,omitempty"`
-	AgentID          string         `json:"agent_id,omitempty"`
-	RunID            string         `json:"run_id,omitempty"`
-	SourceMessageIDs []string       `json:"source_message_ids,omitempty"`
+	ID        string         `json:"id"`
+	Memory    string         `json:"memory"`
+	Hash      string         `json:"hash,omitempty"`
+	CreatedAt string         `json:"created_at,omitempty"`
+	UpdatedAt string         `json:"updated_at,omitempty"`
+	Score     float64        `json:"score,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	BotID     string         `json:"bot_id,omitempty"`
+	AgentID   string         `json:"agent_id,omitempty"`
+	RunID     string         `json:"run_id,omitempty"`
+	// SourceMessageIDs is internal provenance. Public HTTP responses must not
+	// expose raw session/message locators; tool projections authorize and render
+	// them explicitly at the request boundary.
+	SourceMessageIDs []string `json:"-"`
 }
 
 type SearchResponse struct {

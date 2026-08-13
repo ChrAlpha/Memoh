@@ -21,16 +21,18 @@ type MemorySettingsReader interface {
 type MemoryProvider struct {
 	registry *memprovider.Registry
 	settings MemorySettingsReader
+	sessions SessionLister
 	logger   *slog.Logger
 }
 
-func NewMemoryProvider(log *slog.Logger, registry *memprovider.Registry, settingsSvc MemorySettingsReader) *MemoryProvider {
+func NewMemoryProvider(log *slog.Logger, registry *memprovider.Registry, settingsSvc MemorySettingsReader, sessions SessionLister) *MemoryProvider {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &MemoryProvider{
 		registry: registry,
 		settings: settingsSvc,
+		sessions: sessions,
 		logger:   log.With(slog.String("tool", "memory")),
 	}
 }
@@ -71,11 +73,78 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]s
 				if err != nil {
 					return nil, err
 				}
-				return normalizeToolResult(result), nil
+				output := normalizeToolResult(result)
+				if desc.Name == ToolSearchMemory().String() {
+					output = p.filterSourceRefs(ctx.Context, session, output)
+				}
+				return output, nil
 			},
 		})
 	}
 	return tools, nil
+}
+
+func (p *MemoryProvider) filterSourceRefs(ctx context.Context, session SessionContext, output any) any {
+	_, allowed, err := visibleHistorySessions(ctx, p.sessions, session)
+	if err != nil {
+		p.logger.Warn("memory source ref scope lookup failed", slog.Any("error", err))
+	}
+	return filterSourceRefsValue(output, allowed)
+}
+
+func filterSourceRefsValue(value any, allowed map[string]struct{}) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if key == "source_refs" {
+				if filtered := visibleSourceRefs(item, allowed); len(filtered) > 0 {
+					typed[key] = filtered
+				} else {
+					delete(typed, key)
+				}
+				continue
+			}
+			typed[key] = filterSourceRefsValue(item, allowed)
+		}
+		return typed
+	case []map[string]any:
+		for i := range typed {
+			typed[i] = filterSourceRefsValue(typed[i], allowed).(map[string]any)
+		}
+		return typed
+	case []any:
+		for i := range typed {
+			typed[i] = filterSourceRefsValue(typed[i], allowed)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func visibleSourceRefs(value any, allowed map[string]struct{}) []map[string]any {
+	var refs []map[string]any
+	switch typed := value.(type) {
+	case []map[string]any:
+		refs = typed
+	case []any:
+		refs = make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if ref, ok := item.(map[string]any); ok {
+				refs = append(refs, ref)
+			}
+		}
+	default:
+		return nil
+	}
+	filtered := make([]map[string]any, 0, len(refs))
+	for _, ref := range refs {
+		sessionID, _ := ref["session_id"].(string)
+		if historySessionVisible(allowed, sessionID) {
+			filtered = append(filtered, ref)
+		}
+	}
+	return filtered
 }
 
 func (p *MemoryProvider) resolveProvider(ctx context.Context, botID string) memprovider.Provider {

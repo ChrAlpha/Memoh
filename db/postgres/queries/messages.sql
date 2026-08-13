@@ -2580,6 +2580,7 @@ LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.t
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = sqlc.arg(bot_id)
+  AND m.session_id = ANY(sqlc.arg(session_ids)::uuid[])
   AND (sqlc.narg(session_id)::uuid IS NULL OR m.session_id = sqlc.narg(session_id)::uuid)
   AND (sqlc.narg(contact_id)::uuid IS NULL OR m.sender_channel_identity_id = sqlc.narg(contact_id)::uuid)
   AND (sqlc.narg(start_time)::timestamptz IS NULL OR m.created_at >= sqlc.narg(start_time)::timestamptz)

@@ -436,7 +436,17 @@ ON CONFLICT (team_id, id) DO UPDATE SET
   subject = EXCLUDED.subject,
   confidence = EXCLUDED.confidence,
   metadata = EXCLUDED.metadata,
-  source_message_ids = EXCLUDED.source_message_ids,
+  source_message_ids = (
+    SELECT COALESCE(jsonb_agg(ref.value ORDER BY ref.first_seen), '[]'::jsonb)
+    FROM (
+      SELECT value, min(ordinality) AS first_seen
+      FROM jsonb_array_elements(
+        COALESCE(memory_nodes.source_message_ids, '[]'::jsonb)
+        || COALESCE(EXCLUDED.source_message_ids, '[]'::jsonb)
+      ) WITH ORDINALITY AS combined(value, ordinality)
+      GROUP BY value
+    ) AS ref
+  ),
   profile_ref = EXCLUDED.profile_ref,
   topic = EXCLUDED.topic,
   expires_at = EXCLUDED.expires_at,
