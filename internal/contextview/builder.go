@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -225,6 +226,37 @@ func selectionDecisions(sourceFrags []contextfrag.ContextFrag, result SelectionR
 			selectedUsed[selectedIndex] = true
 			break
 		}
+	}
+
+	// A budget edit can refresh a fragment's content hash before a later stage
+	// drops it, so its drop record no longer carries the source's exact ref.
+	// Match those records by ContextRef identity once selected matching is
+	// done, consuming deterministically among the remaining hashes.
+	for i, source := range sourceFrags {
+		if decided[i] {
+			continue
+		}
+		sourceKey, ok := newSelectionRefKey(source.Ref)
+		if !ok {
+			continue
+		}
+		candidateKeys := make([]selectionRefKey, 0, 1)
+		for key, reasons := range dropReasonsByRef {
+			if len(reasons) > 0 && key.identity == sourceKey.identity {
+				candidateKeys = append(candidateKeys, key)
+			}
+		}
+		if len(candidateKeys) == 0 {
+			continue
+		}
+		sort.Slice(candidateKeys, func(a, b int) bool {
+			return candidateKeys[a].contentHash < candidateKeys[b].contentHash
+		})
+		key := candidateKeys[0]
+		reasons := dropReasonsByRef[key]
+		decisions[i] = selectionDecisionForFrag(source, contextfrag.DecisionDropped, reasons[0])
+		decided[i] = true
+		dropReasonsByRef[key] = reasons[1:]
 	}
 
 	// Keep ID-only drop records for legacy selectors that did not provide a Ref.
