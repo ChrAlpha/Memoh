@@ -1238,8 +1238,7 @@
     "refreshSuccess": "Model catalog refreshed: {created} added, {updated} updated",
     "refreshFailed": "Failed to refresh the model catalog",
     "refreshConfirmHint": "Fetch the latest models available to this account and remove unavailable models from model pickers.",
-    "importConfirmHint": "Models will be imported using capabilities supplied by this provider's trusted catalog.",
-    "customImportConfirmHint": "For models that do not report capabilities, the selected defaults below will be applied.",
+    "importConfirmHint": "Fetch and import the models currently available from this provider.",
     "showingCount": "Showing {count} of {total}"
   },
   "provider": {

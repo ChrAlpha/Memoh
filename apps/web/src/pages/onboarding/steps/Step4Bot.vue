@@ -25,19 +25,23 @@ import { useOnboarding } from '@/composables/useOnboarding'
 import { useACPOAuth } from '@/composables/useACPOAuth'
 import { useAvatarInitials } from '@/composables/useAvatarInitials'
 import { defaultAclPreset } from '@/constants/acl-presets'
-import { acpAgentDisplayName, acpAgentIcon, isClaudeCodeAgent, isCodexAgent, withACPMetadata, type ACPForm } from '@/utils/acp'
+import { acpAgentDisplayName, acpAgentIcon, isClaudeCodeAgent, isCodexAgent, normalizeACPAgentID, withACPMetadata, type ACPForm } from '@/utils/acp'
 import { useBotCreateProgressStore } from '@/store/bot-create-progress'
 import AvatarEditDialog from '@/pages/bots/components/avatar-edit-dialog.vue'
 import BotCreateTerminal from '@/pages/bots/components/bot-create-terminal.vue'
 import ModelSelect from '@/pages/bots/components/model-select.vue'
+import AgentTypePill from '@/pages/bots/components/agent-type-pill.vue'
+import AcpSetupPanel from '@/pages/bots/components/acp-setup-panel.vue'
+import { MEMOH_AGENT_VALUE } from '@/pages/bots/components/agent-type'
 import { useStepTransition, nextFrame } from '../useStepTransition'
 import {
-  beginOnboardingBotCreation,
-  commitOnboardingBotResult,
-  disableOnboardingACPLaunch,
-  onboardingOAuthResumeBotId,
-  onboardingRuntimeState,
-} from '../state'
+  clearOnboardingBotResult,
+  markOnboardingOAuthComplete,
+  readOnboardingOAuthResume,
+  readOnboardingProviderId,
+  skipOnboardingOAuth,
+  writeOnboardingBotResult,
+} from '../session'
 import { mergeOnboardingModels } from './provider-setup'
 import StepFrame from '../components/step-frame.vue'
 import StepExitShell from '../components/step-exit-shell.vue'
@@ -55,15 +59,27 @@ const submitting = ref(false)
 const store = useBotCreateProgressStore()
 const { lines: terminalLines, status: createStatus } = storeToRefs(store)
 
-const acpProfiles = ref<AcpprofilePublicProfile[]>([])
-
-const acpSelection = computed(() => onboardingRuntimeState.value.selection.kind === 'acp'
-  ? onboardingRuntimeState.value.selection.selection
+const oauthResume = readOnboardingOAuthResume()
+const agentType = ref(oauthResume?.agentId ?? MEMOH_AGENT_VALUE)
+const acpError = ref('')
+const acpSetupPanelRef = ref<InstanceType<typeof AcpSetupPanel> | null>(null)
+const acpSelection = ref(oauthResume
+  ? { agentId: oauthResume.agentId, setupMode: 'oauth', managed: {} }
   : null)
-const onboardingProviderId = computed(() => onboardingRuntimeState.value.selection.kind === 'provider'
-  ? onboardingRuntimeState.value.selection.providerId
-  : '')
-const isACPSelected = computed(() => !!acpSelection.value)
+
+const { data: acpProfileData } = useQuery({
+  key: ['acp-profiles'],
+  query: async () => {
+    const { data } = await getAcpProfiles({ throwOnError: true })
+    return data
+  },
+})
+const acpProfiles = computed(() => acpProfileData.value?.items ?? [])
+const selectedAcpProfile = computed<AcpprofilePublicProfile | null>(() => {
+  if (agentType.value === MEMOH_AGENT_VALUE) return null
+  return acpProfiles.value.find(profile => normalizeACPAgentID(profile.id) === agentType.value) ?? null
+})
+const onboardingProviderId = readOnboardingProviderId()
 const acpAgentId = computed(() => acpSelection.value?.agentId ?? '')
 const acpAgentName = computed(() => acpAgentDisplayName(acpAgentId.value))
 
@@ -72,6 +88,7 @@ const acpAgentName = computed(() => acpAgentDisplayName(acpAgentId.value))
 const oauthPhase = ref<'idle' | 'pending'>('idle')
 const oauthVisible = ref(false)
 const oauthBotId = ref('')
+const oauthLeaving = ref(false)
 const claudeCode = ref('')
 const {
   codexStatus,
@@ -96,19 +113,7 @@ const {
 } = useACPOAuth(() => oauthBotId.value)
 
 onMounted(() => {
-  if (acpSelection.value) {
-    void (async () => {
-      try {
-        const { data } = await getAcpProfiles({ throwOnError: true })
-        acpProfiles.value = data?.items ?? []
-      } catch {
-        acpProfiles.value = []
-      }
-    })()
-  }
-
-  const resumeBotId = onboardingOAuthResumeBotId()
-  if (resumeBotId) enterOAuthPhase(resumeBotId)
+  if (oauthResume) enterOAuthPhase(oauthResume.botId)
 })
 
 const form = reactive({
@@ -153,11 +158,11 @@ const {
   isLoading: onboardingModelsLoading,
   refresh: refreshOnboardingModels,
 } = useQuery({
-  key: () => ['onboarding-provider-models', onboardingProviderId.value],
+  key: () => ['onboarding-provider-models', onboardingProviderId],
   query: async () => {
-    if (!onboardingProviderId.value) return []
+    if (!onboardingProviderId) return []
     const { data } = await getProvidersByIdModels({
-      path: { id: onboardingProviderId.value },
+      path: { id: onboardingProviderId },
       throwOnError: true,
     })
     return data ?? []
@@ -180,7 +185,7 @@ const providers = computed(() => providerData.value ?? [])
 
 const canSubmit = computed(() => {
   if (!form.display_name.trim()) return false
-  if (isACPSelected.value || !onboardingProviderId.value) return true
+  if (selectedAcpProfile.value || !onboardingProviderId) return true
   if (onboardingModelsStatus.value !== 'success') return false
   return !!form.chat_model_id
 })
@@ -214,8 +219,23 @@ function buildMetadata(): Record<string, unknown> | undefined {
 
 async function handleSubmit() {
   if (!canSubmit.value || submitting.value) return
+
+  if (selectedAcpProfile.value) {
+    const panel = acpSetupPanelRef.value
+    const missing = panel?.missingRequiredField()
+    if (missing) {
+      acpError.value = t('bots.agentCreate.requiredError', { field: missing.label || missing.id || '' })
+      return
+    }
+    const selection = panel?.selection()
+    if (!selection) return
+    acpSelection.value = selection
+  } else {
+    acpSelection.value = null
+  }
+
+  clearOnboardingBotResult()
   submitting.value = true
-  beginOnboardingBotCreation()
 
   const selectedModel = models.value.find(model => model.id === form.chat_model_id)
   if (selectedModel?.id && !selectedModel.enable) {
@@ -270,14 +290,22 @@ async function handleSubmit() {
   }
 
   const botId = store.bot?.id
-  if (botId) {
-    commitOnboardingBotResult({
-      botId,
-      settingsApplied: createResult.settingsApplied,
-      ...(form.chat_model_id && createResult.settingsApplied && { selectedModelId: form.chat_model_id }),
-      ...(acpSelection.value && { acpLaunchAgentId: acpSelection.value.agentId }),
-    })
+  if (!botId) {
+    toast.error(store.setupError ?? t('common.saveFailed'))
+    store.reset()
+    return
   }
+
+  writeOnboardingBotResult({
+    botId,
+    modelConfigured: !!form.chat_model_id && createResult.settingsApplied,
+    ...(acpSelection.value && {
+      acp: {
+        agentId: acpSelection.value.agentId,
+        oauthPending: acpSelection.value.setupMode === 'oauth',
+      },
+    }),
+  })
   if (store.setupError) {
     toast.error(store.setupError)
   } else if (!createResult.settingsApplied) {
@@ -288,7 +316,7 @@ async function handleSubmit() {
 
   // OAuth runs after the workspace is ready so the managed token can be
   // written into the bot-scoped configuration.
-  if (botId && acpSelection.value?.setupMode === 'oauth') {
+  if (acpSelection.value?.setupMode === 'oauth') {
     store.reset()
     enterOAuthPhase(botId)
     return
@@ -348,6 +376,7 @@ const oauthStatusTextClass = computed(() =>
 
 async function authorizeCodexFlow() {
   const ok = await authorizeCodex()
+  if (oauthLeaving.value) return
   if (ok) toast.success(t('onboarding.bot.acp.oauthSuccess'))
   else toast.error(t('onboarding.bot.acp.oauthExchangeFailed'))
 }
@@ -399,15 +428,20 @@ async function exchangeClaudeFlow() {
 }
 
 function continueFromOAuth() {
+  if (!oauthAuthorized.value || oauthLeaving.value) return
+  oauthLeaving.value = true
+  markOnboardingOAuthComplete()
   leave(nextStep)
 }
 
-function skipOAuth() {
+async function skipOAuth() {
+  if (oauthLeaving.value) return
+  oauthLeaving.value = true
   // User skipped OAuth — clear ACP selection so the completion step does not
   // redirect with ?acp=<agent>. Starting an ACP session without a token would
   // fail on the first prompt; the user can authorize later via bot settings.
-  if (codexDevicePending.value) void cancelCodexDeviceAuthorization()
-  disableOnboardingACPLaunch()
+  if (codexDevicePending.value) await cancelCodexDeviceAuthorization()
+  skipOnboardingOAuth()
   leave(nextStep)
 }
 </script>
@@ -487,75 +521,73 @@ function skipOAuth() {
               <Separator class="my-6" />
             </div>
 
-            <!-- ACP 身份横幅:带品牌图标的 text-sm 状态行,不是 HintBox 那种
-                 text-xs 表单提示 —— 关系不同,留在本地。 -->
             <div
-              v-if="isACPSelected"
-              class="flex items-center gap-3 rounded-lg border border-border bg-muted-soft px-3 py-2.5 transition-all duration-[350ms] ease-out delay-[120ms]"
-              :class="visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'"
-            >
-              <component
-                :is="acpAgentIcon(acpAgentId, true)"
-                class="size-5 shrink-0"
-              />
-              <p class="text-sm text-muted-foreground">
-                {{ t('onboarding.bot.acp.banner', { agent: acpAgentName }) }}
-              </p>
-            </div>
-            <div
-              v-else
               class="transition-all duration-[350ms] ease-out delay-[120ms]"
               :class="visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'"
             >
-              <div class="mb-2 flex items-center gap-2">
-                <Label>{{ $t('bots.settings.chatModel') }}</Label>
-                <Tooltip>
-                  <TooltipTrigger as-child>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      class="size-5 text-muted-foreground hover:text-foreground"
-                    >
-                      <CircleHelp class="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-80 text-left leading-relaxed">
-                    {{ $t('onboarding.bot.model.hint') }}
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <InlineLoadingRow
-                v-if="onboardingProviderId && onboardingModelsStatus === 'pending'"
-                size="sm"
-              >
-                {{ $t('onboarding.bot.model.loading') }}
-              </InlineLoadingRow>
-              <div
-                v-else-if="onboardingProviderId && onboardingModelsStatus === 'error'"
-                class="flex items-center justify-between gap-3"
-              >
-                <p class="text-sm text-destructive">
-                  {{ $t('onboarding.bot.model.loadFailed') }}
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
+              <AgentTypePill
+                v-model="agentType"
+                :profiles="acpProfiles"
+                class="mb-3"
+              />
+              <template v-if="!selectedAcpProfile">
+                <div class="mb-2 flex items-center gap-2">
+                  <Label>{{ $t('bots.settings.chatModel') }}</Label>
+                  <Tooltip>
+                    <TooltipTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        class="size-5 text-muted-foreground hover:text-foreground"
+                      >
+                        <CircleHelp class="size-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent class="max-w-80 text-left leading-relaxed">
+                      {{ $t('onboarding.bot.model.hint') }}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                <InlineLoadingRow
+                  v-if="onboardingProviderId && onboardingModelsStatus === 'pending'"
                   size="sm"
-                  :disabled="onboardingModelsLoading"
-                  @click="refreshOnboardingModels()"
                 >
-                  <Spinner v-if="onboardingModelsLoading" />
-                  {{ $t('onboarding.bot.model.retry') }}
-                </Button>
-              </div>
-              <ModelSelect
+                  {{ $t('onboarding.bot.model.loading') }}
+                </InlineLoadingRow>
+                <div
+                  v-else-if="onboardingProviderId && onboardingModelsStatus === 'error'"
+                  class="flex items-center justify-between gap-3"
+                >
+                  <p class="text-sm text-destructive">
+                    {{ $t('onboarding.bot.model.loadFailed') }}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    :disabled="onboardingModelsLoading"
+                    @click="refreshOnboardingModels()"
+                  >
+                    <Spinner v-if="onboardingModelsLoading" />
+                    {{ $t('onboarding.bot.model.retry') }}
+                  </Button>
+                </div>
+                <ModelSelect
+                  v-else
+                  v-model="form.chat_model_id"
+                  :models="models"
+                  :providers="providers"
+                  model-type="chat"
+                  :placeholder="$t('onboarding.bot.model.selectPlaceholder')"
+                />
+              </template>
+              <AcpSetupPanel
                 v-else
-                v-model="form.chat_model_id"
-                :models="models"
-                :providers="providers"
-                model-type="chat"
-                :placeholder="$t('onboarding.bot.model.selectPlaceholder')"
+                ref="acpSetupPanelRef"
+                v-model:error-message="acpError"
+                :profile="selectedAcpProfile"
+                :oauth-hint="t('onboarding.bot.acp.deferredHint')"
               />
             </div>
 

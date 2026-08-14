@@ -1197,8 +1197,7 @@
     "refreshSuccess": "Model カタログを更新しました: {created} 件追加、{updated} 件更新",
     "refreshFailed": "Model カタログの更新に失敗しました",
     "refreshConfirmHint": "このアカウントで現在利用できる最新の Model を取得し、利用できない Model を選択肢から除外します。",
-    "importConfirmHint": "このプロバイダーの信頼できる Model カタログの能力情報を使ってインポートします。",
-    "customImportConfirmHint": "Model が能力を報告しない場合は、以下で選んだデフォルトを適用します。",
+    "importConfirmHint": "このプロバイダーで現在利用できる Model を取得してインポートします。",
     "showingCount": "{total} の {count} を表示中"
   },
   "provider": {

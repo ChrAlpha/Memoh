@@ -1238,8 +1238,7 @@
     "refreshSuccess": "模型目录已刷新：新增 {created} 个，更新 {updated} 个",
     "refreshFailed": "刷新模型目录失败",
     "refreshConfirmHint": "获取此账号当前可用的最新模型，并从模型选择器中移除已不可用的模型。",
-    "importConfirmHint": "将使用此服务商可信模型目录提供的能力信息导入模型。",
-    "customImportConfirmHint": "模型未报告能力时，将应用下方选择的默认值。",
+    "importConfirmHint": "获取并导入该服务商当前可用的模型。",
     "showingCount": "显示 {count} / {total}"
   },
   "provider": {

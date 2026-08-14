@@ -88,6 +88,8 @@ export const useBotCreateProgressStore = defineStore('bot-create-progress', () =
     bot.value = null
     setupError.value = null
     errorCode.value = null
+    lastPayload = null
+    lastOptions = {}
   }
 
   function ensureErrorLine(message: string) {

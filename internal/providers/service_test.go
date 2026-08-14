@@ -90,6 +90,9 @@ models:
 	if got := strings.Join(model.Compatibilities, ","); got != "tool-call,reasoning" {
 		t.Fatalf("compatibilities = %q", got)
 	}
+	if !model.CapabilitiesKnown {
+		t.Fatal("expected legacy preset template capabilities to be authoritative")
+	}
 	if model.ContextWindow == nil || *model.ContextWindow != 200000 {
 		t.Fatalf("context window = %#v", model.ContextWindow)
 	}

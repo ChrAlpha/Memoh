@@ -186,7 +186,7 @@ describe('useBotCreateProgressStore', () => {
     expect(store.lines.some(l => l.kind === 'applying-settings' && l.status === 'error')).toBe(true)
   })
 
-  it('reset returns the store to idle', async () => {
+  it('reset returns the store to idle and drops the retry payload', async () => {
     const bot = { id: 'bot-1', name: 'ada' }
     postBotsStream.mockResolvedValue(streamOf([{ type: 'ready', bot }]))
 
@@ -199,5 +199,8 @@ describe('useBotCreateProgressStore', () => {
     expect(store.bot).toBeNull()
     expect(store.setupError).toBeNull()
     expect(store.errorCode).toBeNull()
+
+    await store.retry()
+    expect(postBotsStream).toHaveBeenCalledTimes(1)
   })
 })

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -338,10 +339,8 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "id is required")
 	}
 	var req providers.ImportModelsRequest
-	if c.Request().ContentLength > 0 {
-		if err := c.Bind(&req); err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
-		}
+	if err := c.Bind(&req); err != nil && !errors.Is(err, io.EOF) {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	if err := models.ValidateCompatibilities(req.DefaultCompatibilities); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -382,19 +381,13 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 		if strings.TrimSpace(m.Type) == string(models.ModelTypeEmbedding) {
 			modelType = models.ModelTypeEmbedding
 		}
-		compatibilities := importedCompatibilities(
-			m,
-			modelType,
-			req.DefaultCompatibilities,
-			provider.ProviderTemplateID == "",
-		)
 		name := strings.TrimSpace(m.Name)
 		if name == "" {
 			name = m.ID
 		}
-		cfg := models.ModelConfig{
+		discoveredConfig := models.ModelConfig{
 			Description:      m.Description,
-			Compatibilities:  compatibilities,
+			Compatibilities:  append([]string(nil), m.Compatibilities...),
 			ReasoningEfforts: m.ReasoningEfforts,
 			ThinkingMode:     m.ThinkingMode,
 			ContextWindow:    m.ContextWindow,
@@ -402,21 +395,28 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 		}
 		if managedCatalog {
 			available := true
-			cfg.CatalogAvailable = &available
+			discoveredConfig.CatalogAvailable = &available
 		}
+		createConfig := discoveredConfig
+		createConfig.Compatibilities = importedCompatibilities(
+			m,
+			modelType,
+			req.DefaultCompatibilities,
+			provider.ProviderTemplateID == "",
+		)
 		_, err := h.modelsService.Create(ctx, models.AddRequest{
 			ModelID:    m.ID,
 			Name:       name,
 			ProviderID: id,
 			Type:       modelType,
 			Enable:     &disabled,
-			Config:     cfg,
+			Config:     createConfig,
 		})
 		if err != nil {
 			if errors.Is(err, models.ErrModelIDAlreadyExists) {
 				// Upsert/assert: re-importing fills in newly discovered
 				// capabilities on existing models without clobbering user config.
-				if h.fillExistingModel(ctx, id, m.ID, cfg, managedCatalog && m.CapabilitiesKnown) {
+				if h.fillExistingModel(ctx, id, m.ID, discoveredConfig, managedCatalog && m.CapabilitiesKnown) {
 					resp.Updated++
 				} else {
 					resp.Skipped++
@@ -441,8 +441,8 @@ func importedCompatibilities(remote providers.RemoteModel, modelType models.Mode
 	if len(remote.Compatibilities) > 0 || modelType != models.ModelTypeChat || remote.CapabilitiesKnown || !allowCustomDefaults {
 		return remote.Compatibilities
 	}
-	// Unknown means unknown. Custom-provider defaults are a user choice from
-	// the request, never an inference from the client protocol.
+	// Unknown means unknown unless the caller explicitly supplies defaults.
+	// The backend never infers model capabilities from the client protocol.
 	return append([]string(nil), defaults...)
 }
 

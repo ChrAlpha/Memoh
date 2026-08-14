@@ -128,9 +128,9 @@ type RemoteModel struct {
 	CapabilitiesKnown bool     `json:"-"`
 }
 
-// ImportModelsRequest carries the capabilities a user explicitly selected for
-// chat models whose provider cannot describe them. It is intentionally scoped
-// to the import operation: templates and trusted discovery remain authoritative.
+// ImportModelsRequest carries caller-supplied capability defaults for chat
+// models whose provider cannot describe them. Templates and trusted discovery
+// remain authoritative.
 type ImportModelsRequest struct {
 	DefaultCompatibilities []string `json:"default_compatibilities,omitempty"`
 }
