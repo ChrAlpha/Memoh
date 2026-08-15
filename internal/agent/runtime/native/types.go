@@ -80,6 +80,10 @@ type InjectMessage struct {
 
 // RunConfig holds everything needed for a single agent invocation.
 type RunConfig struct {
+	// RunID is the stable identity allocated by durable admission for this
+	// invocation. Direct callers without admission receive one at the
+	// application creation boundary before the native runtime starts.
+	RunID                       string
 	Model                       *sdk.Model
 	CurrentModelUUID            string
 	CurrentModelID              string
@@ -115,6 +119,7 @@ type RunConfig struct {
 	ContextCachePlan               contextfrag.CachePlan
 	ContextMutations               *contextfrag.MutationLedger
 	ContextDynamicMutators         []contextfrag.DynamicMutator
+	ContextLifecycle               *contextfrag.LifecycleHolder
 	SessionType                    string
 	LiveToolStream                 bool
 	CanRequestUserInput            bool

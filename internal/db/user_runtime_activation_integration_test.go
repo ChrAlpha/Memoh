@@ -100,7 +100,7 @@ func TestUserRuntimeActivationMigrationPreservesExistingCredentials(t *testing.T
 	ctx := context.Background()
 	dsn := teamMigrationDSN(t)
 	pool := freshMigratedDB(t)
-	stepDown(t, dsn, 1)
+	stepDown(t, dsn, countMigrationsFrom(t, "0133_user_runtime_activation_lifecycle.up.sql"))
 
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestRemoteMountDefaultMigrationPreservesExistingChoices(t *testing.T) {
 	ctx := context.Background()
 	dsn := teamMigrationDSN(t)
 	pool := freshMigratedDB(t)
-	stepDown(t, dsn, 2)
+	stepDown(t, dsn, countMigrationsFrom(t, "0132_remote_mount_default_allow.up.sql"))
 
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
