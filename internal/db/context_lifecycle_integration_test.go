@@ -24,9 +24,9 @@ func TestContextLifecycleMigrationRoundTrip(t *testing.T) {
 	dsn := teamMigrationDSN(t)
 
 	assertContextLifecycleSchema(t, ctx, pool, true)
-	stepDown(t, dsn, countMigrationsFrom(t, "0131_context_lifecycles.up.sql"))
+	stepDown(t, dsn, countMigrationsFrom(t, "0134_context_lifecycles.up.sql"))
 	assertContextLifecycleSchema(t, ctx, pool, false)
-	stepUp(t, dsn, countMigrationsFrom(t, "0131_context_lifecycles.up.sql"))
+	stepUp(t, dsn, countMigrationsFrom(t, "0134_context_lifecycles.up.sql"))
 	assertContextLifecycleSchema(t, ctx, pool, true)
 }
 

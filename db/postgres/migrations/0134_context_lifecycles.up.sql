@@ -1,4 +1,4 @@
--- 0131_context_lifecycles
+-- 0134_context_lifecycles
 -- Persist content-light context lifecycle snapshots by run, including failures.
 
 CREATE TABLE IF NOT EXISTS public.context_lifecycles (
