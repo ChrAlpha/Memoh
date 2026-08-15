@@ -25,6 +25,7 @@ import (
 	"github.com/memohai/memoh/internal/models"
 	"github.com/memohai/memoh/internal/oauthctx"
 	"github.com/memohai/memoh/internal/providers"
+	"github.com/memohai/memoh/internal/reasoning"
 	"github.com/memohai/memoh/internal/settings"
 )
 
@@ -37,24 +38,31 @@ type SpawnAgent interface {
 
 // SpawnRunConfig mirrors agent.RunConfig fields needed by subagent controls.
 type SpawnRunConfig struct {
-	Model                 *sdk.Model
-	ModelUUID             string
-	ModelID               string
-	ModelProvider         string
-	System                string
-	Query                 string
-	SessionType           string
-	Identity              SpawnIdentity
-	LoopDetection         SpawnLoopConfig
-	Messages              []sdk.Message
-	ReasoningEffort       string
-	PromptCacheTTL        string
-	ChatCompletionsCompat string
-	SupportsImageInput    bool
-	SupportsFileInput     bool
-	SupportsToolCall      bool
-	Skills                map[string]SkillDetail
-	BackgroundManager     *background.Manager
+	Model         *sdk.Model
+	ModelUUID     string
+	ModelID       string
+	ModelProvider string
+	System        string
+	Query         string
+	SessionType   string
+	Identity      SpawnIdentity
+	LoopDetection SpawnLoopConfig
+	Messages      []sdk.Message
+	// ReasoningConfig is the thinking decision resolved for the subagent's own
+	// model. It replaces a lone effort string that was never assigned, which is
+	// how subagents came to run with no reasoning configuration at all (#983).
+	ReasoningConfig *models.ReasoningConfig
+	// Keep the unresolved parent-turn inputs as well, so a nested subagent can
+	// resolve the same override against its own selected model.
+	ReasoningStoredEffort    string
+	ReasoningRequestedEffort string
+	PromptCacheTTL           string
+	ChatCompletionsCompat    string
+	SupportsImageInput       bool
+	SupportsFileInput        bool
+	SupportsToolCall         bool
+	Skills                   map[string]SkillDetail
+	BackgroundManager        *background.Manager
 	// TurnRequestMessageID is the persisted task user message this run's
 	// assistant and tool rows bind to, so incremental step persistence files
 	// them into the same history turn the runtime view names.
@@ -192,10 +200,15 @@ type agentSessionService interface {
 }
 
 type resolvedSubagentModel struct {
-	Model                 *sdk.Model
-	UUID                  string
-	ModelID               string
-	ProviderName          string
+	Model        *sdk.Model
+	UUID         string
+	ModelID      string
+	ProviderName string
+	// ReasoningConfig is resolved against this model, not inherited from the
+	// parent: a subagent may run a different model, whose advertised tiers and
+	// off-ability differ. Before #983 it was neither inherited nor resolved, so
+	// subagents ran with no thinking configuration at all.
+	ReasoningConfig       *models.ReasoningConfig
 	PromptCacheTTL        string
 	ChatCompletionsCompat string
 	SupportsImageInput    bool
@@ -935,22 +948,25 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		history = combined
 	}
 	cfg := SpawnRunConfig{
-		Model:                 req.runtime.Model,
-		ModelUUID:             req.runtime.UUID,
-		ModelID:               req.runtime.ModelID,
-		ModelProvider:         req.runtime.ProviderName,
-		System:                req.systemPrompt,
-		Query:                 req.message,
-		SessionType:           sessionpkg.TypeSubagent,
-		PromptCacheTTL:        req.runtime.PromptCacheTTL,
-		ChatCompletionsCompat: req.runtime.ChatCompletionsCompat,
-		SupportsImageInput:    req.runtime.SupportsImageInput,
-		SupportsFileInput:     req.runtime.SupportsFileInput,
-		SupportsToolCall:      req.runtime.SupportsToolCall,
-		Messages:              history,
-		Skills:                req.parentSession.Skills,
-		BackgroundManager:     p.bgManager,
-		TurnRequestMessageID:  req.requestMessageID,
+		Model:                    req.runtime.Model,
+		ModelUUID:                req.runtime.UUID,
+		ModelID:                  req.runtime.ModelID,
+		ModelProvider:            req.runtime.ProviderName,
+		ReasoningConfig:          req.runtime.ReasoningConfig,
+		ReasoningStoredEffort:    req.parentSession.ReasoningStoredEffort,
+		ReasoningRequestedEffort: req.parentSession.ReasoningRequestedEffort,
+		System:                   req.systemPrompt,
+		Query:                    req.message,
+		SessionType:              sessionpkg.TypeSubagent,
+		PromptCacheTTL:           req.runtime.PromptCacheTTL,
+		ChatCompletionsCompat:    req.runtime.ChatCompletionsCompat,
+		SupportsImageInput:       req.runtime.SupportsImageInput,
+		SupportsFileInput:        req.runtime.SupportsFileInput,
+		SupportsToolCall:         req.runtime.SupportsToolCall,
+		Messages:                 history,
+		Skills:                   req.parentSession.Skills,
+		BackgroundManager:        p.bgManager,
+		TurnRequestMessageID:     req.requestMessageID,
 		Identity: SpawnIdentity{
 			BotID:               req.parentSession.BotID,
 			ChatID:              req.parentSession.ChatID,
@@ -1629,6 +1645,11 @@ func (p *SpawnProvider) resolveModel(
 		baseURL,
 		providers.ProviderConfigString(provider, models.ChatCompletionsCompatConfigKey),
 	)
+	reasoningConfig, err := p.resolveSubagentReasoning(ctx, session, modelInfo, provider.ClientType)
+	if err != nil {
+		return resolvedSubagentModel{}, fmt.Errorf("resolve subagent reasoning: %w", err)
+	}
+
 	sdkModel := models.NewSDKChatModel(models.SDKModelConfig{
 		ModelID:               modelInfo.ModelID,
 		ClientType:            provider.ClientType,
@@ -1636,9 +1657,11 @@ func (p *SpawnProvider) resolveModel(
 		CodexAccountID:        creds.CodexAccountID,
 		BaseURL:               baseURL,
 		ChatCompletionsCompat: chatCompletionsCompat,
+		ReasoningConfig:       reasoningConfig,
 	})
 	return resolvedSubagentModel{
 		Model:                 sdkModel,
+		ReasoningConfig:       reasoningConfig,
 		UUID:                  modelInfo.ID,
 		ModelID:               modelInfo.ModelID,
 		ProviderName:          provider.Name,
@@ -1656,4 +1679,47 @@ func truncateTitle(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes-3]) + "..."
+}
+
+// resolveSubagentReasoning resolves the thinking decision for a subagent against
+// the model the subagent will actually run, using the bot's stored effort as the
+// on/off source. It deliberately does not inherit the parent's resolved config: a
+// subagent may run a different model, and a tier the parent's model advertises
+// may not exist on this one.
+//
+// A missing settings service retains the old nil-config fallback for direct or
+// test-only callers that do not carry the parent inputs. When a requested value
+// arrives without the stored fallback (as it does across the ACP tool bridge), a
+// configured settings service still loads stored: the child model may reject the
+// requested tier or Off and ResolveConfig must then fall back to the bot setting.
+// Read failures are returned instead of silently changing provider-wire behavior.
+func (p *SpawnProvider) resolveSubagentReasoning(
+	ctx context.Context,
+	session SessionContext,
+	modelInfo models.GetResponse,
+	clientType string,
+) (*models.ReasoningConfig, error) {
+	stored := strings.TrimSpace(session.ReasoningStoredEffort)
+	requested := strings.TrimSpace(session.ReasoningRequestedEffort)
+	if stored == "" {
+		if p.settings == nil {
+			if requested == "" {
+				return nil, nil
+			}
+		} else {
+			botSettings, err := p.settings.GetBot(ctx, session.BotID)
+			if err != nil {
+				return nil, fmt.Errorf("load bot reasoning settings: %w", err)
+			}
+			stored = botSettings.ReasoningEffort
+		}
+	}
+	return reasoning.ResolveConfig(
+		modelInfo.ResolveThinkingMode(),
+		modelInfo.Config.ReasoningEfforts,
+		modelInfo.ReasoningOptions(clientType),
+		stored,
+		requested,
+		clientType,
+	), nil
 }

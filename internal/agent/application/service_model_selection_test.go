@@ -13,42 +13,9 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/models"
+	"github.com/memohai/memoh/internal/reasoning"
 	"github.com/memohai/memoh/internal/settings"
 )
-
-func TestOffEffortFor(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		levels []string
-		want   string
-	}{
-		{
-			"declaring disable yields the OpenAI wire spelling of off",
-			[]string{models.ReasoningEffortDisable, "low", "medium"},
-			models.ReasoningEffortNone,
-		},
-		{
-			// minimal reduces reasoning, it does not stop it, so standing in for off
-			// would make Off and the Minimal tier the same request. Upstream also
-			// never ships both: minimal is gpt-5.0's weakest tier and gpt-5.1
-			// replaced it with none.
-			"minimal is a tier, not a stand-in for off",
-			[]string{models.ReasoningEffortMinimal, "low", "medium"},
-			"",
-		},
-		{"empty when only real tiers (omit, do not enable)", []string{"medium", "high", "xhigh"}, ""},
-		{"legacy base yields empty (omit reasoning_effort)", []string{"low", "medium", "high"}, ""},
-		{"empty levels yield empty", nil, ""},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := offEffortFor(tt.levels); got != tt.want {
-				t.Fatalf("offEffortFor(%v) = %q, want %q", tt.levels, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestMatchesModelReference_ModelID(t *testing.T) {
 	t.Parallel()
@@ -247,27 +214,27 @@ func TestResolveReasoningConfig(t *testing.T) {
 		want          *models.ReasoningConfig
 	}{
 		{
-			name:          "disable overrides bot default",
+			name:          "unsupported disable override falls back to bot default",
 			model:         toggleModel,
 			botSettings:   settings.Settings{ReasoningEffort: models.ReasoningEffortHigh},
-			requestEffort: reasoningEffortDisable,
-			want:          &models.ReasoningConfig{Disabled: true},
+			requestEffort: models.ReasoningEffortDisable,
+			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortHigh},
 		},
 		{
 			name:          "legacy adaptive request enables toggle with default effort",
 			model:         toggleModel,
-			requestEffort: reasoningEffortAdaptive,
+			requestEffort: reasoning.EffortAdaptive,
 			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortMedium},
 		},
 		{
 			// A requested "none" is an off request, not an active tier. Treating it as
 			// a tier produced Active with Effort "none" — enabled at no strength —
 			// which wires to the same request as off.
-			name:          "requested none reads as off even when the model cannot be turned off",
+			name:          "requested none falls back when the model cannot be turned off",
 			model:         toggleModel,
 			botSettings:   settings.Settings{ReasoningEffort: models.ReasoningEffortHigh},
 			requestEffort: models.ReasoningEffortNone,
-			want:          &models.ReasoningConfig{Disabled: true},
+			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortHigh},
 		},
 		{
 			name:          "requested none reads as off, and a disablable model carries the wire value",
@@ -316,16 +283,16 @@ func TestResolveReasoningConfig(t *testing.T) {
 			want:        &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortMedium},
 		},
 		{
-			name:        "bot effort of disable turns reasoning off",
+			name:        "stale bot disable falls back when the model cannot turn off",
 			model:       toggleModel,
 			botSettings: settings.Settings{ReasoningEffort: models.ReasoningEffortDisable},
-			want:        &models.ReasoningConfig{Disabled: true},
+			want:        &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortMedium},
 		},
 		{
-			name:          "adaptive model can still be disabled",
+			name:          "adaptive model without off support stays active",
 			model:         adaptiveModel,
-			requestEffort: reasoningEffortDisable,
-			want:          &models.ReasoningConfig{Disabled: true},
+			requestEffort: models.ReasoningEffortDisable,
+			want:          &models.ReasoningConfig{Active: true, Adaptive: true, Effort: models.ReasoningEffortMedium},
 		},
 		{
 			name:          "adaptive model honors explicit effort",
