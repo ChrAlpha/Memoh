@@ -66,6 +66,9 @@ func (h *Handler) buildReasoningGroup() *CommandGroup {
 			if !opts.Supported {
 				return &Result{Text: cc.T("cmd.reasoning.unsupported")}, nil
 			}
+			if !hasReasoningControls(opts) {
+				return &Result{Text: cc.T("cmd.reasoning.uncontrollable")}, nil
+			}
 			return reasoningResult(cc.L, s.ReasoningEffort, opts), nil
 		},
 	})
@@ -88,6 +91,9 @@ func (h *Handler) buildReasoningGroup() *CommandGroup {
 			if !opts.Supported {
 				return &Result{Text: cc.T("cmd.reasoning.unsupported")}, nil
 			}
+			if !hasReasoningControls(opts) {
+				return &Result{Text: cc.T("cmd.reasoning.uncontrollable")}, nil
+			}
 			choices := reasoningChoicesFor(opts)
 			if len(cc.Args) < 1 {
 				return &Result{Text: cc.T("cmd.reasoning.setUsage", map[string]any{
@@ -106,6 +112,9 @@ func (h *Handler) buildReasoningGroup() *CommandGroup {
 			case acceptsEffort(level, opts):
 				req.ReasoningEffort = &level
 			default:
+				// Name the levels rather than pointing at a list that may not be on
+				// screen: a typed `set <level>` has no picker above it, and the
+				// levels differ per model, so the message has to carry them.
 				return &Result{Text: cc.T("cmd.reasoning.unknownLevel", map[string]any{
 					"level":  fmt.Sprintf("%q", cc.Args[0]),
 					"levels": strings.Join(choices, ", "),
@@ -188,6 +197,10 @@ func reasoningChoicesFor(opts reasoning.Options) []string {
 		out = append(out, offChoice)
 	}
 	return append(out, tiers...)
+}
+
+func hasReasoningControls(opts reasoning.Options) bool {
+	return opts.Supported && (opts.CanDisable || len(opts.Efforts) > 0)
 }
 
 // acceptsEffort reports whether a typed selection can be stored. Off follows the

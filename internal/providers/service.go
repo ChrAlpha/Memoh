@@ -439,16 +439,21 @@ func remoteModelsFromCatalog(items []sqlc.TemplateProviderTemplateModel) []Remot
 	for _, model := range items {
 		cfg := providerConfig(model.Config)
 		out = append(out, RemoteModel{
-			ID:                model.ModelID,
-			Name:              model.Name,
-			Description:       configStringPtr(cfg, "description"),
-			Type:              model.Type,
-			Compatibilities:   configStringSlice(cfg, "compatibilities"),
-			ReasoningEfforts:  configStringSlice(cfg, "reasoning_efforts"),
-			ThinkingMode:      configString(cfg, "thinking_mode"),
-			ContextWindow:     configIntPtr(cfg, "context_window"),
-			Dimensions:        configIntPtr(cfg, "dimensions"),
-			CapabilitiesKnown: true,
+			ID:                  model.ModelID,
+			Name:                model.Name,
+			Description:         configStringPtr(cfg, "description"),
+			Type:                model.Type,
+			Compatibilities:     configStringSlice(cfg, "compatibilities"),
+			ReasoningEfforts:    configStringSlice(cfg, "reasoning_efforts"),
+			ThinkingMode:        configString(cfg, "thinking_mode"),
+			ReasoningDialect:    configString(cfg, "reasoning_dialect"),
+			ReasoningOffSupport: configString(cfg, "reasoning_off_support"),
+			ReasoningDefaultOn:  configBoolPtr(cfg, "reasoning_default_on"),
+			ThinkingBudgetMin:   configNonNegativeIntPtr(cfg, "thinking_budget_min"),
+			ThinkingBudgetMax:   configIntPtr(cfg, "thinking_budget_max"),
+			ContextWindow:       configIntPtr(cfg, "context_window"),
+			Dimensions:          configIntPtr(cfg, "dimensions"),
+			CapabilitiesKnown:   true,
 		})
 	}
 	return out
@@ -463,16 +468,21 @@ func remoteModelsFromTemplate(def registry.ProviderDefinition) []RemoteModel {
 		}
 		cfg := model.Config
 		out = append(out, RemoteModel{
-			ID:                model.ModelID,
-			Name:              model.Name,
-			Description:       configStringPtr(cfg, "description"),
-			Type:              modelType,
-			Compatibilities:   configStringSlice(cfg, "compatibilities"),
-			ReasoningEfforts:  configStringSlice(cfg, "reasoning_efforts"),
-			ThinkingMode:      configString(cfg, "thinking_mode"),
-			ContextWindow:     configIntPtr(cfg, "context_window"),
-			Dimensions:        configIntPtr(cfg, "dimensions"),
-			CapabilitiesKnown: true,
+			ID:                  model.ModelID,
+			Name:                model.Name,
+			Description:         configStringPtr(cfg, "description"),
+			Type:                modelType,
+			Compatibilities:     configStringSlice(cfg, "compatibilities"),
+			ReasoningEfforts:    configStringSlice(cfg, "reasoning_efforts"),
+			ThinkingMode:        configString(cfg, "thinking_mode"),
+			ReasoningDialect:    configString(cfg, "reasoning_dialect"),
+			ReasoningOffSupport: configString(cfg, "reasoning_off_support"),
+			ReasoningDefaultOn:  configBoolPtr(cfg, "reasoning_default_on"),
+			ThinkingBudgetMin:   configNonNegativeIntPtr(cfg, "thinking_budget_min"),
+			ThinkingBudgetMax:   configIntPtr(cfg, "thinking_budget_max"),
+			ContextWindow:       configIntPtr(cfg, "context_window"),
+			Dimensions:          configIntPtr(cfg, "dimensions"),
+			CapabilitiesKnown:   true,
 		})
 	}
 	return out
@@ -654,6 +664,29 @@ func configIntPtr(cfg map[string]any, key string) *int {
 	return nil
 }
 
+func configNonNegativeIntPtr(cfg map[string]any, key string) *int {
+	if cfg == nil {
+		return nil
+	}
+	switch value := cfg[key].(type) {
+	case int:
+		if value >= 0 {
+			return &value
+		}
+	case int64:
+		if value >= 0 {
+			out := int(value)
+			return &out
+		}
+	case float64:
+		if value >= 0 {
+			out := int(value)
+			return &out
+		}
+	}
+	return nil
+}
+
 // ProviderConfigString is a public helper for extracting a string from the config JSONB.
 func ProviderConfigString(provider sqlc.Provider, key string) string {
 	return configString(providerConfig(provider.Config), key)
@@ -782,4 +815,17 @@ func metadataSectionSource(metadata map[string]any, section string) string {
 		return ""
 	}
 	return strings.TrimSpace(stringValue(nested, metadataSourceKey))
+}
+
+// configBoolPtr reads an optional boolean, distinguishing "absent" from "false".
+// reasoning_default_on needs that distinction: unknown means the adaptor keeps its
+// conservative behaviour, while an explicit false is a fact about the model.
+func configBoolPtr(cfg map[string]any, key string) *bool {
+	if cfg == nil {
+		return nil
+	}
+	if value, ok := cfg[key].(bool); ok {
+		return &value
+	}
+	return nil
 }
