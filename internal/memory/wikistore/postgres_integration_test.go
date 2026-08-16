@@ -41,7 +41,7 @@ func TestPostgresUpsertNodeConcurrentlyUnionsSourceRefs(t *testing.T) {
 	}{
 		{`INSERT INTO users (id, username, email) VALUES ($1, $2, $3)`, []any{userID, username, email}},
 		{`INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, 'member')`, []any{teamID, userID}},
-		{`INSERT INTO bots (team_id, id, owner_user_id, type, name) VALUES ($1, $2, $3, 'personal', $4)`, []any{teamID, botID, userID, botName}},
+		{`INSERT INTO bots (team_id, id, owner_user_id, name) VALUES ($1, $2, $3, $4)`, []any{teamID, botID, userID, botName}},
 	}
 	for _, statement := range fixtureStatements {
 		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
