@@ -147,6 +147,9 @@ func cacheUsageTotals(records []CacheUsageRecord) (readTokens, writeTokens int) 
 }
 
 func cloneStepSnapshots(steps []StepSnapshot) []StepSnapshot {
+	if len(steps) == 0 {
+		return nil
+	}
 	out := make([]StepSnapshot, len(steps))
 	for i, step := range steps {
 		out[i] = cloneStepSnapshot(step)

@@ -126,6 +126,9 @@ func (l *MutationLedger) CacheUsageRecords() []CacheUsageRecord {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.cacheUsage) == 0 {
+		return nil
+	}
 	out := make([]CacheUsageRecord, len(l.cacheUsage))
 	copy(out, l.cacheUsage)
 	return out
@@ -166,6 +169,9 @@ func (l *MutationLedger) StepSnapshots() []StepSnapshot {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.steps) == 0 {
+		return nil
+	}
 	out := make([]StepSnapshot, len(l.steps))
 	for i, snapshot := range l.steps {
 		out[i] = cloneStepSnapshot(snapshot)
