@@ -131,13 +131,13 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 func TestLifecycleHolderSnapshotOwnsStepDropReasons(t *testing.T) {
 	t.Parallel()
 
-	ledger := NewMutationLedger()
-	ledger.AppendStepSnapshot(StepSnapshot{
+	ledger := contextfrag.NewMutationLedger()
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{
 		StepIndex:   0,
 		DropReasons: map[string]int{"budget": 1},
 	})
-	holder := NewLifecycleHolder()
-	holder.SetManifest(Manifest{View: ViewRunConfigPreProvider, Mutations: ledger})
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, Mutations: ledger})
 
 	first, ok := holder.Snapshot()
 	if !ok || len(first.Steps) != 1 {
