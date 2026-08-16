@@ -176,9 +176,12 @@
       <div
         v-if="!activeChatReadOnly"
         class="pointer-events-none absolute z-(--z-panel)"
-        :class="isWelcome
-          ? 'inset-0 flex flex-col items-center justify-start pt-[28dvh]'
-          : 'inset-x-0 bottom-0 pt-2 pb-7'"
+        :class="[
+          isWelcome
+            ? 'inset-0 flex flex-col items-center justify-start pt-[28dvh]'
+            : 'inset-x-0 bottom-0 pt-2 pb-7',
+          { invisible: composerPlacementPending },
+        ]"
         :style="composerLiftPx > 0 ? { bottom: `${composerLiftPx}px` } : undefined"
       >
         <!-- Opaque backdrop, bottom-anchored, rising only to the box's widest point
@@ -219,9 +222,10 @@
                the column math is centered, but the eye reads the composer a hair
                right of the message column (the scroll rail eats the right edge),
                so the whole dock unit shifts left a touch to sit where it looks
-               centered. -->
+               centered. Desktop only — mobile has no scroll rail, so there the
+               nudge would just push the composer off centre. -->
           <div
-            class="pointer-events-auto relative mx-auto w-full -translate-x-0.5 px-4 sm:px-6 lg:px-10"
+            class="pointer-events-auto relative mx-auto w-full px-4 sm:px-6 lg:px-10 md:-translate-x-0.5"
             :class="isWelcome ? 'max-w-[44rem]' : 'max-w-[840px]'"
           >
             <Transition
@@ -377,13 +381,26 @@
             >
               <!-- The composer is ALWAYS a two-row card (textarea on top,
                    controls below) — no pill↔multiline morph: a fixed rounded-2xl
-                   box with a minimum height, so its shape never depends on the
-                   content and nothing animates mid-typing. -->
+                   box, so its shape never depends on the content and nothing
+                   animates mid-typing.
+                   Docked (non-welcome) state compresses and quiets: no min
+                   height + tighter padding (p-2.5) + a shorter textarea row
+                   (min-h-10) pull the two rows together — the centered welcome
+                   card keeps the full presence (min-h-28, p-3); docked it sits
+                   under the conversation and should read lighter, with the edge
+                   softened to --border-soft (.chat-composer-docked, style.css).
+                   Mobile radius is DERIVED from the control circles inside:
+                   radius tracks the control radius — 44px controls → 22, i.e.
+                   rounded-3xl (24, nearest rung); the same rule on desktop
+                   (32px controls → 16) is exactly the rounded-2xl the card
+                   already wears. (The concentric alternative, control radius +
+                   padding = 32, read as too round in QA.) -->
               <div
                 ref="composerEl"
                 data-slot="input-group"
                 role="group"
-                class="chat-composer-edge relative flex min-h-28 w-full flex-wrap content-between items-end gap-1 rounded-2xl bg-surface-composer p-3 cursor-text"
+                class="chat-composer-edge relative flex w-full flex-wrap content-between items-end gap-1 rounded-2xl bg-surface-composer cursor-text max-md:rounded-3xl max-md:p-2.5"
+                :class="isWelcome ? 'min-h-28 p-3' : 'p-2.5 chat-composer-docked'"
                 @click="handleComposerClick"
               >
                 <!-- The attachment row reveals via a grid 0fr↔1fr track so a card
@@ -468,7 +485,8 @@
                   rows="1"
                   :placeholder="activeChatReadOnly ? $t('chat.readonlyHint') : $t('chat.inputPlaceholder')"
                   :disabled="!currentBotId || activeChatReadOnly || loadingMessages || voiceInputState !== 'idle'"
-                  class="order-none min-h-12 max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  :class="isWelcome ? 'min-h-12' : 'min-h-10'"
                   @keydown="handleComposerKeydown"
                   @paste="handlePaste"
                 />
@@ -491,12 +509,12 @@
                     >
                       <Spinner
                         v-if="agentChanging"
-                        class="size-4"
+                        class="size-4 max-md:size-5"
                       />
                       <Plus
                         v-else
                         :stroke-width="1.5"
-                        class="size-4"
+                        class="size-4 max-md:size-5"
                       />
                     </Button>
                   </DropdownMenuTrigger>
@@ -621,7 +639,7 @@
                         size="sm"
                         shape="circle"
                         :disabled="!currentBotId || activeChatReadOnly || composerConfigPending"
-                        class="composer-pill-press min-w-0 max-md:h-11"
+                        class="composer-pill-press min-w-0 shrink max-md:h-11"
                         :style="{ maxWidth: `${modelTriggerMaxWidth}px` }"
                       >
                         <!-- One transformable wrapper for the press squish —
@@ -639,73 +657,80 @@
                         </span>
                       </Button>
                     </PopoverTrigger>
+                    <!-- `menu` makes this host transparent: the inner
+                         menuChromeClass div already owns the border/shadow/
+                         radius, so a chromed host would draw a doubled edge
+                         (same pattern as model-select.vue). -->
                     <PopoverContent
+                      menu
                       class="w-80 max-w-[calc(100vw-2rem)] overflow-hidden p-0"
                       align="end"
                       side="top"
                       :side-offset="4"
                     >
-                      <InlineLoadingRow
-                        v-if="composerModelsLoading"
-                        class="px-2 py-3"
-                      >
-                        {{ $t('common.loading') }}
-                      </InlineLoadingRow>
-                      <div
-                        v-else
-                        :class="menuChromeClass"
-                      >
-                        <div
-                          v-if="activeUsesACPComposer && !activeIsPendingACP && acpModes.length"
-                          class="border-b border-border p-3"
+                      <!-- The chrome wrapper covers BOTH branches: with the
+                           host transparent (`menu`), a bare loading row would
+                           float on the chat UI with no surface at all. -->
+                      <div :class="menuChromeClass">
+                        <InlineLoadingRow
+                          v-if="composerModelsLoading"
+                          class="px-2 py-3"
                         >
-                          <div class="mb-2 text-label text-foreground">
-                            {{ $t('chat.sessionMode') }}
-                          </div>
-                          <Select
-                            :model-value="currentACPModeId"
-                            :disabled="activeChatReadOnly || streaming || acpConfigChanging"
-                            @update:model-value="onACPModeSelected"
+                          {{ $t('common.loading') }}
+                        </InlineLoadingRow>
+                        <template v-else>
+                          <div
+                            v-if="activeUsesACPComposer && !activeIsPendingACP && acpModes.length"
+                            class="border-b border-border p-3"
                           >
-                            <SelectTrigger class="w-full">
-                              <SelectValue :placeholder="$t('chat.sessionModePlaceholder')" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem
-                                v-for="mode in acpModes"
-                                :key="mode.id"
-                                :value="mode.id"
-                              >
-                                <div class="min-w-0">
-                                  <div class="truncate">
-                                    {{ mode.name?.trim() || mode.id }}
+                            <div class="mb-2 text-label text-foreground">
+                              {{ $t('chat.sessionMode') }}
+                            </div>
+                            <Select
+                              :model-value="currentACPModeId"
+                              :disabled="activeChatReadOnly || streaming || acpConfigChanging"
+                              @update:model-value="onACPModeSelected"
+                            >
+                              <SelectTrigger class="w-full">
+                                <SelectValue :placeholder="$t('chat.sessionModePlaceholder')" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem
+                                  v-for="mode in acpModes"
+                                  :key="mode.id"
+                                  :value="mode.id"
+                                >
+                                  <div class="min-w-0">
+                                    <div class="truncate">
+                                      {{ mode.name?.trim() || mode.id }}
+                                    </div>
+                                    <div
+                                      v-if="mode.description?.trim()"
+                                      class="text-caption text-muted-foreground"
+                                    >
+                                      {{ mode.description }}
+                                    </div>
                                   </div>
-                                  <div
-                                    v-if="mode.description?.trim()"
-                                    class="text-caption text-muted-foreground"
-                                  >
-                                    {{ mode.description }}
-                                  </div>
-                                </div>
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p class="mt-2 rounded-md border border-warning-border bg-warning-soft p-2 text-caption text-warning-foreground">
-                            {{ $t('chat.sessionModeCaution') }}
-                          </p>
-                        </div>
-                        <ModelOptions
-                          :model-value="overrideModelId"
-                          :reasoning-effort="overrideReasoningEffort"
-                          :reasoning-options="composerReasoningOptions"
-                          :models="composerModels"
-                          :providers="composerModelProviders"
-                          model-type="chat"
-                          :open="modelPopoverOpen"
-                          show-reasoning
-                          @update:model-value="onComposerModelValueSelected"
-                          @update:reasoning-effort="onComposerReasoningEffortSelected"
-                        />
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <p class="mt-2 rounded-md border border-warning-border bg-warning-soft p-2 text-caption text-warning-foreground">
+                              {{ $t('chat.sessionModeCaution') }}
+                            </p>
+                          </div>
+                          <ModelOptions
+                            :model-value="overrideModelId"
+                            :reasoning-effort="overrideReasoningEffort"
+                            :reasoning-options="composerReasoningOptions"
+                            :models="composerModels"
+                            :providers="composerModelProviders"
+                            model-type="chat"
+                            :open="modelPopoverOpen"
+                            show-reasoning
+                            @update:model-value="onComposerModelValueSelected"
+                            @update:reasoning-effort="onComposerReasoningEffortSelected"
+                          />
+                        </template>
                       </div>
                     </PopoverContent>
                   </Popover>
@@ -735,7 +760,7 @@
                     >
                       <Spinner
                         v-if="voiceInputState === 'transcribing'"
-                        class="size-4"
+                        class="size-4 max-md:size-5"
                       />
                       <svg
                         v-else
@@ -744,7 +769,7 @@
                         stroke="currentColor"
                         stroke-width="2.5"
                         stroke-linecap="round"
-                        class="size-4.5"
+                        class="size-4.5 max-md:size-5"
                         :class="voiceInputState === 'recording' ? 'motion-safe:animate-pulse' : undefined"
                         aria-hidden="true"
                       >
@@ -775,7 +800,7 @@
                       @click="streaming ? chatStore.abort(paneTarget) : handleSend()"
                     >
                       <span
-                        class="grid size-[18px] shrink-0 place-items-center"
+                        class="grid size-[18px] max-md:size-5 shrink-0 place-items-center"
                         aria-hidden="true"
                       >
                         <svg
@@ -785,7 +810,7 @@
                           stroke-width="2.75"
                           stroke-linecap="round"
                           stroke-linejoin="round"
-                          class="col-start-1 row-start-1 size-[18px] transition-opacity duration-200 ease-out motion-reduce:transition-none"
+                          class="col-start-1 row-start-1 size-[18px] max-md:size-5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
                           :class="streaming ? 'opacity-0' : 'opacity-100'"
                         >
                           <path d="M12 19.5 V5" />
@@ -794,7 +819,7 @@
                         <svg
                           viewBox="0 0 24 24"
                           fill="currentColor"
-                          class="col-start-1 row-start-1 size-4 transition-opacity duration-200 ease-out motion-reduce:transition-none"
+                          class="col-start-1 row-start-1 size-4 max-md:size-4.5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
                           :class="streaming ? 'opacity-100' : 'opacity-0'"
                         >
                           <rect
@@ -873,6 +898,7 @@ import { commandResultPresentation, isCommandResultItemVisible, resolveCommandRe
 import { captureChatPaneSendContext, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
+import { useIsMobile } from '@/composables/useIsMobile'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
 import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, acpAgentIcon, findMissingRequiredManagedField, isACPAgentEnabled, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
 import { resolveApiErrorMessage } from '@/utils/api-error'
@@ -985,6 +1011,17 @@ const isWelcome = computed(() =>
   && !loadingChats.value
   && messages.value.length === 0,
 )
+
+// During boot, "a draft that stays a draft" and "a draft about to be
+// repointed to the most recent session" are indistinguishable until
+// fetchSessions returns (bootstrap auto-picks at the END of the load).
+// isWelcome waits out that window via !loadingChats — but rendering the
+// docked posture meanwhile made a hard refresh of the welcome page flash
+// bottom → center. While placement is undecidable, hide the composer
+// instead: `invisible` keeps layout and the dock measurements alive,
+// where v-if would unmount them. A session panel carries its sessionId
+// from the first frame, so this gate never engages on session routes.
+const composerPlacementPending = computed(() => loadingChats.value && !hasRenderedSession.value)
 
 // Rotate the greeting per fresh chat so the entry point feels alive rather than
 // a fixed banner; the pick stays stable while a single welcome screen is shown
@@ -2383,6 +2420,19 @@ watch(inputText, (text) => {
   if (!prefix || text === prefix || text.startsWith(`${prefix} `)) return
   slashPanelSuppressedPrefix.value = ''
 })
+// Mirror of ComposerContinueOn's pill rule: only an explicit non-default
+// selection expands the trigger (unset — including the pre-load window —
+// renders the collapsed default circle; a missing/ghost selection resolves to
+// null here exactly like the child's selectedTarget). The reservation must
+// track which width the control is actually rendering, and on mobile the
+// trigger never expands (see the child's header comment).
+const isMobileShell = useIsMobile()
+const continueOnExpanded = computed(() => (
+  !!selectedWorkspaceTargetId.value
+  && selectedWorkspaceTarget.value?.kind !== 'native'
+  && !isMobileShell.value
+))
+
 const {
   textareaEl,
   composerEl,
@@ -2390,6 +2440,7 @@ const {
   modelTriggerMaxWidth,
 } = useComposerLayout({
   continueOnVisible: showComputersMenu,
+  continueOnExpanded,
 })
 
 const showSend = computed(() => Boolean(inputText.value.trim()) || pendingFiles.value.length > 0 || requestedSkills.value.length > 0)
