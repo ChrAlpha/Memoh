@@ -166,7 +166,6 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	runConfig.Query = ""
 	runConfig.ContextCurrentUserMessageIndex = nil
 	runConfig.ContextMemoryMessageIndex = nil
-	runConfig.ContextSourceFrags = nil
 	if runConfig.ContextLifecycle == nil {
 		runConfig.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}
