@@ -266,7 +266,7 @@ import {
 import {
   SquarePen, LoaderCircle, Check, Search, X, LayoutDashboard, Settings, MessageSquare,
   BrainCircuit, ShieldAlert, HeartPulse, Database, Mail, Link, Clock, Server, FileBox, Zap,
-  Monitor, Globe, Bot as BotIcon, PackageOpen, ChevronLeft, Workflow, Laptop, Plug
+  Monitor, Globe, Bot as BotIcon, ChevronLeft, Workflow, Laptop, Plug
 } from 'lucide-vue-next'
 import { computed, ref, watch, onMounted, toValue, nextTick, inject } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
@@ -295,7 +295,6 @@ import BotChannels from './components/bot-channels.vue'
 import BotMcp from './components/bot-mcp.vue'
 import BotConnectors from './components/bot-connectors.vue'
 import BotMemory from './components/bot-memory.vue'
-import BotPlugins from './components/bot-plugins.vue'
 import BotSkills from './components/bot-skills.vue'
 import BotHeartbeat from './components/bot-heartbeat.vue'
 import BotCompaction from './components/bot-compaction.vue'
@@ -410,7 +409,6 @@ const tabList = computed(() => {
     { value: 'hooks', label: 'bots.tabs.hooks', icon: Workflow, component: BotHooks, params: { 'bot-id': bot_id }, containerWorkspaceOnly: true },
     { value: 'acp', label: 'bots.tabs.acp', icon: BotIcon, component: BotAcp, params: { 'bot-id': bot_id } },
     { value: 'email', label: 'bots.tabs.email', icon: Mail, component: BotEmail, params: { 'bot-id': bot_id } },
-    { value: 'plugins', label: 'bots.tabs.plugins', icon: PackageOpen, component: BotPlugins, params: { 'bot-id': bot_id } },
     ...(capabilitiesStore.loaded && capabilitiesStore.connectors
       ? [{ value: 'connectors', label: 'bots.tabs.connectors', icon: Plug, component: BotConnectors, params: { 'bot-id': bot_id } }]
       : []),
@@ -450,7 +448,6 @@ const searchIndex = computed(() => {
     { tab: 'hooks', key: 'bots.hooks.title', keywords: ['hooks', 'events', 'tool calls', 'approval', 'workspace'] },
     { tab: 'acp', key: 'bots.tabs.acp', keywords: ['codex', 'claude code', 'coding agent', 'acp'] },
     { tab: 'email', key: 'bots.email.title', keywords: ['smtp', 'imap', 'mailbox', 'bindings'] },
-    { tab: 'plugins', key: 'bots.plugins.title', keywords: ['plugin', 'marketplace', 'mcp', 'oauth', 'skills'] },
     ...(capabilitiesStore.loaded && capabilitiesStore.connectors
       ? [{ tab: 'connectors', key: 'bots.tabs.connectors', keywords: ['providers', 'apps', 'oauth', 'api', '连接器', 'コネクター'] }]
       : []),
@@ -528,7 +525,7 @@ function closeMobileDetail(): void {
 
 const groupedTabs = computed(() => {
   const coreKeys = ['overview', 'general', 'channels']
-  const capabilityKeys = ['plugins', 'skills', 'hooks', 'tool-approval', 'acp', 'connectors', 'mcp', 'memory']
+  const capabilityKeys = ['skills', 'hooks', 'tool-approval', 'acp', 'connectors', 'mcp', 'memory']
   const runtimeKeys = ['desktop', 'remote-runtime', 'container', 'network', 'schedule', 'compaction', 'heartbeat']
   const securityKeys = ['access', 'email']
 

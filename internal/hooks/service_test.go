@@ -17,8 +17,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
-	skillset "github.com/memohai/memoh/internal/skills"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
 )
@@ -252,96 +250,6 @@ func TestRunConfigLimitsAggregatedAppendContext(t *testing.T) {
 	}
 	if len(result.AppendContext) >= len(large) {
 		t.Fatalf("append_context was not limited after aggregation")
-	}
-	assertHookTextPreservesHeadTail(t, result.AppendContext)
-}
-
-func TestRunConfigLimitsPluginAppendContextWithSourceCap(t *testing.T) {
-	t.Parallel()
-
-	large := "HEAD\n" + strings.Repeat("plugin context detail ", 300) + "\nTAIL"
-	cfg := Config{
-		Version: 1,
-		Defaults: Defaults{
-			MaxOutputBytes: 4096,
-		},
-		Hooks: []Hook{{
-			Name:  "plugin append-context",
-			Event: EventBeforeModelCall,
-			source: hookSource{
-				Kind:           sourceKindPlugin,
-				PluginID:       "github",
-				MaxOutputBytes: 192,
-			},
-			Actions: []HookAction{
-				{Type: ActionTool, Tool: "append_one"},
-				{Type: ActionTool, Tool: "append_two"},
-			},
-		}},
-	}
-	runner := &fakeToolRunner{
-		fn: func(context.Context, string, map[string]any) (any, error) {
-			return map[string]any{
-				"decision":       DecisionAppendContext,
-				"append_context": large,
-			}, nil
-		},
-	}
-
-	result, err := NewService(nil, nil).RunConfig(context.Background(), cfg, Request{Event: EventBeforeModelCall}, runner)
-	if err != nil {
-		t.Fatalf("RunConfig returned error: %v", err)
-	}
-	if len(result.AppendContext) > 192 {
-		t.Fatalf("append_context bytes = %d, want <= plugin cap 192", len(result.AppendContext))
-	}
-	if len(result.AppendContext) >= len(large) {
-		t.Fatalf("append_context was not limited by plugin cap")
-	}
-	assertHookTextPreservesHeadTail(t, result.AppendContext)
-}
-
-func TestRunConfigLimitsPluginAppendContextWithGlobalCap(t *testing.T) {
-	t.Parallel()
-
-	large := "HEAD\n" + strings.Repeat("plugin context detail ", 300) + "\nTAIL"
-	cfg := Config{
-		Version: 1,
-		Defaults: Defaults{
-			MaxOutputBytes: 192,
-		},
-		Hooks: []Hook{{
-			Name:  "plugin append-context",
-			Event: EventBeforeModelCall,
-			source: hookSource{
-				Kind:           sourceKindPlugin,
-				PluginID:       "github",
-				MaxOutputBytes: 4096,
-			},
-			Actions: []HookAction{{
-				Type: ActionTool,
-				Tool: "append",
-			}},
-		}},
-	}
-	runner := &fakeToolRunner{
-		fn: func(context.Context, string, map[string]any) (any, error) {
-			return map[string]any{
-				"decision":       DecisionAppendContext,
-				"append_context": large,
-			}, nil
-		},
-	}
-
-	result, err := NewService(nil, nil).RunConfig(context.Background(), cfg, Request{Event: EventBeforeModelCall}, runner)
-	if err != nil {
-		t.Fatalf("RunConfig returned error: %v", err)
-	}
-	if len(result.AppendContext) > 192 {
-		t.Fatalf("append_context bytes = %d, want <= global cap 192", len(result.AppendContext))
-	}
-	if len(result.AppendContext) >= len(large) {
-		t.Fatalf("append_context was not limited by global cap")
 	}
 	assertHookTextPreservesHeadTail(t, result.AppendContext)
 }
@@ -725,159 +633,49 @@ func TestRunCommandHookDoesNotUseTargetWorkspaceAsExecutionDirectory(t *testing.
 	}
 }
 
-func TestRunLoadsReadyPluginHooksWithPluginRuntimeDefaults(t *testing.T) {
-	t.Parallel()
-
-	pluginRoot, err := skillset.PluginDirForID("github")
-	if err != nil {
-		t.Fatalf("plugin root: %v", err)
-	}
-	pluginHooksPath, err := skillset.PluginHooksPathForID("github")
-	if err != nil {
-		t.Fatalf("plugin hooks path: %v", err)
-	}
-	disabledHooksPath, err := skillset.PluginHooksPathForID("disabled")
-	if err != nil {
-		t.Fatalf("disabled hooks path: %v", err)
-	}
-	needsAuthHooksPath, err := skillset.PluginHooksPathForID("needsauth")
-	if err != nil {
-		t.Fatalf("needs auth hooks path: %v", err)
-	}
-	forgedHooksPath, err := skillset.PluginHooksPathForID("forged")
-	if err != nil {
-		t.Fatalf("forged hooks path: %v", err)
-	}
-
-	largePluginContext := "HEAD\n" + strings.Repeat("plugin context detail ", 300) + "\nTAIL"
-	pluginPayload, err := json.Marshal(map[string]string{
-		"decision":       DecisionAppendContext,
-		"append_context": largePluginContext,
-	})
-	if err != nil {
-		t.Fatalf("marshal plugin hook output: %v", err)
-	}
-
-	userCfg := `{
+func TestRunPinsWorkspaceTargetAcrossLoadAndExecution(t *testing.T) {
+	cfg := `{
 		"version": 1,
-		"defaults": {"max_output_bytes": 4096},
-		"env": {"USER_ENV": "enabled"},
+		"enabled": true,
 		"hooks": [{
-			"name": "user logger",
+			"name": "pinned",
 			"event": "PostToolUse",
-			"matcher": "^exec$",
-			"priority": 10,
-			"actions": [{"type": "tool", "tool": "user_hook"}]
+			"actions": [{"type": "command", "command": "true"}]
 		}]
 	}`
-	pluginCfg := `{
-		"version": 1,
-		"defaults": {"max_output_bytes": 192},
-		"env": {"PLUGIN_ENV": "enabled"},
-		"hooks": [{
-			"name": "plugin logger",
-			"event": "PostToolUse",
-			"matcher": "^exec$",
-			"priority": 10,
-			"actions": [{"type": "command", "command": "python scripts/hook.py"}]
-		}]
-	}`
-	ignoredPluginCfg := `{
-		"version": 1,
-		"hooks": [{
-			"name": "ignored",
-			"event": "PostToolUse",
-			"priority": 100,
-			"actions": [{"type": "command", "command": "python ignored.py"}]
-		}]
-	}`
-	server := &hookBridgeTestServer{
-		files: map[string][]byte{
-			DefaultConfigPath:  []byte(userCfg),
-			pluginHooksPath:    []byte(pluginCfg),
-			disabledHooksPath:  []byte(ignoredPluginCfg),
-			needsAuthHooksPath: []byte(ignoredPluginCfg),
-			forgedHooksPath:    []byte(ignoredPluginCfg),
-		},
-		stdout: string(pluginPayload),
+	nativeServer := &hookBridgeTestServer{
+		files:  map[string][]byte{DefaultConfigPath: []byte(cfg)},
+		stdout: `{"decision":"allow"}`,
 	}
-	client := newHookBridgeTestClient(t, server)
-	service := NewService(nil, hookBridgeProvider{client: client})
-	service.SetPluginService(fakePluginInstallationLister{items: []pluginspkg.Installation{
-		{PluginID: "github", Enabled: true, Status: pluginspkg.StatusReady},
-		{PluginID: "disabled", Enabled: false, Status: pluginspkg.StatusReady},
-		{PluginID: "needsauth", Enabled: true, Status: pluginspkg.StatusNeedsAuth},
-	}})
-	runner := &fakeToolRunner{}
+	remoteServer := &hookBridgeTestServer{files: map[string][]byte{}}
+	provider := &switchingHookBridgeProvider{clients: map[string]*bridge.Client{
+		"native":        newHookBridgeTestClient(t, nativeServer),
+		"remote-target": newHookBridgeTestClient(t, remoteServer),
+	}}
+	service := NewService(nil, provider)
 
-	result, err := service.Run(context.Background(), Request{
+	if _, err := service.Run(context.Background(), Request{
 		Event: EventPostToolUse,
 		BotID: "bot-1",
 		Tool:  &ToolPayload{Name: "exec", Result: "ok"},
-		Workspace: WorkspaceInfo{
-			CWD:     "/data/workspace",
-			Runtime: "container",
-		},
-	}, runner)
-	if err != nil {
+	}, nil); err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
-	if result.HooksMatched != 2 || result.ActionsRun != 2 {
-		t.Fatalf("hooks matched/actions run = %d/%d, want 2/2", result.HooksMatched, result.ActionsRun)
+	if provider.resolveCalls != 1 {
+		t.Fatalf("target resolver calls = %d, want 1", provider.resolveCalls)
 	}
-	if got := []string{result.ActionResults[0].Name, result.ActionResults[1].Name}; !slices.Equal(got, []string{"user_hook", "python scripts/hook.py"}) {
-		t.Fatalf("action order = %v, want user hook before plugin hook", got)
+	if got := strings.Join(provider.clientTargets, ","); got != "native,native" {
+		t.Fatalf("MCP client targets = %q, want native,native", got)
 	}
-	if len(runner.calls) != 1 || runner.calls[0].name != "user_hook" {
-		t.Fatalf("tool runner calls = %+v, want user_hook only", runner.calls)
+	nativeServer.mu.Lock()
+	nativeExecs := len(nativeServer.execs)
+	nativeServer.mu.Unlock()
+	remoteServer.mu.Lock()
+	remoteExecs := len(remoteServer.execs)
+	remoteServer.mu.Unlock()
+	if nativeExecs != 1 || remoteExecs != 0 {
+		t.Fatalf("execs native=%d remote=%d, want 1/0", nativeExecs, remoteExecs)
 	}
-	server.mu.Lock()
-	execs := append([]capturedExec(nil), server.execs...)
-	server.mu.Unlock()
-	if len(execs) != 1 {
-		t.Fatalf("exec count = %d, want 1", len(execs))
-	}
-	exec := execs[0]
-	if exec.command != "python scripts/hook.py" {
-		t.Fatalf("command = %q, want plugin script command", exec.command)
-	}
-	if exec.workDir != pluginRoot {
-		t.Fatalf("work_dir = %q, want plugin root %q", exec.workDir, pluginRoot)
-	}
-	for _, want := range []string{
-		"PLUGIN_ENV=enabled",
-		"MEMOH_PLUGIN_ID=github",
-		"MEMOH_PLUGIN_DIR=" + pluginRoot,
-		"MEMOH_HOOK_NAME=plugin:github:plugin logger",
-	} {
-		if !slices.Contains(exec.env, want) {
-			t.Fatalf("env = %v, missing %q", exec.env, want)
-		}
-	}
-	if slices.Contains(exec.env, "USER_ENV=enabled") {
-		t.Fatalf("plugin command env leaked user env: %v", exec.env)
-	}
-	var req Request
-	if err := json.Unmarshal(exec.stdin, &req); err != nil {
-		t.Fatalf("stdin is not hook request JSON: %v", err)
-	}
-	if req.HookName != "plugin:github:plugin logger" {
-		t.Fatalf("stdin hook name = %q, want plugin-prefixed hook name", req.HookName)
-	}
-	sources, ok := result.Metadata["hook_sources"].([]map[string]any)
-	if !ok {
-		t.Fatalf("hook_sources metadata = %#v, want []map[string]any", result.Metadata["hook_sources"])
-	}
-	if len(sources) != 2 || sources[0]["source_kind"] != sourceKindUser || sources[1]["source_kind"] != sourceKindPlugin || sources[1]["plugin_id"] != "github" {
-		t.Fatalf("hook_sources = %#v, want user then github plugin", sources)
-	}
-	if len(result.AppendContext) > 192 {
-		t.Fatalf("plugin append_context bytes = %d, want <= plugin cap 192", len(result.AppendContext))
-	}
-	if len(result.AppendContext) >= len(largePluginContext) {
-		t.Fatalf("plugin append_context was not limited by loaded plugin cap")
-	}
-	assertHookTextPreservesHeadTail(t, result.AppendContext)
 }
 
 func TestLoadCreatesEmptyConfigWhenMissing(t *testing.T) {
@@ -933,17 +731,32 @@ type hookBridgeProvider struct {
 	client *bridge.Client
 }
 
+type switchingHookBridgeProvider struct {
+	clients       map[string]*bridge.Client
+	resolveCalls  int
+	clientTargets []string
+}
+
+func (p *switchingHookBridgeProvider) CurrentWorkspaceTargetID(context.Context, string) (string, error) {
+	p.resolveCalls++
+	if p.resolveCalls == 1 {
+		return "native", nil
+	}
+	return "remote-target", nil
+}
+
+func (p *switchingHookBridgeProvider) MCPClient(ctx context.Context, _ string) (*bridge.Client, error) {
+	targetID := bridge.WorkspaceTargetFromContext(ctx)
+	p.clientTargets = append(p.clientTargets, targetID)
+	client := p.clients[targetID]
+	if client == nil {
+		return nil, errors.New("unexpected workspace target: " + targetID)
+	}
+	return client, nil
+}
+
 func (p hookBridgeProvider) MCPClient(context.Context, string) (*bridge.Client, error) {
 	return p.client, nil
-}
-
-type fakePluginInstallationLister struct {
-	items []pluginspkg.Installation
-	err   error
-}
-
-func (l fakePluginInstallationLister) List(context.Context, string) ([]pluginspkg.Installation, error) {
-	return l.items, l.err
 }
 
 type capturedExec struct {

@@ -125,11 +125,7 @@ type Hook struct {
 }
 
 type hookSource struct {
-	Kind           string
-	PluginID       string
-	PluginDir      string
-	Env            map[string]string
-	MaxOutputBytes int
+	Kind string
 }
 
 type Condition struct {

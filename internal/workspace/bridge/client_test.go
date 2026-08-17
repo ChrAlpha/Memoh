@@ -178,6 +178,21 @@ func newTestReadRawClient(t *testing.T, files map[string][]byte) *Client {
 	return newTestClient(t, &rawReadTestServer{files: files})
 }
 
+func TestClientRenameMissingSourceReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	client := newTestClient(t, bridgesvc.New(bridgesvc.Options{
+		DefaultWorkDir: root,
+		WorkspaceRoot:  root,
+		DataMount:      "/data",
+	}))
+	err := client.Rename(context.Background(), "/data/skills/openai/docs", "/data/skills/.staging/openai/docs/backup")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Rename() error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestClientReadRawMissingFileReturnsNotFoundImmediately(t *testing.T) {
 	t.Parallel()
 

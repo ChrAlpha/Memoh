@@ -64,7 +64,7 @@ func TestBuildInteractionMetadataIncludesRequestedSkills(t *testing.T) {
 			},
 			{
 				Name:       "reviewer",
-				SourceKind: "plugin",
+				SourceKind: "registry",
 			},
 		},
 	})
@@ -91,7 +91,7 @@ func TestBuildInteractionMetadataIncludesRequestedSkills(t *testing.T) {
 	if _, ok := raw[0]["ref"]; ok {
 		t.Fatalf("requested skill metadata leaked ref: %#v", raw[0])
 	}
-	if raw[1]["name"] != "reviewer" || raw[1]["source_kind"] != "plugin" {
+	if raw[1]["name"] != "reviewer" || raw[1]["source_kind"] != "registry" {
 		t.Fatalf("unexpected second skill metadata: %#v", raw[1])
 	}
 }

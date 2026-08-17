@@ -56,7 +56,7 @@
               :key="`load-more-${index}`"
               class="pb-[2px]"
             >
-              <div class="flex min-h-[2.125rem] items-center rounded-[9px] px-[11px]">
+              <div class="flex min-h-[2.125rem] items-center rounded-[9px] px-3">
                 <Skeleton
                   :class="[sessionSkeletonBarClass, widthClass]"
                 />
@@ -77,7 +77,7 @@
               :key="`initial-${index}`"
               class="pb-[2px]"
             >
-              <div class="flex min-h-[2.125rem] items-center rounded-[9px] px-[11px]">
+              <div class="flex min-h-[2.125rem] items-center rounded-[9px] px-3">
                 <Skeleton
                   :class="[sessionSkeletonBarClass, widthClass]"
                 />

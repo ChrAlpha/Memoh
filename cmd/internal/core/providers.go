@@ -78,7 +78,6 @@ import (
 	"github.com/memohai/memoh/internal/models"
 	netctl "github.com/memohai/memoh/internal/network"
 	netoverlay "github.com/memohai/memoh/internal/network/overlay"
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
 	"github.com/memohai/memoh/internal/policy"
 	"github.com/memohai/memoh/internal/providers"
 	"github.com/memohai/memoh/internal/providertemplates"
@@ -329,14 +328,8 @@ func (p nativeWorkspaceBridgeProvider) MCPClient(ctx context.Context, botID stri
 	return p.manager.NativeMCPClient(ctx, botID)
 }
 
-func providePluginBridgeProvider(provider bridge.Provider) pluginspkg.BridgeProvider {
-	return pluginspkg.BridgeProvider{Provider: provider}
-}
-
-func provideHooksService(log *slog.Logger, provider bridge.Provider, pluginService *pluginspkg.Service) *hookspkg.Service {
-	service := hookspkg.NewService(log, provider)
-	service.SetPluginService(pluginService)
-	return service
+func provideHooksService(log *slog.Logger, provider bridge.Provider) *hookspkg.Service {
+	return hookspkg.NewService(log, provider)
 }
 
 func provideWorkspaceManager(log *slog.Logger, service ctr.Service, networkController netctl.Controller, cfg config.Config, conn *pgxpool.Pool, queries dbstore.Queries, remote *workspace.RemoteWorkspaceService) (*workspace.Manager, error) {
@@ -610,10 +603,9 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	return service
 }
 
-func provideContainerdHandler(log *slog.Logger, manager *workspace.Manager, cfg config.Config, rc *boot.RuntimeConfig, botService *bots.Service, accountService *accounts.Service, policyService *policy.Service, pluginService *pluginspkg.Service) *handlers.ContainerdHandler {
+func provideContainerdHandler(log *slog.Logger, manager *workspace.Manager, cfg config.Config, rc *boot.RuntimeConfig, botService *bots.Service, accountService *accounts.Service, policyService *policy.Service) *handlers.ContainerdHandler {
 	manager.SetSetupDiagnostics(botService)
 	h := handlers.NewContainerdHandler(log, manager, cfg.Workspace, rc.ContainerBackend, botService, accountService, policyService)
-	h.SetPluginService(pluginService)
 	return h
 }
 

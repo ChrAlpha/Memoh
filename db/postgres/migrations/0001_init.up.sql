@@ -414,25 +414,6 @@ CREATE TABLE IF NOT EXISTS channel_link_codes (
 
 CREATE INDEX IF NOT EXISTS idx_channel_link_codes_user_id ON channel_link_codes(user_id);
 
-CREATE TABLE IF NOT EXISTS bot_plugin_installations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-  plugin_id TEXT NOT NULL,
-  plugin_name TEXT NOT NULL DEFAULT '',
-  version TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'ready',
-  enabled BOOLEAN NOT NULL DEFAULT true,
-  config JSONB NOT NULL DEFAULT '{}'::jsonb,
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
-  installed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT bot_plugin_installations_unique UNIQUE (bot_id, plugin_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_bot_plugin_installations_bot_id ON bot_plugin_installations(bot_id);
-CREATE INDEX IF NOT EXISTS idx_bot_plugin_installations_plugin_id ON bot_plugin_installations(plugin_id);
-
 CREATE TABLE IF NOT EXISTS mcp_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
@@ -445,10 +426,6 @@ CREATE TABLE IF NOT EXISTS mcp_connections (
   last_probed_at TIMESTAMPTZ,
   status_message TEXT NOT NULL DEFAULT '',
   auth_type TEXT NOT NULL DEFAULT 'none',
-  managed_by_plugin_installation_id UUID REFERENCES bot_plugin_installations(id) ON DELETE SET NULL,
-  managed_resource_key TEXT NOT NULL DEFAULT '',
-  visible BOOLEAN NOT NULL DEFAULT true,
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT mcp_connections_type_check CHECK (type IN ('stdio', 'http', 'sse')),
@@ -456,23 +433,6 @@ CREATE TABLE IF NOT EXISTS mcp_connections (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mcp_connections_bot_id ON mcp_connections(bot_id);
-CREATE INDEX IF NOT EXISTS idx_mcp_connections_plugin_installation_id ON mcp_connections(managed_by_plugin_installation_id);
-
-CREATE TABLE IF NOT EXISTS bot_plugin_resources (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  installation_id UUID NOT NULL REFERENCES bot_plugin_installations(id) ON DELETE CASCADE,
-  resource_type TEXT NOT NULL,
-  resource_key TEXT NOT NULL,
-  resource_id TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'active',
-  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT bot_plugin_resources_unique UNIQUE (installation_id, resource_type, resource_key)
-);
-
-CREATE INDEX IF NOT EXISTS idx_bot_plugin_resources_installation_id ON bot_plugin_resources(installation_id);
-CREATE INDEX IF NOT EXISTS idx_bot_plugin_resources_resource ON bot_plugin_resources(resource_type, resource_id);
 
 CREATE TABLE IF NOT EXISTS mcp_oauth_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1373,8 +1333,6 @@ ALTER TABLE IF EXISTS public.bot_heartbeat_logs ADD COLUMN IF NOT EXISTS team_id
 ALTER TABLE IF EXISTS public.bot_history_message_assets ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_history_message_compacts ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_history_messages ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.bot_plugin_installations ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.bot_plugin_resources ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_session_discuss_cursors ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_session_events ADD COLUMN IF NOT EXISTS team_id uuid;
@@ -1440,8 +1398,6 @@ ALTER TABLE IF EXISTS public.bot_heartbeat_logs ALTER COLUMN team_id SET DEFAULT
 ALTER TABLE IF EXISTS public.bot_history_message_assets ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_history_message_compacts ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_history_messages ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.bot_plugin_installations ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.bot_plugin_resources ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_session_discuss_cursors ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_session_events ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
@@ -2475,6 +2431,51 @@ CREATE POLICY context_lifecycles_team_update ON public.context_lifecycles
     USING (team_id = public.memoh_current_team_id())
     WITH CHECK (team_id = public.memoh_current_team_id());
 CREATE POLICY context_lifecycles_team_delete ON public.context_lifecycles
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Skill Package installations
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.bot_skill_package_installations (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id             UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
+    bot_id              UUID        NOT NULL,
+    workspace_target_id TEXT        NOT NULL,
+    registry_id         TEXT        NOT NULL,
+    package_id          TEXT        NOT NULL,
+    revision            TEXT        NOT NULL,
+    installed_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT memoh_team_key_350bc98cf67e UNIQUE (team_id, id),
+    CONSTRAINT bot_skill_package_installations_identity_key
+        UNIQUE (team_id, bot_id, workspace_target_id, registry_id, package_id),
+    CONSTRAINT bot_skill_package_installations_bot_id_fkey
+        FOREIGN KEY (team_id, bot_id)
+        REFERENCES public.bots(team_id, id) ON DELETE CASCADE,
+    CONSTRAINT bot_skill_package_installations_revision_check
+        CHECK (revision ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT bot_skill_package_installations_registry_id_check
+        CHECK (registry_id <> ''),
+    CONSTRAINT bot_skill_package_installations_package_id_check
+        CHECK (package_id <> '')
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_skill_package_installations_bot
+    ON public.bot_skill_package_installations (team_id, bot_id, workspace_target_id);
+
+ALTER TABLE public.bot_skill_package_installations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bot_skill_package_installations FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY bot_skill_package_installations_team_select ON public.bot_skill_package_installations
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_skill_package_installations_team_insert ON public.bot_skill_package_installations
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_skill_package_installations_team_update ON public.bot_skill_package_installations
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_skill_package_installations_team_delete ON public.bot_skill_package_installations
     FOR DELETE USING (team_id = public.memoh_current_team_id());
 
 -- ---------------------------------------------------------------------------

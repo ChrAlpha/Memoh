@@ -11,9 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pluginspkg "github.com/memohai/memoh/internal/plugins"
 	"github.com/memohai/memoh/internal/prune"
-	skillset "github.com/memohai/memoh/internal/skills"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
 
@@ -21,21 +19,19 @@ type ToolRunner interface {
 	RunHookTool(ctx context.Context, toolName string, input map[string]any) (any, error)
 }
 
-type PluginInstallationLister interface {
-	List(ctx context.Context, botID string) ([]pluginspkg.Installation, error)
+type workspaceTargetIDResolver interface {
+	CurrentWorkspaceTargetID(ctx context.Context, botID string) (string, error)
 }
 
 type Service struct {
-	logger        *slog.Logger
-	provider      bridge.Provider
-	pluginService PluginInstallationLister
+	logger   *slog.Logger
+	provider bridge.Provider
 }
 
 var emptyConfigFile = []byte("{\n  \"version\": 1,\n  \"enabled\": true,\n  \"hooks\": []\n}\n")
 
 const (
-	sourceKindUser   = "user"
-	sourceKindPlugin = "plugin"
+	sourceKindUser = "user"
 )
 
 func NewService(log *slog.Logger, provider bridge.Provider) *Service {
@@ -46,13 +42,6 @@ func NewService(log *slog.Logger, provider bridge.Provider) *Service {
 		logger:   log.With(slog.String("service", "hooks")),
 		provider: provider,
 	}
-}
-
-func (s *Service) SetPluginService(service PluginInstallationLister) {
-	if s == nil {
-		return
-	}
-	s.pluginService = service
 }
 
 func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) {
@@ -90,6 +79,11 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 }
 
 func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool, error) {
+	targetID, err := s.currentWorkspaceTargetID(ctx, botID)
+	if err != nil {
+		return Config{}, false, err
+	}
+	ctx = bridge.WithWorkspaceTarget(ctx, targetID)
 	userCfg, exists, err := s.Load(ctx, botID)
 	if err != nil {
 		return Config{}, exists, err
@@ -108,98 +102,20 @@ func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool
 			effective.Hooks = append(effective.Hooks, hook)
 		}
 	}
-	pluginHooks, err := s.loadPluginHooks(ctx, botID)
-	if err != nil {
-		return Config{}, exists, err
-	}
-	effective.Hooks = append(effective.Hooks, pluginHooks...)
 	return effective, exists, nil
 }
 
-func (s *Service) loadPluginHooks(ctx context.Context, botID string) ([]Hook, error) {
-	if s == nil || s.provider == nil || s.pluginService == nil {
-		return nil, nil
+func (s *Service) currentWorkspaceTargetID(ctx context.Context, botID string) (string, error) {
+	if targetID := bridge.WorkspaceTargetFromContext(ctx); targetID != "" {
+		return targetID, nil
 	}
-	botID = strings.TrimSpace(botID)
-	if botID == "" {
-		return nil, nil
+	if s == nil {
+		return "native", nil
 	}
-	installations, err := s.pluginService.List(ctx, botID)
-	if err != nil {
-		return nil, err
+	if resolver, ok := s.provider.(workspaceTargetIDResolver); ok {
+		return resolver.CurrentWorkspaceTargetID(ctx, botID)
 	}
-	client, err := s.provider.MCPClient(ctx, botID)
-	if err != nil {
-		return nil, err
-	}
-
-	hooks := make([]Hook, 0, len(installations))
-	seen := make(map[string]struct{}, len(installations))
-	for _, installation := range installations {
-		if !installation.Enabled || installation.Status != pluginspkg.StatusReady {
-			continue
-		}
-		pluginID := strings.TrimSpace(installation.PluginID)
-		if pluginID == "" {
-			continue
-		}
-		if _, ok := seen[pluginID]; ok {
-			continue
-		}
-		seen[pluginID] = struct{}{}
-
-		pluginDir, err := skillset.PluginDirForID(pluginID)
-		if err != nil {
-			continue
-		}
-		hooksPath, err := skillset.PluginHooksPathForID(pluginID)
-		if err != nil {
-			continue
-		}
-		rc, err := client.ReadRaw(ctx, hooksPath)
-		if err != nil {
-			if errors.Is(err, bridge.ErrNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		raw, readErr := io.ReadAll(rc)
-		closeErr := rc.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-
-		cfg, err := ParseConfig(raw)
-		if err != nil {
-			if s.logger != nil {
-				s.logger.Warn("skipping invalid plugin hooks config",
-					slog.String("plugin_id", pluginID),
-					slog.String("path", hooksPath),
-					slog.String("error", err.Error()),
-				)
-			}
-			continue
-		}
-		if !cfg.enabled() {
-			continue
-		}
-		env := cloneStringMap(cfg.Env)
-		for idx, hook := range cfg.Hooks {
-			hook.Name = pluginHookName(pluginID, hook.Name, idx)
-			hook.source = hookSource{
-				Kind:           sourceKindPlugin,
-				PluginID:       pluginID,
-				PluginDir:      pluginDir,
-				Env:            env,
-				MaxOutputBytes: cfg.Defaults.MaxOutputBytes,
-			}
-			hooks = append(hooks, hook)
-		}
-	}
-	return hooks, nil
+	return "native", nil
 }
 
 func (s *Service) Run(ctx context.Context, req Request, runner ToolRunner) (Result, error) {
@@ -207,6 +123,11 @@ func (s *Service) Run(ctx context.Context, req Request, runner ToolRunner) (Resu
 	if strings.TrimSpace(req.Event) == "" {
 		return Result{}, errors.New("hook event is required")
 	}
+	targetID, err := s.currentWorkspaceTargetID(ctx, req.BotID)
+	if err != nil {
+		return Result{}, err
+	}
+	ctx = bridge.WithWorkspaceTarget(ctx, targetID)
 	cfg, _, err := s.LoadEffective(ctx, req.BotID)
 	if err != nil {
 		return Result{}, err
@@ -267,12 +188,12 @@ func (s *Service) RunConfig(ctx context.Context, cfg Config, req Request, runner
 	return result, nil
 }
 
-func (s *Service) runAction(ctx context.Context, cfg Config, req Request, action HookAction, source hookSource, runner ToolRunner) (ActionResult, error) {
+func (s *Service) runAction(ctx context.Context, cfg Config, req Request, action HookAction, _ hookSource, runner ToolRunner) (ActionResult, error) {
 	switch strings.TrimSpace(action.Type) {
 	case ActionCommand:
-		return s.runCommand(ctx, cfg, req, action, source)
+		return s.runCommand(ctx, cfg, req, action)
 	case ActionTool:
-		return s.runTool(ctx, cfg, req, action, source, runner)
+		return s.runTool(ctx, cfg, req, action, runner)
 	case ActionMCPTool:
 		return ActionResult{ActionType: action.Type, Error: ErrUnsupported.Error()}, ErrUnsupported
 	default:
@@ -281,7 +202,7 @@ func (s *Service) runAction(ctx context.Context, cfg Config, req Request, action
 	}
 }
 
-func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, action HookAction, source hookSource) (ActionResult, error) {
+func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, action HookAction) (ActionResult, error) {
 	res := ActionResult{ActionType: ActionCommand, Name: action.Command}
 	if s == nil || s.provider == nil {
 		err := errors.New("hooks workspace provider is not configured")
@@ -304,9 +225,6 @@ func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, actio
 		return res, err
 	}
 	workDir := strings.TrimSpace(action.WorkDir)
-	if workDir == "" && source.Kind == sourceKindPlugin {
-		workDir = strings.TrimSpace(source.PluginDir)
-	}
 	if workDir == "" {
 		// Hook commands and their config belong to the provider's primary
 		// workspace. req.Workspace describes the operation being inspected and
@@ -314,21 +232,12 @@ func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, actio
 		workDir = DefaultWorkDir
 	}
 	envMap := cfg.Env
-	if source.Kind == sourceKindPlugin {
-		envMap = source.Env
-	}
 	env := make([]string, 0, len(envMap)+6)
 	for key, value := range envMap {
 		if strings.TrimSpace(key) == "" {
 			continue
 		}
 		env = append(env, key+"="+value)
-	}
-	if source.Kind == sourceKindPlugin {
-		env = append(env,
-			"MEMOH_PLUGIN_ID="+source.PluginID,
-			"MEMOH_PLUGIN_DIR="+source.PluginDir,
-		)
 	}
 	env = append(env,
 		"MEMOH_HOOK_EVENT="+req.Event,
@@ -346,7 +255,7 @@ func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, actio
 	execCtx, cancel := context.WithTimeout(ctx, timeout+time.Second)
 	defer cancel()
 	execResult, err := client.ExecWithStdinEnv(execCtx, action.Command, workDir, int32(timeoutUnits), append(payload, '\n'), env)
-	maxOutputBytes := hookMaxOutputBytes(cfg, source)
+	maxOutputBytes := hookMaxOutputBytes(cfg)
 	if execResult != nil {
 		res.Stdout = limitHookOutputText(execResult.Stdout, maxOutputBytes)
 		res.Stderr = limitHookOutputText(execResult.Stderr, maxOutputBytes)
@@ -369,7 +278,7 @@ func (s *Service) runCommand(ctx context.Context, cfg Config, req Request, actio
 	return res, nil
 }
 
-func (*Service) runTool(ctx context.Context, cfg Config, _ Request, action HookAction, source hookSource, runner ToolRunner) (ActionResult, error) {
+func (*Service) runTool(ctx context.Context, cfg Config, _ Request, action HookAction, runner ToolRunner) (ActionResult, error) {
 	res := ActionResult{ActionType: ActionTool, Name: action.Tool}
 	if runner == nil {
 		err := errors.New("hook tool runner is not configured")
@@ -393,7 +302,7 @@ func (*Service) runTool(ctx context.Context, cfg Config, _ Request, action HookA
 		res.Error = err.Error()
 		return res, err
 	}
-	applyToolOutput(&res, output, hookMaxOutputBytes(cfg, source))
+	applyToolOutput(&res, output, hookMaxOutputBytes(cfg))
 	return res, nil
 }
 
@@ -524,12 +433,8 @@ func normalizeDecision(raw string) string {
 	}
 }
 
-func hookMaxOutputBytes(cfg Config, source hookSource) int {
-	maxOutputBytes := cfg.Defaults.MaxOutputBytes
-	if source.Kind == sourceKindPlugin && source.MaxOutputBytes > 0 {
-		maxOutputBytes = source.MaxOutputBytes
-	}
-	return maxOutputBytes
+func hookMaxOutputBytes(cfg Config) int {
+	return cfg.Defaults.MaxOutputBytes
 }
 
 func minPositiveLimit(values ...int) int {
@@ -580,14 +485,6 @@ func trimOutput(raw string, limit int) string {
 	return raw[:limit]
 }
 
-func pluginHookName(pluginID, hookName string, idx int) string {
-	name := strings.TrimSpace(hookName)
-	if name == "" {
-		name = fmt.Sprintf("hook-%d", idx+1)
-	}
-	return "plugin:" + strings.TrimSpace(pluginID) + ":" + name
-}
-
 func hookSourceSummaries(hooks []Hook) []map[string]any {
 	out := make([]map[string]any, 0, len(hooks))
 	for _, hook := range hooks {
@@ -595,10 +492,6 @@ func hookSourceSummaries(hooks []Hook) []map[string]any {
 		item := map[string]any{
 			"hook_name":   hook.Name,
 			"source_kind": source.Kind,
-		}
-		if source.Kind == sourceKindPlugin {
-			item["plugin_id"] = source.PluginID
-			item["plugin_dir"] = source.PluginDir
 		}
 		out = append(out, item)
 	}
@@ -615,10 +508,6 @@ func annotateActionResult(result *ActionResult, hook Hook) {
 	source := normalizeHookSource(hook.source)
 	result.Metadata["hook_name"] = hook.Name
 	result.Metadata["hook_source_kind"] = source.Kind
-	if source.Kind == sourceKindPlugin {
-		result.Metadata["plugin_id"] = source.PluginID
-		result.Metadata["plugin_dir"] = source.PluginDir
-	}
 }
 
 func normalizeHookSource(source hookSource) hookSource {
