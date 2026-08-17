@@ -18,6 +18,9 @@ import (
 
 type recordingMessageService struct {
 	persisted               []messagepkg.PersistInput
+	persistErr              error
+	roundPersistErr         error
+	roundOptions            []messagepkg.RoundPersistenceOptions
 	replaced                int
 	replacementTurnID       string
 	replacementTurnPosition *int64
@@ -25,8 +28,33 @@ type recordingMessageService struct {
 }
 
 func (s *recordingMessageService) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
+	if s.persistErr != nil {
+		return messagepkg.Message{}, s.persistErr
+	}
 	s.persisted = append(s.persisted, input)
 	return messagepkg.Message{ID: "message-id", SessionID: input.SessionID, Role: input.Role, Content: input.Content, DisplayContent: input.DisplayText}, nil
+}
+
+func (s *recordingMessageService) PersistRound(_ context.Context, inputs []messagepkg.PersistInput, options messagepkg.RoundPersistenceOptions) ([]messagepkg.Message, bool, error) {
+	s.roundOptions = append(s.roundOptions, options)
+	if s.roundPersistErr != nil {
+		return nil, true, s.roundPersistErr
+	}
+	if s.persistErr != nil {
+		return nil, true, s.persistErr
+	}
+	persisted := make([]messagepkg.Message, 0, len(inputs))
+	for _, input := range inputs {
+		s.persisted = append(s.persisted, input)
+		persisted = append(persisted, messagepkg.Message{
+			ID:             "message-id",
+			SessionID:      input.SessionID,
+			Role:           input.Role,
+			Content:        input.Content,
+			DisplayContent: input.DisplayText,
+		})
+	}
+	return persisted, true, nil
 }
 
 func (*recordingMessageService) List(context.Context, string) ([]messagepkg.Message, error) {

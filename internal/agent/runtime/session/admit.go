@@ -191,6 +191,9 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 	if m.cluster && m.distributed == nil {
 		return Admission{}, ErrSessionRuntimeSplit
 	}
+	if err := m.waitForHistoryReset(ctx, ResetScope{BotID: in.BotID, SessionID: in.SessionID}); err != nil {
+		return Admission{}, err
+	}
 
 	fingerprint := fingerprintPayload(in.Payload)
 	run, created, err := m.runs.Admit(ctx, ledger.AdmitParams{
@@ -203,6 +206,8 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 		InputFingerprint: fingerprint,
 	})
 	switch {
+	case errors.Is(err, ledger.ErrHistoryResetInProgress):
+		return Admission{}, ErrHistoryResetInProgress
 	case errors.Is(err, ErrSessionBusy):
 		// Nothing was persisted, so this is the caller's cue to retry later
 		// rather than an outcome to record. Returning the sentinel unwrapped
@@ -237,6 +242,32 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 	return m.claimAndStart(ctx, in, admission)
 }
 
+func (m *Manager) waitForHistoryReset(ctx context.Context, scope ResetScope) error {
+	backend, ok := m.backend.(HistoryResetBackend)
+	if !ok {
+		return nil
+	}
+	for {
+		_, active, err := backend.EffectiveHistoryReset(ctx, scope)
+		if err != nil {
+			return fmt.Errorf("check live history reset fence: %w", err)
+		}
+		if resetStore, ok := m.runs.(ledger.ResetStore); ok {
+			_, durableActive, durableErr := resetStore.EffectiveReset(ctx, scope.BotID, scope.SessionID)
+			if durableErr != nil {
+				return fmt.Errorf("check PostgreSQL history reset fence: %w", durableErr)
+			}
+			active = active || durableActive
+		}
+		if !active {
+			return nil
+		}
+		if err := waitHistoryResetRetry(ctx, m.ownerLeaseTTL); err != nil {
+			return err
+		}
+	}
+}
+
 // claimAndStart turns an accepted row into a running, owned, executing run.
 //
 // The four steps are one sequence with one direction: draw a token, take durable
@@ -265,6 +296,9 @@ func (m *Manager) claimAndStart(ctx context.Context, in AdmitInput, admission Ad
 		FencingToken:   token,
 		LiveGeneration: generation,
 	})
+	if errors.Is(err, ledger.ErrHistoryResetInProgress) {
+		return Admission{}, ErrHistoryResetInProgress
+	}
 	if err != nil {
 		return Admission{}, fmt.Errorf("claim runtime run: %w", err)
 	}

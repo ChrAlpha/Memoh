@@ -43,6 +43,12 @@ func TestCodexUsesPinnedWorkspaceAdapter(t *testing.T) {
 	if profile.Command != "codex-acp" {
 		t.Fatalf("Codex pinned launcher = command %q", profile.Command)
 	}
+	if len(profile.RuntimeStorage.SessionRoots) != 1 || profile.RuntimeStorage.SessionRoots[0] != "state/sessions" {
+		t.Fatalf("Codex session roots = %#v, want state/sessions", profile.RuntimeStorage.SessionRoots)
+	}
+	if profile.RuntimeStorage.SessionLocator != RuntimeSessionLocatorCodexRollout {
+		t.Fatalf("Codex session locator = %q, want %q", profile.RuntimeStorage.SessionLocator, RuntimeSessionLocatorCodexRollout)
+	}
 }
 
 func TestListIncludesHermes(t *testing.T) {
@@ -67,6 +73,12 @@ func TestListIncludesHermes(t *testing.T) {
 	}
 	if ShouldForceHTTPMCPServer(AgentCodexID) {
 		t.Fatalf("Codex should rely on advertised HTTP MCP capability")
+	}
+	if len(profile.RuntimeStorage.SessionRoots) != 0 {
+		t.Fatalf("Hermes unexpectedly declares resumable session roots: %#v", profile.RuntimeStorage.SessionRoots)
+	}
+	if profile.RuntimeStorage.SessionLocator != RuntimeSessionLocatorNone {
+		t.Fatalf("Hermes unexpectedly declares session locator %q", profile.RuntimeStorage.SessionLocator)
 	}
 }
 

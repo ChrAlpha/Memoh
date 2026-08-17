@@ -160,8 +160,18 @@ type TurnReplacement struct {
 	SessionMetadata         map[string]any
 }
 
+// ACPPublication moves the session's canonical ACP publication head to the
+// round's run inside the same transaction as the round's messages. A head with
+// CheckpointReset=true is canonical but not resumable.
+type ACPPublication struct {
+	RunID           string
+	CheckpointReset bool
+}
+
 type RoundPersistenceOptions struct {
-	Replacement *TurnReplacement
+	Replacement                   *TurnReplacement
+	CleanupACPDecisionProjections bool
+	ACPPublication                *ACPPublication
 }
 
 // AtomicRoundPersister writes a complete round in one transaction.

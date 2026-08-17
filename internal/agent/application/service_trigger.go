@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -172,7 +173,14 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 	var lifecycleCause error
 	defer func() { terminal(lifecycleCause) }()
 
-	req, _ = s.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
+	// Fail closed like the chat path: proceeding after an uncertain eager
+	// insert would race the background cleanup goroutine against this round's
+	// own user message and could delete the canonical turn's user row.
+	var leadingErr error
+	req, _, leadingErr = s.persistACPLeadingUserMessage(context.WithoutCancel(ctx), req)
+	if leadingErr != nil {
+		return schedule.TriggerResult{}, fmt.Errorf("persist scheduled ACP user message: %w", leadingErr)
+	}
 
 	result, promptErr := s.acpPool.Prompt(ctx, acpagent.PromptInput{
 		BotID:             botID,
@@ -200,7 +208,7 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 	if promptErr != nil {
 		s.cancelPendingACPApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")
 		failedResult, _ := acpFailureResult(ensureACPPromptOutput(result), promptErr)
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr, contextLifecycle); err != nil {
+		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr, false, contextLifecycle); err != nil {
 			lifecycleCause = runtimeHistoryError(err)
 			s.logger.Error("ACP schedule failure persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
 		}
@@ -208,7 +216,7 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 	}
 
 	result = ensureACPPromptOutput(result)
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil, contextLifecycle); err != nil {
+	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil, true, contextLifecycle); err != nil {
 		lifecycleCause = runtimeHistoryError(err)
 		s.logger.Error("ACP schedule persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
 		return schedule.TriggerResult{}, err

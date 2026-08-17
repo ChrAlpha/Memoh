@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpBotRuntimeConfigEpoch = `-- name: BumpBotRuntimeConfigEpoch :one
+UPDATE bots
+SET runtime_config_epoch = runtime_config_epoch + 1,
+    updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $1
+RETURNING runtime_config_epoch
+`
+
+func (q *Queries) BumpBotRuntimeConfigEpoch(ctx context.Context, botID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpBotRuntimeConfigEpoch, botID)
+	var runtime_config_epoch int64
+	err := row.Scan(&runtime_config_epoch)
+	return runtime_config_epoch, err
+}
+
 const clearBotRuntimeData = `-- name: ClearBotRuntimeData :exec
 WITH target_sessions AS MATERIALIZED (
   SELECT session.id
@@ -148,11 +164,19 @@ func (q *Queries) CreateBot(ctx context.Context, arg CreateBotParams) (CreateBot
 }
 
 const deleteBotByID = `-- name: DeleteBotByID :exec
-WITH target_sessions AS MATERIALIZED (
+WITH target_bot AS MATERIALIZED (
+  SELECT bot.id
+  FROM bots bot
+  WHERE bot.team_id = public.memoh_current_team_id()
+    AND bot.id = $1
+  FOR UPDATE
+),
+target_sessions AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
   WHERE session.team_id = public.memoh_current_team_id()
     AND session.bot_id = $1
+    AND EXISTS (SELECT 1 FROM target_bot)
   ORDER BY session.id
   FOR UPDATE
 ),
@@ -198,12 +222,15 @@ deleted_sessions AS (
   RETURNING session.id
 )
 DELETE FROM bots bot
+USING target_bot target
 WHERE bot.team_id = public.memoh_current_team_id()
-  AND bot.id = $1
+  AND bot.id = target.id
   AND (SELECT count(*) FROM target_sessions) >= 0
   AND (SELECT count(*) FROM deleted_sessions) >= 0
 `
 
+// Runtime-fenced writers lock the bot parent before a child session. Keep the
+// same parent-before-child order here so deletion cannot deadlock with them.
 func (q *Queries) DeleteBotByID(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteBotByID, id)
 	return err
@@ -621,6 +648,13 @@ SET name = $2,
     timezone = $5,
     is_active = $6,
     metadata = $7,
+    runtime_config_epoch = runtime_config_epoch
+        + CASE
+            WHEN COALESCE(metadata -> 'acp', 'null'::jsonb)
+                 IS DISTINCT FROM COALESCE($7::jsonb -> 'acp', 'null'::jsonb)
+            THEN 1
+            ELSE 0
+          END,
     updated_at = now()
 WHERE team_id = public.memoh_current_team_id() AND id = $1
 RETURNING id, owner_user_id, name, display_name, avatar_url, timezone, is_active, status, language, reasoning_effort, chat_model_id, search_provider_id, memory_provider_id, heartbeat_enabled, heartbeat_interval, heartbeat_prompt, metadata, created_at, updated_at
@@ -658,6 +692,10 @@ type UpdateBotProfileRow struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+// The runtime config epoch invalidates warm ACP processes, so it must move
+// only when the ACP launch configuration (the metadata 'acp' subtree) actually
+// changes. A rename, avatar, timezone, or activation toggle must not tear down
+// a mid-conversation runtime.
 func (q *Queries) UpdateBotProfile(ctx context.Context, arg UpdateBotProfileParams) (UpdateBotProfileRow, error) {
 	row := q.db.QueryRow(ctx, updateBotProfile,
 		arg.ID,

@@ -124,19 +124,23 @@ func (p *SessionPool) startDynamicAdapter(
 	if timeout <= 0 {
 		timeout = dynamicAdapterStartTimeout
 	}
-	dynamicCtx, cancel := context.WithTimeout(startCtx, timeout)
-	defer cancel()
-	useToolkitCA := p.containerToolkitCABundleAvailable(dynamicCtx, startReq.BotID, workspaceInfo)
+	lookupCtx, cancelLookup := context.WithTimeout(startCtx, timeout)
+	useToolkitCA := p.containerToolkitCABundleAvailable(lookupCtx, startReq.BotID, workspaceInfo)
 	dynamicEnv := dynamicACPEnv(startReq.Env, useToolkitCA)
-	state, version, resolveErr := p.resolveDynamicAdapter(dynamicCtx, startReq.BotID, packageName, adapterLookupEnv(dynamicEnv))
+	state, version, resolveErr := p.resolveDynamicAdapter(lookupCtx, startReq.BotID, packageName, adapterLookupEnv(dynamicEnv))
+	lookupErr := lookupCtx.Err()
+	cancelLookup()
 	if resolveErr != nil && startCtx.Err() != nil {
 		return nil, startCtx.Err()
 	}
 	if resolveErr != nil {
 		disableDynamicAdapter(state)
 	}
-	if version == "" || dynamicCtx.Err() != nil {
-		if err := dynamicCtx.Err(); err != nil {
+	if version == "" || lookupErr != nil {
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if err := startCtx.Err(); err != nil {
 			return nil, err
 		}
 		return nil, resolveErr
@@ -147,7 +151,13 @@ func (p *SessionPool) startDynamicAdapter(
 	dynamicReq.Args = append(append([]string(nil), profile.DynamicArgs...), packageName+"@"+version)
 	dynamicReq.Env = dynamicEnv
 
-	sess, err := p.runner.StartSession(dynamicCtx, dynamicReq, sink)
+	startTimeout := timeout
+	if startReq.Resume != nil {
+		startTimeout = sessionStateIOTimeout
+	}
+	adapterCtx, cancelAdapter := context.WithTimeout(startCtx, startTimeout)
+	sess, err := p.runner.StartSession(adapterCtx, dynamicReq, sink)
+	cancelAdapter()
 	if err == nil && sess != nil {
 		return sess, nil
 	}

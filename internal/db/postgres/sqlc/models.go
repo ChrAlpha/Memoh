@@ -8,6 +8,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AcpSessionPublication struct {
+	TeamID          pgtype.UUID        `json:"team_id"`
+	SessionID       pgtype.UUID        `json:"session_id"`
+	RunID           pgtype.UUID        `json:"run_id"`
+	CheckpointReset bool               `json:"checkpoint_reset"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AcpSessionState struct {
+	TeamID              pgtype.UUID        `json:"team_id"`
+	SessionID           pgtype.UUID        `json:"session_id"`
+	ThroughRunID        pgtype.UUID        `json:"through_run_id"`
+	AgentID             string             `json:"agent_id"`
+	AcpSessionID        string             `json:"acp_session_id"`
+	Cwd                 string             `json:"cwd"`
+	TranscriptPath      string             `json:"transcript_path"`
+	RuntimeFencingToken int64              `json:"runtime_fencing_token"`
+	FileCount           int32              `json:"file_count"`
+	RecordCount         int64              `json:"record_count"`
+	FileShapes          []byte             `json:"file_shapes"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AcpSessionStateLine struct {
+	TeamID       pgtype.UUID `json:"team_id"`
+	SessionID    pgtype.UUID `json:"session_id"`
+	FilePath     string      `json:"file_path"`
+	LineNumber   int64       `json:"line_number"`
+	Content      string      `json:"content"`
+	ContentBytes int32       `json:"content_bytes"`
+}
+
 type Bot struct {
 	ID                      pgtype.UUID        `json:"id"`
 	OwnerUserID             pgtype.UUID        `json:"owner_user_id"`
@@ -49,6 +82,9 @@ type Bot struct {
 	OverlayEnabled          bool               `json:"overlay_enabled"`
 	OverlayConfig           []byte             `json:"overlay_config"`
 	Metadata                []byte             `json:"metadata"`
+	RuntimeResetToken       pgtype.UUID        `json:"runtime_reset_token"`
+	RuntimeResetExpiresAt   pgtype.Timestamptz `json:"runtime_reset_expires_at"`
+	RuntimeConfigEpoch      int64              `json:"runtime_config_epoch"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt               pgtype.Timestamptz `json:"updated_at"`
 	AclDefaultEffect        string             `json:"acl_default_effect"`
@@ -226,27 +262,30 @@ type BotRemoteRuntimeBinding struct {
 }
 
 type BotSession struct {
-	ID                  pgtype.UUID        `json:"id"`
-	BotID               pgtype.UUID        `json:"bot_id"`
-	RouteID             pgtype.UUID        `json:"route_id"`
-	ChannelType         pgtype.Text        `json:"channel_type"`
-	Type                string             `json:"type"`
-	SessionMode         string             `json:"session_mode"`
-	RuntimeType         string             `json:"runtime_type"`
-	RuntimeMetadata     []byte             `json:"runtime_metadata"`
-	Visibility          string             `json:"visibility"`
-	Title               string             `json:"title"`
-	Metadata            []byte             `json:"metadata"`
-	NextTurnPosition    int64              `json:"next_turn_position"`
-	CompactionEpoch     int64              `json:"compaction_epoch"`
-	RuntimeFencingToken int64              `json:"runtime_fencing_token"`
-	ParentSessionID     pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID     pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt           pgtype.Timestamptz `json:"deleted_at"`
-	TeamID              pgtype.UUID        `json:"team_id"`
-	WorkdirID           pgtype.UUID        `json:"workdir_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	BotID                 pgtype.UUID        `json:"bot_id"`
+	RouteID               pgtype.UUID        `json:"route_id"`
+	ChannelType           pgtype.Text        `json:"channel_type"`
+	Type                  string             `json:"type"`
+	SessionMode           string             `json:"session_mode"`
+	RuntimeType           string             `json:"runtime_type"`
+	RuntimeMetadata       []byte             `json:"runtime_metadata"`
+	Visibility            string             `json:"visibility"`
+	Title                 string             `json:"title"`
+	Metadata              []byte             `json:"metadata"`
+	NextTurnPosition      int64              `json:"next_turn_position"`
+	CompactionEpoch       int64              `json:"compaction_epoch"`
+	RuntimeFencingToken   int64              `json:"runtime_fencing_token"`
+	RuntimeResetToken     pgtype.UUID        `json:"runtime_reset_token"`
+	RuntimeResetExpiresAt pgtype.Timestamptz `json:"runtime_reset_expires_at"`
+	RuntimeConfigEpoch    int64              `json:"runtime_config_epoch"`
+	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
+	CreatedByUserID       pgtype.UUID        `json:"created_by_user_id"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt             pgtype.Timestamptz `json:"deleted_at"`
+	TeamID                pgtype.UUID        `json:"team_id"`
+	WorkdirID             pgtype.UUID        `json:"workdir_id"`
 }
 
 type BotSessionDiscussCursor struct {

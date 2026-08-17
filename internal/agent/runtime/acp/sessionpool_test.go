@@ -2,11 +2,14 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -200,6 +203,140 @@ func TestSessionPoolPromptForceFreshRuntimeReplacesBoundRuntime(t *testing.T) {
 	pool.mu.RUnlock()
 	if firstStillRegistered {
 		t.Fatalf("ForceFreshRuntime left the old runtime registered")
+	}
+}
+
+func TestSessionPoolRestoresOnlyMatchingDurableACPState(t *testing.T) {
+	baseState := PersistedSessionState{
+		AgentID:        acpprofile.AgentCodexID,
+		ACPSessionID:   "native-session-1",
+		ThroughRunID:   "22222222-2222-4222-8222-222222222222",
+		Cwd:            "/data/project",
+		TranscriptPath: "state/sessions/2026/08/12/rollout-native-session-1.jsonl",
+		FileCount:      1,
+		RecordCount:    1,
+	}
+	baseRecords := []SessionStateRecord{{
+		FilePath: baseState.TranscriptPath, LineNumber: 1,
+		Content: json.RawMessage(`{"type":"session_meta","payload":{"id":"native-session-1"}}`),
+	}}
+
+	tests := []struct {
+		name        string
+		mutate      func(*PersistedSessionState)
+		forceFresh  bool
+		wantResume  bool
+		wantLoads   int
+		wantSyncErr bool
+	}{
+		{name: "matching", wantResume: true, wantLoads: 1},
+		{name: "different agent", mutate: func(state *PersistedSessionState) { state.AgentID = acpprofile.AgentClaudeCodeID }, wantLoads: 1, wantSyncErr: true},
+		{name: "different cwd", mutate: func(state *PersistedSessionState) { state.Cwd = "/data/other" }, wantLoads: 1, wantSyncErr: true},
+		{name: "force fresh bypasses state", forceFresh: true, wantLoads: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := baseState
+			if tt.mutate != nil {
+				tt.mutate(&state)
+			}
+			store := &recordingSessionStateStore{state: state, records: baseRecords, found: true}
+			runner := &recordingRunner{
+				info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data"},
+				startErr: errors.New("started"),
+			}
+			pool := newSessionPool(nil, runner, fakeBotGetter{bot: enabledACPBot("bot-1", "api_key", map[string]any{"api_key": "sk-test"})})
+			pool.SetSessionStateStore(store)
+
+			_, err := pool.Prompt(context.Background(), PromptInput{
+				BotID:                 "bot-1",
+				SessionID:             "session-1",
+				AgentID:               acpprofile.AgentCodexID,
+				ProjectPath:           "/data/project",
+				Prompt:                "continue",
+				RuntimeOwnerAccountID: "user-1",
+				ForceFreshRuntime:     tt.forceFresh,
+			})
+			if tt.wantSyncErr {
+				if !errors.Is(err, ErrSessionStateOutOfSync) {
+					t.Fatalf("Prompt() error = %v, want ErrSessionStateOutOfSync", err)
+				}
+			} else if err == nil || err.Error() != "started" {
+				t.Fatalf("Prompt() error = %v, want runner sentinel", err)
+			}
+			if store.loadCalls != tt.wantLoads {
+				t.Fatalf("state Load calls = %d, want %d", store.loadCalls, tt.wantLoads)
+			}
+			if got := runner.req.Resume != nil; got != tt.wantResume {
+				t.Fatalf("runner Resume present = %v, want %v", got, tt.wantResume)
+			}
+			if tt.wantResume {
+				resumeState := runner.req.Resume.State()
+				if resumeState.SessionID != baseState.ACPSessionID || resumeState.TranscriptPath != baseState.TranscriptPath {
+					t.Fatalf("runner Resume = %#v", resumeState)
+				}
+			}
+		})
+	}
+}
+
+func TestSessionPoolCheckpointsJSONLAfterSuccessfulPrompt(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("strict anchored checkpoint I/O requires Linux openat2")
+	}
+	t.Setenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_WRITE_STATE", "1")
+	pool := newFakeScriptPool(t)
+	store := &recordingSessionStateStore{}
+	pool.SetSessionStateStore(store)
+	fence := runtimefence.Fence{BotID: "bot-1", SessionID: "session-1", Token: 17}
+	runID := "33333333-3333-4333-8333-333333333333"
+
+	result, err := pool.Prompt(runtimefence.WithContext(context.Background(), fence), PromptInput{
+		BotID:                 fence.BotID,
+		SessionID:             fence.SessionID,
+		RunID:                 runID,
+		AgentID:               acpprofile.AgentCodexID,
+		ProjectPath:           "/data/project",
+		Prompt:                "remember this turn",
+		RuntimeOwnerAccountID: "user-1",
+	})
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if !strings.Contains(result.Text, "session-pool-ok") {
+		t.Fatalf("Prompt() result = %#v", result)
+	}
+	if !result.CheckpointStaged {
+		t.Fatal("successful durable prompt did not report a staged checkpoint")
+	}
+	// The handle's native head must have advanced to the staged run so the
+	// next prompt matches once the application commits the same durable head.
+	handle := pool.sessionHandle(fence.SessionID)
+	if handle == nil {
+		t.Fatal("staged prompt lost its runtime handle")
+	}
+	handle.state.Lock()
+	nativeHead, nativeHeadFound := handle.nativeHead, handle.nativeHeadFound
+	handle.state.Unlock()
+	if !nativeHeadFound || nativeHead.RunID != runID || nativeHead.Kind != SessionPublicationCheckpoint {
+		t.Fatalf("native head = %#v found=%v, want staged checkpoint run", nativeHead, nativeHeadFound)
+	}
+	store.setHead(SessionPublicationHead{RunID: runID, Kind: SessionPublicationCheckpoint}, true)
+	if store.headCalls != 2 || store.loadCalls != 0 || store.replaceCalls != 1 {
+		t.Fatalf("state store calls = head:%d load:%d replace:%d, want 2/0/1", store.headCalls, store.loadCalls, store.replaceCalls)
+	}
+	if store.replaceFence != fence {
+		t.Fatalf("Replace fence = %#v, want %#v", store.replaceFence, fence)
+	}
+	state := store.replaced
+	if state.AgentID != acpprofile.AgentCodexID || state.ACPSessionID != "session-pool-fake-session" || state.ThroughRunID != runID || state.Cwd != "/data/project" {
+		t.Fatalf("checkpoint identity = %#v", state)
+	}
+	if state.FileCount != 1 || state.RecordCount != 3 || len(store.replacedRecords) != 3 {
+		t.Fatalf("checkpoint counts/records = %#v/%#v", state, store.replacedRecords)
+	}
+	if !strings.Contains(string(store.replacedRecords[1].Content), "remember this turn") {
+		t.Fatalf("checkpoint prompt line = %s", store.replacedRecords[1].Content)
 	}
 }
 
@@ -2880,6 +3017,127 @@ func (g fakeSessionGetter) Get(context.Context, string) (SessionDescriptor, erro
 	return g.session, g.err
 }
 
+type recordingSessionStateStore struct {
+	mu              sync.Mutex
+	head            SessionPublicationHead
+	headSet         bool
+	headFound       bool
+	headErr         error
+	headCalls       int
+	epoch           RuntimeConfigEpoch
+	epochErr        error
+	epochCalls      int
+	state           PersistedSessionState
+	records         []SessionStateRecord
+	found           bool
+	loadErr         error
+	replaceErr      error
+	loadCalls       int
+	replaceCalls    int
+	replaced        PersistedSessionState
+	replacedRecords []SessionStateRecord
+	replaceFence    runtimefence.Fence
+	guardCalls      int
+	guardErr        error
+}
+
+func (s *recordingSessionStateStore) RuntimeConfigEpoch(context.Context, string, string) (RuntimeConfigEpoch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.epochCalls++
+	return s.epoch, s.epochErr
+}
+
+func (s *recordingSessionStateStore) GuardRuntimeSync(ctx context.Context, _ string, _ int64, fn func(context.Context) error) error {
+	s.mu.Lock()
+	s.guardCalls++
+	err := s.guardErr
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return fn(ctx)
+}
+
+func (s *recordingSessionStateStore) CanonicalShape(context.Context, string, string) (map[string]SessionStateFileShape, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.found {
+		return nil, false, nil
+	}
+	shapes := make(map[string]SessionStateFileShape, len(s.state.Files))
+	for _, file := range s.state.Files {
+		shapes[file.Path] = file.SessionStateFileShape
+	}
+	return shapes, true, nil
+}
+
+func (s *recordingSessionStateStore) Head(context.Context, string, string) (SessionPublicationHead, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.headCalls++
+	if s.headSet {
+		return s.head, s.headFound, s.headErr
+	}
+	if s.found {
+		return SessionPublicationHead{
+			RunID: s.state.ThroughRunID,
+			Kind:  SessionPublicationCheckpoint,
+		}, true, s.headErr
+	}
+	return SessionPublicationHead{}, false, s.headErr
+}
+
+func (s *recordingSessionStateStore) Load(ctx context.Context, _, _ string, consume SessionStateRecordConsumer) (bool, error) {
+	s.mu.Lock()
+	s.loadCalls++
+	state, found, loadErr := s.state, s.found, s.loadErr
+	records := append([]SessionStateRecord(nil), s.records...)
+	s.mu.Unlock()
+	if loadErr != nil || !found {
+		return found, loadErr
+	}
+	index := 0
+	reader := func(context.Context) (SessionStateRecord, error) {
+		if index == len(records) {
+			return SessionStateRecord{}, io.EOF
+		}
+		record := records[index]
+		index++
+		return record, nil
+	}
+	return true, consume(ctx, state, reader)
+}
+
+func (s *recordingSessionStateStore) Replace(ctx context.Context, _, _ string, state PersistedSessionState, reader SessionStateRecordReader) error {
+	var records []SessionStateRecord
+	for {
+		record, err := reader(ctx)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		records = append(records, record)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replaceCalls++
+	s.replaced = state
+	s.replacedRecords = records
+	s.replaceFence, _ = runtimefence.FromContext(ctx)
+	return s.replaceErr
+}
+
+func (s *recordingSessionStateStore) setHead(head SessionPublicationHead, found bool) {
+	s.mu.Lock()
+	s.head = head
+	s.headSet = true
+	s.headFound = found
+	s.mu.Unlock()
+}
+
 type fakeToolApprovalService struct {
 	cancelBotID     string
 	cancelSessionID string
@@ -3454,6 +3712,65 @@ func (a *sessionPoolFakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) 
 		image := p.Prompt[0].Image
 		if image.Data != "aW1hZ2U=" || image.MimeType != "image/png" {
 			return acp.PromptResponse{}, fmt.Errorf("image block = %#v, want inline PNG", image)
+		}
+	}
+	if os.Getenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_WRITE_STATE") == "1" {
+		home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		if home == "" {
+			return acp.PromptResponse{}, errors.New("CODEX_HOME is missing")
+		}
+		dir := filepath.Join(home, "sessions", "2026", "08", "12")
+		if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // fake agent writes beneath its process-owned test home.
+			return acp.PromptResponse{}, err
+		}
+		var promptText strings.Builder
+		for _, block := range p.Prompt {
+			if block.Text != nil {
+				promptText.WriteString(block.Text.Text)
+			}
+		}
+		meta, err := json.Marshal(map[string]any{
+			"type":    "session_meta",
+			"payload": map[string]string{"id": string(p.SessionId)},
+		})
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		line, err := json.Marshal(map[string]string{"type": "message", "prompt": promptText.String()})
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		transcript := filepath.Join(dir, "rollout-"+string(p.SessionId)+".jsonl")
+		terminal, err := json.Marshal(map[string]any{
+			"type": "event_msg",
+			"payload": map[string]string{
+				"type": "task_complete",
+			},
+		})
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		data := make([]byte, 0, len(meta)+len(line)+len(terminal)+3)
+		if _, statErr := os.Stat(transcript); errors.Is(statErr, os.ErrNotExist) { //nolint:gosec // fake session ID is generated by the in-process test agent.
+			data = append(data, meta...)
+			data = append(data, '\n')
+		} else if statErr != nil {
+			return acp.PromptResponse{}, statErr
+		}
+		data = append(data, line...)
+		data = append(data, '\n')
+		data = append(data, terminal...)
+		data = append(data, '\n')
+		file, err := os.OpenFile(transcript, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // fake agent writes its process-owned test transcript.
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		if _, err := file.Write(data); err != nil {
+			_ = file.Close()
+			return acp.PromptResponse{}, err
+		}
+		if err := file.Close(); err != nil {
+			return acp.PromptResponse{}, err
 		}
 	}
 	a.appendConfigLog(fmt.Sprintf("prompt:model=%s,reasoning=%s", a.modelID, a.reasoningEffort))

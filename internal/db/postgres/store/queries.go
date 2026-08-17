@@ -2,10 +2,13 @@ package postgresstore
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbpkg "github.com/memohai/memoh/internal/db"
 	dbsqlc "github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 )
@@ -59,5 +62,11 @@ func (q *Queries) InTx(ctx context.Context, fn func(dbstore.Queries) error) erro
 	if err := fn(q.WithTx(tx)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		if errors.Is(err, pgx.ErrTxCommitRollback) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", dbpkg.ErrCommitOutcomeUnknown, err)
+	}
+	return nil
 }

@@ -224,6 +224,7 @@ type clientCallbacks struct {
 	baseSession    ToolSessionContext
 	mu             sync.RWMutex
 	collector      *eventCollector
+	stateReceipt   *sessionStateReceiptCollector
 	sink           EventSink
 	promptSession  ToolSessionContext
 	approvalGrants map[string]approvedToolGrant

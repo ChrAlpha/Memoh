@@ -513,8 +513,7 @@ func TestStartBridgeProcessRetriesTransientMissingCommand(t *testing.T) {
 	})
 
 	client, server := newRecordingBridgeClient(t)
-	server.setExitCodes("command -v codex-acp >/dev/null 2>&1", 127, 0)
-	server.setExitCode("test -x "+containerToolkitBin+"/codex-acp", 1)
+	server.setExitCodes("test -x "+containerToolkitBin+"/codex-acp", 1, 0)
 
 	proc, err := startBridgeProcess(context.Background(), client, "codex-acp", nil, "/data", time.Minute, processOptions{
 		Backend:   WorkspaceBackendContainer,
@@ -529,7 +528,7 @@ func TestStartBridgeProcessRetriesTransientMissingCommand(t *testing.T) {
 
 	var checks int
 	for _, record := range server.records() {
-		if record.Command == "command -v codex-acp >/dev/null 2>&1" {
+		if record.Command == "test -x "+containerToolkitBin+"/codex-acp" {
 			checks++
 		}
 	}
@@ -537,7 +536,7 @@ func TestStartBridgeProcessRetriesTransientMissingCommand(t *testing.T) {
 		t.Fatalf("command checks = %d, want retry; records=%#v", checks, server.records())
 	}
 	processRecord, ok := findRecordWithTimeout(server.records(), int32(time.Minute.Seconds()))
-	if !ok || processRecord.Command != "codex-acp" {
+	if !ok || processRecord.Command != containerToolkitBin+"/codex-acp" {
 		t.Fatalf("process record = %#v, ok=%v", processRecord, ok)
 	}
 }
@@ -560,10 +559,16 @@ func TestStartBridgeProcessReportsToolkitFallbackFailure(t *testing.T) {
 		t.Fatalf("startBridgeProcess() error = nil, want missing command error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"codex-acp", "workspace PATH", containerToolkitBin} {
+	// Resumable agents are pinned: the error must point at the missing
+	// toolkit adapter payload, never at PATH (a PATH copy is deliberately
+	// not consulted, so mentioning it would misdirect operators).
+	for _, want := range []string{"codex-acp", "pinned adapter", containerToolkitBin} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q missing %q", msg, want)
 		}
+	}
+	if strings.Contains(msg, "workspace PATH") {
+		t.Fatalf("pinned-adapter error %q must not point at PATH", msg)
 	}
 }
 
@@ -721,6 +726,11 @@ func (s *recordingBridgeServer) ListDir(_ context.Context, req *pb.ListDirReques
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].GetPath() < entries[j].GetPath() })
+	// Mirror the bridge server's max_entries contract: more entries than the
+	// requested bound is a refusal, never a truncated listing.
+	if maxEntries := int(req.GetMaxEntries()); maxEntries > 0 && len(entries) > maxEntries {
+		return nil, status.Errorf(codes.ResourceExhausted, "directory listing exceeds %d entries", maxEntries)
+	}
 	return &pb.ListDirResponse{Entries: entries, TotalCount: int32(len(entries))}, nil //nolint:gosec // test fixture contains only a bounded handful of entries.
 }
 
@@ -760,6 +770,33 @@ func (s *recordingBridgeServer) ReadRaw(req *pb.ReadRawRequest, stream pb.Contai
 	return stream.Send(&pb.DataChunk{Data: append([]byte(nil), node.content...)})
 }
 
+func (s *recordingBridgeServer) ReadRawNoFollow(req *pb.ReadRawNoFollowRequest, stream pb.ContainerService_ReadRawNoFollowServer) error {
+	s.mu.Lock()
+	target, err := s.noFollowTargetLocked(req.GetRoot(), req.GetRelativePath(), false)
+	var content []byte
+	if err == nil {
+		node, ok := s.fs[target]
+		if !ok || node.isDir || node.isSymlink {
+			err = status.Error(codes.NotFound, "not found")
+		} else {
+			content = append([]byte(nil), node.content...)
+		}
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	const chunkSize = 64 * 1024
+	for len(content) > 0 {
+		size := min(len(content), chunkSize)
+		if err := stream.Send(&pb.DataChunk{Data: content[:size]}); err != nil {
+			return err
+		}
+		content = content[size:]
+	}
+	return nil
+}
+
 func (s *recordingBridgeServer) WriteRaw(stream grpc.ClientStreamingServer[pb.WriteRawChunk, pb.WriteRawResponse]) error {
 	var filePath string
 	var content []byte
@@ -784,6 +821,70 @@ func (s *recordingBridgeServer) WriteRaw(stream grpc.ClientStreamingServer[pb.Wr
 	s.files = append(s.files, writeRecord{Path: filePath, Content: append([]byte(nil), content...)})
 	s.mu.Unlock()
 	return stream.SendAndClose(&pb.WriteRawResponse{BytesWritten: int64(len(content))})
+}
+
+func (s *recordingBridgeServer) WriteRawNoFollow(stream grpc.ClientStreamingServer[pb.WriteRawNoFollowChunk, pb.WriteRawResponse]) error {
+	var root, relativePath string
+	var content []byte
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if root == "" {
+			root = chunk.GetRoot()
+			relativePath = chunk.GetRelativePath()
+		}
+		content = append(content, chunk.GetData()...)
+	}
+	s.mu.Lock()
+	target, err := s.noFollowTargetLocked(root, relativePath, true)
+	if err == nil {
+		if _, exists := s.fs[target]; exists {
+			err = status.Error(codes.AlreadyExists, "target already exists")
+		} else {
+			s.writeFileLocked(target, content)
+			s.files = append(s.files, writeRecord{Path: target, Content: append([]byte(nil), content...)})
+		}
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return stream.SendAndClose(&pb.WriteRawResponse{BytesWritten: int64(len(content))})
+}
+
+func (s *recordingBridgeServer) noFollowTargetLocked(root, relativePath string, createParents bool) (string, error) {
+	root = path.Clean(root)
+	relativePath = path.Clean(relativePath)
+	if root == "." || !strings.HasPrefix(root, "/") || relativePath == "." || strings.HasPrefix(relativePath, "../") || strings.HasPrefix(relativePath, "/") {
+		return "", status.Error(codes.InvalidArgument, "invalid anchored path")
+	}
+	current := "/"
+	for _, component := range strings.Split(strings.TrimPrefix(root, "/"), "/") {
+		current = path.Join(current, component)
+		node, ok := s.fs[current]
+		if !ok || !node.isDir || node.isSymlink {
+			return "", status.Error(codes.FailedPrecondition, "unsafe root")
+		}
+	}
+	components := strings.Split(relativePath, "/")
+	current = root
+	for _, component := range components[:len(components)-1] {
+		current = path.Join(current, component)
+		node, ok := s.fs[current]
+		if !ok && createParents {
+			s.ensureDirLocked(current)
+			node, ok = s.fs[current]
+		}
+		if !ok || !node.isDir || node.isSymlink {
+			return "", status.Error(codes.FailedPrecondition, "unsafe parent")
+		}
+	}
+	return path.Join(root, relativePath), nil
 }
 
 func (s *recordingBridgeServer) DeleteFile(_ context.Context, req *pb.DeleteFileRequest) (*pb.DeleteFileResponse, error) {

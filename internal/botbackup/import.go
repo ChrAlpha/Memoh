@@ -34,6 +34,7 @@ import (
 	memprovider "github.com/memohai/memoh/internal/memory/adapters"
 	modelpkg "github.com/memohai/memoh/internal/models"
 	providerpkg "github.com/memohai/memoh/internal/providers"
+	"github.com/memohai/memoh/internal/runtimefence"
 	"github.com/memohai/memoh/internal/schedule"
 	searchpkg "github.com/memohai/memoh/internal/searchproviders"
 	"github.com/memohai/memoh/internal/settings"
@@ -506,12 +507,24 @@ func (s *Service) Import(ctx context.Context, actorUserID string, raw []byte, op
 			return ImportResult{}, err
 		}
 	}
+	var releaseACPRuntimeReset func()
+	if shouldGateOverwriteACPRuntimes(opts) && s.acpRuntimes == nil {
+		return ImportResult{}, ErrHistoryResetUnavailable
+	}
+	if shouldGateOverwriteACPRuntimes(opts) {
+		target := strings.TrimSpace(opts.TargetBotID)
+		ctx, releaseACPRuntimeReset, err = s.acpRuntimes.BeginBotHistoryReset(ctx, target)
+		if err != nil {
+			return ImportResult{}, errors.Join(
+				ErrHistoryResetUnavailable,
+				fmt.Errorf("begin ACP runtime reset for overwrite import: %w", err),
+			)
+		}
+		defer releaseACPRuntimeReset()
+	}
 	targetBotID, created, err := s.restoreBot(ctx, actorUserID, profile, opts)
 	if err != nil {
 		return ImportResult{}, err
-	}
-	if shouldCloseOverwriteACPRuntimes(opts, created) {
-		s.closeBotACPRuntimes(targetBotID)
 	}
 	state.idMap[profile.ID] = targetBotID
 	state.createMode = created
@@ -538,6 +551,26 @@ func (s *Service) Import(ctx context.Context, actorUserID string, raw []byte, op
 		}()
 	}
 
+	// Permanently invalidate every old runtime before any overwrite section can
+	// mutate database or workspace state. This short committed transaction is
+	// intentionally before applyRestore: a process crash during an external
+	// workspace transfer must not roll the epoch invalidation back.
+	if _, fenced := runtimefence.ResetFromContext(ctx); releaseACPRuntimeReset != nil && fenced {
+		botUUID, parseErr := db.ParseUUID(targetBotID)
+		if parseErr != nil {
+			return ImportResult{}, parseErr
+		}
+		bumpErr := runtimefence.InResetTransaction(ctx, s.queries, targetBotID, "", func(queries dbstore.Queries) error {
+			_, err := queries.BumpBotRuntimeConfigEpoch(ctx, botUUID)
+			return err
+		})
+		if bumpErr != nil {
+			return ImportResult{}, errors.Join(
+				ErrHistoryResetUnavailable,
+				fmt.Errorf("advance ACP runtime config generation: %w", bumpErr),
+			)
+		}
+	}
 	if err := s.applyRestore(ctx, actorUserID, targetBotID, cfg, deps, opts, state); err != nil {
 		return ImportResult{}, err
 	}
@@ -661,10 +694,30 @@ func (s *Service) applyRestore(ctx context.Context, actorUserID, targetBotID str
 			state.warnings = append(state.warnings, "workspace restore skipped: workspace manager not configured")
 		} else if archive, err := workspaceArchive(state.entries); err != nil {
 			state.warnings = append(state.warnings, "workspace restore failed: "+err.Error())
-		} else if err := s.restoreWorkspaceData(ctx, targetBotID, archive, state.createMode); err != nil {
-			state.warnings = append(state.warnings, "workspace restore failed: "+err.Error())
 		} else {
-			state.counts[SectionWorkspace] = countWorkspaceFiles(state.entries)
+			_, fenced := runtimefence.ResetFromContext(ctx)
+			var transferErr, guardErr error
+			if fenced {
+				transferErr, guardErr = runtimefence.PublishBotRuntimeConfig(
+					ctx,
+					s.queries,
+					targetBotID,
+					workspaceRestoreRetryTimeout,
+					func(publishCtx context.Context) error {
+						return s.restoreWorkspaceData(publishCtx, targetBotID, archive, state.createMode)
+					},
+				)
+			} else {
+				transferErr = s.restoreWorkspaceData(ctx, targetBotID, archive, state.createMode)
+			}
+			switch {
+			case guardErr != nil:
+				return guardErr
+			case transferErr == nil:
+				state.counts[SectionWorkspace] = countWorkspaceFiles(state.entries)
+			default:
+				state.warnings = append(state.warnings, "workspace restore failed: "+transferErr.Error())
+			}
 		}
 	}
 	return nil
@@ -861,26 +914,12 @@ func (s *Service) restoreBot(ctx context.Context, actorUserID string, profile bo
 	return created.ID, true, nil
 }
 
-func shouldCloseOverwriteACPRuntimes(opts ImportOptions, created bool) bool {
-	if created || normalizeImportMode(opts.Mode) != ImportModeOverwrite {
+func shouldGateOverwriteACPRuntimes(opts ImportOptions) bool {
+	if normalizeImportMode(opts.Mode) != ImportModeOverwrite {
 		return false
 	}
-	return opts.wants(SectionProfile) || opts.wants(SectionWorkspace)
-}
-
-func (s *Service) closeBotACPRuntimes(botID string) {
-	if s == nil || s.acpRuntimes == nil {
-		return
-	}
-	for _, profile := range acpprofile.List() {
-		if err := s.acpRuntimes.CloseBotAgentRuntimes(botID, profile.ID); err != nil {
-			s.logger.Warn("close ACP runtime after bot backup import failed",
-				slog.String("bot_id", botID),
-				slog.String("agent_id", profile.ID),
-				slog.Any("error", err),
-			)
-		}
-	}
+	return opts.wants(SectionProfile) || opts.wants(SectionWorkspace) ||
+		(opts.wants(SectionHistory) && opts.strategyFor(SectionHistory) == StrategyReplace)
 }
 
 // restoreSettings writes the bot settings, importing the behavior group
@@ -1255,9 +1294,16 @@ func (s *Service) restoreEmailBindings(ctx context.Context, botID string, state 
 // single transaction so a failure leaves no partial history. When replace is
 // set, existing conversation state is cleared first so the import is a real
 // replacement, not a partial append.
-func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string, state *importState, includeAssets, replace bool) error {
+func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string, state *importState, includeAssets, replace bool) (retErr error) {
 	if s.queries == nil {
 		return nil
+	}
+	_, resetProtected := runtimefence.ResetFromContext(ctx)
+	if resetProtected {
+		defer func() { retErr = runtimefence.NormalizeResetError(ctx, retErr) }()
+	}
+	if resetProtected && s.db == nil {
+		return runtimefence.ErrTransactionsUnsupported
 	}
 	q := s.queries
 	var tx pgx.Tx
@@ -1267,11 +1313,25 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			return fmt.Errorf("begin history tx: %w", err)
 		}
 		tx = begun
-		defer func() { _ = tx.Rollback(ctx) }()
+		defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 		q = s.queries.WithTx(tx)
 	}
 
 	pgBotID := optionalUUID(botID)
+	if resetProtected {
+		// Keep the parent lock and the fresh token/expiry validation in the
+		// transaction that performs the destructive replace and restore. An old
+		// reset owner therefore cannot commit after a successor takes over.
+		if _, err := q.LockBotForRuntimeReset(ctx, pgBotID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return runtimefence.ErrResetLeaseLost
+			}
+			return fmt.Errorf("lock history restore reset: %w", err)
+		}
+		if err := runtimefence.ValidateResetLocked(ctx, q, botID, ""); err != nil {
+			return err
+		}
+	}
 	if replace {
 		routes, err := q.ListChatRoutes(ctx, pgBotID)
 		if err != nil {
@@ -1443,6 +1503,12 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		if runtimeType == "" {
 			runtimeType = sessionpkg.RuntimeModel
 		}
+		// Bundles carry no ACP publication heads or snapshots, so imported ACP
+		// sessions always start a fresh native session.
+		metadata := item.Metadata
+		if runtimeType == sessionpkg.RuntimeACPAgent {
+			state.warnings = appendWarningOnce(state.warnings, acpCheckpointBackupWarning)
+		}
 		eventID := pgtype.UUID{}
 		if item.EventID.Valid {
 			eventID = eventMap[item.EventID.String()]
@@ -1454,7 +1520,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			SourceReplyToMessageID: item.SourceReplyToMessageID,
 			Role:                   item.Role,
 			Content:                item.Content,
-			Metadata:               item.Metadata,
+			Metadata:               metadata,
 			Usage:                  item.Usage,
 			SessionMode:            sessionMode,
 			RuntimeType:            runtimeType,

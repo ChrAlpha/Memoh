@@ -130,6 +130,7 @@ func ServerModule() fx.Option {
 			injectToolProviders,
 			injectACPToolProviders,
 			injectBotConnectorLifecycle,
+			injectBotContainerLifecycle,
 			configureMemoryProviderRegistry,
 			startProviderTemplateSync,
 			startScheduleService,

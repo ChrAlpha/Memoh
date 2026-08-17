@@ -1019,7 +1019,7 @@ func (m *Manager) steer(ctx context.Context, botID, sessionID, runID, expectedGe
 
 func (m *Manager) applyCommand(ctx context.Context, cmd Command) {
 	switch strings.TrimSpace(cmd.Type) {
-	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse:
+	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
 		m.publishStoredCommandResult(ctx, cmd, m.executeRoutedCommand(ctx, cmd))
 	case CommandSteer:
 		commandCtx, cancel, err := m.activeCommandContext(ctx, cmd)
@@ -1038,7 +1038,13 @@ func (m *Manager) activeCommandContext(ctx context.Context, cmd Command) (contex
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	lookupCtx, lookupCancel := context.WithTimeout(ctx, m.commandTimeout())
+	lookupTimeout := m.commandTimeout()
+	if strings.TrimSpace(cmd.Type) == CommandHistoryReset && !cmd.ExpiresAt.IsZero() {
+		if remaining := time.Until(cmd.ExpiresAt); remaining > lookupTimeout {
+			lookupTimeout = remaining
+		}
+	}
+	lookupCtx, lookupCancel := context.WithTimeout(ctx, lookupTimeout)
 	lookupStarted := time.Now()
 	now, err := m.backend.Now(lookupCtx)
 	lookupElapsed := time.Since(lookupStarted)
@@ -1092,6 +1098,9 @@ func (m *Manager) applyRoutedCommand(ctx context.Context, cmd Command) error {
 	if strings.TrimSpace(cmd.Type) == CommandAbort {
 		_, err := m.abortLocal(commandCtx, ctrl)
 		return err
+	}
+	if strings.TrimSpace(cmd.Type) == CommandHistoryReset {
+		return m.applyHistoryResetCommand(commandCtx, cmd, ctrl)
 	}
 	if !cmd.DecisionResolved && !runtimeCommandTargetPresent(run, cmd.Type, cmd.TargetID) {
 		return ErrCommandTargetNotActive
@@ -1491,7 +1500,7 @@ func (m *Manager) finishCommandExecution(commandID string, done chan struct{}) {
 
 func isDurableRoutedCommand(cmd Command) bool {
 	switch strings.TrimSpace(cmd.Type) {
-	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse:
+	case CommandAbort, CommandToolApprovalResponse, CommandUserInputResponse, CommandHistoryReset:
 		return strings.TrimSpace(cmd.ID) != ""
 	default:
 		return false

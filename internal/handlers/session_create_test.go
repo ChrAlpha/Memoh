@@ -248,6 +248,10 @@ type recordingRuntimeBinder struct {
 
 func (*recordingRuntimeBinder) CloseSession(string) error { return nil }
 
+func (*recordingRuntimeBinder) BeginSessionHistoryReset(ctx context.Context, _, _ string) (context.Context, func(), error) {
+	return ctx, func() {}, nil
+}
+
 func (b *recordingRuntimeBinder) BindRuntime(botID, runtimeID, sessionID, agentID, projectPath, runtimeOwnerAccountID string) error {
 	b.bindArgs = []string{botID, runtimeID, sessionID, agentID, projectPath, runtimeOwnerAccountID}
 	return b.bindErr

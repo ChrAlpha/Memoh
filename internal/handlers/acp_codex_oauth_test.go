@@ -21,6 +21,7 @@ import (
 	"github.com/memohai/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	"github.com/memohai/memoh/internal/providers"
+	"github.com/memohai/memoh/internal/runtimefence"
 	"github.com/memohai/memoh/internal/workspace/bridge"
 )
 
@@ -683,12 +684,21 @@ type acpCodexDeviceHTTPTestEnv struct {
 	userID   string
 }
 
+type recordingCodexOAuthRuntimeReset struct{}
+
+func (*recordingCodexOAuthRuntimeReset) BeginBotHistoryReset(ctx context.Context, botID string) (context.Context, func(), error) {
+	resetCtx := runtimefence.WithResetContext(ctx, runtimefence.ResetFence{
+		Scope: "bot", BotID: botID, Token: "99999999-9999-4999-8999-999999999999",
+	})
+	return resetCtx, func() {}, nil
+}
+
 func newACPCodexDeviceHTTPTestEnv(t *testing.T, provider *acpCodexDeviceIntegrationProvider) *acpCodexDeviceHTTPTestEnv {
 	t.Helper()
 	botID := "11111111-1111-1111-1111-111111111111"
 	userID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	client, recorder := newUsersACPConfigBridgeClient(t)
-	queries := acpCodexDeviceIntegrationQueries{
+	queries := &acpCodexDeviceIntegrationQueries{
 		bot: testBotRow(botID, map[string]any{}),
 	}
 	handler := &ACPCodexOAuthHandler{
@@ -699,6 +709,7 @@ func newACPCodexDeviceHTTPTestEnv(t *testing.T, provider *acpCodexDeviceIntegrat
 			backend: bridge.WorkspaceBackendContainer,
 			client:  client,
 		},
+		runtimeResets:  &recordingCodexOAuthRuntimeReset{},
 		callbackURL:    "http://localhost:1455/auth/callback",
 		states:         map[string]acpCodexOAuthState{},
 		deviceSessions: map[string]*acpCodexDeviceAuthSession{},
@@ -758,11 +769,33 @@ type acpCodexDeviceIntegrationQueries struct {
 	bot sqlc.GetBotByIDRow
 }
 
-func (q acpCodexDeviceIntegrationQueries) GetBotByID(_ context.Context, id pgtype.UUID) (sqlc.GetBotByIDRow, error) {
+func (q *acpCodexDeviceIntegrationQueries) GetBotByID(_ context.Context, id pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	if !id.Valid || id != q.bot.ID {
 		return sqlc.GetBotByIDRow{}, errors.New("bot not found")
 	}
 	return q.bot, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) SupportsTransactions() bool { return true }
+
+func (q *acpCodexDeviceIntegrationQueries) InTx(_ context.Context, fn func(dbstore.Queries) error) error {
+	return fn(q)
+}
+
+func (*acpCodexDeviceIntegrationQueries) LockBotForRuntimeReset(_ context.Context, botID pgtype.UUID) (pgtype.UUID, error) {
+	return botID, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) ValidateLockedBotRuntimeReset(_ context.Context, arg sqlc.ValidateLockedBotRuntimeResetParams) (pgtype.UUID, error) {
+	return arg.BotID, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) BumpBotRuntimeConfigEpoch(context.Context, pgtype.UUID) (int64, error) {
+	return 1, nil
+}
+
+func (*acpCodexDeviceIntegrationQueries) RefreshLockedBotRuntimeReset(context.Context, sqlc.RefreshLockedBotRuntimeResetParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{Valid: true}, nil
 }
 
 type acpCodexDevicePollRequest struct {
