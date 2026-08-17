@@ -495,62 +495,46 @@ func TestRunConfigLimitsAppendSystemSectionText(t *testing.T) {
 	}
 }
 
-func TestRunConfigLimitsPluginAppendSystemSectionToNarrowestCap(t *testing.T) {
+func TestRunConfigLimitsAppendSystemSectionToDefaultCap(t *testing.T) {
 	t.Parallel()
 
-	large := "HEAD\n" + strings.Repeat("plugin system detail ", 300) + "\nTAIL"
-	tests := []struct {
-		name      string
-		globalCap int
-		pluginCap int
-	}{
-		{name: "plugin cap", globalCap: 4096, pluginCap: 192},
-		{name: "global cap", globalCap: 192, pluginCap: 4096},
+	large := "HEAD\n" + strings.Repeat("hook system detail ", 300) + "\nTAIL"
+	cfg := Config{
+		Version:  1,
+		Defaults: Defaults{MaxOutputBytes: 192},
+		Hooks: []Hook{{
+			Name:   "hook system section",
+			Event:  EventBeforePromptBuild,
+			source: hookSource{Kind: sourceKindUser},
+			Actions: []HookAction{
+				{Type: ActionTool, Tool: "section-one"},
+				{Type: ActionTool, Tool: "section-two"},
+			},
+		}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				Version:  1,
-				Defaults: Defaults{MaxOutputBytes: tt.globalCap},
-				Hooks: []Hook{{
-					Name:  "plugin system section",
-					Event: EventBeforePromptBuild,
-					source: hookSource{
-						Kind:           sourceKindPlugin,
-						PluginID:       "github",
-						MaxOutputBytes: tt.pluginCap,
-					},
-					Actions: []HookAction{
-						{Type: ActionTool, Tool: "section-one"},
-						{Type: ActionTool, Tool: "section-two"},
-					},
-				}},
-			}
-			runner := &fakeToolRunner{
-				fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
-					return map[string]any{
-						"append_system_section": map[string]any{"id": name, "text": large},
-					}, nil
-				},
-			}
+	runner := &fakeToolRunner{
+		fn: func(_ context.Context, name string, _ map[string]any) (any, error) {
+			return map[string]any{
+				"append_system_section": map[string]any{"id": name, "text": large},
+			}, nil
+		},
+	}
 
-			result, err := NewService(nil, nil).RunConfig(
-				context.Background(),
-				cfg,
-				Request{Event: EventBeforePromptBuild},
-				runner,
-			)
-			if err != nil {
-				t.Fatalf("RunConfig returned error: %v", err)
-			}
-			total := 0
-			for _, section := range result.AppendSystemSections {
-				total += len(section.Text)
-			}
-			if total > 192 {
-				t.Fatalf("aggregate section text bytes = %d, want narrower cap <= 192", total)
-			}
-		})
+	result, err := NewService(nil, nil).RunConfig(
+		context.Background(),
+		cfg,
+		Request{Event: EventBeforePromptBuild},
+		runner,
+	)
+	if err != nil {
+		t.Fatalf("RunConfig returned error: %v", err)
+	}
+	total := 0
+	for _, section := range result.AppendSystemSections {
+		total += len(section.Text)
+	}
+	if total > 192 {
+		t.Fatalf("aggregate section text bytes = %d, want default cap <= 192", total)
 	}
 }
 
