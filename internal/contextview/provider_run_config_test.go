@@ -183,7 +183,7 @@ func TestProviderRunConfigApplierUsesInjectedLoggerShape(t *testing.T) {
 	}
 }
 
-func TestProviderRunConfigApplierInstallsStepReselectorOnlyOnSuccess(t *testing.T) {
+func TestProviderRunConfigApplierInstallsStepReselectorOnAssembledPayloads(t *testing.T) {
 	t.Parallel()
 
 	t.Run("success", func(t *testing.T) {
@@ -233,8 +233,8 @@ func TestProviderRunConfigApplierInstallsStepReselectorOnlyOnSuccess(t *testing.
 		if err != nil {
 			t.Fatalf("fallback error = %v", err)
 		}
-		if out.ContextStepReselector != nil {
-			t.Fatal("legacy fallback installed the step reselector")
+		if out.ContextStepReselector == nil {
+			t.Fatal("legacy fallback is an assembly path and must keep step reselection")
 		}
 	})
 
