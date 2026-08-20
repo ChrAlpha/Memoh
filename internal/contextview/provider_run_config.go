@@ -243,12 +243,17 @@ func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*co
 	if err != nil {
 		return nil, err
 	}
-	return ComputeContextBudgetPlan(
+	limits := cfg.GenerationLimits()
+	plan, err := ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
-		min(DefaultOutputReserveTokens, cfg.ContextBudgetMaxTokens/4),
+		limits.MaxOutputTokens,
 		providerToolDefsCost(cfg.ContextToolDefs),
 		currentRequestCost,
 	)
+	if plan != nil {
+		plan.OutputReserveResolution = limits.Resolution
+	}
+	return plan, err
 }
 
 func providerCurrentRequestCost(ctx context.Context, cfg agentpkg.RunConfig) (int, error) {

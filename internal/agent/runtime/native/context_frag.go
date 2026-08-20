@@ -21,6 +21,18 @@ func (cfg RunConfig) EffectiveHistoryBudgetTokens() int {
 	return budget
 }
 
+// GenerationLimits resolves the turn's output allowance from the model the
+// run dispatches to and the thinking decision it was constructed with. The
+// context budget plan reserves exactly this value and, when enforced, the
+// provider request carries it as max_tokens.
+func (cfg RunConfig) GenerationLimits() models.GenerationLimits {
+	return models.ResolveGenerationLimits(
+		models.ClientType(models.ResolveClientType(cfg.Model)),
+		cfg.ReasoningConfig,
+		cfg.ContextBudgetMaxTokens,
+	)
+}
+
 // RefreshContextFrag rebuilds the typed context frag view from the legacy
 // RunConfig fields. The SDK-facing fields remain the source of truth in phase 1.
 func (cfg RunConfig) RefreshContextFrag() RunConfig {

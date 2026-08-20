@@ -1155,6 +1155,9 @@ func (a *Agent) buildGenerateOptions(ctx context.Context, cfg RunConfig, tools [
 		sdk.WithSystem(system),
 		sdk.WithMaxSteps(-1),
 	}
+	if limits := cfg.GenerationLimits(); limits.Enforced {
+		opts = append(opts, sdk.WithMaxTokens(limits.MaxOutputTokens))
+	}
 	if len(providerTools) > 0 {
 		opts = append(opts, sdk.WithTools(providerTools))
 	}

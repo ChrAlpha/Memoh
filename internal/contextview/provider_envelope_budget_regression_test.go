@@ -45,7 +45,10 @@ func TestApplyProviderRunConfigContextbench16KRenderedEnvelope(t *testing.T) {
 	}
 
 	inputTokens := testRenderedProviderEnvelopeTokens(out.System, out.Messages, out.ContextToolDefs)
-	reserve := min(DefaultOutputReserveTokens, out.ContextBudgetMaxTokens/4)
+	if out.ContextManifest.BudgetPlan == nil {
+		t.Fatal("budget plan missing from manifest")
+	}
+	reserve := out.ContextManifest.BudgetPlan.OutputReserve
 	if envelope := inputTokens + reserve; envelope > out.ContextBudgetMaxTokens {
 		t.Fatalf("provider call allowed with rendered envelope %d > window %d (input=%d reserve=%d)",
 			envelope, out.ContextBudgetMaxTokens, inputTokens, reserve)

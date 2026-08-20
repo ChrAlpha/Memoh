@@ -12,6 +12,7 @@ import (
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
 	agenttools "github.com/memohai/memoh/internal/agent/tool"
+	"github.com/memohai/memoh/internal/models"
 )
 
 // photoPrefix is a vision turn whose user message carries a JPEG of the given
@@ -36,7 +37,7 @@ func TestProviderStepReselectionKeepsPhotoInFrozenPrefixWithinEnvelope(t *testin
 	system := strings.Repeat("s", 8_000)
 	tools := []sdk.Tool{{Name: "lookup", Description: "Look something up.", Parameters: map[string]any{"type": "object"}}}
 
-	plan, err := ComputeContextBudgetPlan(128_000, min(DefaultOutputReserveTokens, 128_000/4), 0, 0)
+	plan, err := ComputeContextBudgetPlan(128_000, models.DefaultOutputReserveTokens, 0, 0)
 	if err != nil {
 		t.Fatalf("ComputeContextBudgetPlan: %v", err)
 	}
