@@ -44,9 +44,6 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		return agentpkg.ContextStepSelectionResult{}
 	}
 	frags = markInjectedLoopUserFrags(frags)
-	if input.ProviderInputAllowanceTokens > 0 {
-		frags = applyProviderStepEnvelopeCosts(frags)
-	}
 
 	selector := &FragmentSelector{}
 	budget := input.BudgetMaxTokens
@@ -106,19 +103,6 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		contextfrag.ErrBudgetUnsatisfied,
 		input.ProviderInputAllowanceTokens,
 	)}
-}
-
-// applyProviderStepEnvelopeCosts lifts each loop fragment to the provider
-// envelope estimate so the selector's budget arithmetic and the envelope check
-// price the same message identically.
-func applyProviderStepEnvelopeCosts(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
-	for i := range frags {
-		if providerStepFragMessage(frags[i]) == nil {
-			continue
-		}
-		frags[i].TokenEstimate = contextfrag.ResolveProviderBudgetFragTokens(frags[i])
-	}
-	return frags
 }
 
 func providerStepEnvelopeOverflow(input agentpkg.ContextStepSelectionInput, messages []sdk.Message) int {
