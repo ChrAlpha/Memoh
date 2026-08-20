@@ -43,12 +43,12 @@ func ResolveGenerationLimits(clientType ClientType, reasoning *ReasoningConfig, 
 	if reasoning != nil && reasoning.Active {
 		limits.MaxOutputTokens = DefaultReasoningOutputReserveTokens
 	}
-	if !EnforcesMaxOutputTokens(clientType) {
-		limits.Resolution = GenerationLimitsProviderIgnores
-	}
 	if contextWindow > 0 && limits.MaxOutputTokens > contextWindow/4 {
 		limits.MaxOutputTokens = contextWindow / 4
 		limits.Resolution = GenerationLimitsWindowClamped
+	}
+	if !EnforcesMaxOutputTokens(clientType) {
+		limits.Resolution = GenerationLimitsProviderIgnores
 	}
 	return limits
 }
@@ -56,7 +56,8 @@ func ResolveGenerationLimits(clientType ClientType, reasoning *ReasoningConfig, 
 // anthropicGenerationLimits reproduces the adapter's max_tokens resolution:
 // the answer allowance, the reasoning-aware default for adaptive thinking, or
 // the answer allowance plus the legacy thinking budget. Thinking may use at
-// most half of a configured window.
+// most half of a configured window, down to the minimum budget the API
+// accepts.
 func anthropicGenerationLimits(reasoning *ReasoningConfig, contextWindow int) GenerationLimits {
 	limits := GenerationLimits{
 		MaxOutputTokens: anthropicDefaultMaxTokens,
@@ -84,8 +85,9 @@ func anthropicGenerationLimits(reasoning *ReasoningConfig, contextWindow int) Ge
 
 // AnthropicThinkingBudget is the legacy budget_tokens sent for an effort,
 // fitted so the answer allowance plus the budget stays within half of the
-// configured window; the model construction and the budget plan share it so
-// budget_tokens always stays below the requested max_tokens.
+// configured window but never below the minimum the API accepts; the model
+// construction and the budget plan share it so budget_tokens always stays
+// below the requested max_tokens.
 func AnthropicThinkingBudget(effort string, contextWindow int) int {
 	budget := legacyAnthropicBudgetFor(effort)
 	if contextWindow > 0 {
