@@ -524,6 +524,8 @@ func providerViewFallback(
 	manifest.CachePlan = &plan
 	if budgetPlan != nil {
 		fallbackPlan := *budgetPlan
+		fallbackPlan.ActualSystemCost = 0
+		fallbackPlan.HistoryBudget = 0
 		manifest.BudgetPlan = &fallbackPlan
 	}
 	manifest.Mutations = ledger

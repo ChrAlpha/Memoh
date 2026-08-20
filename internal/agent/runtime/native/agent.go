@@ -1322,7 +1322,11 @@ func failPreparedProviderAttempt(
 	provenance preparedMessageProvenance,
 	err error,
 ) *sdk.GenerateParams {
-	snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
+	switch snapshot.ReselectionOutcome {
+	case contextfrag.ReselectionOutcomeWouldApply, contextfrag.ReselectionOutcomeWouldFail:
+	default:
+		snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeFailed
+	}
 	snapshot.ReselectionApplied = false
 	params.Messages = append([]sdk.Message(nil), params.Messages[:prefixCount]...)
 	handoff.reject(provenance)
@@ -1348,9 +1352,11 @@ func copyDropReasons(reasons map[string]int) map[string]int {
 // checked against: the window minus the output reserve, whether the plan
 // recorded it or the run assembled its context without a plan.
 func stepReselectionAllowance(cfg RunConfig) int {
-	window, reserve := cfg.ContextBudgetMaxTokens, cfg.GenerationLimits().MaxOutputTokens
+	window, reserve := cfg.ContextBudgetMaxTokens, 0
 	if plan := cfg.ContextManifest.BudgetPlan; plan != nil {
 		window, reserve = plan.Window, plan.OutputReserve
+	} else if window > 0 {
+		reserve = cfg.GenerationLimits().MaxOutputTokens
 	}
 	if window <= 0 {
 		return 0

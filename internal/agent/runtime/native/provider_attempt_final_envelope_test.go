@@ -50,6 +50,18 @@ func TestAgentGenerateChecksInitialEnvelopeWithoutReselector(t *testing.T) {
 	if len(records) != 1 || records[0].Kind != contextfrag.MutationContextBudgetFailure {
 		t.Fatalf("mutations = %#v, want one context budget failure", records)
 	}
+	assertRejectedInitialStep(t, cfg.ContextMutations)
+}
+
+func assertRejectedInitialStep(t *testing.T, ledger *contextfrag.MutationLedger) {
+	t.Helper()
+	steps := ledger.StepSnapshots()
+	if len(steps) != 1 {
+		t.Fatalf("step snapshots = %#v, want exactly the rejected initial step", steps)
+	}
+	if steps[0].StepIndex != 0 || steps[0].ReselectionApplied || steps[0].ReselectionOutcome != contextfrag.ReselectionOutcomeFailed {
+		t.Fatalf("initial step snapshot = %#v, want step 0 failed without reselection", steps[0])
+	}
 }
 
 func TestAgentGenerateChecksFullPrefixInitialEnvelopeWithReselector(t *testing.T) {
@@ -79,6 +91,7 @@ func TestAgentGenerateChecksFullPrefixInitialEnvelopeWithReselector(t *testing.T
 	if reselectorCalls != 0 {
 		t.Fatalf("reselector calls = %d, want none for a prefix-only initial dispatch", reselectorCalls)
 	}
+	assertRejectedInitialStep(t, cfg.ContextMutations)
 }
 
 func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T) {
@@ -121,8 +134,11 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 		ContextMutations:       ledger,
 		ContextBudgetMaxTokens: plan.Window,
 		ContextManifest:        contextfrag.Manifest{BudgetPlan: &plan},
-		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
-			return ContextStepSelectionResult{}
+		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+			return ContextStepSelectionResult{
+				Messages: append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...),
+				Dropped:  len(input.Messages) - input.InitialMessageCount,
+			}
 		},
 	})
 	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
@@ -133,6 +149,13 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 	}
 	if mode := ledger.LoopSelectionMode(); mode != contextfrag.LoopSelectionSuffixOnlyShadow {
 		t.Fatalf("loop selection mode = %q, want shadow", mode)
+	}
+	steps := ledger.StepSnapshots()
+	if len(steps) != 2 {
+		t.Fatalf("step snapshots = %#v, want the dispatched step and the rejected shadow step", steps)
+	}
+	if rejected := steps[1]; rejected.ReselectionOutcome != contextfrag.ReselectionOutcomeWouldApply || rejected.ReselectionApplied || rejected.Dropped == 0 {
+		t.Fatalf("shadow step snapshot = %#v, want the observed would_apply verdict kept on the rejected step", rejected)
 	}
 }
 
