@@ -167,10 +167,7 @@ func systemBudgetPlanActive(profile IntentProfile, plan *contextfrag.ContextBudg
 
 func finishSystemBudgetPlan(plan *contextfrag.ContextBudgetPlan, actual int) {
 	plan.ActualSystemCost = actual
-	plan.HistoryBudget = plan.SystemBudget - actual
-	if plan.HistoryBudget < 1 {
-		plan.HistoryBudget = 1
-	}
+	plan.HistoryBudget = max(plan.SystemBudget-actual, 0)
 }
 
 func systemFragCost(frags []contextfrag.ContextFrag) int {
