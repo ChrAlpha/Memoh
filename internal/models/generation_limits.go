@@ -10,62 +10,86 @@ const (
 
 	anthropicDefaultMaxTokens          = 4096
 	anthropicDefaultReasoningMaxTokens = 32000
+	anthropicMinThinkingBudgetTokens   = 1024
 )
 
 const (
 	GenerationLimitsProviderDefault = "provider_default"
-	GenerationLimitsPolicyCap       = "policy_cap"
 	GenerationLimitsEstimated       = "estimated"
 	GenerationLimitsProviderIgnores = "provider_ignores"
 	GenerationLimitsWindowClamped   = "window_clamped"
 )
 
 // GenerationLimits is the single authority for one turn's output allowance:
-// the same MaxOutputTokens reserves window space in the context budget plan
-// and, when Enforced, is sent to the provider as max_tokens. Unenforced
-// limits are Memoh's reserve only; the provider keeps its own default because
-// the model's real cap is unknown and an explicit value could be rejected.
+// the context budget plan reserves MaxOutputTokens and, when Requested, the
+// provider request carries the same value as max_tokens. Unrequested limits
+// are Memoh's reserve only; the provider keeps its own default because the
+// model's real cap is unknown and an explicit value could be rejected.
 type GenerationLimits struct {
 	MaxOutputTokens int
-	Enforced        bool
+	Requested       bool
 	Resolution      string
 }
 
-// ResolveGenerationLimits derives the output allowance from the client type
-// and the resolved thinking decision. Anthropic mirrors the SDK's own
-// defaults exactly (answer allowance, plus the thinking budget for legacy
-// models, or the reasoning-aware default for adaptive thinking), so the
-// reserved and requested values cannot diverge; OpenAI Responses models all
-// accept the policy caps; other clients are estimated without enforcement.
+// ResolveGenerationLimits derives the output allowance from the client type,
+// the resolved thinking decision, and the configured context window.
+// Anthropic mirrors the SDK's own defaults, so the reserved and requested
+// values cannot diverge; every other client is estimated without a request.
 func ResolveGenerationLimits(clientType ClientType, reasoning *ReasoningConfig, contextWindow int) GenerationLimits {
-	active := reasoning != nil && reasoning.Active
+	if clientType == ClientTypeAnthropicMessages {
+		return anthropicGenerationLimits(reasoning, contextWindow)
+	}
 	limits := GenerationLimits{MaxOutputTokens: DefaultOutputReserveTokens, Resolution: GenerationLimitsEstimated}
-	if active {
+	if reasoning != nil && reasoning.Active {
 		limits.MaxOutputTokens = DefaultReasoningOutputReserveTokens
 	}
-	legacyThinking := false
-	switch clientType {
-	case ClientTypeAnthropicMessages:
-		limits.Enforced = true
-		limits.Resolution = GenerationLimitsProviderDefault
-		switch {
-		case active && reasoning.Adaptive:
-			limits.MaxOutputTokens = anthropicDefaultReasoningMaxTokens
-		case active:
-			legacyThinking = true
-			limits.MaxOutputTokens = anthropicDefaultMaxTokens + legacyAnthropicBudgetFor(reasoning.Effort)
-		default:
-			limits.MaxOutputTokens = anthropicDefaultMaxTokens
-		}
-	case ClientTypeOpenAIResponses:
-		limits.Enforced = true
-		limits.Resolution = GenerationLimitsPolicyCap
-	case ClientTypeOpenAICodex:
+	if !EnforcesMaxOutputTokens(clientType) {
 		limits.Resolution = GenerationLimitsProviderIgnores
 	}
-	if contextWindow > 0 && !legacyThinking && limits.MaxOutputTokens > contextWindow/4 {
+	if contextWindow > 0 && limits.MaxOutputTokens > contextWindow/4 {
 		limits.MaxOutputTokens = contextWindow / 4
 		limits.Resolution = GenerationLimitsWindowClamped
 	}
 	return limits
+}
+
+// anthropicGenerationLimits reproduces the adapter's max_tokens resolution:
+// the answer allowance, the reasoning-aware default for adaptive thinking, or
+// the answer allowance plus the legacy thinking budget. Thinking may use at
+// most half of a configured window.
+func anthropicGenerationLimits(reasoning *ReasoningConfig, contextWindow int) GenerationLimits {
+	limits := GenerationLimits{
+		MaxOutputTokens: anthropicDefaultMaxTokens,
+		Requested:       true,
+		Resolution:      GenerationLimitsProviderDefault,
+	}
+	switch {
+	case reasoning == nil || !reasoning.Active:
+		return limits
+	case reasoning.Adaptive:
+		limits.MaxOutputTokens = anthropicDefaultReasoningMaxTokens
+		if contextWindow > 0 && limits.MaxOutputTokens > contextWindow/2 {
+			limits.MaxOutputTokens = contextWindow / 2
+			limits.Resolution = GenerationLimitsWindowClamped
+		}
+	default:
+		budget := AnthropicThinkingBudget(reasoning.Effort, contextWindow)
+		limits.MaxOutputTokens = anthropicDefaultMaxTokens + budget
+		if budget < legacyAnthropicBudgetFor(reasoning.Effort) {
+			limits.Resolution = GenerationLimitsWindowClamped
+		}
+	}
+	return limits
+}
+
+// AnthropicThinkingBudget is the legacy budget_tokens sent for an effort,
+// fitted so the answer allowance plus the budget stays within half of the
+// configured window; the model construction and the budget plan share it so
+// budget_tokens always stays below the requested max_tokens.
+func AnthropicThinkingBudget(effort string, contextWindow int) int {
+	budget := legacyAnthropicBudgetFor(effort)
+	if contextWindow > 0 {
+		budget = min(budget, max(anthropicMinThinkingBudgetTokens, contextWindow/2-anthropicDefaultMaxTokens))
+	}
+	return budget
 }

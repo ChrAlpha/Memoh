@@ -18,19 +18,19 @@ func TestRunConfigGenerationLimitsFollowModelAndReasoning(t *testing.T) {
 		ReasoningConfig:        &models.ReasoningConfig{Active: true, Adaptive: true, Effort: models.ReasoningEffortHigh},
 		ContextBudgetMaxTokens: 200_000,
 	}
-	if got := anthropic.GenerationLimits(); got.MaxOutputTokens != 32_000 || !got.Enforced || got.Resolution != models.GenerationLimitsProviderDefault {
-		t.Fatalf("anthropic adaptive limits = %+v, want enforced 32000 provider_default", got)
+	if got := anthropic.GenerationLimits(); got.MaxOutputTokens != 32_000 || !got.Requested || got.Resolution != models.GenerationLimitsProviderDefault {
+		t.Fatalf("anthropic adaptive limits = %+v, want requested 32000 provider_default", got)
 	}
 	generic := RunConfig{Model: &sdk.Model{ID: "mock", Provider: &atomicMockProvider{}}, ContextBudgetMaxTokens: 128_000}
-	if got := generic.GenerationLimits(); got.MaxOutputTokens != models.DefaultOutputReserveTokens || got.Enforced {
-		t.Fatalf("generic limits = %+v, want unenforced %d", got, models.DefaultOutputReserveTokens)
+	if got := generic.GenerationLimits(); got.MaxOutputTokens != models.DefaultOutputReserveTokens || got.Requested {
+		t.Fatalf("generic limits = %+v, want unrequested %d", got, models.DefaultOutputReserveTokens)
 	}
-	if got := (RunConfig{}).GenerationLimits(); got.MaxOutputTokens != models.DefaultOutputReserveTokens || got.Enforced {
-		t.Fatalf("model-less limits = %+v, want unenforced default", got)
+	if got := (RunConfig{}).GenerationLimits(); got.MaxOutputTokens != models.DefaultOutputReserveTokens || got.Requested {
+		t.Fatalf("model-less limits = %+v, want unrequested default", got)
 	}
 }
 
-func TestAgentGenerateSendsMaxTokensOnlyWhenLimitsAreEnforced(t *testing.T) {
+func TestAgentGenerateSendsMaxTokensOnlyWhenLimitsAreRequested(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -38,7 +38,7 @@ func TestAgentGenerateSendsMaxTokensOnlyWhenLimitsAreEnforced(t *testing.T) {
 		provider sdk.Provider
 		want     *int
 	}{
-		{name: "anthropic enforces the mirrored default", provider: anthropicNameMockProvider{&atomicMockProvider{}}, want: intPtr(4096)},
+		{name: "anthropic requests the mirrored default", provider: anthropicNameMockProvider{&atomicMockProvider{}}, want: intPtr(4096)},
 		{name: "generic completions keeps the provider default", provider: &atomicMockProvider{}, want: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

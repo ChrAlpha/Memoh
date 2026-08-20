@@ -24,7 +24,7 @@ func TestResolveGenerationLimitsMirrorsAnthropicProviderDefaults(t *testing.T) {
 			if got.MaxOutputTokens != tc.want {
 				t.Fatalf("MaxOutputTokens = %d, want %d", got.MaxOutputTokens, tc.want)
 			}
-			if !got.Enforced {
+			if !got.Requested {
 				t.Fatal("Anthropic limits must be sent as max_tokens so the plan and the request share one value")
 			}
 			if got.Resolution != GenerationLimitsProviderDefault {
@@ -34,64 +34,70 @@ func TestResolveGenerationLimitsMirrorsAnthropicProviderDefaults(t *testing.T) {
 	}
 }
 
-func TestResolveGenerationLimitsCapsOpenAIResponses(t *testing.T) {
+func TestResolveGenerationLimitsFitsAnthropicThinkingIntoHalfTheWindow(t *testing.T) {
 	t.Parallel()
 
-	plain := ResolveGenerationLimits(ClientTypeOpenAIResponses, nil, 400_000)
-	if plain.MaxOutputTokens != DefaultOutputReserveTokens || !plain.Enforced || plain.Resolution != GenerationLimitsPolicyCap {
-		t.Fatalf("plain responses limits = %+v, want enforced policy cap %d", plain, DefaultOutputReserveTokens)
+	legacy := ResolveGenerationLimits(ClientTypeAnthropicMessages, &ReasoningConfig{Active: true, Effort: ReasoningEffortHigh}, 64_000)
+	if legacy.MaxOutputTokens != 32_000 || !legacy.Requested || legacy.Resolution != GenerationLimitsWindowClamped {
+		t.Fatalf("legacy high on 64k = %+v, want 4096 + a 27904 budget fitted to half the window", legacy)
 	}
-	reasoning := ResolveGenerationLimits(ClientTypeOpenAIResponses, &ReasoningConfig{Active: true, Effort: ReasoningEffortHigh}, 400_000)
-	if reasoning.MaxOutputTokens != DefaultReasoningOutputReserveTokens || !reasoning.Enforced {
-		t.Fatalf("reasoning responses limits = %+v, want enforced policy cap %d", reasoning, DefaultReasoningOutputReserveTokens)
+	if budget := AnthropicThinkingBudget(ReasoningEffortHigh, 64_000); budget != 27_904 {
+		t.Fatalf("fitted budget = %d, want 27904 so budget_tokens stays below max_tokens", budget)
+	}
+	if budget := AnthropicThinkingBudget(ReasoningEffortHigh, 200_000); budget != 50_000 {
+		t.Fatalf("budget on 200k = %d, want the full 50000", budget)
+	}
+	if budget := AnthropicThinkingBudget(ReasoningEffortHigh, 8_000); budget != 1_024 {
+		t.Fatalf("budget on 8k = %d, want the Anthropic minimum", budget)
+	}
+	adaptive := ResolveGenerationLimits(ClientTypeAnthropicMessages, &ReasoningConfig{Active: true, Adaptive: true}, 100_000)
+	if adaptive.MaxOutputTokens != 32_000 || adaptive.Resolution != GenerationLimitsProviderDefault {
+		t.Fatalf("adaptive on 100k = %+v, want the untouched 32000 default", adaptive)
+	}
+	small := ResolveGenerationLimits(ClientTypeAnthropicMessages, &ReasoningConfig{Active: true, Adaptive: true}, 60_000)
+	if small.MaxOutputTokens != 30_000 || !small.Requested || small.Resolution != GenerationLimitsWindowClamped {
+		t.Fatalf("adaptive on 60k = %+v, want 30000 window_clamped", small)
 	}
 }
 
-func TestResolveGenerationLimitsEstimatesWithoutEnforcingForUnknownCatalogs(t *testing.T) {
+func TestResolveGenerationLimitsEstimatesWithoutRequestingForOtherClients(t *testing.T) {
 	t.Parallel()
 
-	for _, clientType := range []ClientType{ClientTypeOpenAICompletions, ClientTypeGoogleGenerativeAI, ClientTypeGitHubCopilot} {
+	for _, clientType := range []ClientType{ClientTypeOpenAIResponses, ClientTypeOpenAICompletions, ClientTypeGoogleGenerativeAI, ClientTypeGitHubCopilot} {
 		t.Run(string(clientType), func(t *testing.T) {
 			t.Parallel()
 			plain := ResolveGenerationLimits(clientType, nil, 128_000)
-			if plain.MaxOutputTokens != DefaultOutputReserveTokens || plain.Enforced || plain.Resolution != GenerationLimitsEstimated {
-				t.Fatalf("plain limits = %+v, want unenforced estimate %d", plain, DefaultOutputReserveTokens)
+			if plain.MaxOutputTokens != DefaultOutputReserveTokens || plain.Requested || plain.Resolution != GenerationLimitsEstimated {
+				t.Fatalf("plain limits = %+v, want unrequested estimate %d", plain, DefaultOutputReserveTokens)
 			}
 			reasoning := ResolveGenerationLimits(clientType, &ReasoningConfig{Active: true}, 128_000)
-			if reasoning.MaxOutputTokens != DefaultReasoningOutputReserveTokens || reasoning.Enforced {
-				t.Fatalf("reasoning limits = %+v, want unenforced estimate %d", reasoning, DefaultReasoningOutputReserveTokens)
+			if reasoning.MaxOutputTokens != DefaultReasoningOutputReserveTokens || reasoning.Requested {
+				t.Fatalf("reasoning limits = %+v, want unrequested estimate %d", reasoning, DefaultReasoningOutputReserveTokens)
 			}
 		})
 	}
 }
 
-func TestResolveGenerationLimitsNeverEnforcesOnCodex(t *testing.T) {
+func TestResolveGenerationLimitsMarksCodexAsIgnoringTheCap(t *testing.T) {
 	t.Parallel()
 
 	got := ResolveGenerationLimits(ClientTypeOpenAICodex, &ReasoningConfig{Active: true, Effort: ReasoningEffortHigh}, 400_000)
-	if got.Enforced || got.Resolution != GenerationLimitsProviderIgnores || got.MaxOutputTokens != DefaultReasoningOutputReserveTokens {
-		t.Fatalf("codex limits = %+v, want unenforced reserve %d with provider_ignores", got, DefaultReasoningOutputReserveTokens)
+	if got.Requested || got.Resolution != GenerationLimitsProviderIgnores || got.MaxOutputTokens != DefaultReasoningOutputReserveTokens {
+		t.Fatalf("codex limits = %+v, want unrequested reserve %d with provider_ignores", got, DefaultReasoningOutputReserveTokens)
 	}
 }
 
-func TestResolveGenerationLimitsClampsToAQuarterOfTheWindow(t *testing.T) {
+func TestResolveGenerationLimitsClampsEstimatesToAQuarterOfTheWindow(t *testing.T) {
 	t.Parallel()
 
 	got := ResolveGenerationLimits(ClientTypeOpenAICompletions, nil, 8_192)
-	if got.MaxOutputTokens != 2_048 || got.Resolution != GenerationLimitsWindowClamped || got.Enforced {
+	if got.MaxOutputTokens != 2_048 || got.Resolution != GenerationLimitsWindowClamped || got.Requested {
 		t.Fatalf("small-window limits = %+v, want 2048 window_clamped", got)
 	}
 	if got := ResolveGenerationLimits(ClientTypeOpenAICompletions, nil, 32_767); got.MaxOutputTokens != 8_191 {
 		t.Fatalf("quarter-window clamp = %+v, want 8191", got)
 	}
-	if got := ResolveGenerationLimits(ClientTypeOpenAIResponses, &ReasoningConfig{Active: true}, 64_000); got.MaxOutputTokens != 16_000 || !got.Enforced {
-		t.Fatalf("clamped enforced limits = %+v, want 16000 still enforced", got)
-	}
 	if got := ResolveGenerationLimits(ClientTypeOpenAICompletions, nil, 0); got.MaxOutputTokens != DefaultOutputReserveTokens {
 		t.Fatalf("unknown window must not clamp: %+v", got)
-	}
-	legacy := ResolveGenerationLimits(ClientTypeAnthropicMessages, &ReasoningConfig{Active: true, Effort: ReasoningEffortHigh}, 64_000)
-	if legacy.MaxOutputTokens != 4096+50000 {
-		t.Fatalf("legacy thinking floor must survive the clamp (budget_tokens must stay below max_tokens): %+v", legacy)
 	}
 }

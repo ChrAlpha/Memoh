@@ -23,7 +23,7 @@ func (cfg RunConfig) EffectiveHistoryBudgetTokens() int {
 
 // GenerationLimits resolves the turn's output allowance from the model the
 // run dispatches to and the thinking decision it was constructed with. The
-// context budget plan reserves exactly this value and, when enforced, the
+// context budget plan reserves exactly this value and, when requested, the
 // provider request carries it as max_tokens.
 func (cfg RunConfig) GenerationLimits() models.GenerationLimits {
 	return models.ResolveGenerationLimits(
