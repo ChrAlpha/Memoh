@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -59,9 +60,47 @@ func TestApplyProviderRunConfigTrimsFloorPricedHistoryToTheRenderedEnvelope(t *t
 	if len(out.Messages) < 2 || len(out.Messages) >= 61 {
 		t.Fatalf("messages = %d, want a trimmed history that still keeps recent turns", len(out.Messages))
 	}
+	if slack, next := plan.Window-plan.OutputReserve-rendered, contextfrag.ProviderEnvelopeTokens("", []sdk.Message{sdk.UserMessage(strings.Repeat("a", 1_000))}, nil); slack >= next {
+		t.Fatalf("slack = %d tokens, want less than the next trimmed message (%d) so trimming stays tight", slack, next)
+	}
 	for _, record := range out.ContextMutations.Records() {
 		if record.Kind == contextfrag.MutationContextBudgetFailure || record.Kind == contextfrag.MutationContextViewFallback {
 			t.Fatalf("trimmable history recorded %+v", record)
 		}
+	}
+}
+
+// TestApplyProviderRunConfigFailsClosedWhenRenderingOutgrowsSelection keeps
+// the rendered-envelope check as the last line of defense: a fragment that
+// renders as many tiny messages is charged once by selection but per message
+// by the rendered check, and that drift must still fail closed.
+func TestApplyProviderRunConfigFailsClosedWhenRenderingOutgrowsSelection(t *testing.T) {
+	t.Parallel()
+
+	tiny := sdk.UserMessage("x")
+	burst := historyMessageFrag("burst", tiny)
+	for range 39 {
+		burst.Parts = append(burst.Parts, contextfrag.Part{Type: contextfrag.PartSDKMessage, SDKMessage: &tiny})
+	}
+	frags := []contextfrag.ContextFrag{
+		systemTextFrag("system", strings.Repeat("s", 2_784), contextfrag.KindSystemPrompt, 100),
+		burst,
+		currentMessageFrag("current", "current"),
+	}
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+		ContextSourceFrags:     frags,
+		ContextBudgetMaxTokens: 1_200,
+	})
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("preflight error = %v, want rendered-envelope ErrBudgetUnsatisfied", err)
+	}
+	if !strings.Contains(err.Error(), "rendered_input=") {
+		t.Fatalf("preflight error = %v, want the rendered-envelope detail", err)
+	}
+	records := out.ContextMutations.Records()
+	if len(records) != 1 || records[0] != (contextfrag.MutationRecord{
+		Kind: contextfrag.MutationContextBudgetFailure, Detail: "budget_unsatisfied",
+	}) {
+		t.Fatalf("rendered-envelope mutations = %#v, want one budget_unsatisfied record", records)
 	}
 }

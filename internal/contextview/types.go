@@ -20,7 +20,10 @@ type SourceSpec struct {
 type BudgetEnvelope struct {
 	MaxTokens int
 	// Plan activates unified provider-envelope budgeting. Nil preserves the
-	// legacy unbudgeted provider selection path.
+	// legacy unbudgeted provider selection path. Either Plan or
+	// EnforceProtectedBudget makes the budget a provider allowance, which
+	// charges fragments with the provider envelope estimator instead of their
+	// legacy estimates.
 	Plan *contextfrag.ContextBudgetPlan
 	// EnforceProtectedBudget makes MaxTokens a hard allowance that includes
 	// must-keep fragments without reactivating the turn-start system pass.
@@ -28,7 +31,7 @@ type BudgetEnvelope struct {
 	// context cannot fit the remaining provider envelope.
 	EnforceProtectedBudget bool
 	// RecentProtectTokens bands the newest droppable history within this many
-	// estimated tokens to drop last. Zero disables the window.
+	// charged tokens to drop last. Zero disables the window.
 	RecentProtectTokens int
 	ToolExchange        *contextfrag.ToolExchangePolicy
 }
