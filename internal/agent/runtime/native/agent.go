@@ -1281,7 +1281,7 @@ func prepareProviderAttempt(
 	}
 	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, provenance, fmt.Errorf(
-			"%w: serialized_input_overflow=%d allowance=%d",
+			"%w: input_overflow=%d allowance=%d",
 			contextfrag.ErrBudgetUnsatisfied,
 			overflow,
 			inputAllowance,
@@ -1314,8 +1314,7 @@ func providerAttemptEnvelopeOverflow(params *sdk.GenerateParams, allowance int) 
 	if params == nil || allowance <= 0 {
 		return 0
 	}
-	_, payloadBytes := contextfrag.ProviderPayloadHashAndBytes(params.System, params.Messages, params.Tools)
-	return contextfrag.ProviderBudgetTokensFromBytes(payloadBytes) - allowance
+	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools) - allowance
 }
 
 func failPreparedProviderAttempt(
@@ -1368,9 +1367,7 @@ func remainingStepBudget(maxTokens int, params *sdk.GenerateParams, prefixCount 
 		return 0
 	}
 	prefixCount = clampStableMessageCount(prefixCount, len(params.Messages))
-	prefixMessages := append([]sdk.Message(nil), params.Messages[:prefixCount]...)
-	_, bytes := contextfrag.ProviderPayloadHashAndBytes(params.System, prefixMessages, params.Tools)
-	remaining := maxTokens - contextfrag.ProviderBudgetTokensFromBytes(bytes)
+	remaining := maxTokens - contextfrag.ProviderEnvelopeTokens(params.System, params.Messages[:prefixCount], params.Tools)
 	if remaining < 1 {
 		return 1
 	}

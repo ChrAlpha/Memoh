@@ -122,6 +122,26 @@ func ResolveProviderBudgetFragTokens(frag ContextFrag) int {
 	return estimated
 }
 
+// ProviderEnvelopeTokens prices one provider payload for envelope decisions
+// with the estimator selection applies per fragment, so a message costs the
+// same whether it is being selected or has already been frozen into a prefix.
+func ProviderEnvelopeTokens(system string, messages []sdk.Message, tools []sdk.Tool) int {
+	total := ProviderBudgetTokensFromBytes(len(system))
+	for _, message := range messages {
+		bytes, images := sdkMessageEstimate(message)
+		total += ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
+	}
+	for _, tool := range tools {
+		total += ProviderToolDefTokens(ToolDefAccountingFor("", tool))
+	}
+	return total
+}
+
+// ProviderToolDefTokens prices one tool definition for envelope decisions.
+func ProviderToolDefTokens(def ToolDefAccounting) int {
+	return max(def.TokenEstimate, ProviderBudgetTokensFromBytes(def.Bytes))
+}
+
 // ToolDefAccountingFor measures one tool definition as the provider will
 // receive it (name, description, parameter schema). A definition that fails
 // to serialize falls back to its visible prose size.

@@ -45,7 +45,7 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 	}
 	frags = markInjectedLoopUserFrags(frags)
 	if input.ProviderInputAllowanceTokens > 0 {
-		frags = applyProviderStepSerializedCosts(frags, input)
+		frags = applyProviderStepEnvelopeCosts(frags)
 	}
 
 	selector := &FragmentSelector{}
@@ -102,43 +102,21 @@ func SelectProviderStepMessages(ctx context.Context, input agentpkg.ContextStepS
 		budget = nextBudget
 	}
 	return agentpkg.ContextStepSelectionResult{FatalError: fmt.Errorf(
-		"%w: serialized provider step exceeds input allowance %d",
+		"%w: provider step exceeds input allowance %d",
 		contextfrag.ErrBudgetUnsatisfied,
 		input.ProviderInputAllowanceTokens,
 	)}
 }
 
-func applyProviderStepSerializedCosts(
-	frags []contextfrag.ContextFrag,
-	input agentpkg.ContextStepSelectionInput,
-) []contextfrag.ContextFrag {
-	prefix := append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...)
-	_, runningBytes := contextfrag.ProviderPayloadHashAndBytes(input.ProviderSystem, prefix, input.ProviderTools)
-	runningTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
-	_, emptyEnvelopeBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{}, nil)
-	messageCount := len(prefix)
+// applyProviderStepEnvelopeCosts lifts each loop fragment to the provider
+// envelope estimate so the selector's budget arithmetic and the envelope check
+// price the same message identically.
+func applyProviderStepEnvelopeCosts(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	for i := range frags {
-		msg := providerStepFragMessage(frags[i])
-		if msg == nil {
+		if providerStepFragMessage(frags[i]) == nil {
 			continue
 		}
-		_, singletonBytes := contextfrag.ProviderPayloadHashAndBytes("", []sdk.Message{*msg}, nil)
-		messageBytes := singletonBytes - emptyEnvelopeBytes
-		if messageCount == 0 {
-			// The fixed-envelope measurement serializes an empty cloned prefix as
-			// null. The first message replaces those four bytes with [<message>].
-			messageBytes -= 2
-		} else {
-			messageBytes++ // comma before an appended array element
-		}
-		runningBytes += messageBytes
-		nextTokens := contextfrag.ProviderBudgetTokensFromBytes(runningBytes)
-		serializedTokens := nextTokens - runningTokens
-		if serializedTokens > frags[i].TokenEstimate {
-			frags[i].TokenEstimate = serializedTokens
-		}
-		runningTokens = nextTokens
-		messageCount++
+		frags[i].TokenEstimate = contextfrag.ResolveProviderBudgetFragTokens(frags[i])
 	}
 	return frags
 }
@@ -147,16 +125,14 @@ func providerStepEnvelopeOverflow(input agentpkg.ContextStepSelectionInput, mess
 	if input.ProviderInputAllowanceTokens <= 0 {
 		return 0
 	}
-	_, payloadBytes := contextfrag.ProviderPayloadHashAndBytes(input.ProviderSystem, messages, input.ProviderTools)
-	return contextfrag.ProviderBudgetTokensFromBytes(payloadBytes) - input.ProviderInputAllowanceTokens
+	return contextfrag.ProviderEnvelopeTokens(input.ProviderSystem, messages, input.ProviderTools) - input.ProviderInputAllowanceTokens
 }
 
 // markInjectedLoopUserFrags types user-role messages appended during the tool
 // loop. Text-only carriers (InjectCh text, background summaries) hold content
 // the run deliberately inserted mid-stream, so step budget pressure must never
-// drop them. Image-bearing payloads (read_media injections) stay droppable:
-// their sources live at workspace paths the model can re-read, and their
-// base64 bodies can exceed the whole step budget on their own.
+// drop them. Media-bearing payloads (read_media injections) stay droppable:
+// their sources live at workspace paths the model can re-read.
 func markInjectedLoopUserFrags(frags []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	for i := range frags {
 		msg := providerStepFragMessage(frags[i])
