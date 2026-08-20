@@ -98,9 +98,10 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name       string
-		reselector ContextStepReselector
-		want       string
+		name        string
+		reselector  ContextStepReselector
+		want        string
+		wantDropped bool
 	}{
 		{
 			name: "would apply",
@@ -110,7 +111,8 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 					Dropped:  len(input.Messages) - input.InitialMessageCount,
 				}
 			},
-			want: contextfrag.ReselectionOutcomeWouldApply,
+			want:        contextfrag.ReselectionOutcomeWouldApply,
+			wantDropped: true,
 		},
 		{
 			name: "would fail",
@@ -175,7 +177,7 @@ func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T)
 			if len(steps) != 2 {
 				t.Fatalf("step snapshots = %#v, want the dispatched step and the rejected shadow step", steps)
 			}
-			if rejected := steps[1]; rejected.ReselectionOutcome != tc.want || rejected.ReselectionApplied {
+			if rejected := steps[1]; rejected.ReselectionOutcome != tc.want || rejected.ReselectionApplied || (rejected.Dropped > 0) != tc.wantDropped {
 				t.Fatalf("shadow step snapshot = %#v, want the observed %s verdict kept on the rejected step", rejected, tc.want)
 			}
 		})

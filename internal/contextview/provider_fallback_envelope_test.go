@@ -17,12 +17,13 @@ import (
 // buildErrorFragsFirstConfig reproduces an internal build error (duplicate
 // fragment IDs) so the applier takes the legacy fallback path.
 func buildErrorFragsFirstConfig(messages []sdk.Message, window int) agentpkg.RunConfig {
+	system := systemTextFrag("system.prompt", "fragment system", contextfrag.KindSystemPrompt, 100)
 	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
 	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
 	return agentpkg.RunConfig{
 		System:                 "legacy system",
 		Messages:               messages,
-		ContextSourceFrags:     []contextfrag.ContextFrag{first, second},
+		ContextSourceFrags:     []contextfrag.ContextFrag{system, first, second},
 		ContextBudgetMaxTokens: window,
 	}
 }
@@ -64,9 +65,12 @@ func TestFallbackDispatchFailsClosedWhenLegacyPayloadExceedsAllowance(t *testing
 		return nil, fmt.Errorf("provider must not be called for an oversized fallback payload (call %d)", call)
 	}}
 	agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: ProviderRunConfigApplier(nil)})
-	// 1,598 tokens with the legacy system: inside the 2,000 window, outside the
-	// 1,500 allowance, so only the output reserve can reject it.
-	cfg := buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage(strings.Repeat("o", 5_100))}, 2_000)
+	const window = 2_000
+	limits := models.ResolveGenerationLimits(models.ClientTypeOpenAICompletions, nil, window)
+	cfg := buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage(strings.Repeat("o", 5_100))}, window)
+	if cost := contextfrag.ProviderEnvelopeTokens(cfg.System, cfg.Messages, nil); cost <= window-limits.MaxOutputTokens || cost >= window {
+		t.Fatalf("legacy payload costs %d tokens, want strictly between allowance %d and window %d", cost, window-limits.MaxOutputTokens, window)
+	}
 	cfg.Model = &sdk.Model{ID: "model", Provider: provider, Type: sdk.ModelTypeChat}
 	cfg.Identity = agentpkg.SessionContext{BotID: "bot-1"}
 	cfg.ContextMutations = contextfrag.NewMutationLedger()
