@@ -22,8 +22,7 @@ type BudgetEnvelope struct {
 	// Plan activates unified provider-envelope budgeting. Nil preserves the
 	// legacy unbudgeted provider selection path. Either Plan or
 	// EnforceProtectedBudget makes the budget a provider allowance, which
-	// charges fragments with the provider envelope estimator instead of their
-	// legacy estimates.
+	// charges fragments at least the provider envelope estimate.
 	Plan *contextfrag.ContextBudgetPlan
 	// EnforceProtectedBudget makes MaxTokens a hard allowance that includes
 	// must-keep fragments without reactivating the turn-start system pass.

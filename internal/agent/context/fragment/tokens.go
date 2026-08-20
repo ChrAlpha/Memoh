@@ -123,9 +123,9 @@ func ResolveProviderBudgetFragTokens(frag ContextFrag) int {
 }
 
 // ProviderEnvelopeTokens prices one provider payload for envelope decisions
-// with the estimator that selection applies per fragment, so a message costs
-// the same whether it is being selected or has already been frozen into a
-// prefix.
+// with the estimator that selection applies per fragment, so a single-message
+// fragment costs the same whether it is being selected or has already been
+// frozen into a prefix.
 func ProviderEnvelopeTokens(system string, messages []sdk.Message, tools []sdk.Tool) int {
 	total := ProviderBudgetTokensFromBytes(len(system))
 	for _, message := range messages {
