@@ -25,6 +25,7 @@ const (
 	KindNativeImage          Kind = "native_image"
 	KindSkillsCatalog        Kind = "skills_catalog"
 	KindHookContext          Kind = "hook_context"
+	KindInjectedMessage      Kind = "injected_message"
 	KindBackgroundSummary    Kind = "background_summary"
 	KindACPContext           Kind = "acp_context"
 
@@ -33,6 +34,29 @@ const (
 	KindMemoryRecall        Kind = "memory_recall"
 	KindConversationSummary Kind = "conversation_summary"
 )
+
+// BackgroundSummaryMessagePrefix marks the per-step user message that carries
+// KindBackgroundSummary content. The agent rebuilds that message between steps
+// (remove by prefix, append the fresh summary) so running-task status never
+// rewrites the cached system prefix, and step reselection recognizes it as a
+// status notice rather than a conversation turn.
+const BackgroundSummaryMessagePrefix = "[Background tasks]\n"
+
+// IsBackgroundSummaryCarrier reports whether msg is the per-step background
+// summary carrier: a user message holding exactly one unadorned text part that
+// starts with BackgroundSummaryMessagePrefix. The agent's between-step removal
+// and step reselection share this single contract so a message one side would
+// remove is never content the other side protects.
+func IsBackgroundSummaryCarrier(msg sdk.Message) bool {
+	if msg.Role != sdk.MessageRoleUser || len(msg.Content) != 1 {
+		return false
+	}
+	part, ok := msg.Content[0].(sdk.TextPart)
+	return ok &&
+		part.CacheControl == nil &&
+		part.ProviderMetadata == nil &&
+		strings.HasPrefix(part.Text, BackgroundSummaryMessagePrefix)
+}
 
 // WorkspaceInstructionAnchor is the heading that marks where the workspace
 // instruction section begins in a flattened system prompt string; it must

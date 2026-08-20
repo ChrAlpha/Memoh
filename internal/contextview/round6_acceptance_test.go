@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
 	agentpkg "github.com/memohai/memoh/internal/agent/runtime/native"
@@ -171,6 +172,75 @@ func TestProviderUsesByteEstimatorForStaticSystemFragsWithoutTokenizer(t *testin
 	}
 }
 
+func TestOversizedHookSystemSectionPrunesWithExplicitMarker(t *testing.T) {
+	t.Parallel()
+
+	frags := round6StaticSystemFrags(sessionmode.Chat, contextfrag.Scope{})
+	id := "system.hook.round6.动态"
+	hook := hookSystemTestFrag(
+		id,
+		strings.Repeat("猫😺", 5000),
+		contextfrag.RetentionOptional,
+		contextfrag.CacheDynamic,
+		contextfrag.TrustWorkspace,
+		80,
+		contextfrag.Scope{},
+	)
+	hook.Budget = contextfrag.BudgetPolicy{
+		MaxTokens: 64,
+		Overflow:  contextfrag.OverflowTrim,
+	}
+	frags = append(frags, hook)
+	base := make([]contextfrag.ContextFrag, 0, len(frags)-1)
+	for _, frag := range frags {
+		if frag.ID != id {
+			base = append(base, frag)
+		}
+	}
+	marker := systemBudgetMarkerFrag([]string{id}, contextfrag.Scope{})
+	const toolDefsCost = 1
+	window := contextWindowForDefaultOutputReserve(
+		systemFragCost(appendClone(base, marker)) + toolDefsCost,
+	)
+
+	out, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		SessionType:             sessionmode.Chat,
+		ContextSourceFrags:      frags,
+		ContextBudgetMaxTokens:  window,
+		ContextToolDefsResolved: true,
+		ContextToolDefs: []contextfrag.ToolDefAccounting{{
+			Provider:      "native",
+			Name:          "use_skill",
+			TokenEstimate: toolDefsCost,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("applyProviderRunConfig() error = %v", err)
+	}
+	decision, ok := decisionByID(out.ContextManifest.SelectionDecisions, id)
+	if !ok ||
+		decision.Decision != contextfrag.DecisionDropped ||
+		decision.Reason != systemBudgetDropReason {
+		t.Fatalf("decision for %s = %#v, %v; want dropped/system_budget", id, decision, ok)
+	}
+	markerFrag := round6FragByID(out.ContextFrags, systemBudgetMarkerID)
+	markerItem := manifestItemByID(out.ContextManifest.Items, systemBudgetMarkerID)
+	if markerFrag == nil || markerItem == nil ||
+		!utf8.ValidString(markerFrag.Parts[0].Text) ||
+		!strings.Contains(markerFrag.Parts[0].Text, "[System Notice]") ||
+		markerItem.TokenEstimate != contextfrag.ResolveFragTokens(*markerFrag) {
+		t.Fatalf("marker frag/item = %#v/%#v", markerFrag, markerItem)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil || plan.ActualSystemCost > plan.SystemBudget {
+		t.Fatalf("budget plan = %#v", plan)
+	}
+	if !round6HasEditTrace(out.ContextManifest.EditTrace, "frag_budget.trim."+id, contextfrag.EditReplace) ||
+		!round6HasEditTrace(out.ContextManifest.EditTrace, "selection.drop."+id, contextfrag.EditRemove) {
+		t.Fatalf("hook edit trace = %#v, want trim then drop audit", out.ContextManifest.EditTrace)
+	}
+}
+
 func round6StaticSystemFrags(mode string, scope contextfrag.Scope) []contextfrag.ContextFrag {
 	return agentpkg.SystemSectionFrags(agentpkg.GenerateSystemSections(agentpkg.SystemPromptParams{
 		SessionType: mode,
@@ -194,4 +264,26 @@ func manifestItemByID(items []contextfrag.ManifestItem, id string) *contextfrag.
 		}
 	}
 	return nil
+}
+
+func round6FragByID(frags []contextfrag.ContextFrag, id string) *contextfrag.ContextFrag {
+	for i := range frags {
+		if frags[i].ID == id {
+			return &frags[i]
+		}
+	}
+	return nil
+}
+
+func round6HasEditTrace(
+	trace []contextfrag.ContextEditTrace,
+	id string,
+	op contextfrag.ContextEditOp,
+) bool {
+	for _, edit := range trace {
+		if edit.EditID == id && edit.Op == op {
+			return true
+		}
+	}
+	return false
 }

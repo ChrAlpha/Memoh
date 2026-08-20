@@ -18,8 +18,15 @@ type LifecycleSnapshot struct {
 	Selection          SelectionTrace      `json:"selection"`
 	BudgetPlan         *ContextBudgetPlan  `json:"budget_plan,omitempty"`
 	CachePlan          *CachePlan          `json:"cache_plan,omitempty"`
+	CacheReadTokens    int                 `json:"cache_read_tokens"`
+	CacheWriteTokens   int                 `json:"cache_write_tokens"`
+	CacheUsage         []CacheUsageRecord  `json:"cache_usage,omitempty"`
 	Mutations          []MutationRecord    `json:"mutations,omitempty"`
 	FinalInputHash     string              `json:"final_input_hash,omitempty"`
+	Model              string              `json:"model,omitempty"`
+	ClientType         string              `json:"client_type,omitempty"`
+	LoopSelectionMode  string              `json:"loop_selection_mode,omitempty"`
+	Steps              []StepSnapshot      `json:"steps,omitempty"`
 }
 
 // LifecycleHolder shares the latest audit across copied RunConfig values.
@@ -75,6 +82,11 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 	if ledger != nil {
 		snapshot.Mutations = ledger.Records()
 		snapshot.FinalInputHash = ledger.FinalInputHash()
+		snapshot.CacheUsage = ledger.CacheUsageRecords()
+		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
+		snapshot.Model, snapshot.ClientType = ledger.ModelInfo()
+		snapshot.LoopSelectionMode = ledger.LoopSelectionMode()
+		snapshot.Steps = ledger.StepSnapshots()
 	}
 	return snapshot, true
 }
@@ -100,6 +112,11 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 	if manifest.Mutations != nil {
 		snapshot.Mutations = manifest.Mutations.Records()
 		snapshot.FinalInputHash = manifest.Mutations.FinalInputHash()
+		snapshot.CacheUsage = manifest.Mutations.CacheUsageRecords()
+		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
+		snapshot.Model, snapshot.ClientType = manifest.Mutations.ModelInfo()
+		snapshot.LoopSelectionMode = manifest.Mutations.LoopSelectionMode()
+		snapshot.Steps = manifest.Mutations.StepSnapshots()
 	}
 	return snapshot
 }
@@ -108,6 +125,8 @@ func cloneLifecycleSnapshot(snapshot LifecycleSnapshot) LifecycleSnapshot {
 	snapshot.SelectionDecisions = append([]SelectionDecision(nil), snapshot.SelectionDecisions...)
 	snapshot.Selection = cloneSelectionTrace(snapshot.Selection)
 	snapshot.Mutations = append([]MutationRecord(nil), snapshot.Mutations...)
+	snapshot.CacheUsage = append([]CacheUsageRecord(nil), snapshot.CacheUsage...)
+	snapshot.Steps = cloneStepSnapshots(snapshot.Steps)
 	if snapshot.BudgetPlan != nil {
 		plan := *snapshot.BudgetPlan
 		snapshot.BudgetPlan = &plan
@@ -117,6 +136,25 @@ func cloneLifecycleSnapshot(snapshot LifecycleSnapshot) LifecycleSnapshot {
 		snapshot.CachePlan = &plan
 	}
 	return snapshot
+}
+
+func cacheUsageTotals(records []CacheUsageRecord) (readTokens, writeTokens int) {
+	for _, record := range records {
+		readTokens += record.CacheReadTokens
+		writeTokens += record.CacheWriteTokens
+	}
+	return readTokens, writeTokens
+}
+
+func cloneStepSnapshots(steps []StepSnapshot) []StepSnapshot {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]StepSnapshot, len(steps))
+	for i, step := range steps {
+		out[i] = cloneStepSnapshot(step)
+	}
+	return out
 }
 
 func cloneSelectionTrace(selection SelectionTrace) SelectionTrace {

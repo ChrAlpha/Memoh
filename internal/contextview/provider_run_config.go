@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
 
@@ -73,6 +74,13 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	if err != nil {
 		return nil
 	}
+	hook, err := (&HookContextCollector{}).Collect(ctx, CollectRequest{
+		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
+		Config: HookContextConfig{Text: cfg.ContextHookText},
+	})
+	if err != nil {
+		return nil
+	}
 	var memory []contextfrag.ContextFrag
 	if index, ok := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex); ok {
 		message := cfg.Messages[index]
@@ -92,6 +100,7 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Provenance.Index < messages[j].Provenance.Index
 	})
+	messages = insertContextFragsBeforeCurrent(messages, hook)
 
 	if cfg.ContextQueryMaterialized {
 		return messages
@@ -111,6 +120,26 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	messages = append(messages, rawCurrent...)
 	messages = append(messages, images...)
 	return messages
+}
+
+func insertContextFragsBeforeCurrent(frags, dynamic []contextfrag.ContextFrag) []contextfrag.ContextFrag {
+	if len(dynamic) == 0 {
+		return frags
+	}
+	history := make([]contextfrag.ContextFrag, 0, len(frags))
+	current := make([]contextfrag.ContextFrag, 0, 1)
+	for _, frag := range frags {
+		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
+			current = append(current, frag)
+			continue
+		}
+		history = append(history, frag)
+	}
+	out := make([]contextfrag.ContextFrag, 0, len(frags)+len(dynamic))
+	out = append(out, history...)
+	out = append(out, dynamic...)
+	out = append(out, current...)
+	return out
 }
 
 func preserveExplicitHistoryMetadata(collected []contextfrag.ContextFrag, cfg agentpkg.RunConfig) []contextfrag.ContextFrag {
@@ -302,11 +331,11 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		}
 		providerSourceFrags = frags
 	} else {
-		cfg = legacyMaterializeQuery(cfg)
 		frags = CollectProviderSourceFrags(ctx, cfg)
 		if frags == nil {
 			return providerViewFallback(logger, cfg, ledger, "collect_error", "context view collection failed", nil), nil
 		}
+		cfg = materializeLegacyQuery(cfg, false)
 	}
 	budgetPlan, budgetErr := providerContextBudgetPlan(ctx, cfg)
 	if cfg.ContextBudgetMaxTokens == 0 {
@@ -365,10 +394,12 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 
 	plan := cachePlanFromPlacement(view.Placement)
 	plan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
+	plan.MidStableMessageCount = midStableMessageCount(view.Placement, view.Selected)
 	manifest := view.Manifest
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.System = payload.System
 	cfg.Messages = payload.Messages
@@ -387,10 +418,12 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		cfg.ContextCurrentUserMessageIndex = nil
 	}
 	cfg.ContextQueryMaterialized = true
+	cfg.ContextHookText = ""
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
+	cfg.ContextStepReselector = SelectProviderStepMessages
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
@@ -434,6 +467,7 @@ func providerBudgetAuditConfig(
 			manifest.BudgetPlan = &plan
 		}
 		manifest.Mutations = ledger
+		appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 		cfg.ContextManifest = manifest
 		cfg.ContextMutations = ledger
 		if cfg.ContextLifecycle != nil {
@@ -443,10 +477,12 @@ func providerBudgetAuditConfig(
 	}
 	cachePlan := cachePlanFromPlacement(view.Placement)
 	cachePlan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
+	cachePlan.MidStableMessageCount = midStableMessageCount(view.Placement, view.Selected)
 	manifest := view.Manifest
 	manifest.CachePlan = &cachePlan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.ContextFrags = view.Selected
 	cfg.ContextManifest = manifest
@@ -472,6 +508,7 @@ func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *c
 	manifest.CachePlan = &plan
 	manifest.Mutations = ledger
 	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
+	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
@@ -479,6 +516,44 @@ func providerViewFallback(logger *slog.Logger, cfg agentpkg.RunConfig, ledger *c
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
 	return cfg
+}
+
+func appendContextSourceWarnings(
+	manifest *contextfrag.Manifest,
+	warnings []contextfrag.ValidationWarning,
+) {
+	if manifest == nil || len(warnings) == 0 {
+		return
+	}
+	for _, warning := range warnings {
+		warning.Ref = finalContextSourceWarningRef(*manifest, warning.Ref)
+		manifest.ValidationWarnings = append(manifest.ValidationWarnings, warning)
+	}
+}
+
+func finalContextSourceWarningRef(
+	manifest contextfrag.Manifest,
+	ref contextfrag.ContextRef,
+) contextfrag.ContextRef {
+	if strings.TrimSpace(ref.ID) == "" {
+		return ref
+	}
+	for _, item := range manifest.Items {
+		if sameContextRefIdentity(item.Ref, ref) {
+			return item.Ref
+		}
+	}
+	for _, decision := range manifest.SelectionDecisions {
+		if sameContextRefIdentity(decision.Ref, ref) {
+			return decision.Ref
+		}
+	}
+	return ref
+}
+
+func sameContextRefIdentity(left, right contextfrag.ContextRef) bool {
+	return left.ID == right.ID &&
+		(left.Namespace == "" || right.Namespace == "" || left.Namespace == right.Namespace)
 }
 
 func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Manifest) {
@@ -512,14 +587,21 @@ func mergeCapabilityFallbackAudit(out *agentpkg.RunConfig, prior contextfrag.Man
 }
 
 func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	return materializeLegacyQuery(cfg, true)
+}
+
+func materializeLegacyQuery(cfg agentpkg.RunConfig, includeHookContext bool) agentpkg.RunConfig {
 	if usage := strings.TrimSpace(cfg.ContextToolUsage); usage != "" && !strings.Contains(cfg.System, usage) {
 		cfg.System = appendToolUsageLegacy(cfg.System, usage)
+	}
+	cfg.Messages = cloneMessages(cfg.Messages)
+	cfg.ForkContextSourceMessageIDs = append([]string(nil), cfg.ForkContextSourceMessageIDs...)
+	if includeHookContext {
+		cfg = insertFallbackHookContext(cfg)
 	}
 	if cfg.ContextQueryMaterialized {
 		return cfg
 	}
-	cfg.Messages = cloneMessages(cfg.Messages)
-	cfg.ForkContextSourceMessageIDs = append([]string(nil), cfg.ForkContextSourceMessageIDs...)
 	imageParts := make([]sdk.MessagePart, 0, len(cfg.InlineImages))
 	for _, image := range cfg.InlineImages {
 		if strings.TrimSpace(image.Image) != "" {
@@ -554,6 +636,82 @@ func legacyMaterializeQuery(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 	cfg.ContextCurrentUserMessageIndex = intPointer(len(cfg.Messages) - 1)
 	cfg.ContextQueryMaterialized = true
 	return cfg
+}
+
+func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	text := strings.TrimSpace(cfg.ContextHookText)
+	cfg.ContextHookText = ""
+	if text == "" || utf8.RuneCountInString(text) > maxHookContextChars {
+		return cfg
+	}
+
+	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.ContextMemoryMessageIndex)
+	currentIndex, hasCurrent := markedCurrentUserMessageIndex(
+		cfg.Messages,
+		cfg.ContextCurrentUserMessageIndex,
+		optionalIndex(memoryIndex, hasMemory)...,
+	)
+	if !hasCurrent {
+		currentIndex, hasCurrent = sourceCurrentUserMessageIndex(cfg, memoryIndex, hasMemory)
+	}
+	if !hasCurrent {
+		cfg.Messages = append(cfg.Messages, sdk.UserMessage(text))
+		if len(cfg.ForkContextSourceMessageIDs) == len(cfg.Messages)-1 {
+			cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+		}
+		return cfg
+	}
+
+	messageCount := len(cfg.Messages)
+	currentMessage := cfg.Messages[currentIndex]
+	messages := make([]sdk.Message, 0, messageCount+1)
+	messages = append(messages, cfg.Messages[:currentIndex]...)
+	messages = append(messages, cfg.Messages[currentIndex+1:]...)
+	messages = append(messages, sdk.UserMessage(text), currentMessage)
+	cfg.Messages = messages
+	if len(cfg.ForkContextSourceMessageIDs) == messageCount {
+		currentSourceID := cfg.ForkContextSourceMessageIDs[currentIndex]
+		sourceIDs := make([]string, 0, messageCount+1)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[:currentIndex]...)
+		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[currentIndex+1:]...)
+		sourceIDs = append(sourceIDs, "", currentSourceID)
+		cfg.ForkContextSourceMessageIDs = sourceIDs
+	}
+	if len(cfg.ContextHistoryTokenEstimates) == messageCount {
+		currentEstimate := cfg.ContextHistoryTokenEstimates[currentIndex]
+		estimates := make([]int, 0, messageCount+1)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[:currentIndex]...)
+		estimates = append(estimates, cfg.ContextHistoryTokenEstimates[currentIndex+1:]...)
+		estimates = append(estimates, 0, currentEstimate)
+		cfg.ContextHistoryTokenEstimates = estimates
+	}
+	cfg.ContextCurrentUserMessageIndex = intPointer(messageCount)
+	if hasMemory {
+		if memoryIndex > currentIndex {
+			memoryIndex--
+		}
+		cfg.ContextMemoryMessageIndex = intPointer(memoryIndex)
+	}
+	return cfg
+}
+
+func sourceCurrentUserMessageIndex(cfg agentpkg.RunConfig, memoryIndex int, hasMemory bool) (int, bool) {
+	for i := len(cfg.ContextSourceFrags) - 1; i >= 0; i-- {
+		frag := cfg.ContextSourceFrags[i]
+		if frag.Kind != contextfrag.KindCurrentUserMessage && frag.Slot != contextfrag.SlotCurrentUser {
+			continue
+		}
+		index := frag.Provenance.Index
+		if index < 0 || index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser ||
+			hasMemory && index == memoryIndex {
+			continue
+		}
+		message, ok := singleSDKMessage(frag)
+		if ok && reflect.DeepEqual(message, cfg.Messages[index]) {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func appendToolUsageLegacy(system, usage string) string {
@@ -613,6 +771,49 @@ func stablePrefixTokenEstimate(placement PlacementPlan, selected []contextfrag.C
 		}
 	}
 	return total
+}
+
+const midBreakpointMinSpanTokens = 2048
+
+// midStableMessageCount selects the smallest leading message count holding at
+// least half of a large stable span's token mass. Zero avoids a redundant or
+// low-value midpoint breakpoint.
+func midStableMessageCount(placement PlacementPlan, selected []contextfrag.ContextFrag) int {
+	byID := make(map[string]contextfrag.ContextFrag, len(selected))
+	for _, frag := range selected {
+		byID[frag.ID] = frag
+	}
+	var perMessage []int
+	total := 0
+	for i, item := range placement.Items {
+		if i >= placement.FirstVolatileIndex {
+			break
+		}
+		if item.Slot == contextfrag.SlotSystem {
+			continue
+		}
+		tokens := 0
+		if frag, ok := byID[item.FragID]; ok {
+			tokens = contextfrag.ResolveFragTokens(frag)
+		}
+		perMessage = append(perMessage, tokens)
+		total += tokens
+	}
+	if total < midBreakpointMinSpanTokens {
+		return 0
+	}
+	cumulative := 0
+	for i, tokens := range perMessage {
+		cumulative += tokens
+		if cumulative*2 >= total {
+			count := i + 1
+			if count >= len(perMessage) {
+				return 0
+			}
+			return count
+		}
+	}
+	return 0
 }
 
 func latestUserMessageIndex(messages []sdk.Message, excluded ...int) *int {
