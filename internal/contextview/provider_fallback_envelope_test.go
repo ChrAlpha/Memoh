@@ -42,6 +42,9 @@ func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *tes
 	if plan.Window != 100_000 || plan.OutputReserve != limits.MaxOutputTokens || plan.OutputReserveResolution != limits.Resolution {
 		t.Fatalf("fallback plan = %+v, want window 100000 reserving %d (%s)", plan, limits.MaxOutputTokens, limits.Resolution)
 	}
+	if plan.ActualSystemCost != 0 || plan.HistoryBudget != 0 {
+		t.Fatalf("fallback plan = %+v, want the failed build's system and history figures cleared", plan)
+	}
 	if out.ContextStepReselector == nil {
 		t.Fatal("fallback assembly must keep step reselection; it is an assembly path, not a budget-disabled path")
 	}
@@ -61,7 +64,9 @@ func TestFallbackDispatchFailsClosedWhenLegacyPayloadExceedsAllowance(t *testing
 		return nil, fmt.Errorf("provider must not be called for an oversized fallback payload (call %d)", call)
 	}}
 	agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: ProviderRunConfigApplier(nil)})
-	cfg := buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage(strings.Repeat("oversized ", 2_000))}, 2_000)
+	// 1,598 tokens with the legacy system: inside the 2,000 window, outside the
+	// 1,500 allowance, so only the output reserve can reject it.
+	cfg := buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage(strings.Repeat("o", 5_100))}, 2_000)
 	cfg.Model = &sdk.Model{ID: "model", Provider: provider, Type: sdk.ModelTypeChat}
 	cfg.Identity = agentpkg.SessionContext{BotID: "bot-1"}
 	cfg.ContextMutations = contextfrag.NewMutationLedger()
@@ -74,16 +79,8 @@ func TestFallbackDispatchFailsClosedWhenLegacyPayloadExceedsAllowance(t *testing
 	if calls := provider.calls.Load(); calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", calls)
 	}
-	var sawFallback, sawBudgetFailure bool
-	for _, record := range cfg.ContextMutations.Records() {
-		switch record.Kind {
-		case contextfrag.MutationContextViewFallback:
-			sawFallback = true
-		case contextfrag.MutationContextBudgetFailure:
-			sawBudgetFailure = true
-		}
-	}
-	if !sawFallback || !sawBudgetFailure {
-		t.Fatalf("mutations = %+v, want both the fallback and the budget failure recorded", cfg.ContextMutations.Records())
+	records := cfg.ContextMutations.Records()
+	if !hasMutation(records, contextfrag.MutationContextViewFallback) || !hasMutation(records, contextfrag.MutationContextBudgetFailure) {
+		t.Fatalf("mutations = %+v, want both the fallback and the budget failure recorded", records)
 	}
 }

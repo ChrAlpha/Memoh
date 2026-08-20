@@ -24,7 +24,9 @@ func (p namedEnvelopeProbeProvider) Name() string { return p.name }
 // client types, thinking decisions, and assembly paths: the plan reserves the
 // resolved output allowance, the request carries it only where the adapter
 // would have resolved the same value, a fitting payload dispatches, and a
-// payload over the allowance never reaches the provider.
+// payload that fits the window but not the allowance never reaches the
+// provider. Fragment-first assembly rejects it while planning the budget;
+// the fallback assembles the legacy payload and relies on the dispatch check.
 func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -42,6 +44,7 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 		{name: "responses", provider: "openai-responses-mock", clientType: models.ClientTypeOpenAIResponses},
 		{name: "codex", provider: "openai-codex-mock", clientType: models.ClientTypeOpenAICodex},
 		{name: "google", provider: "google-mock", clientType: models.ClientTypeGoogleGenerativeAI},
+		{name: "copilot", provider: "github-copilot-mock", clientType: models.ClientTypeGitHubCopilot},
 	}
 	paths := []struct {
 		name   string
@@ -60,7 +63,6 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 	}
 	const window = 200_000
 	fitting := []sdk.Message{sdk.UserMessage("hello")}
-	oversized := []sdk.Message{sdk.UserMessage(strings.Repeat("oversized ", 80_000))}
 
 	for _, client := range clients {
 		for _, path := range paths {
@@ -68,6 +70,13 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 				t.Parallel()
 
 				limits := models.ResolveGenerationLimits(client.clientType, client.reasoning, window)
+				// Inside the window, outside the allowance: only the output reserve
+				// can reject it, so an allowance that forgot the reserve would dispatch.
+				overAllowanceTokens := window - limits.MaxOutputTokens + 1_000
+				oversized := []sdk.Message{sdk.UserMessage(strings.Repeat("o", overAllowanceTokens*4*100/contextfrag.ProviderBudgetSafetyFactorPercent))}
+				if cost := contextfrag.ProviderEnvelopeTokens("", oversized, nil); cost <= window-limits.MaxOutputTokens || cost >= window {
+					t.Fatalf("oversized fixture costs %d tokens, want strictly between allowance %d and window %d", cost, window-limits.MaxOutputTokens, window)
+				}
 				var seen sdk.GenerateParams
 				probe := &envelopeProbeProvider{handler: func(_ int, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
 					seen = params

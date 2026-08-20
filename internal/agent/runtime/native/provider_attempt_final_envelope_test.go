@@ -97,65 +97,88 @@ func TestAgentGenerateChecksFullPrefixInitialEnvelopeWithReselector(t *testing.T
 func TestAgentGenerateShadowModeStillFailsClosedOnEnvelopeOverflow(t *testing.T) {
 	t.Parallel()
 
-	lookupTool := sdk.Tool{
-		Name:       "lookup",
-		Parameters: &jsonschema.Schema{Type: "object"},
-		Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
-			return strings.Repeat("large-result ", 1_000), nil
+	for _, tc := range []struct {
+		name       string
+		reselector ContextStepReselector
+		want       string
+	}{
+		{
+			name: "would apply",
+			reselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+				return ContextStepSelectionResult{
+					Messages: append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...),
+					Dropped:  len(input.Messages) - input.InitialMessageCount,
+				}
+			},
+			want: contextfrag.ReselectionOutcomeWouldApply,
 		},
-	}
-	modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
-		if call != 1 {
-			return nil, fmt.Errorf("unexpected provider call %d after envelope overflow", call)
-		}
-		return &sdk.GenerateResult{
-			FinishReason: sdk.FinishReasonToolCalls,
-			ToolCalls: []sdk.ToolCall{{
-				ToolCallID: "call-shadow", ToolName: "lookup", Input: map[string]any{"q": "one"},
-			}},
-		}, nil
-	}}
-	a := New(Deps{
-		LoopReselectMode: LoopReselectShadow,
-		ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-			return cfg, nil
+		{
+			name: "would fail",
+			reselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+				return ContextStepSelectionResult{FatalError: contextfrag.ErrProtectedContextOverflow}
+			},
+			want: contextfrag.ReselectionOutcomeWouldFail,
 		},
-	})
-	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{lookupTool}}})
-	plan := contextfrag.ContextBudgetPlan{Window: 2_000, OutputReserve: 100}
-	ledger := contextfrag.NewMutationLedger()
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err := a.Generate(context.Background(), RunConfig{
-		Model:                  &sdk.Model{ID: "mock-model", Provider: modelProvider},
-		System:                 "system",
-		Messages:               []sdk.Message{sdk.UserMessage("task")},
-		SupportsToolCall:       true,
-		Identity:               SessionContext{BotID: "bot-1"},
-		ContextMutations:       ledger,
-		ContextBudgetMaxTokens: plan.Window,
-		ContextManifest:        contextfrag.Manifest{BudgetPlan: &plan},
-		ContextStepReselector: func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
-			return ContextStepSelectionResult{
-				Messages: append([]sdk.Message(nil), input.Messages[:input.InitialMessageCount]...),
-				Dropped:  len(input.Messages) - input.InitialMessageCount,
+			lookupTool := sdk.Tool{
+				Name:       "lookup",
+				Parameters: &jsonschema.Schema{Type: "object"},
+				Execute: func(_ *sdk.ToolExecContext, _ any) (any, error) {
+					return strings.Repeat("large-result ", 1_000), nil
+				},
 			}
-		},
-	})
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
-	}
-	if got := modelProvider.calls.Load(); got != 1 {
-		t.Fatalf("provider calls = %d, want the initial call only", got)
-	}
-	if mode := ledger.LoopSelectionMode(); mode != contextfrag.LoopSelectionSuffixOnlyShadow {
-		t.Fatalf("loop selection mode = %q, want shadow", mode)
-	}
-	steps := ledger.StepSnapshots()
-	if len(steps) != 2 {
-		t.Fatalf("step snapshots = %#v, want the dispatched step and the rejected shadow step", steps)
-	}
-	if rejected := steps[1]; rejected.ReselectionOutcome != contextfrag.ReselectionOutcomeWouldApply || rejected.ReselectionApplied || rejected.Dropped == 0 {
-		t.Fatalf("shadow step snapshot = %#v, want the observed would_apply verdict kept on the rejected step", rejected)
+			modelProvider := &atomicMockProvider{handler: func(call int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+				if call != 1 {
+					return nil, fmt.Errorf("unexpected provider call %d after envelope overflow", call)
+				}
+				return &sdk.GenerateResult{
+					FinishReason: sdk.FinishReasonToolCalls,
+					ToolCalls: []sdk.ToolCall{{
+						ToolCallID: "call-shadow", ToolName: "lookup", Input: map[string]any{"q": "one"},
+					}},
+				}, nil
+			}}
+			a := New(Deps{
+				LoopReselectMode: LoopReselectShadow,
+				ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+					return cfg, nil
+				},
+			})
+			a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []sdk.Tool{lookupTool}}})
+			plan := contextfrag.ContextBudgetPlan{Window: 2_000, OutputReserve: 100}
+			ledger := contextfrag.NewMutationLedger()
+
+			_, err := a.Generate(context.Background(), RunConfig{
+				Model:                  &sdk.Model{ID: "mock-model", Provider: modelProvider},
+				System:                 "system",
+				Messages:               []sdk.Message{sdk.UserMessage("task")},
+				SupportsToolCall:       true,
+				Identity:               SessionContext{BotID: "bot-1"},
+				ContextMutations:       ledger,
+				ContextBudgetMaxTokens: plan.Window,
+				ContextManifest:        contextfrag.Manifest{BudgetPlan: &plan},
+				ContextStepReselector:  tc.reselector,
+			})
+			if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+				t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
+			}
+			if got := modelProvider.calls.Load(); got != 1 {
+				t.Fatalf("provider calls = %d, want the initial call only", got)
+			}
+			if mode := ledger.LoopSelectionMode(); mode != contextfrag.LoopSelectionSuffixOnlyShadow {
+				t.Fatalf("loop selection mode = %q, want shadow", mode)
+			}
+			steps := ledger.StepSnapshots()
+			if len(steps) != 2 {
+				t.Fatalf("step snapshots = %#v, want the dispatched step and the rejected shadow step", steps)
+			}
+			if rejected := steps[1]; rejected.ReselectionOutcome != tc.want || rejected.ReselectionApplied {
+				t.Fatalf("shadow step snapshot = %#v, want the observed %s verdict kept on the rejected step", rejected, tc.want)
+			}
+		})
 	}
 }
 
