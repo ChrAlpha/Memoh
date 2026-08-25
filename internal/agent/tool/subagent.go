@@ -1839,6 +1839,10 @@ func (p *SpawnProvider) resolveModel(
 	if err != nil {
 		return resolvedSubagentModel{}, fmt.Errorf("resolve subagent reasoning: %w", err)
 	}
+	contextWindow := modelInfo.Config.ContextBudgetMaxTokens()
+	if contextWindow <= 0 {
+		contextWindow = session.ContextBudgetMaxTokens
+	}
 
 	sdkModel := models.NewSDKChatModel(models.SDKModelConfig{
 		ModelID:               modelInfo.ModelID,
@@ -1853,6 +1857,7 @@ func (p *SpawnProvider) resolveModel(
 		ReasoningDefaultOn:    modelInfo.Config.ReasoningDefaultOn,
 		ThinkingBudgetMin:     modelInfo.Config.ThinkingBudgetMin,
 		ThinkingBudgetMax:     modelInfo.Config.ThinkingBudgetMax,
+		ContextWindow:         contextWindow,
 	})
 	return resolvedSubagentModel{
 		Model:                  sdkModel,
@@ -1864,7 +1869,7 @@ func (p *SpawnProvider) resolveModel(
 		ChatCompletionsCompat:  chatCompletionsCompat,
 		SupportsImageInput:     modelInfo.HasCompatibility(models.CompatVision),
 		SupportsToolCall:       modelInfo.HasCompatibility(models.CompatToolCall),
-		ContextBudgetMaxTokens: modelInfo.Config.ContextBudgetMaxTokens(),
+		ContextBudgetMaxTokens: contextWindow,
 	}, nil
 }
 
