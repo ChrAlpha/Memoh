@@ -125,7 +125,7 @@ async function syncStoreFromUrl(rawName: string) {
   const urlName = rawName.trim()
   if (!urlName) {
     if (!currentBotId.value) {
-      await chatStore.initialize()
+      await chatStore.initializeWithRecovery()
     }
     await maybeStartACPSession()
     return
