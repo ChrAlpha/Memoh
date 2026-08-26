@@ -60,6 +60,7 @@ export const useChatStore = defineStore('chat', () => {
   const fsBeacon = createFsChangeBeacon({ currentBotId, sessionId })
   const {
     fsChangedAt,
+    lastFsChange,
     markFsChanged,
     affectsPath,
     fsEventForPath,
@@ -603,7 +604,7 @@ export const useChatStore = defineStore('chat', () => {
     overrideModelId, overrideReasoningEffort,
     startupSendFailure, startupSendFailureFor,
     commandEvent, commandEventForScope, rememberCommandEvent, showCommandError,
-    fsChangedAt, markFsChanged, affectsPath, fsEventForPath,
+    fsChangedAt, lastFsChange, markFsChanged, affectsPath, fsEventForPath,
     initialize, initializeWithRecovery, refreshBots, selectBot, selectSession, createNewSession,
     selectDraft, userSentInSession, draftViewRequested, applyDraftViewRequest,
     forkedSessionRequested, guiToolUseRequested, deletedSession,

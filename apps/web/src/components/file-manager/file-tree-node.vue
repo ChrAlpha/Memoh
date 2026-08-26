@@ -24,6 +24,7 @@ import {
 } from '@felinic/ui'
 import type { HandlersFsFileInfo } from '@memohai/sdk'
 import { isArchiveFile, sortDirsFirst } from './utils'
+import { createSequentialLoader, nodeNeedsRefresh } from './freshness'
 import { resolveFileIcon } from './file-icon'
 import { FileTreeKey } from './file-tree-context'
 import {
@@ -63,20 +64,22 @@ const isArchive = computed(() => isArchiveFile(props.entry.name))
 // Seti type glyph by name/extension (color tracks the active theme).
 const fileIcon = computed(() => resolveFileIcon(props.entry.name ?? '', isDark.value))
 
-async function loadChildren() {
+const loader = createSequentialLoader(async (background) => {
   if (!props.entry.isDir || !path.value) return
-  loading.value = true
+  if (!background) loading.value = true
   try {
-    children.value = sortDirsFirst(await tree.listDirectory(path.value))
+    children.value = sortDirsFirst(await tree.listDirectory(path.value, { background }))
     loaded.value = true
+  } catch {
+    // background refresh failed — keep what we have
   } finally {
-    loading.value = false
+    if (!background) loading.value = false
   }
-}
+})
 
 async function expand() {
   expanded.value = true
-  if (!loaded.value) await loadChildren()
+  if (!loaded.value) loader.request(false)
 }
 
 function onRowClick() {
@@ -92,9 +95,10 @@ function onRowClick() {
   }
 }
 
-// Re-fetch an expanded folder's children when the workspace changes.
-watch(() => tree.refreshKey.value, () => {
-  if (expanded.value) void loadChildren()
+// Re-fetch an expanded folder's children when the workspace changes; a
+// path-scoped signal skips folders outside the touched directories.
+watch(() => tree.refreshSignal.value, (signal) => {
+  if (expanded.value && nodeNeedsRefresh(path.value, signal)) loader.request(signal.background)
 })
 
 // Reveal (deep-link): expand the chain of ancestor folders leading to the

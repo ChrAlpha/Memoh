@@ -1,0 +1,85 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createSequentialLoader, dirsFromChangedPaths, nodeNeedsRefresh } from './freshness'
+
+describe('dirsFromChangedPaths', () => {
+  it('maps changed file paths to their unique parent directories', () => {
+    const dirs = dirsFromChangedPaths(['/data/a.txt', '/data/sub/b.txt', '/data/sub/c.txt'])
+    expect(dirs).toEqual(['/data', '/data/sub'])
+  })
+
+  it('returns null for wildcard input', () => {
+    expect(dirsFromChangedPaths(null)).toBeNull()
+    expect(dirsFromChangedPaths(undefined)).toBeNull()
+  })
+
+  it('ignores empty paths', () => {
+    expect(dirsFromChangedPaths(['', '/data/a.txt'])).toEqual(['/data'])
+  })
+})
+
+describe('nodeNeedsRefresh', () => {
+  it('matches wildcard signals', () => {
+    expect(nodeNeedsRefresh('/data/sub', { dirs: null })).toBe(true)
+  })
+
+  it('matches when the node dir is listed', () => {
+    expect(nodeNeedsRefresh('/data/sub', { dirs: ['/data', '/data/sub'] })).toBe(true)
+  })
+
+  it('skips unrelated dirs', () => {
+    expect(nodeNeedsRefresh('/data/other', { dirs: ['/data/sub'] })).toBe(false)
+  })
+})
+
+describe('createSequentialLoader', () => {
+  it('runs a single load immediately', async () => {
+    const load = vi.fn().mockResolvedValue(undefined)
+    const loader = createSequentialLoader(load)
+    loader.request(true)
+    await Promise.resolve()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(load).toHaveBeenCalledWith(true)
+  })
+
+  it('coalesces requests while a load is in flight and reruns once', async () => {
+    let release: () => void = () => {}
+    const first = new Promise<void>((resolve) => { release = resolve })
+    const load = vi.fn().mockReturnValueOnce(first).mockResolvedValue(undefined)
+    const loader = createSequentialLoader(load)
+    loader.request(true)
+    loader.request(true)
+    loader.request(true)
+    expect(load).toHaveBeenCalledTimes(1)
+    release()
+    await first
+    await Promise.resolve()
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
+  it('a foreground request during flight makes the rerun foreground', async () => {
+    let release: () => void = () => {}
+    const first = new Promise<void>((resolve) => { release = resolve })
+    const load = vi.fn().mockReturnValueOnce(first).mockResolvedValue(undefined)
+    const loader = createSequentialLoader(load)
+    loader.request(true)
+    loader.request(false)
+    loader.request(true)
+    release()
+    await first
+    await Promise.resolve()
+    expect(load).toHaveBeenLastCalledWith(false)
+  })
+
+  it('keeps working after a load rejects', async () => {
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue(undefined)
+    const loader = createSequentialLoader(load)
+    loader.request(false)
+    await Promise.resolve()
+    await Promise.resolve()
+    loader.request(true)
+    await Promise.resolve()
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+})
