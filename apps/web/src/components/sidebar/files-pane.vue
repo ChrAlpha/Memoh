@@ -370,7 +370,7 @@ import type { HandlersFsFileInfo } from '@memohai/sdk'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import { sdkApiUrl, sdkAuthQuery } from '@/lib/api-client'
 import { joinPath, parentPath } from '@/components/file-manager/utils'
-import { dirsFromChangedPaths, type TreeRefreshSignal } from '@/components/file-manager/freshness'
+import { createFsWatchReporter, dirsFromChangedPaths, type TreeRefreshSignal } from '@/components/file-manager/freshness'
 import { createFreshnessTicker } from '@/composables/freshness-ticker'
 import FileTree from '@/components/file-manager/file-tree.vue'
 import SidebarPanelHeader from './panel-header.vue'
@@ -560,8 +560,35 @@ const freshnessTicker = createFreshnessTicker({
   tick: () => reload({ background: true }),
 })
 
+// The server scopes bridge fs watches to the pane's expanded directories.
+// Watch lifetime equals attention: an inactive or hidden pane reports an
+// empty set so idle workspaces carry no watches.
+const expandedDirs = ref<Set<string>>(new Set())
+
+function setDirExpanded(path: string, isExpanded: boolean) {
+  const next = new Set(expandedDirs.value)
+  if (isExpanded) next.add(path)
+  else next.delete(path)
+  expandedDirs.value = next
+}
+
+const fsWatchReporter = createFsWatchReporter({
+  send: (dirs) => {
+    if (props.botId) chatStore.setFsWatchDirs(props.botId, dirs)
+  },
+})
+
+function reportWatchDirs() {
+  if (!props.botId || !props.active || !isDocumentVisible() || props.botId !== currentBotId.value) {
+    fsWatchReporter.update([])
+    return
+  }
+  fsWatchReporter.update([rootPath, ...expandedDirs.value])
+}
+
 function handleVisibilityChange() {
   freshnessTicker.evaluate()
+  reportWatchDirs()
 }
 
 // Reveal a path in the tree (expand its ancestors + scroll into view). Used by
@@ -1171,6 +1198,7 @@ provide(FileTreeKey, {
   activePath,
   rootPath,
   listDirectory: paneListDirectory,
+  setDirExpanded,
   isSelected,
   toggleSelect: toggleSelection,
   openFile: handleOpenFile,
@@ -1189,6 +1217,7 @@ watch(() => props.botId, () => {
   selectedEntries.value = new Map()
   selectionMode.value = false
   revealPath.value = null
+  expandedDirs.value = new Set()
   reload()
 }, { immediate: true })
 
@@ -1208,14 +1237,22 @@ watch(
   () => freshnessTicker.evaluate(),
 )
 
+watch(
+  () => [props.botId, props.active, currentBotId.value, expandedDirs.value] as const,
+  () => reportWatchDirs(),
+)
+
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
   freshnessTicker.evaluate()
+  reportWatchDirs()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   freshnessTicker.stop()
+  fsWatchReporter.stop()
+  if (props.botId) chatStore.setFsWatchDirs(props.botId, [])
 })
 
 defineExpose({

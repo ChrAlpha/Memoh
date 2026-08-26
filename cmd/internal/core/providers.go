@@ -127,6 +127,10 @@ func provideFSEventHub() *fsevent.Hub {
 	return fsevent.NewHub(fsevent.DefaultWindow)
 }
 
+func provideFSWatchService(log *slog.Logger, manager *workspace.Manager, hub *fsevent.Hub) *workspace.FSWatchService {
+	return workspace.NewFSWatchService(log, manager, hub.Publish)
+}
+
 func provideDBConn(lc fx.Lifecycle, cfg config.Config) (*pgxpool.Pool, error) {
 	conn, err := db.Open(context.Background(), cfg)
 	if err != nil {

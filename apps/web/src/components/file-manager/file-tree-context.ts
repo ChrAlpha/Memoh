@@ -23,6 +23,9 @@ export interface FileTreeContext {
   // Foreground calls toast on failure and resolve to an empty listing;
   // background calls throw so callers can keep the previous listing.
   listDirectory: (path: string, opts?: { background?: boolean }) => Promise<HandlersFsFileInfo[]>
+  // Nodes report folder expansion so the pane can scope server-side fs
+  // watches to what is actually open.
+  setDirExpanded: (path: string, expanded: boolean) => void
   isSelected: (path: string) => boolean
   toggleSelect: (entry: HandlersFsFileInfo, selected: boolean) => void
   openFile: (entry: HandlersFsFileInfo) => void

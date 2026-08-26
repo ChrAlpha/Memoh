@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDark } from '@vueuse/core'
 import {
@@ -79,7 +79,13 @@ const loader = createSequentialLoader(async (background) => {
 
 async function expand() {
   expanded.value = true
+  if (path.value) tree.setDirExpanded(path.value, true)
   if (!loaded.value) loader.request(false)
+}
+
+function collapse() {
+  expanded.value = false
+  if (path.value) tree.setDirExpanded(path.value, false)
 }
 
 function onRowClick() {
@@ -88,12 +94,16 @@ function onRowClick() {
     return
   }
   if (props.entry.isDir) {
-    if (expanded.value) expanded.value = false
+    if (expanded.value) collapse()
     else void expand()
   } else {
     tree.openFile(props.entry)
   }
 }
+
+onBeforeUnmount(() => {
+  if (expanded.value && path.value) tree.setDirExpanded(path.value, false)
+})
 
 // Re-fetch an expanded folder's children when the workspace changes; a
 // path-scoped signal skips folders outside the touched directories.

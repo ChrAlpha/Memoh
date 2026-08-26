@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { createSequentialLoader, dirsFromChangedPaths, nodeNeedsRefresh } from './freshness'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createFsWatchReporter, createSequentialLoader, dirsFromChangedPaths, nodeNeedsRefresh } from './freshness'
 
 describe('dirsFromChangedPaths', () => {
   it('maps changed file paths to their unique parent directories', () => {
@@ -81,5 +81,54 @@ describe('createSequentialLoader', () => {
     loader.request(true)
     await Promise.resolve()
     expect(load).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('createFsWatchReporter', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('debounces updates and sends the latest set', () => {
+    const send = vi.fn()
+    const reporter = createFsWatchReporter({ send, debounceMs: 300 })
+    reporter.update(['/data'])
+    reporter.update(['/data', '/data/sub'])
+    expect(send).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(['/data', '/data/sub'])
+  })
+
+  it('skips resending an unchanged set', () => {
+    const send = vi.fn()
+    const reporter = createFsWatchReporter({ send, debounceMs: 300 })
+    reporter.update(['/data'])
+    vi.advanceTimersByTime(300)
+    reporter.update(['/data'])
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends an empty set when cleared', () => {
+    const send = vi.fn()
+    const reporter = createFsWatchReporter({ send, debounceMs: 300 })
+    reporter.update(['/data'])
+    vi.advanceTimersByTime(300)
+    reporter.update([])
+    vi.advanceTimersByTime(300)
+    expect(send).toHaveBeenLastCalledWith([])
+  })
+
+  it('stop cancels pending sends', () => {
+    const send = vi.fn()
+    const reporter = createFsWatchReporter({ send, debounceMs: 300 })
+    reporter.update(['/data'])
+    reporter.stop()
+    vi.advanceTimersByTime(1000)
+    expect(send).not.toHaveBeenCalled()
   })
 })

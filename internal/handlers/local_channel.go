@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 
@@ -74,6 +75,7 @@ type LocalChannelHandler struct {
 	speechService       localSpeechSynthesizer
 	speechModelResolver localSpeechModelResolver
 	fsEventHub          *fsevent.Hub
+	fsWatchSubs         fsWatchSubscriptions
 	wsSkillTurnsMu      sync.Mutex
 	wsSkillTurns        *wsRequestedSkillTurnRegistry
 	logger              *slog.Logger
@@ -127,6 +129,39 @@ func (h *LocalChannelHandler) SetAgentService(service *application.Service) {
 // are forwarded to connected WebSocket clients as fs_changed events.
 func (h *LocalChannelHandler) SetFSEventHub(hub *fsevent.Hub) {
 	h.fsEventHub = hub
+}
+
+// fsWatchSubscriptions receives each connection's watched-directory set so
+// the workspace watch service can keep bridge watches scoped to what viewers
+// actually have expanded.
+type fsWatchSubscriptions interface {
+	SetSubscription(subID, botID string, dirs []string)
+	DropSubscription(subID string)
+}
+
+// SetFSWatchSubscriptions configures the workspace fs watch subscription sink.
+func (h *LocalChannelHandler) SetFSWatchSubscriptions(subs fsWatchSubscriptions) {
+	h.fsWatchSubs = subs
+}
+
+const fsWatchMaxDirs = 64
+
+func sanitizeFSWatchDirs(dirs []string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if len(out) >= fsWatchMaxDirs {
+			break
+		}
+		resolved, err := resolveContainerPath(dir)
+		if err != nil {
+			continue
+		}
+		if resolved != "/data" && !strings.HasPrefix(resolved, "/data/") {
+			continue
+		}
+		out = append(out, resolved)
+	}
+	return out
 }
 
 // SetSessionRuntime installs the durable admission gate for turn-starting
@@ -908,6 +943,9 @@ type wsClientMessage struct {
 	Reason            string                     `json:"reason,omitempty"`
 	Answers           []userinput.QuestionAnswer `json:"answers,omitempty"`
 	Canceled          bool                       `json:"canceled,omitempty"`
+	// Dirs is the fs_watch payload: the connection's currently expanded
+	// workspace directories. The latest message replaces the previous set.
+	Dirs []string `json:"dirs,omitempty"`
 	// Cursor is the subscriber's last observed position. It is carried here
 	// rather than in a separate message type because runtime_subscribe shares
 	// this envelope with every other inbound message.
@@ -1757,6 +1795,12 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 		defer unsubscribeFSEvents()
 	}
 
+	fsWatchSubID := ""
+	if h.fsWatchSubs != nil {
+		fsWatchSubID = uuid.NewString()
+		defer h.fsWatchSubs.DropSubscription(fsWatchSubID)
+	}
+
 	connCtx, connCancel := context.WithCancel(context.Background())
 	defer connCancel()
 	streamBaseCtx := context.WithoutCancel(c.Request().Context())
@@ -1799,6 +1843,11 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 		}
 
 		switch msg.Type {
+		case "fs_watch":
+			if h.fsWatchSubs != nil {
+				h.fsWatchSubs.SetSubscription(fsWatchSubID, botID, sanitizeFSWatchDirs(msg.Dirs))
+			}
+
 		case "abort":
 			// Abort is the one inbound message that addresses existing work, so
 			// it is the one that takes a run_id.

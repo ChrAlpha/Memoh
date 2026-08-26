@@ -79,6 +79,7 @@ func ServerModule() fx.Option {
 			provideUserRuntimePipe,
 			provideWikiStore,
 			provideWorkspaceManager,
+			provideFSWatchService,
 			workdir.NewService,
 			provideBridgeProvider,
 			provideMemoryLLM,
