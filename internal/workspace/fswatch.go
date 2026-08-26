@@ -98,10 +98,11 @@ func (s *FSWatchService) SetSubscription(subID, botID string, dirs []string) {
 	}
 
 	s.mu.Lock()
+	freed := false
 	current := s.subs[subID]
 	for key := range current {
 		if _, keep := want[key]; !keep {
-			s.releaseLocked(subID, key)
+			freed = s.releaseLocked(subID, key) || freed
 		}
 	}
 	if len(want) > 0 {
@@ -119,16 +120,23 @@ func (s *FSWatchService) SetSubscription(subID, botID string, dirs []string) {
 	if len(s.subs[subID]) == 0 {
 		delete(s.subs, subID)
 	}
+	if freed {
+		s.promoteWatchlessLocked()
+	}
 	s.mu.Unlock()
 }
 
 // DropSubscription releases every directory subID was watching.
 func (s *FSWatchService) DropSubscription(subID string) {
 	s.mu.Lock()
+	freed := false
 	for key := range s.subs[subID] {
-		s.releaseLocked(subID, key)
+		freed = s.releaseLocked(subID, key) || freed
 	}
 	delete(s.subs, subID)
+	if freed {
+		s.promoteWatchlessLocked()
+	}
 	s.mu.Unlock()
 }
 
@@ -163,14 +171,33 @@ func (s *FSWatchService) startWatchLocked(key fsWatchKey) {
 	go s.runWatch(ctx, key)
 }
 
-func (s *FSWatchService) releaseLocked(subID string, key fsWatchKey) {
+func (s *FSWatchService) releaseLocked(subID string, key fsWatchKey) (watchFreed bool) {
 	delete(s.subs[subID], key)
 	if s.hasSubscriberLocked(key) {
-		return
+		return false
 	}
-	if watch, ok := s.watches[key]; ok {
-		watch.cancel()
-		delete(s.watches, key)
+	watch, ok := s.watches[key]
+	if !ok {
+		return false
+	}
+	watch.cancel()
+	delete(s.watches, key)
+	return true
+}
+
+// promoteWatchlessLocked starts watches for still-wanted keys left watchless
+// by an earlier budget rejection. The client suppresses unchanged fs_watch
+// reports, so freed capacity must be handed out here or it stays unused until
+// an unrelated report arrives. startWatchLocked's budget and unsupported
+// gates bound the fill; Go's random map order spreads promotion across
+// subscriptions and bots.
+func (s *FSWatchService) promoteWatchlessLocked() {
+	for _, keys := range s.subs {
+		for key := range keys {
+			if _, running := s.watches[key]; !running {
+				s.startWatchLocked(key)
+			}
+		}
 	}
 }
 

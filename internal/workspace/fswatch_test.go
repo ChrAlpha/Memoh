@@ -236,6 +236,65 @@ func TestFSWatchServiceEnforcesTotalBudget(t *testing.T) {
 	}
 }
 
+func TestFSWatchServicePromotesWatchlessKeysWhenBudgetFrees(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxPerBot = 1
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	first := watcher.next(t)
+	if first.dir != "/data" {
+		t.Fatalf("first dir = %s", first.dir)
+	}
+	// Over budget: recorded but watchless.
+	svc.SetSubscription("conn-2", "bot-1", []string{"/data/sub"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	// The frontend suppresses unchanged fs_watch reports, so freeing capacity
+	// must promote the waiting key without any new client message.
+	svc.DropSubscription("conn-1")
+	promoted := watcher.next(t)
+	if promoted.dir != "/data/sub" {
+		t.Fatalf("promoted dir = %s", promoted.dir)
+	}
+}
+
+func TestFSWatchServicePromotesAcrossBotsWhenTotalBudgetFrees(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxTotal = 1
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	watcher.next(t)
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	svc.DropSubscription("conn-1")
+	promoted := watcher.next(t)
+	if promoted.botID != "bot-2" || promoted.dir != "/data" {
+		t.Fatalf("promoted = %s %s", promoted.botID, promoted.dir)
+	}
+}
+
+func TestFSWatchServiceShrinkingASetPromotesWaiters(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxPerBot = 1
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	watcher.next(t)
+	svc.SetSubscription("conn-2", "bot-1", []string{"/data/sub"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	// conn-1 collapses its directory: SetSubscription's removal path must
+	// promote just like a full drop.
+	svc.SetSubscription("conn-1", "bot-1", nil)
+	promoted := watcher.next(t)
+	if promoted.dir != "/data/sub" {
+		t.Fatalf("promoted dir = %s", promoted.dir)
+	}
+}
+
 func TestFSWatchServiceUnsupportedExpiryIgnoresDroppedSubscriptions(t *testing.T) {
 	watcher := newFakeWatcher()
 	svc, _ := newTestFSWatchService(watcher)
