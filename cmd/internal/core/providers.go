@@ -507,8 +507,9 @@ func agentLoopReselectModeFromConfig(log *slog.Logger, cfg config.AgentConfig) n
 	return native.LoopReselectMode(mode)
 }
 
-func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
+func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider, fsEventHub *fsevent.Hub) {
 	a.SetToolProviders(providers)
+	a.SetFSChangeNotifier(fsEventHub.Publish)
 	for _, p := range providers {
 		if cp, ok := p.(*agenttools.ContainerProvider); ok {
 			cp.SetHookService(hookService)
