@@ -142,3 +142,75 @@ func TestWatchDirEmptyPathRejected(t *testing.T) {
 		t.Fatalf("error = %v, want InvalidArgument", err)
 	}
 }
+
+func TestWatchDirStreamsShareOneWatcherInstance(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Options{DefaultWorkDir: "/data", WorkspaceRoot: root, DataMount: "/data"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rootStream := newWatchStream(ctx)
+	subStream := newWatchStream(ctx)
+	go func() { _ = srv.WatchDir(&pb.WatchDirRequest{Path: "/data"}, rootStream) }()
+	go func() { _ = srv.WatchDir(&pb.WatchDirRequest{Path: "/data/sub"}, subStream) }()
+
+	time.Sleep(150 * time.Millisecond)
+	// Every inotify instance is a scarce kernel resource (max_user_instances
+	// defaults to 128); concurrent streams must multiplex one watcher.
+	if got := srv.activeWatchInstances(); got != 1 {
+		t.Fatalf("watcher instances = %d, want 1", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "sub", "a.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	batch := waitBatch(t, subStream)
+	found := false
+	for _, p := range batch {
+		if p == "/data/sub/a.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("sub batch = %v", batch)
+	}
+}
+
+func TestWatchDirSameDirSecondStreamSurvivesFirstCancel(t *testing.T) {
+	root := t.TempDir()
+	srv := New(Options{DefaultWorkDir: "/data", WorkspaceRoot: root, DataMount: "/data"})
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	defer cancelB()
+	streamA := newWatchStream(ctxA)
+	streamB := newWatchStream(ctxB)
+	doneA := make(chan error, 1)
+	go func() { doneA <- srv.WatchDir(&pb.WatchDirRequest{Path: "/data"}, streamA) }()
+	go func() { _ = srv.WatchDir(&pb.WatchDirRequest{Path: "/data"}, streamB) }()
+
+	time.Sleep(150 * time.Millisecond)
+	cancelA()
+	select {
+	case <-doneA:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream A did not end after cancel")
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	batch := waitBatch(t, streamB)
+	found := false
+	for _, p := range batch {
+		if p == "/data/b.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("surviving stream batch = %v", batch)
+	}
+}
