@@ -1170,12 +1170,17 @@ func (w *wsWriter) loop() {
 
 		select {
 		case data := <-w.ch:
+			// A peer that stops reading must not wedge this goroutine forever:
+			// Close() waits on it before the connection is torn down.
+			_ = w.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			_ = w.conn.WriteMessage(websocket.TextMessage, data)
 		case <-w.stop:
 			return
 		}
 	}
 }
+
+const wsWriteTimeout = 30 * time.Second
 
 func (w *wsWriter) Send(data []byte) {
 	select {

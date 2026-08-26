@@ -128,3 +128,105 @@ func TestHubPublishWithoutSubscribersIsNoop(_ *testing.T) {
 	hub.Publish("bot-1", []string{"/data/a.txt"})
 	time.Sleep(30 * time.Millisecond)
 }
+
+func TestHubBlockedSubscriberDoesNotDelayOthers(t *testing.T) {
+	hub := NewHub(10 * time.Millisecond)
+	release := make(chan struct{})
+	blockedGot := make(chan []string, 16)
+	cancelBlocked := hub.Subscribe("bot-1", func(paths []string) {
+		<-release
+		blockedGot <- paths
+	})
+	defer cancelBlocked()
+	healthy := make(chan []string, 16)
+	cancelHealthy := hub.Subscribe("bot-1", func(paths []string) { healthy <- paths })
+	defer cancelHealthy()
+
+	hub.Publish("bot-1", []string{"/data/a.txt"})
+	first := collect(t, healthy)
+	if len(first) != 1 || first[0] != "/data/a.txt" {
+		t.Fatalf("healthy first = %v", first)
+	}
+	hub.Publish("bot-1", []string{"/data/b.txt"})
+	second := collect(t, healthy)
+	if len(second) != 1 || second[0] != "/data/b.txt" {
+		t.Fatalf("healthy second = %v", second)
+	}
+
+	close(release)
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		for _, p := range collect(t, blockedGot) {
+			seen[p] = true
+		}
+	}
+	if !seen["/data/a.txt"] || !seen["/data/b.txt"] {
+		t.Fatalf("blocked subscriber saw %v", seen)
+	}
+}
+
+func TestHubBacklogCoalescesForSlowSubscriber(t *testing.T) {
+	hub := NewHub(5 * time.Millisecond)
+	release := make(chan struct{})
+	deliveries := make(chan []string, 16)
+	first := true
+	cancel := hub.Subscribe("bot-1", func(paths []string) {
+		if first {
+			first = false
+			<-release
+		}
+		deliveries <- paths
+	})
+	defer cancel()
+
+	hub.Publish("bot-1", []string{"/data/a.txt"})
+	time.Sleep(20 * time.Millisecond)
+	// These land while the subscriber is blocked on its first delivery and
+	// must merge into ONE pending batch instead of queueing per flush.
+	hub.Publish("bot-1", []string{"/data/b.txt"})
+	time.Sleep(20 * time.Millisecond)
+	hub.Publish("bot-1", []string{"/data/c.txt"})
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+
+	got := collect(t, deliveries)
+	if len(got) != 1 || got[0] != "/data/a.txt" {
+		t.Fatalf("first delivery = %v", got)
+	}
+	merged := collect(t, deliveries)
+	sort.Strings(merged)
+	if len(merged) != 2 || merged[0] != "/data/b.txt" || merged[1] != "/data/c.txt" {
+		t.Fatalf("merged backlog = %v, want [/data/b.txt /data/c.txt]", merged)
+	}
+	expectNoDelivery(t, deliveries, 50*time.Millisecond)
+}
+
+func TestHubWildcardSwallowsBacklogForSlowSubscriber(t *testing.T) {
+	hub := NewHub(5 * time.Millisecond)
+	release := make(chan struct{})
+	deliveries := make(chan []string, 16)
+	first := true
+	cancel := hub.Subscribe("bot-1", func(paths []string) {
+		if first {
+			first = false
+			<-release
+		}
+		deliveries <- paths
+	})
+	defer cancel()
+
+	hub.Publish("bot-1", []string{"/data/a.txt"})
+	time.Sleep(20 * time.Millisecond)
+	hub.Publish("bot-1", []string{"/data/b.txt"})
+	time.Sleep(20 * time.Millisecond)
+	hub.Publish("bot-1", nil)
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+
+	if got := collect(t, deliveries); len(got) != 1 || got[0] != "/data/a.txt" {
+		t.Fatalf("first delivery = %v", got)
+	}
+	if got := collect(t, deliveries); got != nil {
+		t.Fatalf("backlog delivery = %v, want wildcard nil", got)
+	}
+}
