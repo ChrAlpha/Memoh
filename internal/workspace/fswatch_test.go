@@ -295,6 +295,64 @@ func TestFSWatchServiceShrinkingASetPromotesWaiters(t *testing.T) {
 	}
 }
 
+func TestFSWatchServiceUnsupportedDeathPromotesOtherBots(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxTotal = 1
+	svc.unsupportedFor = time.Hour
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	// bot-1's bridge cannot watch: its slot must go to the waiting bot-2
+	// immediately, not sit reserved for bot-1's TTL timer.
+	run.errCh <- bridge.ErrWatchUnsupported
+	promoted := watcher.next(t)
+	if promoted.botID != "bot-2" || promoted.dir != "/data" {
+		t.Fatalf("promoted = %s %s", promoted.botID, promoted.dir)
+	}
+}
+
+func TestFSWatchServiceStreamDeathPromotesWaiters(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxTotal = 1
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	run.errCh <- errors.New("stream broke")
+	promoted := watcher.next(t)
+	if promoted.botID != "bot-2" {
+		t.Fatalf("promoted = %s %s", promoted.botID, promoted.dir)
+	}
+}
+
+func TestFSWatchServiceFailingWatchWaitsForRetryDelay(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.retryDelay = 80 * time.Millisecond
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	failedAt := time.Now()
+	run.errCh <- errors.New("dial failed")
+
+	// The death-path promotion must not restart the key that just died —
+	// that would bypass the retry backoff and spin on a persistent failure.
+	retry := watcher.next(t)
+	if since := time.Since(failedAt); since < 60*time.Millisecond {
+		t.Fatalf("retry arrived after %v, want >= retryDelay", since)
+	}
+	if retry.dir != "/data" {
+		t.Fatalf("retry dir = %s", retry.dir)
+	}
+}
+
 func TestFSWatchServiceUnsupportedExpiryIgnoresDroppedSubscriptions(t *testing.T) {
 	watcher := newFakeWatcher()
 	svc, _ := newTestFSWatchService(watcher)

@@ -121,7 +121,7 @@ func (s *FSWatchService) SetSubscription(subID, botID string, dirs []string) {
 		delete(s.subs, subID)
 	}
 	if freed {
-		s.promoteWatchlessLocked()
+		s.promoteWatchlessLocked(nil)
 	}
 	s.mu.Unlock()
 }
@@ -135,7 +135,7 @@ func (s *FSWatchService) DropSubscription(subID string) {
 	}
 	delete(s.subs, subID)
 	if freed {
-		s.promoteWatchlessLocked()
+		s.promoteWatchlessLocked(nil)
 	}
 	s.mu.Unlock()
 }
@@ -190,10 +190,15 @@ func (s *FSWatchService) releaseLocked(subID string, key fsWatchKey) (watchFreed
 // reports, so freed capacity must be handed out here or it stays unused until
 // an unrelated report arrives. startWatchLocked's budget and unsupported
 // gates bound the fill; Go's random map order spreads promotion across
-// subscriptions and bots.
-func (s *FSWatchService) promoteWatchlessLocked() {
+// subscriptions and bots. skip names a key promotion must not touch — the
+// one whose stream just died, which belongs to the delayed retry (starting
+// it here would bypass the backoff and spin on a persistently failing watch).
+func (s *FSWatchService) promoteWatchlessLocked(skip *fsWatchKey) {
 	for _, keys := range s.subs {
 		for key := range keys {
+			if skip != nil && key == *skip {
+				continue
+			}
 			if _, running := s.watches[key]; !running {
 				s.startWatchLocked(key)
 			}
@@ -237,11 +242,15 @@ func (s *FSWatchService) runWatch(ctx context.Context, key fsWatchKey) {
 	}
 	established := time.Since(startedAt) >= s.establishedAfter
 
+	// Every deletion from s.watches frees budget and is followed by one
+	// promotion pass, so a waiting watchless key can take the slot — the
+	// unsupported mark is recorded first so promotion skips that bot.
 	s.mu.Lock()
 	delete(s.watches, key)
 	stillWanted := s.hasSubscriberLocked(key)
 	if errors.Is(err, bridge.ErrWatchUnsupported) {
 		s.unsupported[key.botID] = time.Now().Add(s.unsupportedFor)
+		s.promoteWatchlessLocked(nil) //nolint:contextcheck // promoted watches outlive the dead stream's context by design and own fresh ones.
 		s.mu.Unlock()
 		// The client suppresses identical fs_watch reports, so nothing external
 		// re-triggers acquisition when the TTL lapses (e.g. after an in-place
@@ -252,6 +261,7 @@ func (s *FSWatchService) runWatch(ctx context.Context, key fsWatchKey) {
 		})
 		return
 	}
+	s.promoteWatchlessLocked(&key) //nolint:contextcheck // promoted watches outlive the dead stream's context by design and own fresh ones.
 	s.mu.Unlock()
 
 	if !stillWanted {
