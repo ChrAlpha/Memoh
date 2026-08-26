@@ -61,6 +61,7 @@ import (
 	dbstore "github.com/memohai/memoh/internal/db/store"
 	emailpkg "github.com/memohai/memoh/internal/email"
 	"github.com/memohai/memoh/internal/fetchproviders"
+	"github.com/memohai/memoh/internal/fsevent"
 	"github.com/memohai/memoh/internal/handlers"
 	hookspkg "github.com/memohai/memoh/internal/hooks"
 	"github.com/memohai/memoh/internal/logger"
@@ -120,6 +121,10 @@ func provideNetworkController(service ctr.Service, rc *boot.RuntimeConfig, netwo
 	ctrl := netctl.NewController(runtime, networkService, registry)
 	networkService.SetController(ctrl)
 	return ctrl
+}
+
+func provideFSEventHub() *fsevent.Hub {
+	return fsevent.NewHub(fsevent.DefaultWindow)
 }
 
 func provideDBConn(lc fx.Lifecycle, cfg config.Config) (*pgxpool.Pool, error) {

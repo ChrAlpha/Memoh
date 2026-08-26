@@ -48,6 +48,7 @@ func FoundationModule() fx.Option {
 			policy.NewService,
 			oauthclients.NewRegistry,
 			event.NewHub,
+			provideFSEventHub,
 			provideSessionService,
 			provideMessageService,
 		),

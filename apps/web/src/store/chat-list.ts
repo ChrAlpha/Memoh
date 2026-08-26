@@ -217,6 +217,7 @@ export const useChatStore = defineStore('chat', () => {
     assistantStreams,
     sessionList,
     chatViews,
+    markFsChanged,
     bumpProjectionVersion: () => { runtimeProjectionVersion.value += 1 },
     normalizeTarget: normalizedChatViewTarget,
     promoteDraftView: promoteDraftChatView,

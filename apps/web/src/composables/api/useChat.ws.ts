@@ -239,6 +239,7 @@ export function connectWebSocket(
           && eventType !== 'runtime_delta'
           && eventType !== 'runtime_dropped'
           && eventType !== 'control_ack'
+          && eventType !== 'fs_changed'
         ) {
           return
         }

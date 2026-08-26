@@ -39,6 +39,7 @@ import (
 	messagepkg "github.com/memohai/memoh/internal/chat/message"
 	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
 	"github.com/memohai/memoh/internal/command"
+	"github.com/memohai/memoh/internal/fsevent"
 	"github.com/memohai/memoh/internal/media"
 	"github.com/memohai/memoh/internal/runtimefence"
 	skillset "github.com/memohai/memoh/internal/skills"
@@ -72,6 +73,7 @@ type LocalChannelHandler struct {
 	mediaService        *media.Service
 	speechService       localSpeechSynthesizer
 	speechModelResolver localSpeechModelResolver
+	fsEventHub          *fsevent.Hub
 	wsSkillTurnsMu      sync.Mutex
 	wsSkillTurns        *wsRequestedSkillTurnRegistry
 	logger              *slog.Logger
@@ -119,6 +121,12 @@ func NewLocalChannelHandler(channelType channel.ChannelType, channelManager *cha
 // SetAgentService configures the application service used for WebSocket turns.
 func (h *LocalChannelHandler) SetAgentService(service *application.Service) {
 	h.agentService = service
+}
+
+// SetFSEventHub configures the per-bot workspace fs-change hub whose batches
+// are forwarded to connected WebSocket clients as fs_changed events.
+func (h *LocalChannelHandler) SetFSEventHub(hub *fsevent.Hub) {
+	h.fsEventHub = hub
 }
 
 // SetSessionRuntime installs the durable admission gate for turn-starting
@@ -987,6 +995,13 @@ func (r wsTurnRef) event(eventType string) wsOutboundEvent {
 	return out
 }
 
+// wsFSChangedEvent is the bot-scoped workspace fs-change push. A nil Paths
+// serializes as null and means "unknown scope, refresh everything".
+type wsFSChangedEvent struct {
+	Type  string   `json:"type"`
+	Paths []string `json:"paths"`
+}
+
 type wsRequestedSkillTurnRegistry struct {
 	mu     sync.Mutex
 	active map[string]int
@@ -1734,6 +1749,13 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 
 	writer := newWSWriter(conn)
 	defer writer.Close()
+
+	if h.fsEventHub != nil {
+		unsubscribeFSEvents := h.fsEventHub.Subscribe(botID, func(paths []string) {
+			writer.SendJSON(wsFSChangedEvent{Type: "fs_changed", Paths: paths})
+		})
+		defer unsubscribeFSEvents()
+	}
 
 	connCtx, connCancel := context.WithCancel(context.Background())
 	defer connCancel()
