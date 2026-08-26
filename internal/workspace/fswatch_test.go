@@ -153,6 +153,31 @@ func TestFSWatchServiceUnsupportedBridgeBacksOff(t *testing.T) {
 	watcher.expectNone(t, 150*time.Millisecond)
 }
 
+func TestFSWatchServiceRecoversAfterUnsupportedTTL(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.unsupportedFor = 50 * time.Millisecond
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	run.errCh <- bridge.ErrWatchUnsupported
+
+	// Within the TTL an identical re-send stays backed off.
+	time.Sleep(20 * time.Millisecond)
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	watcher.expectNone(t, 20*time.Millisecond)
+
+	// After the TTL (e.g. the workspace was upgraded to a watch-capable
+	// bridge), re-sending the SAME set restarts the watch — a subscription
+	// must not stay watchless forever just because its dirs never changed.
+	time.Sleep(60 * time.Millisecond)
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	retry := watcher.next(t)
+	if retry.dir != "/data" {
+		t.Fatalf("retry dir = %s", retry.dir)
+	}
+}
+
 func TestFSWatchServiceImmediateFailureRetriesWithoutStaleSignal(t *testing.T) {
 	watcher := newFakeWatcher()
 	svc, published := newTestFSWatchService(watcher)
@@ -184,14 +209,15 @@ func TestFSWatchServiceRetriesFailedWatchAndSignalsStaleDir(t *testing.T) {
 	time.Sleep(60 * time.Millisecond)
 	run.errCh <- errors.New("stream broke")
 
-	// The dying watch may have missed events: viewers are told to re-list.
+	// The dying watch may have missed events anywhere under it: viewers get a
+	// wildcard so the stale directory itself (not just its parent) reloads.
 	select {
 	case rec := <-published:
-		if rec.botID != "bot-1" || len(rec.paths) != 1 || rec.paths[0] != "/data" {
-			t.Fatalf("published = %+v", rec)
+		if rec.botID != "bot-1" || rec.paths != nil {
+			t.Fatalf("published = %+v, want wildcard", rec)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stale-dir publish")
+		t.Fatal("timed out waiting for stale wildcard publish")
 	}
 
 	// And the watch is re-attempted while a subscription still wants it.

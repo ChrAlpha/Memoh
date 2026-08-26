@@ -40,6 +40,7 @@ type FSWatchService struct {
 	watchDir         func(ctx context.Context, botID, dir string, onBatch func([]string)) error
 	retryDelay       time.Duration
 	establishedAfter time.Duration
+	unsupportedFor   time.Duration
 
 	mu          sync.Mutex
 	subs        map[string]map[fsWatchKey]struct{}
@@ -56,6 +57,7 @@ func NewFSWatchService(logger *slog.Logger, clients bridge.Provider, publish fun
 		publish:          publish,
 		retryDelay:       fsWatchRetryDelay,
 		establishedAfter: fsWatchEstablishedAfter,
+		unsupportedFor:   fsWatchUnsupportedTTL,
 		subs:             make(map[string]map[fsWatchKey]struct{}),
 		watches:          make(map[fsWatchKey]*fsDirWatch),
 		unsupported:      make(map[string]time.Time),
@@ -95,11 +97,12 @@ func (s *FSWatchService) SetSubscription(subID, botID string, dirs []string) {
 		if s.subs[subID] == nil {
 			s.subs[subID] = make(map[fsWatchKey]struct{})
 		}
+		// Every wanted key is (re)acquired — not just newly added ones — so a
+		// subscription whose watch died as unsupported can recover after the
+		// TTL even when the client re-sends an identical directory set.
 		for key := range want {
-			if _, has := s.subs[subID][key]; !has {
-				s.subs[subID][key] = struct{}{}
-				s.acquireLocked(key)
-			}
+			s.subs[subID][key] = struct{}{}
+			s.acquireLocked(key)
 		}
 	}
 	if len(s.subs[subID]) == 0 {
@@ -173,7 +176,7 @@ func (s *FSWatchService) runWatch(ctx context.Context, key fsWatchKey) {
 	delete(s.watches, key)
 	stillWanted := s.hasSubscriberLocked(key)
 	if errors.Is(err, bridge.ErrWatchUnsupported) {
-		s.unsupported[key.botID] = time.Now().Add(fsWatchUnsupportedTTL)
+		s.unsupported[key.botID] = time.Now().Add(s.unsupportedFor)
 		s.mu.Unlock()
 		return
 	}
@@ -182,11 +185,13 @@ func (s *FSWatchService) runWatch(ctx context.Context, key fsWatchKey) {
 	if !stillWanted {
 		return
 	}
-	// A stream that died after being established may have missed events, so
-	// tell viewers to re-list it; then re-attempt after a delay (bounded —
-	// one timer per dead watch, re-armed only while wanted).
+	// A stream that died after being established may have missed events
+	// anywhere under its directory, so send a wildcard (a path-scoped signal
+	// would only refresh the parent listing, not the stale directory itself);
+	// then re-attempt after a delay (bounded — one timer per dead watch,
+	// re-armed only while wanted).
 	if established && s.publish != nil {
-		s.publish(key.botID, []string{key.dir})
+		s.publish(key.botID, nil)
 	}
 	if err != nil {
 		s.logger.Debug("workspace fs watch ended; scheduling retry",

@@ -2,9 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFsWatchReporter, createSequentialLoader, dirsFromChangedPaths, nodeNeedsRefresh } from './freshness'
 
 describe('dirsFromChangedPaths', () => {
-  it('maps changed file paths to their unique parent directories', () => {
-    const dirs = dirsFromChangedPaths(['/data/a.txt', '/data/sub/b.txt', '/data/sub/c.txt'])
-    expect(dirs).toEqual(['/data', '/data/sub'])
+  it('maps changed paths to their parents plus themselves', () => {
+    const dirs = dirsFromChangedPaths(['/data/a.txt', '/data/sub/b.txt'])
+    expect(dirs).toEqual(['/data', '/data/a.txt', '/data/sub', '/data/sub/b.txt'])
+  })
+
+  it('re-lists a changed directory itself, not only its parent', () => {
+    // A stale-directory signal names the directory whose CONTENTS may have
+    // changed; matching only the parent would skip re-listing it.
+    const dirs = dirsFromChangedPaths(['/data/sub'])
+    expect(dirs).toContain('/data/sub')
+    expect(dirs).toContain('/data')
   })
 
   it('returns null for wildcard input', () => {
@@ -13,7 +21,7 @@ describe('dirsFromChangedPaths', () => {
   })
 
   it('ignores empty paths', () => {
-    expect(dirsFromChangedPaths(['', '/data/a.txt'])).toEqual(['/data'])
+    expect(dirsFromChangedPaths(['', '/data/a.txt'])).toEqual(['/data', '/data/a.txt'])
   })
 })
 
