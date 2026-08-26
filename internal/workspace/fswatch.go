@@ -17,6 +17,13 @@ const (
 	// directory (dial failure, stopped workspace) — it missed nothing, so no
 	// stale-dir signal is sent and only the retry remains.
 	fsWatchEstablishedAfter = 2 * time.Second
+	// Budgets bound the amplification an authorized client can drive by
+	// fanning out fs_watch sets over many connections: every unique
+	// (bot, dir) costs a host goroutine, a bridge stream, and bridge watch
+	// state. Over-budget keys stay subscribed but watchless (event-only
+	// freshness still works); existing watches are never evicted.
+	fsWatchMaxDirsPerBot = 128
+	fsWatchMaxDirsTotal  = 1024
 )
 
 type fsWatchKey struct {
@@ -41,6 +48,8 @@ type FSWatchService struct {
 	retryDelay       time.Duration
 	establishedAfter time.Duration
 	unsupportedFor   time.Duration
+	maxPerBot        int
+	maxTotal         int
 
 	mu          sync.Mutex
 	subs        map[string]map[fsWatchKey]struct{}
@@ -58,6 +67,8 @@ func NewFSWatchService(logger *slog.Logger, clients bridge.Provider, publish fun
 		retryDelay:       fsWatchRetryDelay,
 		establishedAfter: fsWatchEstablishedAfter,
 		unsupportedFor:   fsWatchUnsupportedTTL,
+		maxPerBot:        fsWatchMaxDirsPerBot,
+		maxTotal:         fsWatchMaxDirsTotal,
 		subs:             make(map[string]map[fsWatchKey]struct{}),
 		watches:          make(map[fsWatchKey]*fsDirWatch),
 		unsupported:      make(map[string]time.Time),
@@ -135,6 +146,18 @@ func (s *FSWatchService) startWatchLocked(key fsWatchKey) {
 		}
 		delete(s.unsupported, key.botID)
 	}
+	if len(s.watches) >= s.maxTotal {
+		return
+	}
+	botCount := 0
+	for existing := range s.watches {
+		if existing.botID == key.botID {
+			botCount++
+		}
+	}
+	if botCount >= s.maxPerBot {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.watches[key] = &fsDirWatch{cancel: cancel}
 	go s.runWatch(ctx, key)
@@ -148,6 +171,21 @@ func (s *FSWatchService) releaseLocked(subID string, key fsWatchKey) {
 	if watch, ok := s.watches[key]; ok {
 		watch.cancel()
 		delete(s.watches, key)
+	}
+}
+
+func (s *FSWatchService) reacquireBotKeys(botID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, keys := range s.subs {
+		for key := range keys {
+			if key.botID != botID {
+				continue
+			}
+			if _, running := s.watches[key]; !running {
+				s.startWatchLocked(key)
+			}
+		}
 	}
 }
 
@@ -178,6 +216,13 @@ func (s *FSWatchService) runWatch(ctx context.Context, key fsWatchKey) {
 	if errors.Is(err, bridge.ErrWatchUnsupported) {
 		s.unsupported[key.botID] = time.Now().Add(s.unsupportedFor)
 		s.mu.Unlock()
+		// The client suppresses identical fs_watch reports, so nothing external
+		// re-triggers acquisition when the TTL lapses (e.g. after an in-place
+		// bridge upgrade). One timer per unsupported mark reacquires whatever
+		// is still wanted for the bot.
+		time.AfterFunc(s.unsupportedFor, func() { //nolint:contextcheck // outlives the dead stream's context by design; new watches own fresh ones.
+			s.reacquireBotKeys(key.botID)
+		})
 		return
 	}
 	s.mu.Unlock()

@@ -178,6 +178,77 @@ func TestFSWatchServiceRecoversAfterUnsupportedTTL(t *testing.T) {
 	}
 }
 
+func TestFSWatchServiceReacquiresAutomaticallyAfterUnsupportedTTL(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.unsupportedFor = 50 * time.Millisecond
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	run.errCh <- bridge.ErrWatchUnsupported
+
+	// The client's reporter suppresses identical directory sets, so with the
+	// pane simply left open no further SetSubscription arrives. The service
+	// itself must retry still-wanted keys once the TTL expires.
+	retry := watcher.next(t)
+	if retry.botID != "bot-1" || retry.dir != "/data" {
+		t.Fatalf("auto retry = %s %s", retry.botID, retry.dir)
+	}
+}
+
+func TestFSWatchServiceEnforcesPerBotBudget(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxPerBot = 2
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data", "/data/a", "/data/b"})
+	first := watcher.next(t)
+	second := watcher.next(t)
+	if first.botID != "bot-1" || second.botID != "bot-1" {
+		t.Fatalf("runs = %+v %+v", first, second)
+	}
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	// Another bot is unaffected by bot-1's budget.
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data"})
+	other := watcher.next(t)
+	if other.botID != "bot-2" {
+		t.Fatalf("other bot run = %+v", other)
+	}
+}
+
+func TestFSWatchServiceEnforcesTotalBudget(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.maxTotal = 2
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data", "/data/a"})
+	watcher.next(t)
+	watcher.next(t)
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data"})
+	watcher.expectNone(t, 100*time.Millisecond)
+
+	// Releasing capacity lets a later subscription start a watch again.
+	svc.DropSubscription("conn-1")
+	svc.SetSubscription("conn-2", "bot-2", []string{"/data", "/data/x"})
+	if run := watcher.next(t); run.botID != "bot-2" {
+		t.Fatalf("run after release = %+v", run)
+	}
+}
+
+func TestFSWatchServiceUnsupportedExpiryIgnoresDroppedSubscriptions(t *testing.T) {
+	watcher := newFakeWatcher()
+	svc, _ := newTestFSWatchService(watcher)
+	svc.unsupportedFor = 40 * time.Millisecond
+
+	svc.SetSubscription("conn-1", "bot-1", []string{"/data"})
+	run := watcher.next(t)
+	run.errCh <- bridge.ErrWatchUnsupported
+	svc.DropSubscription("conn-1")
+
+	watcher.expectNone(t, 150*time.Millisecond)
+}
+
 func TestFSWatchServiceImmediateFailureRetriesWithoutStaleSignal(t *testing.T) {
 	watcher := newFakeWatcher()
 	svc, published := newTestFSWatchService(watcher)
