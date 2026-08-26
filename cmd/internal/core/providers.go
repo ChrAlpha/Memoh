@@ -545,9 +545,10 @@ func provideACPRunner(log *slog.Logger, manager *workspace.Manager) *acpclient.R
 	return acpclient.NewRunner(log, manager)
 }
 
-func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.Runner, botService *bots.Service, sessionService *sessionpkg.Service, queries dbstore.Queries, toolGateway *mcp.ToolGatewayService, toolContexts *mcp.ToolSessionContextStore, toolApproval *toolapproval.Service, userInput *userinput.Service, containerdHandler *handlers.ContainerdHandler, sessionRuntime *sessionruntime.Manager) *acpagent.SessionPool {
+func provideACPSessionPool(lc fx.Lifecycle, log *slog.Logger, runner *acpclient.Runner, botService *bots.Service, sessionService *sessionpkg.Service, queries dbstore.Queries, toolGateway *mcp.ToolGatewayService, toolContexts *mcp.ToolSessionContextStore, toolApproval *toolapproval.Service, userInput *userinput.Service, containerdHandler *handlers.ContainerdHandler, sessionRuntime *sessionruntime.Manager, fsEventHub *fsevent.Hub) *acpagent.SessionPool {
 	pool := acpagent.NewSessionPool(log, runner, botService, acpsessionadapter.NewSource(sessionService))
 	pool.SetSessionRuntime(sessionRuntime)
+	pool.SetFSChangeNotifier(fsEventHub.Publish)
 	pool.SetSessionStateStore(acpsessionadapter.NewStateStore(queries))
 	pool.SetToolGateway(toolGateway)
 	pool.SetToolSessionContextStore(toolContexts)
