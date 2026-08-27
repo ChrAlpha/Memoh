@@ -9,9 +9,20 @@ import (
 	"time"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
+
+	agenttools "github.com/memohai/memoh/internal/agent/tool"
 )
 
 type agentStreamTestProvider func(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error)
+
+type streamEmitterCaptureProvider struct {
+	emitter chan agenttools.StreamEmitter
+}
+
+func (p *streamEmitterCaptureProvider) Tools(_ context.Context, session agenttools.SessionContext) ([]sdk.Tool, error) {
+	p.emitter <- session.Emitter
+	return nil, nil
+}
 
 func (agentStreamTestProvider) Name() string { return "stream-mock" }
 func (agentStreamTestProvider) ListModels(context.Context) ([]sdk.Model, error) {
@@ -153,6 +164,78 @@ func TestAgentStreamCancellationDoesNotWaitForProviderToClose(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stream did not close after its terminal abort")
+	}
+}
+
+func TestStreamEmitterGateRejectsLateEventsAndWaitsForInFlightSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan StreamEvent)
+	gate := newStreamEmitterGate(ctx, ch)
+
+	sendDone := make(chan struct{})
+	go func() {
+		gate.emit(agenttools.ToolStreamEvent{Type: agenttools.StreamEventSpawnProgress})
+		close(sendDone)
+	}()
+
+	select {
+	case <-sendDone:
+		t.Fatal("emitter returned before a receiver or cancellation")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	cancel()
+	gate.close()
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("gate did not wait for in-flight emitter")
+	}
+
+	gate.emit(agenttools.ToolStreamEvent{Type: agenttools.StreamEventSpawnProgress})
+	close(ch)
+}
+
+func TestAgentStreamRejectsCapturedEmitterAfterClose(t *testing.T) {
+	capture := &streamEmitterCaptureProvider{emitter: make(chan agenttools.StreamEmitter, 1)}
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{capture})
+
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: finishedTextTestProvider("done")},
+		Messages:         []sdk.Message{sdk.UserMessage("finish normally")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+	if terminal.Type != EventAgentEnd {
+		t.Fatalf("terminal event = %q, want %q", terminal.Type, EventAgentEnd)
+	}
+
+	emitter := <-capture.emitter
+	if emitter == nil {
+		t.Fatal("captured emitter is nil")
+	}
+	emitDone := make(chan struct{})
+	go func() {
+		emitter(agenttools.ToolStreamEvent{Type: agenttools.StreamEventSpawnProgress})
+		close(emitDone)
+	}()
+	select {
+	case <-emitDone:
+	case <-time.After(time.Second):
+		t.Fatal("captured emitter blocked after stream close")
+	}
+}
+
+func TestSpawnProgressPreservesWireStatus(t *testing.T) {
+	event := toolStreamEventToAgentEvent(agenttools.ToolStreamEvent{Type: agenttools.StreamEventSpawnProgress})
+	if event.Type != EventProgress || event.ProgressStatus != "spawn_running" {
+		t.Fatalf("spawn progress event = %#v, want progress/spawn_running", event)
 	}
 }
 
