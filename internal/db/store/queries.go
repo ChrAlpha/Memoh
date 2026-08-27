@@ -172,6 +172,7 @@ type Queries interface {
 	GetBotAgentByID(ctx context.Context, arg dbsqlc.GetBotAgentByIDParams) (dbsqlc.BotAgent, error)
 	FindActiveBotAgentByRuntimeProvider(ctx context.Context, arg dbsqlc.FindActiveBotAgentByRuntimeProviderParams) (dbsqlc.BotAgent, error)
 	ListBotAgents(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.BotAgent, error)
+	LockBotForAgentMutation(ctx context.Context, botID pgtype.UUID) (pgtype.UUID, error)
 	UpdateBotAgent(ctx context.Context, arg dbsqlc.UpdateBotAgentParams) (dbsqlc.BotAgent, error)
 	SoftDeleteBotAgent(ctx context.Context, arg dbsqlc.SoftDeleteBotAgentParams) (dbsqlc.BotAgent, error)
 	BotAgentIsDefault(ctx context.Context, arg dbsqlc.BotAgentIsDefaultParams) (bool, error)
