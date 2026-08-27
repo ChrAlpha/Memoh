@@ -7743,7 +7743,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Fork source message",
+                        "description": "Fork source turn",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -21548,15 +21548,18 @@ const docTemplate = `{
         },
         "handlers.forkSessionRequest": {
             "type": "object",
-            "required": [
-                "message_id"
-            ],
             "properties": {
                 "message_id": {
-                    "type": "string"
+                    "description": "MessageID is the pre-turn spelling of TurnID, resolved server-side to the\nround that contains it. Deprecated: send turn_id. A client holds a turn id\nfrom admission onward, while a stored message id exists only once the\nround has been persisted.",
+                    "type": "string",
+                    "format": "uuid"
                 },
                 "title": {
                     "type": "string"
+                },
+                "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
                 }
             }
         },

@@ -2476,8 +2476,15 @@ export type HandlersEmailOAuthStatusResponse = {
 };
 
 export type HandlersForkSessionRequest = {
-    message_id: string;
+    /**
+     * MessageID is the pre-turn spelling of TurnID, resolved server-side to the
+     * round that contains it. Deprecated: send turn_id. A client holds a turn id
+     * from admission onward, while a stored message id exists only once the
+     * round has been persisted.
+     */
+    message_id?: string;
     title?: string;
+    turn_id?: string;
 };
 
 export type HandlersFsOpResponse = {
@@ -9815,7 +9822,7 @@ export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse = GetBotsB
 
 export type PostBotsByBotIdSessionsBySessionIdForkData = {
     /**
-     * Fork source message
+     * Fork source turn
      */
     body: HandlersForkSessionRequest;
     path: {
