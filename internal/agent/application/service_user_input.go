@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	sdk "github.com/memohai/twilight-ai/sdk"
@@ -418,10 +419,18 @@ func (s *Service) continueUserInputSession(
 
 	reasoningTiming := newReasoningTimingTracker(nil)
 	configureNativeReasoningTiming(&cfg, reasoningTiming, nil)
-	stream := s.agent.Stream(ctx, cfg)
+	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(cfg))
+	defer idleCancel.Stop()
+	stream := s.agent.Stream(idleCtx, cfg)
 	stored := false
+	failureEventForwarded := false
+	var hasVisibleOutput bool
 	for event := range stream {
-		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
+		idleCancel.Reset()
+		if event.Type == native.EventToolCallStart {
+			idleCancel.RecordToolCall()
+		}
+		if eventErr := agentStreamLifecycleError(event); eventErr != nil && lifecycleCause == nil {
 			lifecycleCause = eventErr
 		}
 		if event.IsTerminal() {
@@ -432,19 +441,37 @@ func (s *Service) continueUserInputSession(
 				case native.EventAgentEnd:
 					lifecycleCause = nil
 				case native.EventAgentAbort:
-					if context.Cause(ctx) != nil || lifecycleCause == nil {
+					if idleCancel.DidFire() {
+						lifecycleCause = context.Cause(idleCtx)
+					} else if context.Cause(ctx) != nil || lifecycleCause == nil {
 						lifecycleCause = agentAbortCause(ctx)
 					}
 				}
 			}
 		}
-		data, err := json.Marshal(event)
+		if hasVisibleAgentStreamOutput(event) {
+			hasVisibleOutput = true
+		}
+		if event.Type == native.EventAgentAbort && idleCancel.DidFire() && eventCh != nil {
+			if failureData, marshalErr := json.Marshal(agentFailureStreamEvent(context.Cause(idleCtx))); marshalErr == nil {
+				select {
+				case eventCh <- json.RawMessage(failureData):
+					failureEventForwarded = true
+				case <-ctx.Done():
+					lifecycleCause = context.Cause(ctx)
+					return lifecycleCause
+				}
+			}
+		}
+		data, err := json.Marshal(publicAgentStreamEvent(event))
 		if err != nil {
 			continue
 		}
 		if !stored && event.IsTerminal() && len(event.Messages) > 0 {
 			if snap, ok := extractTerminalSnapshot(data); ok {
 				snap.reasoningTiming = takeTerminalReasoningTiming(reasoningTiming, event.Type)
+				snap.visibleOutput = hasVisibleOutput
+				snap.failureCode = snapshotFailureCode(idleCancel.DidFire(), lifecycleCause)
 				lifecycleDeferred = lifecycleDeferred || snap.deferredToolID != ""
 				if snap.aborted && !lifecycleDeferred && lifecycleCause == nil {
 					lifecycleCause = agentAbortCause(ctx)
@@ -462,7 +489,7 @@ func (s *Service) continueUserInputSession(
 				stored = true
 			}
 		}
-		if eventCh != nil {
+		if eventCh != nil && shouldForwardAfterIdleFailure(event, failureEventForwarded) {
 			select {
 			case eventCh <- json.RawMessage(data):
 			case <-ctx.Done():
@@ -470,6 +497,23 @@ func (s *Service) continueUserInputSession(
 				return lifecycleCause
 			}
 		}
+	}
+	if idleCancel.DidFire() {
+		lifecycleCause = context.Cause(idleCtx)
+		if !stored {
+			if _, storeErr := s.persistTurnFailure(context.WithoutCancel(ctx), chatReq, resolvedContext{runConfig: cfg, model: models.GetResponse{ID: resolved.ModelID}}, snapshotFailureCode(true, lifecycleCause)); storeErr != nil {
+				s.logger.Error("user input timeout persist failed", slog.Any("error", storeErr))
+			}
+		}
+		if eventCh != nil && !failureEventForwarded {
+			if data, marshalErr := json.Marshal(agentFailureStreamEvent(lifecycleCause)); marshalErr == nil {
+				select {
+				case eventCh <- json.RawMessage(data):
+				case <-ctx.Done():
+				}
+			}
+		}
+		return lifecycleCause
 	}
 	if ctx.Err() != nil {
 		lifecycleCause = context.Cause(ctx)
