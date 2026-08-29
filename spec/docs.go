@@ -18548,7 +18548,8 @@ const docTemplate = `{
                 "capability_gate",
                 "read_media",
                 "renderer_prune",
-                "mid_stream_retry"
+                "mid_stream_retry",
+                "run_abort_observed"
             ],
             "x-enum-varnames": [
                 "MutationBeforeModelCallHook",
@@ -18562,7 +18563,8 @@ const docTemplate = `{
                 "MutationCapabilityGate",
                 "MutationReadMedia",
                 "MutationRendererPrune",
-                "MutationMidStreamRetry"
+                "MutationMidStreamRetry",
+                "MutationRunAbortObserved"
             ]
         },
         "contextfrag.MutationRecord": {

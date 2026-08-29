@@ -25,6 +25,12 @@ const (
 	MutationReadMedia             MutationKind = "read_media"
 	MutationRendererPrune         MutationKind = "renderer_prune"
 	MutationMidStreamRetry        MutationKind = "mid_stream_retry"
+	// MutationRunAbortObserved marks a terminal classification where durable
+	// budget evidence outranked an explicit user cancellation: the run died of
+	// budget, but an abort was concurrently in flight. It keeps "who stopped
+	// it" recoverable from the snapshot without weakening the diagnostic
+	// status precedence.
+	MutationRunAbortObserved MutationKind = "run_abort_observed"
 )
 
 // AllMutationKinds lists every mutation kind the ledger can record; the
@@ -43,6 +49,7 @@ func AllMutationKinds() []MutationKind {
 		MutationReadMedia,
 		MutationRendererPrune,
 		MutationMidStreamRetry,
+		MutationRunAbortObserved,
 	}
 }
 

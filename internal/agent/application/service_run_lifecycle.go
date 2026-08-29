@@ -275,6 +275,15 @@ func (s *Service) persistContextLifecycleSnapshot(
 		return
 	}
 	ctx = nonNilContext(ctx)
+	if status, _ := classifyContextLifecycleTerminal(ctx, *snapshot, cause); status == contextLifecycleStatusFailedBudget &&
+		explicitRunCancellation(ctx, cause) {
+		// Budget evidence outranks the abort for the terminal status; keep the
+		// concurrent cancellation recoverable from the snapshot itself.
+		snapshot.Mutations = append(snapshot.Mutations, contextfrag.MutationRecord{
+			Kind:   contextfrag.MutationRunAbortObserved,
+			Detail: "explicit_cancel_during_budget_failure",
+		})
+	}
 	quality := contextLifecycleCandidateMetadata
 	if authoritative {
 		quality = contextLifecycleCandidateAuthoritative
@@ -666,9 +675,7 @@ func classifyContextLifecycleTerminal(
 			return contextLifecycleStatusFailedBudget, string(apperror.CodeContextBudgetUnsatisfied)
 		}
 	}
-	explicitlyCanceled := errors.Is(context.Cause(nonNilContext(ctx)), context.Canceled) &&
-		(errors.Is(cause, context.Canceled) || errors.Is(privateCause, context.Canceled))
-	if explicitlyCanceled {
+	if explicitRunCancellation(ctx, cause) {
 		return contextLifecycleStatusAborted, ""
 	}
 	if cause != nil {
@@ -678,6 +685,15 @@ func classifyContextLifecycleTerminal(
 		return contextLifecycleStatusFallback, ""
 	}
 	return contextLifecycleStatusCompleted, ""
+}
+
+// explicitRunCancellation reports a user-driven cancellation: the run context
+// was canceled with context.Canceled as the cause, and the terminal error is
+// that cancellation rather than a failure the runtime canceled itself over
+// (budget failures cancel with their own error as the cause).
+func explicitRunCancellation(ctx context.Context, cause error) bool {
+	return errors.Is(context.Cause(nonNilContext(ctx)), context.Canceled) &&
+		(errors.Is(cause, context.Canceled) || errors.Is(apperror.CauseOf(cause), context.Canceled))
 }
 
 func contextLifecycleOwnershipLost(ctx context.Context, cause error) bool {

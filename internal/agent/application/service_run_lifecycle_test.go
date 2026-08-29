@@ -740,3 +740,76 @@ func TestRecoverContextLifecycleFromAssistantMetadataCountsStoreErrorsAndSkipsOw
 		t.Fatalf("ownership-lost recovery touched store: gets=%d creates=%d", ownershipStore.getCalls, len(ownershipStore.creates))
 	}
 }
+
+func TestBudgetOverAbortKeepsAbortTraceInSnapshot(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		mutations []contextfrag.MutationRecord
+		cause     error
+		status    string
+		wantTrace bool
+	}{
+		{
+			name: "budget win over explicit abort records the abort trace",
+			ctx:  canceledCtx,
+			mutations: []contextfrag.MutationRecord{{
+				Kind:   contextfrag.MutationContextBudgetFailure,
+				Detail: "protected_context_overflow",
+			}},
+			cause:     context.Canceled,
+			status:    contextLifecycleStatusFailedBudget,
+			wantTrace: true,
+		},
+		{
+			name: "budget failure without cancellation stays trace-free",
+			ctx:  context.Background(),
+			mutations: []contextfrag.MutationRecord{{
+				Kind:   contextfrag.MutationContextBudgetFailure,
+				Detail: "budget_unsatisfied",
+			}},
+			cause:     contextfrag.ErrBudgetUnsatisfied,
+			status:    contextLifecycleStatusFailedBudget,
+			wantTrace: false,
+		},
+		{
+			name:      "plain abort needs no trace",
+			ctx:       canceledCtx,
+			cause:     context.Canceled,
+			status:    contextLifecycleStatusAborted,
+			wantTrace: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &recordingContextLifecycleStore{}
+			service := &Service{contextLifecycles: store}
+			service.contextLifecycleTerminal(tt.ctx, lifecycleTestRunConfig(tt.mutations...))(tt.cause)
+
+			if len(store.creates) != 1 {
+				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.creates))
+			}
+			got := store.creates[0]
+			if got.Status != tt.status {
+				t.Fatalf("status = %q, want %q", got.Status, tt.status)
+			}
+			var snapshot contextfrag.LifecycleSnapshot
+			if err := json.Unmarshal(got.Snapshot, &snapshot); err != nil {
+				t.Fatalf("unmarshal snapshot: %v", err)
+			}
+			hasTrace := false
+			for _, mutation := range snapshot.Mutations {
+				if mutation.Kind == contextfrag.MutationRunAbortObserved {
+					hasTrace = true
+				}
+			}
+			if hasTrace != tt.wantTrace {
+				t.Fatalf("abort trace = %v, want %v (mutations %#v)", hasTrace, tt.wantTrace, snapshot.Mutations)
+			}
+		})
+	}
+}
