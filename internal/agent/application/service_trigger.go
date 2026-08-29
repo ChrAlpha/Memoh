@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/agent/event"
-	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
-	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/sessionmode"
-	chatview "github.com/memohai/memoh/internal/agent/view"
-	"github.com/memohai/memoh/internal/schedule"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/event"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
+	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
+	chatview "github.com/felinics/memoh/internal/agent/view"
+	"github.com/felinics/memoh/internal/schedule"
 )
 
 // attachCurrentTurnPrompt routes a trigger's rich prompt through Query so the
@@ -125,20 +125,45 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	// complete, and every stream event is projected to the session runtime so
 	// the run is visible while it executes. The previous Generate-based path
 	// emitted nothing until storeRound wrote the whole round at the end.
+	reasoningTiming := newReasoningTimingTracker(nil)
 	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
-	if stepCommitter != nil {
-		cfg.OnStepCommitted = stepCommitter.commit
-		cfg.OnStepInterrupted = stepCommitter.interrupt
-	}
+	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 
-	// cancelStream is the consumption brake: if the consumer stops early
-	// (projection refused, terminal handled), cancelling unwinds the Stream
-	// goroutine instead of leaving it blocked on an unread channel.
-	streamCtx, cancelStream := context.WithCancel(ctx)
-	defer cancelStream()
-	result, streamErr := s.consumeTriggeredStream(streamCtx, s.agent.Stream(streamCtx, cfg), req, rc, admission.Handle, stepCommitter)
+	result, streamErr := s.runTriggeredNativeStream(ctx, cfg, req, rc, admission.Handle, stepCommitter, reasoningTiming)
 	lifecycleCause = streamErr
 	return result, streamErr
+}
+
+func (s *Service) runTriggeredNativeStream(
+	ctx context.Context,
+	cfg native.RunConfig,
+	req ChatRequest,
+	rc resolvedContext,
+	handle sessionruntime.RunHandle,
+	stepCommitter *agentStepCommitter,
+	reasoningTiming *reasoningTimingTracker,
+) (schedule.TriggerResult, error) {
+	// cancelStream remains the consumption brake: if the consumer stops early
+	// (projection refused, terminal handled), cancelling unwinds the Stream
+	// goroutine instead of leaving it blocked on an unread channel. The child
+	// idle context independently owns first-event and between-event silence.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	idleCtx, idleCancel := s.withStreamIdleTimeout(streamCtx, reasoningEffortForIdle(cfg))
+	defer func() {
+		cancelStream()
+		idleCancel.Stop()
+	}()
+
+	return s.consumeTriggeredStreamWithIdle(
+		idleCtx,
+		s.agent.Stream(idleCtx, cfg),
+		req,
+		rc,
+		handle,
+		stepCommitter,
+		reasoningTiming,
+		idleCancel,
+	)
 }
 
 // triggerScheduleACP runs one schedule fire through the ACP session pool.
@@ -204,7 +229,10 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 		return schedule.TriggerResult{}, fmt.Errorf("persist scheduled ACP user message: %w", leadingErr)
 	}
 
-	result, promptErr := s.acpPool.Prompt(ctx, acpagent.PromptInput{
+	reasoningTiming := newReasoningTimingTracker(nil)
+	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, strings.TrimSpace(payload.ReasoningEffort))
+	defer idleCancel.Stop()
+	result, promptErr := s.acpPool.Prompt(idleCtx, acpagent.PromptInput{
 		BotID:             botID,
 		ChatID:            botID,
 		SessionID:         payload.SessionID,
@@ -224,13 +252,19 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 		ContextURI:            acpContextURI,
 		ContextMarkdown:       contextMarkdown,
 		RuntimeOwnerAccountID: runtimeOwner,
-		Sink:                  acpclient.EventSinkFunc(func(event.StreamEvent) {}),
+		Sink: acpclient.EventSinkFunc(func(ev event.StreamEvent) {
+			idleCancel.Reset()
+			if ev.Type == native.EventToolCallStart {
+				idleCancel.RecordToolCall()
+			}
+			reasoningTiming.observe(ev)
+		}),
 	})
 	lifecycleCause = promptErr
 	if promptErr != nil {
 		s.cancelPendingACPApprovals(context.WithoutCancel(ctx), req, "tool approval cancelled: the scheduled run ended before a decision arrived")
 		failedResult, _ := acpFailureResult(ensureACPPromptOutput(result), promptErr)
-		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr, false, contextLifecycle); err != nil {
+		if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, failedResult, promptErr, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); err != nil {
 			lifecycleCause = runtimeHistoryError(err)
 			s.logger.Error("ACP schedule failure persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
 		}
@@ -238,7 +272,7 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 	}
 
 	result = ensureACPPromptOutput(result)
-	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil, true, contextLifecycle); err != nil {
+	if err := s.persistACPRound(context.WithoutCancel(ctx), req, info.AgentID, info.ProjectPath, result, nil, true, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentEnd)); err != nil {
 		lifecycleCause = runtimeHistoryError(err)
 		s.logger.Error("ACP schedule persist failed", slog.Any("error", err), slog.String("session_id", payload.SessionID))
 		return schedule.TriggerResult{}, err
@@ -262,16 +296,24 @@ func (s *Service) triggerScheduleACP(ctx context.Context, botID string, payload 
 // committer, with one terminal-snapshot write as the fallback when step
 // persistence is unavailable, and an abort terminal is reported as an error
 // outcome while its partial transcript still persists. What a trigger
-// deliberately does NOT have is the WS client plumbing — no push channel, no
-// abort channel, no idle timeout — because there is no client; the runtime
-// lease and routed abort already bound execution.
+// deliberately does NOT have is the WS client plumbing — no push channel or
+// abort channel because there is no client. An application idle watchdog still
+// bounds first-event and between-event silence, including manual schedule fires
+// whose caller context has no deadline.
 //
 // The events channel is a parameter (rather than this function calling
 // agent.Stream itself) so tests can drive the loop directly; the caller owns
 // the stream context and must cancel it to unwind a still-running Stream
 // goroutine when this returns early.
-func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan native.StreamEvent, req ChatRequest, rc resolvedContext, handle sessionruntime.RunHandle, stepCommitter *agentStepCommitter) (schedule.TriggerResult, error) {
+func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan native.StreamEvent, req ChatRequest, rc resolvedContext, handle sessionruntime.RunHandle, stepCommitter *agentStepCommitter, reasoningTiming *reasoningTimingTracker) (schedule.TriggerResult, error) {
+	return s.consumeTriggeredStreamWithIdle(ctx, events, req, rc, handle, stepCommitter, reasoningTiming, nil)
+}
+
+func (s *Service) consumeTriggeredStreamWithIdle(ctx context.Context, events <-chan native.StreamEvent, req ChatRequest, rc resolvedContext, handle sessionruntime.RunHandle, stepCommitter *agentStepCommitter, reasoningTiming *reasoningTimingTracker, idle *idleCancel) (schedule.TriggerResult, error) {
 	publishEvent := s.turnAgentEventPublisher(handle)
+	if reasoningTiming == nil {
+		reasoningTiming = newReasoningTimingTracker(nil)
+	}
 
 	var (
 		lastSnapshot     terminalSnapshot
@@ -282,6 +324,12 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 		streamErr        error
 	)
 	for event := range events {
+		if idle != nil {
+			idle.Reset()
+			if event.Type == native.EventToolCallStart {
+				idle.RecordToolCall()
+			}
+		}
 		if eventErr := agentStreamEventError(event); eventErr != nil {
 			s.logger.Error("triggered run stream error",
 				slog.String("bot_id", req.BotID),
@@ -300,7 +348,7 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 			// changes — without this the schedule log would mark a stopped
 			// run "ok", a regression from the Generate era, which errored.
 			terminalAborted = true
-			if streamErr == nil {
+			if context.Cause(ctx) != nil || streamErr == nil {
 				streamErr = agentAbortCause(ctx)
 			}
 		}
@@ -308,7 +356,7 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 			hasVisibleOutput = true
 		}
 		if publishEvent != nil {
-			if publishErr := publishEvent(ctx, event); publishErr != nil {
+			if publishErr := publishEvent(ctx, publicAgentStreamEvent(event)); publishErr != nil {
 				// A refused projection write (fence rejection, ownership
 				// handoff) means this process may no longer own the run, and
 				// continuing would persist history the runtime no longer
@@ -330,7 +378,11 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 			if !ok {
 				continue
 			}
+			if stepCommitter == nil {
+				snap.reasoningTiming = takeTerminalReasoningTiming(reasoningTiming, event.Type)
+			}
 			snap.visibleOutput = hasVisibleOutput
+			snap.failureCode = snapshotFailureCode(idle != nil && idle.DidFire(), streamErr)
 			lastSnapshot = snap
 			hasSnapshot = true
 			if !stored && !runOwnershipLost(ctx) {
@@ -356,6 +408,9 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 			}
 		}
 	}
+	if streamErr == nil {
+		streamErr = context.Cause(ctx)
+	}
 
 	// Mid-run abort/error: finalize whatever the step committer already landed
 	// so the partial transcript survives for audit. This is a deliberate
@@ -380,6 +435,11 @@ func (s *Service) consumeTriggeredStream(ctx context.Context, events <-chan nati
 		// outcome so the schedule log records the stop, not a success.
 		return schedule.TriggerResult{}, streamErr
 	case streamErr != nil && !hasSnapshot:
+		if idle != nil && idle.DidFire() {
+			if _, storeErr := s.persistTurnFailure(context.WithoutCancel(ctx), req, rc, snapshotFailureCode(true, streamErr)); storeErr != nil {
+				s.logger.Error("triggered run timeout persist failed", slog.Any("error", storeErr))
+			}
+		}
 		return schedule.TriggerResult{}, streamErr
 	case !hasSnapshot:
 		return schedule.TriggerResult{}, errors.New("schedule run ended without a terminal event")

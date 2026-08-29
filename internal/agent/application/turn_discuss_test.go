@@ -9,20 +9,33 @@ import (
 	"testing"
 	"time"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/turn"
-	"github.com/memohai/memoh/internal/apperror"
-	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/chat/timeline"
-	"github.com/memohai/memoh/internal/contextview"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/contextview"
 )
 
 type fakeAgentStreamer struct {
 	lastConfig *native.RunConfig
+}
+
+type silentDiscussAgentStreamer struct{}
+
+func (*silentDiscussAgentStreamer) Stream(ctx context.Context, _ native.RunConfig) <-chan native.StreamEvent {
+	ch := make(chan native.StreamEvent, 1)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+		ch <- native.StreamEvent{Type: native.EventAgentAbort, Messages: json.RawMessage(`[]`)}
+	}()
+	return ch
 }
 
 func (f *fakeAgentStreamer) Stream(_ context.Context, cfg native.RunConfig) <-chan native.StreamEvent {
@@ -255,9 +268,19 @@ func TestStoreDiscussRoundPersistsAdmittedRunIDAndLifecycleAssociation(t *testin
 		lifecycleTestSessionID,
 		"",
 		"local",
-		[]sdk.Message{sdk.AssistantMessage("done")},
+		[]sdk.Message{{
+			Role: sdk.MessageRoleAssistant,
+			Content: []sdk.MessagePart{
+				sdk.ReasoningPart{Text: "thinking"},
+				sdk.TextPart{Text: "done"},
+			},
+		}},
 		"model-id",
 		holder,
+		[]messagepkg.ReasoningTimingSegment{{
+			DurationMS: 2000,
+			State:      "completed",
+		}},
 	)
 	if err != nil {
 		t.Fatalf("storeDiscussRound() error = %v", err)
@@ -270,6 +293,9 @@ func TestStoreDiscussRoundPersistsAdmittedRunIDAndLifecycleAssociation(t *testin
 	}
 	if _, ok := messages.persisted[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot); !ok {
 		t.Fatalf("assistant metadata = %#v, want lifecycle snapshot", messages.persisted[0].Metadata)
+	}
+	if timings := messagepkg.ReasoningTimingFromMetadata(messages.persisted[0].Metadata); len(timings) != 1 || timings[0].DurationMS != 2000 {
+		t.Fatalf("assistant reasoning timing = %#v, want persisted discuss timing", timings)
 	}
 	snapshot, ok := holder.Snapshot()
 	if !ok || snapshot.AssistantMessageID != "message-id" {
@@ -295,11 +321,54 @@ func TestAdmittedDiscussCancellationPersistsAbortedLifecycle(t *testing.T) {
 	handle.Cancel()
 	drainDiscuss(t, handle)
 
+	if resolver.storeCalls != 0 {
+		t.Fatalf("store calls = %d, want none for empty explicit cancellation", resolver.storeCalls)
+	}
 	if len(lifecycles.creates) != 1 || lifecycles.creates[0].Status != contextLifecycleStatusAborted {
 		t.Fatalf("lifecycle creates = %#v, want one aborted row", lifecycles.creates)
 	}
 	if len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusAborted {
 		t.Fatalf("runtime finishes = %#v, want one aborted finish", runtime.finishes)
+	}
+}
+
+func TestAdmittedDiscussSilencePublishesStableTimeoutFailure(t *testing.T) {
+	resolver := &fakeDiscussService{resolveResult: ResolveRunConfigResult{ModelID: "model-1"}}
+	service := newDiscussTestService(&fakeRunner{}, &silentDiscussAgentStreamer{}, resolver)
+	service.streamIdleTimeout = 10 * time.Millisecond
+	runtime, lifecycles := configureDiscussLifecycle(service)
+
+	handle, err := service.StartTurn(context.Background(), lifecycleDiscussCommand())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := drainDiscuss(t, handle)
+
+	if resolver.storeCalls != 1 {
+		t.Fatalf("store calls = %d, want one turn-level timeout failure", resolver.storeCalls)
+	}
+	var failurePayload json.RawMessage
+	for _, event := range events {
+		if event.Kind == string(native.EventError) {
+			failurePayload = event.Payload
+			break
+		}
+	}
+	if len(failurePayload) == 0 {
+		t.Fatalf("events = %#v, want a structural error", events)
+	}
+	var failure native.StreamEvent
+	if err := json.Unmarshal(failurePayload, &failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Code != string(apperror.CodeAgentResponseTimeout) || strings.Contains(failure.Error, "deadline") {
+		t.Fatalf("public timeout event = %#v", failure)
+	}
+	if len(lifecycles.creates) != 1 || lifecycles.creates[0].ErrorCode.String != string(apperror.CodeAgentResponseTimeout) {
+		t.Fatalf("lifecycle creates = %#v", lifecycles.creates)
+	}
+	if len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusErrored || runtime.finishes[0].message != string(apperror.CodeAgentResponseTimeout) {
+		t.Fatalf("runtime finishes = %#v", runtime.finishes)
 	}
 }
 

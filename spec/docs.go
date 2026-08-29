@@ -4901,7 +4901,7 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/github_com_memohai_memoh_internal_mcp.Connection"
+                            "$ref": "#/definitions/github_com_felinics_memoh_internal_mcp.Connection"
                         }
                     },
                     "400": {
@@ -5188,7 +5188,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_memohai_memoh_internal_mcp.Connection"
+                            "$ref": "#/definitions/github_com_felinics_memoh_internal_mcp.Connection"
                         }
                     },
                     "400": {
@@ -5245,7 +5245,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/github_com_memohai_memoh_internal_mcp.Connection"
+                            "$ref": "#/definitions/github_com_felinics_memoh_internal_mcp.Connection"
                         }
                     },
                     "400": {
@@ -7743,7 +7743,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Fork source message",
+                        "description": "Fork source turn",
                         "name": "body",
                         "in": "body",
                         "required": true,
@@ -18516,6 +18516,9 @@ const docTemplate = `{
                 "background_task": {
                     "$ref": "#/definitions/conversation.UIBackgroundTask"
                 },
+                "code": {
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -18533,6 +18536,9 @@ const docTemplate = `{
                 "progress": {
                     "type": "array",
                     "items": {}
+                },
+                "reasoning_timing": {
+                    "$ref": "#/definitions/conversation.UIReasoningTiming"
                 },
                 "running": {
                     "type": "boolean"
@@ -18554,14 +18560,24 @@ const docTemplate = `{
                 "text",
                 "reasoning",
                 "tool",
-                "attachments"
+                "attachments",
+                "error"
             ],
             "x-enum-varnames": [
                 "UIMessageText",
                 "UIMessageReasoning",
                 "UIMessageTool",
-                "UIMessageAttachments"
+                "UIMessageAttachments",
+                "UIMessageError"
             ]
+        },
+        "conversation.UIReasoningTiming": {
+            "type": "object",
+            "properties": {
+                "duration_ms": {
+                    "type": "integer"
+                }
+            }
         },
         "conversation.UIReplyRef": {
             "type": "object",
@@ -19120,7 +19136,7 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_memohai_memoh_internal_mcp.Connection": {
+        "github_com_felinics_memoh_internal_mcp.Connection": {
             "type": "object",
             "properties": {
                 "auth_type": {
@@ -21537,15 +21553,18 @@ const docTemplate = `{
         },
         "handlers.forkSessionRequest": {
             "type": "object",
-            "required": [
-                "message_id"
-            ],
             "properties": {
                 "message_id": {
-                    "type": "string"
+                    "description": "MessageID is the pre-turn spelling of TurnID, resolved server-side to the\nround that contains it. Deprecated: send turn_id. A client holds a turn id\nfrom admission onward, while a stored message id exists only once the\nround has been persisted.",
+                    "type": "string",
+                    "format": "uuid"
                 },
                 "title": {
                     "type": "string"
+                },
+                "turn_id": {
+                    "type": "string",
+                    "format": "uuid"
                 }
             }
         },
@@ -22080,7 +22099,7 @@ const docTemplate = `{
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/github_com_memohai_memoh_internal_mcp.Connection"
+                        "$ref": "#/definitions/github_com_felinics_memoh_internal_mcp.Connection"
                     }
                 }
             }

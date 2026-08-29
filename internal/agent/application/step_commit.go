@@ -7,20 +7,21 @@ import (
 	"strings"
 	"sync"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	"github.com/memohai/memoh/internal/runtimefence"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // agentStepCommitter bridges Twilight's complete-step barrier to history
 // persistence. It is intentionally enabled only for admitted, fenced turns;
 // legacy calls and replacement flows keep their terminal-snapshot behavior.
 type agentStepCommitter struct {
-	service   *Service
-	req       ChatRequest
-	rc        resolvedContext
-	persister messagepkg.AgentStepPersister
+	service         *Service
+	req             ChatRequest
+	rc              resolvedContext
+	persister       messagepkg.AgentStepPersister
+	reasoningTiming *reasoningTimingTracker
 
 	mu                   sync.Mutex
 	turnRequestMessageID string
@@ -73,6 +74,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 		return errors.New("agent step is missing")
 	}
 	messages := sdkMessagesToModelMessages(step.Messages)
+	timingState := "completed"
+	if interrupted {
+		timingState = "interrupted"
+	}
+	reasoningTiming := c.reasoningTiming.take(timingState)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -102,6 +108,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, step *s
 	opts := storeRoundOptions{
 		AllowPendingToolCalls: step.DeferredToolApproval != nil,
 		ContextLifecycle:      c.rc.runConfig.ContextLifecycle,
+		ReasoningTiming:       reasoningTiming,
 	}
 	if interrupted {
 		opts.MessageMetadataByIndex = make(map[int]map[string]any)

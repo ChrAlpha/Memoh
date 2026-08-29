@@ -2318,6 +2318,8 @@ definitions:
         type: array
       background_task:
         $ref: '#/definitions/conversation.UIBackgroundTask'
+      code:
+        type: string
       content:
         type: string
       execution_location:
@@ -2331,6 +2333,8 @@ definitions:
       progress:
         items: {}
         type: array
+      reasoning_timing:
+        $ref: '#/definitions/conversation.UIReasoningTiming'
       running:
         type: boolean
       tool_call_id:
@@ -2346,12 +2350,19 @@ definitions:
     - reasoning
     - tool
     - attachments
+    - error
     type: string
     x-enum-varnames:
     - UIMessageText
     - UIMessageReasoning
     - UIMessageTool
     - UIMessageAttachments
+    - UIMessageError
+  conversation.UIReasoningTiming:
+    properties:
+      duration_ms:
+        type: integer
+    type: object
   conversation.UIReplyRef:
     properties:
       attachments:
@@ -2729,7 +2740,7 @@ definitions:
       provider:
         $ref: '#/definitions/fetchproviders.ProviderName'
     type: object
-  github_com_memohai_memoh_internal_mcp.Connection:
+  github_com_felinics_memoh_internal_mcp.Connection:
     properties:
       auth_type:
         type: string
@@ -4351,11 +4362,18 @@ definitions:
   handlers.forkSessionRequest:
     properties:
       message_id:
+        description: |-
+          MessageID is the pre-turn spelling of TurnID, resolved server-side to the
+          round that contains it. Deprecated: send turn_id. A client holds a turn id
+          from admission onward, while a stored message id exists only once the
+          round has been persisted.
+        format: uuid
         type: string
       title:
         type: string
-    required:
-    - message_id
+      turn_id:
+        format: uuid
+        type: string
     type: object
   handlers.fsOpResponse:
     properties:
@@ -4707,7 +4725,7 @@ definitions:
     properties:
       items:
         items:
-          $ref: '#/definitions/github_com_memohai_memoh_internal_mcp.Connection'
+          $ref: '#/definitions/github_com_felinics_memoh_internal_mcp.Connection'
         type: array
     type: object
   mcp.MCPServerEntry:
@@ -9291,7 +9309,7 @@ paths:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/github_com_memohai_memoh_internal_mcp.Connection'
+            $ref: '#/definitions/github_com_felinics_memoh_internal_mcp.Connection'
         "400":
           description: Bad Request
           schema:
@@ -9513,7 +9531,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_memohai_memoh_internal_mcp.Connection'
+            $ref: '#/definitions/github_com_felinics_memoh_internal_mcp.Connection'
         "400":
           description: Bad Request
           schema:
@@ -9551,7 +9569,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_memohai_memoh_internal_mcp.Connection'
+            $ref: '#/definitions/github_com_felinics_memoh_internal_mcp.Connection'
         "400":
           description: Bad Request
           schema:
@@ -11176,7 +11194,7 @@ paths:
         name: session_id
         required: true
         type: string
-      - description: Fork source message
+      - description: Fork source turn
         in: body
         name: body
         required: true

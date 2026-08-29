@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memohai/memoh/internal/fsevent"
+	"github.com/felinics/memoh/internal/fsevent"
 )
 
 func collectFSEvents(t *testing.T, env *skillsTestEnv) <-chan []string {

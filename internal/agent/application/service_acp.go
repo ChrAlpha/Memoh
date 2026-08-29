@@ -14,21 +14,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
-	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
-	"github.com/memohai/memoh/internal/agent/event"
-	acpagent "github.com/memohai/memoh/internal/agent/runtime/acp"
-	acpclient "github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	"github.com/memohai/memoh/internal/apperror"
-	attachmentpkg "github.com/memohai/memoh/internal/attachment"
-	"github.com/memohai/memoh/internal/bots"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	session "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	acpfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	"github.com/felinics/memoh/internal/agent/event"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
+	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/apperror"
+	attachmentpkg "github.com/felinics/memoh/internal/attachment"
+	"github.com/felinics/memoh/internal/bots"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 // acpSinkStallTimeout bounds how long a live-turn event delivery may wait on
@@ -106,6 +106,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		return errors.New("ACP session pool is not configured")
 	}
 	req.RunID = runIDForChatRequest(req.RunID)
+	reasoningTiming := newReasoningTimingTracker(nil)
 	sess, err := s.sessionService.Get(ctx, req.ThreadID)
 	if err != nil {
 		return err
@@ -162,6 +163,8 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	idleCtx, idleCancel := s.withStreamIdleTimeout(streamCtx, strings.TrimSpace(req.ReasoningEffort))
+	defer idleCancel.Stop()
 	terminal := s.contextLifecycleTerminal(streamCtx, native.RunConfig{
 		RunID: req.RunID,
 		Identity: native.SessionContext{
@@ -252,6 +255,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	cleanupProjections := func() { cleanupProjectionsIn(context.WithoutCancel(ctx)) }
 
 	emitWithContext := func(deliveryCtx context.Context, ev native.StreamEvent) {
+		reasoningTiming.observe(ev)
 		if isACPDecisionProjectionEvent(ev) && recordProjection(ev) {
 			completeProjection(ev.ToolCallID, s.persistACPDecisionProjection(context.WithoutCancel(ctx), req, ev))
 		}
@@ -285,6 +289,10 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		}
 	}
 	emit := func(ev native.StreamEvent) {
+		idleCancel.Reset()
+		if ev.Type == native.EventToolCallStart {
+			idleCancel.RecordToolCall()
+		}
 		emitWithContext(streamCtx, ev)
 	}
 
@@ -294,7 +302,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 	// block would pin the answer text above any reasoning that streams first.
 	// The first text_delta lazily creates the text block instead.
 
-	result, err := s.acpPool.Prompt(streamCtx, acpagent.PromptInput{
+	result, err := s.acpPool.Prompt(idleCtx, acpagent.PromptInput{
 		BotID:                    req.BotID,
 		ChatID:                   req.ChatID,
 		SessionID:                req.ThreadID,
@@ -362,6 +370,33 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			return feedbackErr
 		}
 		result = ensureACPPromptOutput(result)
+		if idleCancel.DidFire() {
+			timeoutErr := context.Cause(idleCtx)
+			lifecycleCause = timeoutErr
+			failedResult, failureDelta := acpFailureResult(result, timeoutErr)
+			if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, timeoutErr, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); persistErr != nil {
+				lifecycleCause = runtimeHistoryError(persistErr)
+				s.logger.Error("ACP idle timeout persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
+				switch s.resolveACPRoundPersistFailure(ctx, req, persistErr, cleanupProjectionsIn) {
+				case acpRoundCommitted:
+					lifecycleCause = timeoutErr
+					cleanupProjections()
+				case acpRoundUnresolved:
+					return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, persistErr, nil)
+				case acpRoundRolledBack:
+					cleanupProjections()
+				}
+			} else {
+				cleanupProjections()
+			}
+			if failureDelta != "" {
+				emitWithContext(ctx, native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
+			}
+			emitWithContext(ctx, agentFailureStreamEvent(timeoutErr))
+			emitWithContext(ctx, native.StreamEvent{Type: native.EventTextEnd})
+			emitWithContext(ctx, acpTerminalStreamEvent(native.EventAbort, failedResult))
+			return timeoutErr
+		}
 		if streamCtx.Err() != nil {
 			// A user-initiated stop is not an agent failure: keep the partial
 			// output unannotated instead of persisting a misleading
@@ -371,7 +406,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 			// remains reusable and a cold start resumes the last complete turn.
 			abortedReq := req
 			abortedReq.SkipMemoryExtraction = true
-			if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, false, contextLifecycle); persistErr != nil {
+			if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); persistErr != nil {
 				lifecycleCause = persistErr
 				s.logger.Error("ACP abort persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 				// The runtime stays valid regardless of the resolution: the
@@ -390,7 +425,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		if failureDelta != "" {
 			emit(native.StreamEvent{Type: native.EventTextDelta, Delta: failureDelta})
 		}
-		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, false, contextLifecycle); persistErr != nil {
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, failedResult, err, false, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentAbort)); persistErr != nil {
 			lifecycleCause = runtimeHistoryError(persistErr)
 			s.logger.Error("ACP failure persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 			switch s.resolveACPRoundPersistFailure(ctx, req, persistErr, cleanupProjectionsIn) {
@@ -430,7 +465,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		// disconnect is not a stop: the completed turn persists normally below.
 		abortedReq := req
 		abortedReq.SkipMemoryExtraction = true
-		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, true, contextLifecycle); persistErr != nil {
+		if persistErr := s.persistACPRound(context.WithoutCancel(ctx), abortedReq, agentID, projectPath, result, nil, true, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentEnd)); persistErr != nil {
 			lifecycleCause = persistErr
 			s.logger.Error("ACP abort persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 			switch s.resolveACPRoundPersistFailure(ctx, req, persistErr, cleanupProjectionsIn) {
@@ -462,7 +497,7 @@ func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh
 		return nil
 	}
 	emit(native.StreamEvent{Type: native.EventTextEnd})
-	if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, true, contextLifecycle); persistErr != nil {
+	if persistErr := s.persistACPRound(context.WithoutCancel(ctx), req, agentID, projectPath, result, nil, true, contextLifecycle, takeTerminalReasoningTiming(reasoningTiming, native.EventAgentEnd)); persistErr != nil {
 		lifecycleCause = runtimeHistoryError(persistErr)
 		s.logger.Error("ACP persist failed", slog.Any("error", persistErr), slog.String("session_id", req.ThreadID))
 		switch s.resolveACPRoundPersistFailure(ctx, req, persistErr, cleanupProjectionsIn) {
@@ -1201,6 +1236,7 @@ func (s *Service) persistACPRound(
 	promptErr error,
 	turnCompleted bool,
 	contextLifecycle *contextfrag.LifecycleHolder,
+	reasoningTiming []messagepkg.ReasoningTimingSegment,
 ) error {
 	meta := map[string]any{
 		"acp_agent_id": agentID,
@@ -1215,6 +1251,8 @@ func (s *Service) persistACPRound(
 			meta["error_code"] = feedbackErr.Code
 			meta["error_reason"] = feedbackErr.Reason
 			meta["i18n_key"] = feedbackErr.I18nKey
+		} else if code := apperror.CodeOf(promptErr); code != "" {
+			meta["error_code"] = string(code)
 		} else {
 			meta["error_code"] = "acp_runtime_prompt_failed"
 		}
@@ -1298,6 +1336,7 @@ func (s *Service) persistACPRound(
 		SkipMemory:                    skipMemory,
 		AllowEmptyAssistantText:       true,
 		MessageMetadataByIndex:        metadataByIndex,
+		ReasoningTiming:               reasoningTiming,
 		RequireCompletePersist:        true,
 		CleanupACPDecisionProjections: true,
 		ACPPublication:                publication,

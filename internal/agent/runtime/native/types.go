@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"time"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/memohai/memoh/internal/agent/background"
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/agent/event"
-	tools "github.com/memohai/memoh/internal/agent/tool"
-	"github.com/memohai/memoh/internal/models"
+	"github.com/felinics/memoh/internal/agent/background"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/event"
+	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // SessionContext carries request-scoped identity and routing information.
@@ -211,6 +211,12 @@ type RunConfig struct {
 	// and the number of SDK output messages that preceded the injection. Used
 	// by the resolver to interleave injected messages in storeRound.
 	InjectedRecorder func(headerifiedText string, insertAfter int)
+
+	// OnProviderStreamEventObserved receives normalized provider parts before
+	// Twilight buffers them or invokes the step commit barrier. Persistence uses
+	// this production boundary to measure reasoning without putting timing on
+	// the public event wire.
+	OnProviderStreamEventObserved func(StreamEvent)
 
 	// OnStepCommitted is a synchronous durability barrier. The callback sees
 	// the complete step plus any user/read-media messages prepared immediately

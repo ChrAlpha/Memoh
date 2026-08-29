@@ -3,7 +3,7 @@ package acp
 import (
 	"testing"
 
-	"github.com/memohai/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/event"
 )
 
 type recordingEventSink struct {

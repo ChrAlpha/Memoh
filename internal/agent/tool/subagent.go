@@ -15,20 +15,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/memohai/memoh/internal/agent/background"
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/memohai/memoh/internal/agent/context/history"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
-	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/hooks"
-	"github.com/memohai/memoh/internal/models"
-	"github.com/memohai/memoh/internal/oauthctx"
-	"github.com/memohai/memoh/internal/providers"
-	"github.com/memohai/memoh/internal/reasoning"
-	"github.com/memohai/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/agent/background"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/hooks"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/oauthctx"
+	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/settings"
 )
 
 // SpawnAgent is the interface the subagent control tools use to run tasks.
@@ -143,8 +143,8 @@ type SpawnResult struct {
 const (
 	// subagentTimeout caps total execution time as a safety net per attempt.
 	subagentTimeout = 10 * time.Minute
-	// spawnHeartbeatInterval keeps the parent stream active during foreground waits.
-	spawnHeartbeatInterval  = 30 * time.Second
+	// spawnProgressInterval keeps the parent stream active during foreground waits.
+	spawnProgressInterval   = 30 * time.Second
 	subagentMaxRetries      = 3
 	subagentRetryBaseDelay  = 2 * time.Second
 	subagentWatchdogTimeout = 3 * time.Minute
@@ -803,9 +803,9 @@ func (p *SpawnProvider) submitAgentTask(ctx context.Context, session SessionCont
 		}, nil
 	}
 
-	heartbeatCtx, heartbeatCancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer heartbeatCancel()
-	p.startSpawnHeartbeat(heartbeatCtx, session, 1)
+	progressCtx, progressCancel := context.WithCancel(ctx)
+	defer progressCancel()
+	p.startSpawnProgress(progressCtx, session)
 	result := p.runAgentRequest(taskCtx, key, req)
 	return agentResultMap(result), nil
 }
@@ -1547,23 +1547,33 @@ func agentResultMap(res agentRunResult) map[string]any {
 	return out
 }
 
-func (*SpawnProvider) startSpawnHeartbeat(ctx context.Context, session SessionContext, _ int) {
+func (*SpawnProvider) startSpawnProgress(ctx context.Context, session SessionContext) {
 	emitter := session.Emitter
 	if emitter == nil {
 		return
 	}
 	go func() {
-		ticker := time.NewTicker(spawnHeartbeatInterval)
+		ticker := time.NewTicker(spawnProgressInterval)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				emitter(ToolStreamEvent{Type: StreamEventSpawnHeartbeat})
-			}
-		}
+		runSpawnProgress(ctx, emitter, ticker.C)
 	}()
+}
+
+func runSpawnProgress(ctx context.Context, emitter StreamEmitter, ticks <-chan time.Time) {
+	if emitter == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			if ctx.Err() != nil {
+				return
+			}
+			emitter(ToolStreamEvent{Type: StreamEventSpawnProgress})
+		}
+	}
 }
 
 func isRetryableSubagentError(err error) bool {

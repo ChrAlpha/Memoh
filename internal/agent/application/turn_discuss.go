@@ -7,16 +7,18 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/memohai/memoh/internal/agent/runtime/session"
-	"github.com/memohai/memoh/internal/agent/turn"
-	sessionpkg "github.com/memohai/memoh/internal/chat/thread"
-	"github.com/memohai/memoh/internal/chat/timeline"
-	"github.com/memohai/memoh/internal/contextview"
-	"github.com/memohai/memoh/internal/models"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/contextview"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // turnRuntimeHooks are test seams for the transport-facing turn lifecycle.
@@ -161,7 +163,32 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle, resolved ResolveRunConfigResult) {
 	runConfig := resolved.RunConfig
 	runConfig.RunID = h.id
-	runConfig.Messages = discussMessagesToSDK(cmd.DiscussMessages)
+	budgetTokens := resolved.ContextBudgetMaxTokens
+	if budgetTokens <= 0 {
+		budgetTokens = s.contextAbsoluteMaxTokens()
+	}
+	admitted, admission := admitDiscussMessages(cmd.DiscussMessages, budgetTokens)
+	if admission.ProtectedOverflow {
+		s.logger.Error("context_admission_rejected",
+			slog.String("path", "discuss_turn"),
+			slog.String("bot_id", cmd.BotID),
+			slog.String("session_id", cmd.ThreadID),
+			slog.Int("estimated_tokens", admission.EstimatedTokens),
+			slog.Int("budget_tokens", admission.BudgetTokens))
+		h.emitErr(apperror.New(apperror.CodeContextProtectedOverflow, nil))
+		return
+	}
+	if admission.DroppedMessages > 0 {
+		s.logger.Info("context_admission",
+			slog.String("path", "discuss_turn"),
+			slog.String("bot_id", cmd.BotID),
+			slog.String("session_id", cmd.ThreadID),
+			slog.Int("estimated_tokens", admission.EstimatedTokens),
+			slog.Int("selected_tokens", admission.SelectedTokens),
+			slog.Int("budget_tokens", admission.BudgetTokens),
+			slog.Int("dropped_messages", admission.DroppedMessages))
+	}
+	runConfig.Messages = discussMessagesToSDK(admitted)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""
 	runConfig.ContextCurrentUserMessageIndex = nil
@@ -185,7 +212,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		imageParts = s.inlineDiscussImages(ctx, cmd.BotID, refs)
 		injectImagePartsIntoLastUserMessage(runConfig.Messages, imageParts)
 	}
-	runConfig.ContextSourceFrags = s.collectDiscussSourceFrags(ctx, runConfig, cmd.DiscussMessages, imageParts)
+	runConfig.ContextSourceFrags = s.collectDiscussSourceFrags(ctx, runConfig, admitted, imageParts)
 	runConfig = runConfig.RefreshContextFrag()
 	terminal := s.contextLifecycleTerminal(ctx, runConfig)
 	var lifecycleCause error
@@ -196,19 +223,29 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		}
 	}()
 
-	eventCh := s.streamDiscussAgent(ctx, runConfig)
+	reasoningTiming := newReasoningTimingTracker(nil)
+	configureNativeReasoningTiming(&runConfig, reasoningTiming, nil)
+	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(runConfig))
+	defer idleCancel.Stop()
+	eventCh := s.streamDiscussAgent(idleCtx, runConfig)
 
 	var finalMessages json.RawMessage
+	var finalReasoningTiming []messagepkg.ReasoningTimingSegment
 	var terminalEvent native.StreamEvent
 	var terminalPayload []byte
 	var hasTerminalEvent bool
 	for event := range eventCh {
-		if eventErr := agentStreamEventError(event); eventErr != nil && lifecycleCause == nil {
+		idleCancel.Reset()
+		if event.Type == native.EventToolCallStart {
+			idleCancel.RecordToolCall()
+		}
+		if eventErr := agentStreamLifecycleError(event); eventErr != nil && lifecycleCause == nil {
 			lifecycleCause = eventErr
 		}
 		terminal := event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort
 		if terminal {
 			finalMessages = event.Messages
+			finalReasoningTiming = takeTerminalReasoningTiming(reasoningTiming, event.Type)
 			terminalEvent = event
 			terminalPayload, _ = json.Marshal(event)
 			hasTerminalEvent = true
@@ -218,7 +255,9 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 				case native.EventAgentEnd:
 					lifecycleCause = nil
 				case native.EventAgentAbort:
-					if context.Cause(ctx) != nil || lifecycleCause == nil {
+					if idleCancel.DidFire() {
+						lifecycleCause = context.Cause(idleCtx)
+					} else if context.Cause(ctx) != nil || lifecycleCause == nil {
 						lifecycleCause = agentAbortCause(ctx)
 					}
 				}
@@ -226,14 +265,14 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			continue
 		}
 		if h.publishAgentEvent != nil {
-			if publishErr := h.publishAgentEvent(ctx, event); publishErr != nil {
+			if publishErr := h.publishAgentEvent(ctx, publicAgentStreamEvent(event)); publishErr != nil {
 				lifecycleCause = publishErr
 				lifecycleDeferred = false
 				h.emitErr(publishErr)
 				return
 			}
 		}
-		payload, marshalErr := json.Marshal(event)
+		payload, marshalErr := json.Marshal(publicAgentStreamEvent(event))
 		if marshalErr != nil {
 			continue
 		}
@@ -244,7 +283,12 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			return
 		}
 	}
-	if !hasTerminalEvent {
+	timedOut := idleCancel.DidFire()
+	if timedOut {
+		lifecycleCause = context.Cause(idleCtx)
+		lifecycleDeferred = false
+	}
+	if !hasTerminalEvent && !timedOut {
 		if lifecycleCause == nil {
 			if ctx.Err() != nil {
 				lifecycleCause = context.Cause(ctx)
@@ -263,22 +307,33 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	// detaching cancellation so that terminal history and runtime publication
 	// can cross the same durable boundary as the main chat stream.
 	terminalCtx := context.WithoutCancel(ctx)
-	if len(finalMessages) > 0 {
-		var sdkMsgs []sdk.Message
-		if json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
-			if storeErr := s.storeDiscussRound(terminalCtx,
-				runConfig.RunID,
-				cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID, cmd.CurrentChannel,
-				sdkMsgs, resolved.ModelID,
-				runConfig.ContextLifecycle,
-			); storeErr != nil {
-				historyErr := runtimeHistoryError(storeErr)
-				lifecycleCause = historyErr
-				lifecycleDeferred = false
-				h.emitErr(historyErr)
+	if hasTerminalEvent || timedOut {
+		var failureCode apperror.Code
+		if timedOut {
+			failureCode = snapshotFailureCode(true, lifecycleCause)
+		}
+		if storeErr := s.persistDiscussTerminalSnapshot(terminalCtx, runConfig, cmd, resolved.ModelID, finalMessages, finalReasoningTiming, failureCode); storeErr != nil {
+			historyErr := runtimeHistoryError(storeErr)
+			lifecycleCause = historyErr
+			lifecycleDeferred = false
+			h.emitErr(historyErr)
+			return
+		}
+	}
+
+	if timedOut {
+		failureEvent := agentFailureStreamEvent(lifecycleCause)
+		if h.publishAgentEvent != nil {
+			if publishErr := h.publishAgentEvent(terminalCtx, failureEvent); publishErr != nil {
+				h.emitErr(publishErr)
 				return
 			}
 		}
+		if payload, marshalErr := json.Marshal(failureEvent); marshalErr == nil {
+			h.emit(string(failureEvent.Type), payload)
+		}
+		h.emitErr(lifecycleCause)
+		return
 	}
 	if hasTerminalEvent && h.publishAgentEvent != nil {
 		if publishErr := h.publishAgentEvent(terminalCtx, terminalEvent); publishErr != nil {
@@ -296,8 +351,74 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	// Compute pressure on this goroutine so the detached trigger holds a few
 	// scalars instead of pinning the whole composed context until it runs.
 	if compactable := discussCompactableTokens(cmd.DiscussMessages); compactable > 0 && s.compactionService != nil && s.settingsService != nil {
+		// Pressure is measured on the full composed context, not the admitted
+		// window: what admission dropped is exactly what compaction must cover.
 		go s.maybeCompactDiscuss(context.WithoutCancel(ctx), cmd.BotID, cmd.ThreadID, resolved.ModelID, compactable)
 	}
+}
+
+func (s *Service) persistDiscussTerminalSnapshot(
+	ctx context.Context,
+	runConfig native.RunConfig,
+	cmd turn.StartTurnCommand,
+	modelID string,
+	finalMessages json.RawMessage,
+	reasoningTiming []messagepkg.ReasoningTimingSegment,
+	failureCode apperror.Code,
+) error {
+	var sdkMsgs []sdk.Message
+	if len(finalMessages) > 0 && json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
+		return s.storeDiscussRound(
+			ctx,
+			runConfig.RunID,
+			cmd.BotID,
+			cmd.ThreadID,
+			cmd.SourceChannelIdentityID,
+			cmd.CurrentChannel,
+			sdkMsgs,
+			modelID,
+			runConfig.ContextLifecycle,
+			reasoningTiming,
+		)
+	}
+	if failureCode == "" {
+		return nil
+	}
+	if s.turnHooks != nil && s.turnHooks.storeRound != nil {
+		return s.turnHooks.storeRound(
+			ctx,
+			runConfig.RunID,
+			cmd.BotID,
+			cmd.ThreadID,
+			cmd.SourceChannelIdentityID,
+			cmd.CurrentChannel,
+			[]sdk.Message{sdk.AssistantMessage("")},
+			modelID,
+			runConfig.ContextLifecycle,
+		)
+	}
+	return s.storeRoundWithOptions(ctx, ChatRequest{
+		RunID:                   runConfig.RunID,
+		BotID:                   cmd.BotID,
+		ChatID:                  cmd.BotID,
+		ThreadID:                cmd.ThreadID,
+		SourceChannelIdentityID: cmd.SourceChannelIdentityID,
+		CurrentChannel:          cmd.CurrentChannel,
+		UserMessagePersisted:    true,
+	}, []ModelMessage{{
+		Role:    "assistant",
+		Content: newTextContent(""),
+	}}, modelID, storeRoundOptions{
+		AllowEmptyAssistantText: true,
+		MessageMetadataByIndex: map[int]map[string]any{
+			0: {
+				messagepkg.AgentStepInterruptedMetadataKey: true,
+				messagepkg.HistoryErrorCodeMetadataKey:     string(failureCode),
+			},
+		},
+		ContextLifecycle: runConfig.ContextLifecycle,
+		ReasoningTiming:  reasoningTiming,
+	})
 }
 
 func (s *Service) collectDiscussSourceFrags(
@@ -359,14 +480,14 @@ func (s *Service) collectDiscussSourceFrags(
 // turn with the same trigger policy as the chat path. ACP discuss turns run
 // through streamTurnChat and inherit its trigger directly.
 func (s *Service) maybeCompactDiscuss(ctx context.Context, botID, threadID, modelID string, compactable int) {
-	budget := 0
+	// The absolute cap keeps compaction triggers alive even when the model
+	// has no configured context window; a zero budget would disable them.
+	budget := s.contextAbsoluteMaxTokens()
 	var turnModel models.GetResponse
 	if s.modelsService != nil && strings.TrimSpace(modelID) != "" {
 		if model, err := s.modelsService.GetByID(ctx, modelID); err == nil {
 			turnModel = model
-			if model.Config.ContextWindow != nil {
-				budget = *model.Config.ContextWindow
-			}
+			budget = s.effectiveContextTokenBudget(model)
 		}
 	}
 	s.maybeCompact(ctx, ChatRequest{BotID: botID, ThreadID: threadID}, resolvedContext{
@@ -378,24 +499,43 @@ func (s *Service) maybeCompactDiscuss(ctx context.Context, botID, threadID, mode
 }
 
 // discussCompactableTokens estimates the raw history share of a discuss
-// context, excluding artifact summaries, in the chat trigger's token unit.
+// context, excluding artifact summaries, in the shared estimator's unit.
 func discussCompactableTokens(messages []turn.DiscussMessage) int {
 	total := 0
 	for _, message := range messages {
 		if message.CompactionArtifactID != "" {
 			continue
 		}
-		size := len(message.RawContent)
-		if size == 0 {
-			size = len(message.Content)
-		}
-		total += size / 4
+		total += discussMessageTokens(message)
 	}
 	return total
 }
 
 func (s *Service) pumpDiscussACP(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
-	prompt := discussACPFullContextPrompt(cmd.DiscussMessages)
+	// ACP resolution carries no model window, so the prompt is budgeted by
+	// the absolute cap before any concatenation (CM-ADM-001).
+	admitted, admission := admitDiscussMessages(cmd.DiscussMessages, s.contextAbsoluteMaxTokens())
+	if admission.ProtectedOverflow {
+		s.logger.Error("context_admission_rejected",
+			slog.String("path", "discuss_acp"),
+			slog.String("bot_id", cmd.BotID),
+			slog.String("session_id", cmd.ThreadID),
+			slog.Int("estimated_tokens", admission.EstimatedTokens),
+			slog.Int("budget_tokens", admission.BudgetTokens))
+		h.emitErr(apperror.New(apperror.CodeContextProtectedOverflow, nil))
+		return
+	}
+	if admission.DroppedMessages > 0 {
+		s.logger.Info("context_admission",
+			slog.String("path", "discuss_acp"),
+			slog.String("bot_id", cmd.BotID),
+			slog.String("session_id", cmd.ThreadID),
+			slog.Int("estimated_tokens", admission.EstimatedTokens),
+			slog.Int("selected_tokens", admission.SelectedTokens),
+			slog.Int("budget_tokens", admission.BudgetTokens),
+			slog.Int("dropped_messages", admission.DroppedMessages))
+	}
+	prompt := discussACPFullContextPrompt(admitted)
 	if strings.TrimSpace(prompt) == "" {
 		// No composable context: end without a skip marker so the caller
 		// does not advance its consumed cursor (pre-port semantics).
@@ -511,6 +651,7 @@ func (s *Service) storeDiscussRound(
 	messages []sdk.Message,
 	modelID string,
 	lifecycle *contextfrag.LifecycleHolder,
+	reasoningTiming []messagepkg.ReasoningTimingSegment,
 ) error {
 	if s.turnHooks != nil && s.turnHooks.storeRound != nil {
 		return s.turnHooks.storeRound(
@@ -533,7 +674,10 @@ func (s *Service) storeDiscussRound(
 		SourceChannelIdentityID: channelIdentityID,
 		CurrentChannel:          currentPlatform,
 		UserMessagePersisted:    true,
-	}, sdkMessagesToModelMessages(messages), modelID, storeRoundOptions{ContextLifecycle: lifecycle})
+	}, sdkMessagesToModelMessages(messages), modelID, storeRoundOptions{
+		ContextLifecycle: lifecycle,
+		ReasoningTiming:  reasoningTiming,
+	})
 }
 
 // discussMessagesToSDK converts composed context messages into SDK

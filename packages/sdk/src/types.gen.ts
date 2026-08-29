@@ -1312,6 +1312,7 @@ export type ConversationUiMessage = {
     approval?: ConversationUiToolApproval;
     attachments?: Array<ConversationUiAttachment>;
     background_task?: ConversationUiBackgroundTask;
+    code?: string;
     content?: string;
     execution_location?: ConversationUiExecutionLocation;
     id?: number;
@@ -1319,13 +1320,18 @@ export type ConversationUiMessage = {
     name?: string;
     output?: unknown;
     progress?: Array<unknown>;
+    reasoning_timing?: ConversationUiReasoningTiming;
     running?: boolean;
     tool_call_id?: string;
     type?: ConversationUiMessageType;
     user_input?: ConversationUiUserInput;
 };
 
-export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments';
+export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments' | 'error';
+
+export type ConversationUiReasoningTiming = {
+    duration_ms?: number;
+};
 
 export type ConversationUiReplyRef = {
     attachments?: Array<ConversationUiAttachment>;
@@ -1551,7 +1557,7 @@ export type FetchprovidersUpdateRequest = {
     provider?: FetchprovidersProviderName;
 };
 
-export type GithubComMemohaiMemohInternalMcpConnection = {
+export type GithubComFelinicsMemohInternalMcpConnection = {
     auth_type?: string;
     bot_id?: string;
     config?: {
@@ -2471,8 +2477,15 @@ export type HandlersEmailOAuthStatusResponse = {
 };
 
 export type HandlersForkSessionRequest = {
-    message_id: string;
+    /**
+     * MessageID is the pre-turn spelling of TurnID, resolved server-side to the
+     * round that contains it. Deprecated: send turn_id. A client holds a turn id
+     * from admission onward, while a stored message id exists only once the
+     * round has been persisted.
+     */
+    message_id?: string;
     title?: string;
+    turn_id?: string;
 };
 
 export type HandlersFsOpResponse = {
@@ -2687,7 +2700,7 @@ export type McpImportRequest = {
 };
 
 export type McpListResponse = {
-    items?: Array<GithubComMemohaiMemohInternalMcpConnection>;
+    items?: Array<GithubComFelinicsMemohInternalMcpConnection>;
 };
 
 export type McpMcpServerEntry = {
@@ -7599,7 +7612,7 @@ export type PostBotsByBotIdMcpResponses = {
     /**
      * Created
      */
-    201: GithubComMemohaiMemohInternalMcpConnection;
+    201: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type PostBotsByBotIdMcpResponse = PostBotsByBotIdMcpResponses[keyof PostBotsByBotIdMcpResponses];
@@ -7874,7 +7887,7 @@ export type GetBotsByBotIdMcpByIdResponses = {
     /**
      * OK
      */
-    200: GithubComMemohaiMemohInternalMcpConnection;
+    200: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type GetBotsByBotIdMcpByIdResponse = GetBotsByBotIdMcpByIdResponses[keyof GetBotsByBotIdMcpByIdResponses];
@@ -7919,7 +7932,7 @@ export type PutBotsByBotIdMcpByIdResponses = {
     /**
      * OK
      */
-    200: GithubComMemohaiMemohInternalMcpConnection;
+    200: GithubComFelinicsMemohInternalMcpConnection;
 };
 
 export type PutBotsByBotIdMcpByIdResponse = PutBotsByBotIdMcpByIdResponses[keyof PutBotsByBotIdMcpByIdResponses];
@@ -9810,7 +9823,7 @@ export type GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse = GetBotsB
 
 export type PostBotsByBotIdSessionsBySessionIdForkData = {
     /**
-     * Fork source message
+     * Fork source turn
      */
     body: HandlersForkSessionRequest;
     path: {

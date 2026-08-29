@@ -24,17 +24,17 @@ import {
 } from '@felinic/ui'
 import type { HandlersFsFileInfo } from '@memohai/sdk'
 import { isArchiveFile, sortDirsFirst } from './utils'
-import { createSequentialLoader, nodeNeedsRefresh } from './freshness'
+import { nodeNeedsRefresh } from './freshness'
 import { resolveFileIcon } from './file-icon'
 import { FileTreeKey } from './file-tree-context'
 import {
-  treeAsideClass,
   treeGlyphSlotClass,
   treeIndentClass,
   treeRowClass,
   treeRowIdleClass,
   treeRowSelectedClass,
 } from './tree-row'
+import { useTreeDisclosure } from './tree-disclosure'
 
 const props = defineProps<{
   entry: HandlersFsFileInfo
@@ -47,9 +47,6 @@ if (!ctx) throw new Error('FileTreeNode must be used within a FileTree provider'
 const tree = ctx
 const isDark = useDark()
 
-const expanded = ref(false)
-const loaded = ref(false)
-const loading = ref(false)
 const children = ref<HandlersFsFileInfo[]>([])
 const rowEl = ref<HTMLElement | null>(null)
 
@@ -64,23 +61,21 @@ const isArchive = computed(() => isArchiveFile(props.entry.name))
 // Seti type glyph by name/extension (color tracks the active theme).
 const fileIcon = computed(() => resolveFileIcon(props.entry.name ?? '', isDark.value))
 
-const loader = createSequentialLoader(async (background) => {
-  if (!props.entry.isDir || !path.value) return
-  if (!background) loading.value = true
+const disclosure = useTreeDisclosure(async (background) => {
+  if (!props.entry.isDir || !path.value) return false
   try {
     children.value = sortDirsFirst(await tree.listDirectory(path.value, { background }))
-    loaded.value = true
+    return true
   } catch {
     // background refresh failed — keep what we have
-  } finally {
-    if (!background) loading.value = false
+    return false
   }
 })
+const { expanded, loaded, spinnerVisible, reload } = disclosure
 
 async function expand() {
-  expanded.value = true
   if (path.value) tree.setDirExpanded(path.value, true)
-  if (!loaded.value) loader.request(false)
+  await disclosure.expand()
 }
 
 function collapse() {
@@ -108,7 +103,7 @@ onBeforeUnmount(() => {
 // Re-fetch an expanded folder's children when the workspace changes; a
 // path-scoped signal skips folders outside the touched directories.
 watch(() => tree.refreshSignal.value, (signal) => {
-  if (expanded.value && nodeNeedsRefresh(path.value, signal)) loader.request(signal.background)
+  if (expanded.value && nodeNeedsRefresh(path.value, signal)) void reload(signal.background)
 })
 
 // Reveal (deep-link): expand the chain of ancestor folders leading to the
@@ -157,11 +152,15 @@ function onCheckbox(checked: boolean | 'indeterminate') {
         />
 
         <span :class="treeGlyphSlotClass">
+          <Spinner
+            v-if="entry.isDir && spinnerVisible"
+            class="text-muted-foreground"
+          />
           <ChevronRight
-            v-if="entry.isDir"
+            v-else-if="entry.isDir"
             :stroke-width="1.53"
-            class="size-4 text-muted-foreground"
-            :class="{ 'rotate-90': expanded }"
+            class="size-4 text-muted-foreground transition-[rotate]"
+            :class="{ 'rotate-90': expanded && loaded }"
           />
           <span
             v-else
@@ -227,22 +226,6 @@ function onCheckbox(checked: boolean | 'indeterminate') {
       </ContextMenuItem>
     </ContextMenuContent>
   </ContextMenu>
-
-  <!-- Loading spinner: kept outside the display:contents wrapper so the
-       browser can composite the animation layer correctly. -->
-  <div
-    v-if="entry.isDir && expanded && loading && children.length === 0"
-    :class="treeAsideClass"
-  >
-    <span
-      v-for="g in depth + 1"
-      :key="g"
-      :class="treeIndentClass"
-    />
-    <span :class="treeGlyphSlotClass">
-      <Spinner class="size-3.5" />
-    </span>
-  </div>
 
   <!-- Children: kept mounted after first load to avoid re-mount cost on
        close/reopen. display:contents when expanded (no layout impact),

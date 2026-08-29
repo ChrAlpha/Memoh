@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 )
 
 func fsNotifyTool(name string, execErr error) sdk.Tool {

@@ -3,9 +3,9 @@ package acp
 import (
 	"strings"
 
-	"github.com/memohai/memoh/internal/agent/event"
-	"github.com/memohai/memoh/internal/agent/runtime/acp/client"
-	"github.com/memohai/memoh/internal/fsevent"
+	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/fsevent"
 )
 
 // fsChangeEventSink observes the ACP prompt event stream and reports

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/memohai/memoh/internal/workspace/bridgepb"
-	"github.com/memohai/memoh/internal/workspace/bridgesvc"
+	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
+	"github.com/felinics/memoh/internal/workspace/bridgesvc"
 )
 
 func TestClientWatchDirReceivesBatches(t *testing.T) {

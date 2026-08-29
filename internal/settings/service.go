@@ -12,16 +12,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/memohai/memoh/internal/acl"
-	acpfeedback "github.com/memohai/memoh/internal/agent/decision/feedback"
-	acpprofile "github.com/memohai/memoh/internal/agent/runtime/acp/profile"
-	"github.com/memohai/memoh/internal/botagents"
-	"github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	netctl "github.com/memohai/memoh/internal/network"
-	"github.com/memohai/memoh/internal/reasoning"
-	tzutil "github.com/memohai/memoh/internal/timezone"
+	"github.com/felinics/memoh/internal/acl"
+	acpfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/botagents"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	netctl "github.com/felinics/memoh/internal/network"
+	"github.com/felinics/memoh/internal/reasoning"
+	tzutil "github.com/felinics/memoh/internal/timezone"
 )
 
 type ReasoningOptionsResolver interface {
@@ -35,6 +35,11 @@ type Service struct {
 	reasoningResolver ReasoningOptionsResolver
 	botAgents         *botagents.Service
 	logger            *slog.Logger
+}
+
+type defaultAgentTransactionalQueries interface {
+	SupportsTransactions() bool
+	InTx(context.Context, func(dbstore.Queries) error) error
 }
 
 var (
@@ -425,7 +430,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(fmt.Errorf("marshal network config: %w", err))
 	}
-	updated, err := s.queries.UpsertBotSettings(ctx, sqlc.UpsertBotSettingsParams{
+	upsertParams := sqlc.UpsertBotSettingsParams{
 		ID:                         pgID,
 		Timezone:                   timezoneValue,
 		Language:                   current.Language,
@@ -466,7 +471,8 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		OverlayProvider:            normalizedNetwork.OverlayProvider,
 		OverlayEnabled:             normalizedNetwork.OverlayEnabled,
 		OverlayConfig:              overlayConfigJSON,
-	})
+	}
+	updated, err := s.upsertBotSettings(ctx, upsertParams)
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(err)
 	}
@@ -481,6 +487,47 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	settings := normalizeBotSettingsWriteRow(updated)
 	settings.AclDefaultEffect = current.AclDefaultEffect
 	return settings, nil
+}
+
+// upsertBotSettings serializes default-Agent changes with Agent availability
+// changes. The active recheck intentionally runs after the parent bot lock in
+// a separate statement, so READ COMMITTED observes a disable/delete that won
+// the lock before this assignment. Query-only test doubles retain the direct
+// path used by existing unit tests.
+func (s *Service) upsertBotSettings(ctx context.Context, params sqlc.UpsertBotSettingsParams) (sqlc.UpsertBotSettingsRow, error) {
+	if !params.DefaultBotAgentIDSet {
+		return s.queries.UpsertBotSettings(ctx, params)
+	}
+	txer, ok := s.queries.(defaultAgentTransactionalQueries)
+	if !ok || !txer.SupportsTransactions() {
+		return s.queries.UpsertBotSettings(ctx, params)
+	}
+
+	var updated sqlc.UpsertBotSettingsRow
+	err := txer.InTx(ctx, func(q dbstore.Queries) error {
+		if _, err := q.LockBotForAgentMutation(ctx, params.ID); err != nil {
+			return err
+		}
+		if params.DefaultBotAgentID.Valid {
+			agent, err := q.GetBotAgentByID(ctx, sqlc.GetBotAgentByIDParams{
+				BotID: params.ID,
+				ID:    params.DefaultBotAgentID,
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return botagents.ErrUnavailable
+			}
+			if err != nil {
+				return err
+			}
+			if !agent.Enabled || agent.DeletedAt.Valid {
+				return botagents.ErrUnavailable
+			}
+		}
+		var err error
+		updated, err = q.UpsertBotSettings(ctx, params)
+		return err
+	})
+	return updated, err
 }
 
 func (s *Service) Delete(ctx context.Context, botID string) error {

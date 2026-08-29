@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/memohai/memoh/internal/agent/turn"
-	messagepkg "github.com/memohai/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func convertTestMessagesToUITurns(messages []messagepkg.Message) []UITurn {
@@ -147,6 +147,49 @@ func TestConvertMessagesToUITurnsGroupsAssistantToolAndKeepsCurrentConversationD
 	}
 	if assistantTurn.Messages[4].Type != UIMessageText || assistantTurn.Messages[4].Content != "done" {
 		t.Fatalf("unexpected trailing text block: %#v", assistantTurn.Messages[4])
+	}
+}
+
+func TestConvertMessagesToUITurnsProjectsPersistedReasoningTiming(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 8, 26, 1, 2, 5, 0, time.UTC)
+	rawMetadata := json.RawMessage(`{
+		"reasoning_timing": {
+			"version": 1,
+			"segments": [{
+				"ordinal": 0,
+				"duration_ms": 2000,
+				"state": "completed"
+			}, {
+				"ordinal": 1,
+				"duration_ms": 3500,
+				"state": "completed"
+			}]
+		}
+	}`)
+	turns := convertTestMessagesToUITurns([]messagepkg.Message{{
+		ID:          "assistant-1",
+		Role:        "assistant",
+		Content:     json.RawMessage(`{"role":"assistant","content":[{"type":"reasoning","text":"thinking"},{"type":"reasoning","text":"thinking again"},{"type":"text","text":"answer"}]}`),
+		RawMetadata: rawMetadata,
+		CreatedAt:   createdAt,
+	}})
+	if len(turns) != 1 || len(turns[0].Messages) != 3 {
+		t.Fatalf("turns = %#v", turns)
+	}
+	reasoning := turns[0].Messages[0]
+	if reasoning.Type != UIMessageReasoning || reasoning.ReasoningTiming == nil {
+		t.Fatalf("reasoning block = %#v", reasoning)
+	}
+	if got := reasoning.ReasoningTiming; got.DurationMS != 2000 {
+		t.Fatalf("reasoning timing = %#v", got)
+	}
+	if got := turns[0].Messages[1].ReasoningTiming; got == nil || got.DurationMS != 3500 {
+		t.Fatalf("second reasoning timing = %#v", got)
+	}
+	if turns[0].Messages[2].ReasoningTiming != nil {
+		t.Fatalf("text block unexpectedly received timing: %#v", turns[0].Messages[2])
 	}
 }
 
@@ -891,6 +934,37 @@ func TestConvertMessagesToUITurnsTruncatesReplyPreview(t *testing.T) {
 	}
 	if !strings.HasSuffix(turns[0].Reply.Preview, "...") {
 		t.Fatalf("expected ellipsis suffix, got %q", turns[0].Reply.Preview)
+	}
+}
+
+func TestConvertMessagesToUITurnsProjectsTimeoutFailure(t *testing.T) {
+	now := time.Now().UTC()
+	turns := convertTestMessagesToUITurns([]messagepkg.Message{{
+		ID:        "user-1",
+		TurnID:    "turn-1",
+		BotID:     "bot-1",
+		Role:      "user",
+		Content:   json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hello"}]}`),
+		CreatedAt: now,
+	}, {
+		ID:      "assistant-1",
+		TurnID:  "turn-1",
+		BotID:   "bot-1",
+		Role:    "assistant",
+		Content: json.RawMessage(`{"role":"assistant","content":[]}`),
+		Metadata: map[string]any{
+			messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout",
+		},
+		CreatedAt: now.Add(time.Second),
+	}})
+	if len(turns) != 2 {
+		t.Fatalf("expected user + timeout assistant, got %d", len(turns))
+	}
+	if turns[1].Role != "assistant" || len(turns[1].Messages) != 1 {
+		t.Fatalf("timeout assistant turn = %#v", turns[1])
+	}
+	if turns[1].Messages[0].Type != UIMessageError || turns[1].Messages[0].Code != "agent.response_timeout" {
+		t.Fatalf("timeout block = %#v", turns[1].Messages[0])
 	}
 }
 

@@ -15,12 +15,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/memohai/memoh/internal/chat/event"
-	dbpkg "github.com/memohai/memoh/internal/db"
-	"github.com/memohai/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/memohai/memoh/internal/db/store"
-	"github.com/memohai/memoh/internal/media"
-	"github.com/memohai/memoh/internal/runtimefence"
+	"github.com/felinics/memoh/internal/chat/event"
+	dbpkg "github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/media"
+	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // DBService persists and reads bot history messages.
@@ -1087,6 +1087,63 @@ func (s *DBService) ListSinceBySession(ctx context.Context, sessionID string, si
 	msgs := toMessagesFromSinceBySession(rows)
 	s.enrichAssets(ctx, msgs)
 	return msgs, nil
+}
+
+// ListActiveSinceWithinBytes returns bot messages since a given time,
+// admitted newest-first within the content byte budget (CM-ADM-001).
+func (s *DBService) ListActiveSinceWithinBytes(ctx context.Context, botID string, since time.Time, maxBytes int64) ([]Message, error) {
+	pgBotID, err := dbpkg.ParseUUID(botID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListActiveMessagesSinceWithinBytes(ctx, sqlc.ListActiveMessagesSinceWithinBytesParams{
+		BotID:     pgBotID,
+		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
+		MaxBytes:  maxBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := toMessagesFromActiveSinceWithinBytes(rows)
+	s.enrichAssets(ctx, msgs)
+	return msgs, nil
+}
+
+// ListActiveSinceBySessionWithinBytes returns session messages since a given
+// time, admitted newest-first within the content byte budget (CM-ADM-001).
+func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListActiveMessagesSinceBySessionWithinBytes(ctx, sqlc.ListActiveMessagesSinceBySessionWithinBytesParams{
+		SessionID: pgSessionID,
+		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
+		MaxBytes:  maxBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := toMessagesFromActiveSinceBySessionWithinBytes(rows)
+	s.enrichAssets(ctx, msgs)
+	return msgs, nil
+}
+
+// MeasureActiveBySession aggregates a session's active message count and
+// content bytes on the database side (CM-ADM-001).
+func (s *DBService) MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return ActiveMessagesMeasure{}, err
+	}
+	row, err := s.queries.MeasureActiveMessagesBySession(ctx, sqlc.MeasureActiveMessagesBySessionParams{
+		SessionID: pgSessionID,
+		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
+	})
+	if err != nil {
+		return ActiveMessagesMeasure{}, err
+	}
+	return ActiveMessagesMeasure{MessageCount: row.MessageCount, ContentBytes: row.ContentBytes}, nil
 }
 
 // ListActiveSinceBySession returns session messages since a given time, excluding passive_sync messages.
@@ -2218,6 +2275,22 @@ func toMessagesFromActiveSinceBySession(rows []sqlc.ListActiveMessagesSinceBySes
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, toMessageFromActiveSinceBySessionRow(row))
+	}
+	return messages
+}
+
+func toMessagesFromActiveSinceWithinBytes(rows []sqlc.ListActiveMessagesSinceWithinBytesRow) []Message {
+	messages := make([]Message, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, toMessageFromActiveSinceBySessionRow(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+	}
+	return messages
+}
+
+func toMessagesFromActiveSinceBySessionWithinBytes(rows []sqlc.ListActiveMessagesSinceBySessionWithinBytesRow) []Message {
+	messages := make([]Message, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, toMessageFromActiveSinceBySessionRow(sqlc.ListActiveMessagesSinceBySessionRow(row)))
 	}
 	return messages
 }

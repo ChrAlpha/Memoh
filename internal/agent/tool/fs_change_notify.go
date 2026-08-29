@@ -1,9 +1,9 @@
 package tools
 
 import (
-	sdk "github.com/memohai/twilight-ai/sdk"
+	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/memohai/memoh/internal/fsevent"
+	"github.com/felinics/memoh/internal/fsevent"
 )
 
 // FSChangeNotifier receives the workspace paths touched by a successful
