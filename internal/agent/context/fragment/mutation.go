@@ -23,13 +23,58 @@ const (
 	MutationContextBudgetDisabled MutationKind = "context_budget_disabled"
 	MutationCapabilityGate        MutationKind = "capability_gate"
 	MutationReadMedia             MutationKind = "read_media"
+	MutationRendererPrune         MutationKind = "renderer_prune"
 	MutationMidStreamRetry        MutationKind = "mid_stream_retry"
+	// MutationRunAbortObserved marks a terminal classification where durable
+	// budget evidence outranked an explicit user cancellation: the run died of
+	// budget, but an abort was concurrently in flight. It keeps "who stopped
+	// it" recoverable from the snapshot without weakening the diagnostic
+	// status precedence.
+	MutationRunAbortObserved MutationKind = "run_abort_observed"
 )
+
+// AllMutationKinds lists every mutation kind the ledger can record; the
+// generated API contract is pinned to this list.
+func AllMutationKinds() []MutationKind {
+	return []MutationKind{
+		MutationBeforeModelCallHook,
+		MutationBackgroundSummary,
+		MutationMidTaskPrune,
+		MutationLoopStepReselection,
+		MutationInjectedMessage,
+		MutationContextViewFallback,
+		MutationContextBudgetFailure,
+		MutationContextBudgetDisabled,
+		MutationCapabilityGate,
+		MutationReadMedia,
+		MutationRendererPrune,
+		MutationMidStreamRetry,
+		MutationRunAbortObserved,
+	}
+}
 
 // MutationRecord is one ledger entry describing a post-render mutation.
 type MutationRecord struct {
 	Kind   MutationKind `json:"kind"`
 	Detail string       `json:"detail,omitempty"`
+}
+
+// Cache comparison outcomes describe how a persisted run's rendered stable
+// prefix related to the previous run of the same session. Landing keeps these
+// values read-compatible without restoring the dropped runtime comparator.
+const (
+	CacheOutcomeFirstObservation = "first_observation"
+	CacheOutcomeHit              = "hit"
+	CacheOutcomeMissSamePrefix   = "miss_same_prefix"
+	CacheOutcomeExpired          = "expired"
+	CacheOutcomePrefixChanged    = "prefix_changed"
+	CacheOutcomeModelChanged     = "model_changed"
+)
+
+type CacheComparison struct {
+	Outcome                  string `json:"outcome"`
+	PrevAgeMs                int64  `json:"prev_age_ms,omitempty"`
+	FirstStepCacheReadTokens int    `json:"first_step_cache_read_tokens,omitempty"`
 }
 
 type CacheUsageRecord struct {
@@ -105,6 +150,9 @@ func (l *MutationLedger) Records() []MutationRecord {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.records) == 0 {
+		return nil
+	}
 	out := make([]MutationRecord, len(l.records))
 	copy(out, l.records)
 	return out

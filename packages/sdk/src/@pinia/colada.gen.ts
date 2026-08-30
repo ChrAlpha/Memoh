@@ -2452,7 +2452,7 @@ export const getBotsByBotIdSessionsBySessionIdContextLifecycleQueryKey = (option
 /**
  * Get session context lifecycle
  *
- * List run-keyed context lifecycle snapshots for a chat session; sessions predating run lifecycle persistence fall back to legacy assistant metadata
+ * List run-keyed context lifecycle snapshots for a chat session, newest first, with page-scoped aggregate totals (cache read/write tokens, drop reasons, mutation kinds). Aggregates cover only the returned page; has_more reports older turns. Sessions predating run lifecycle persistence fall back to legacy assistant metadata (legacy_source)
  */
 export const getBotsByBotIdSessionsBySessionIdContextLifecycleQuery = defineQueryOptions<Options<GetBotsByBotIdSessionsBySessionIdContextLifecycleData>, GetBotsByBotIdSessionsBySessionIdContextLifecycleResponse, GetBotsByBotIdSessionsBySessionIdContextLifecycleError>((options: Options<GetBotsByBotIdSessionsBySessionIdContextLifecycleData>) => ({
     key: getBotsByBotIdSessionsBySessionIdContextLifecycleQueryKey(options),

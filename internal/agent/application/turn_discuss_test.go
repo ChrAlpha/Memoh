@@ -49,6 +49,21 @@ func (f *fakeAgentStreamer) Stream(_ context.Context, cfg native.RunConfig) <-ch
 	return ch
 }
 
+type countingDiscussLifecycleProvider struct {
+	triggerLifecycleProvider
+}
+
+func (p *countingDiscussLifecycleProvider) DoStream(
+	_ context.Context,
+	params sdk.GenerateParams,
+) (*sdk.StreamResult, error) {
+	p.mu.Lock()
+	p.calls++
+	p.params = params
+	p.mu.Unlock()
+	return nil, errors.New("provider must not run after context budget rejection")
+}
+
 type fakeDiscussService struct {
 	resolveResult  ResolveRunConfigResult
 	inlineFn       func(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart
@@ -92,6 +107,9 @@ type testDiscussService interface {
 
 func newDiscussTestService(streamer testChatStreamer, agent testAgentStreamer, resolver testDiscussService) *Service {
 	service := newTurnTestService(streamer)
+	if service.logger == nil {
+		service.logger = slog.New(slog.DiscardHandler)
+	}
 	service.turnHooks.streamAgent = agent.Stream
 	service.turnHooks.resolveRunConfig = resolver.ResolveRunConfig
 	service.turnHooks.inlineImages = resolver.InlineImageAttachments
@@ -369,6 +387,77 @@ func TestAdmittedDiscussSilencePublishesStableTimeoutFailure(t *testing.T) {
 	}
 	if len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusErrored || runtime.finishes[0].message != string(apperror.CodeAgentResponseTimeout) {
 		t.Fatalf("runtime finishes = %#v", runtime.finishes)
+	}
+}
+
+func TestAdmittedDiscussBudgetFailurePersistsFailedBudgetLifecycle(t *testing.T) {
+	const admittedRunID = "00000000-0000-4000-8000-000000000919"
+	logger := slog.New(slog.DiscardHandler)
+	provider := &countingDiscussLifecycleProvider{}
+	holder := contextfrag.NewLifecycleHolder()
+	resolver := &fakeDiscussService{
+		resolveResult: ResolveRunConfigResult{
+			RunConfig: native.RunConfig{
+				Model: &sdk.Model{
+					ID:       "discuss-budget-model",
+					Type:     sdk.ModelTypeChat,
+					Provider: provider,
+				},
+				System:           "required discuss policy",
+				Identity:         native.SessionContext{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
+				ContextScope:     contextfrag.Scope{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
+				ContextLifecycle: holder,
+			},
+			ModelID:                "discuss-budget-model",
+			ContextBudgetMaxTokens: 1,
+		},
+	}
+	agent := native.New(native.Deps{
+		Logger:             logger,
+		ContextViewApplier: contextview.ProviderRunConfigApplier(logger),
+	})
+	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
+	runtime, lifecycles := configureDiscussLifecycle(service)
+	runtime.admission.RunID = admittedRunID
+	runtime.admission.Handle.RunID = admittedRunID
+
+	handle, err := service.StartTurn(context.Background(), lifecycleDiscussCommand())
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	for range handle.Events() {
+	}
+	var handleErrs []error
+	for err := range handle.Errs() {
+		handleErrs = append(handleErrs, err)
+	}
+	// Since the pre-materialization admission boundary (#1077), an over-budget
+	// discuss turn is rejected before context assembly and surfaces the stable
+	// protected-overflow code on the handle's error channel.
+	if len(handleErrs) != 1 || apperror.CodeOf(handleErrs[0]) != apperror.CodeContextProtectedOverflow {
+		t.Fatalf("handle errors = %v, want one %q rejection", handleErrs, apperror.CodeContextProtectedOverflow)
+	}
+	if provider.callCount() != 0 {
+		t.Fatalf("provider calls = %d, want 0 after provider-budget rejection", provider.callCount())
+	}
+	if resolver.storeCalls != 0 {
+		t.Fatalf("StoreRound calls = %d, want 0 after provider-budget rejection", resolver.storeCalls)
+	}
+	snapshot := assertDeferredLifecycleRow(
+		t,
+		lifecycles.creates,
+		admittedRunID,
+		contextLifecycleStatusFailedBudget,
+		string(apperror.CodeContextProtectedOverflow),
+	)
+	// Admission rejects before context assembly, so the persisted snapshot is
+	// the content-light minimal form: the classification authority is the
+	// stable protected-overflow error code, not a budget plan or mutation.
+	if snapshot.BudgetPlan != nil {
+		t.Fatalf("budget plan = %#v, want none before context assembly", snapshot.BudgetPlan)
+	}
+	if len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", runtime.finishes)
 	}
 }
 

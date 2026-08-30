@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/application"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -617,7 +618,7 @@ func TestFinishWSRunPersistsPreContextFailureAfterFencedFinish(t *testing.T) {
 	if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
 		t.Fatalf("decode lifecycle snapshot: %v", err)
 	}
-	if snapshot.Version != 1 {
+	if snapshot.Version != contextfrag.LifecycleSnapshotVersion {
 		t.Fatalf("snapshot version = %d, want 1", snapshot.Version)
 	}
 }
