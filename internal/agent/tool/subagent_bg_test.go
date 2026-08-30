@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -224,6 +225,37 @@ func (s *fakeAgentMessageService) persistInputs() []messagepkg.PersistInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]messagepkg.PersistInput(nil), s.inputs...)
+}
+
+func TestPersistSubagentMessagesSkipsMarshalDefectAndKeepsLaterOutput(t *testing.T) {
+	messages := newFakeAgentMessageService()
+	provider := &SpawnProvider{
+		messageService: messages,
+		logger:         slog.New(slog.DiscardHandler),
+	}
+	req := &agentRequest{
+		agentSessionID:   "subagent-session",
+		parentSession:    SessionContext{BotID: "bot-1"},
+		requestMessageID: "request-1",
+		runtime:          resolvedSubagentModel{UUID: "model-1"},
+	}
+	result := &SpawnResult{Messages: []sdk.Message{
+		{
+			Role: sdk.MessageRoleAssistant,
+			Content: []sdk.MessagePart{sdk.ToolCallPart{
+				ToolCallID: "bad-call", ToolName: "bad", Input: func() {},
+			}},
+		},
+		sdk.AssistantMessage("durable report"),
+	}}
+
+	if err := provider.persistMessages(context.Background(), req, result, false); err != nil {
+		t.Fatalf("persistMessages() error = %v, want malformed message skipped", err)
+	}
+	inputs := messages.persistInputs()
+	if len(inputs) != 1 || inputs[0].Role != string(sdk.MessageRoleAssistant) {
+		t.Fatalf("persisted inputs = %#v, want only the later valid assistant message", inputs)
+	}
 }
 
 func (s *fakeAgentMessageService) ListBySession(_ context.Context, sessionID string) ([]messagepkg.Message, error) {

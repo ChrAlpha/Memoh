@@ -134,6 +134,58 @@ func TestReaperMarksExpiredLeaseLost(t *testing.T) {
 	}
 }
 
+func TestReaperFinalizesDurableFinishProposalInsteadOfMarkingOwnerLost(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		proposed  ledger.State
+		errorCode string
+	}{
+		{name: "completed", proposed: ledger.StateCompleted},
+		{name: "aborted", proposed: ledger.StateAborted},
+		{name: "failed", proposed: ledger.StateFailed, errorCode: "agent.response_timeout"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runs := newFakeLedger()
+			runs.insertClaimed("run-finishing-"+tt.name, "session-finishing-"+tt.name, 5, "generation-1")
+			prepared, applied, err := runs.PrepareFinish(context.Background(), ledger.PrepareFinishParams{
+				RunID:        "run-finishing-" + tt.name,
+				FencingToken: 5,
+				State:        tt.proposed,
+				ErrorCode:    tt.errorCode,
+			})
+			if err != nil || !applied || prepared.State != ledger.StateFinishing {
+				t.Fatalf("prepare finish = state:%q applied:%v err:%v", prepared.State, applied, err)
+			}
+			live := newFakeLiveness("generation-1")
+			live.setCandidates(LeaseCandidate{
+				Key:   Key{BotID: testBotID, SessionID: "session-finishing-" + tt.name},
+				RunID: "run-finishing-" + tt.name, FencingToken: 5,
+			})
+			reaper := newTestReaper(t, runs, live)
+			var observed []TerminalRun
+			reaper.SetTerminalObserver(func(_ context.Context, run TerminalRun) {
+				observed = append(observed, run)
+			})
+
+			reaper.tick(context.Background())
+
+			if got := runs.state("run-finishing-" + tt.name); got != tt.proposed {
+				t.Fatalf("state = %q, want proposed %q rather than lost", got, tt.proposed)
+			}
+			if got := runs.errorCode("run-finishing-" + tt.name); got != tt.errorCode {
+				t.Fatalf("error code = %q, want %q", got, tt.errorCode)
+			}
+			if len(observed) != 1 || observed[0].State != string(tt.proposed) {
+				t.Fatalf("terminal observation = %+v, want %q", observed, tt.proposed)
+			}
+			if len(live.indexed()) != 0 {
+				t.Fatalf("finishing candidate remains indexed: %+v", live.indexed())
+			}
+		})
+	}
+}
+
 func TestReaperObservesAppliedAndAlreadyTerminalOutcomes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

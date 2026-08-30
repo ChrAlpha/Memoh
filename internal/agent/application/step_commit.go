@@ -167,10 +167,12 @@ func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error 
 		c.mu.Unlock()
 		return nil
 	}
-	c.finalized = true
 	persisted := append([]messagepkg.Message(nil), c.persisted...)
 	memoryPersisted := append([]messagepkg.Message(nil), c.memoryPersisted...)
 	messages := append([]ModelMessage(nil), c.messages...)
+	if len(persisted) == 0 {
+		c.finalized = true
+	}
 	c.mu.Unlock()
 	if len(persisted) == 0 {
 		return nil
@@ -179,6 +181,9 @@ func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error 
 	if err := c.service.persistSessionWorkspaceTarget(ctx, c.req); err != nil {
 		return err
 	}
+	c.mu.Lock()
+	c.finalized = true
+	c.mu.Unlock()
 	if c.req.OutboundAssetCollector != nil {
 		c.service.LinkOutboundAssets(ctx, c.req.BotID, c.req.ThreadID, outboundAssetRefsToMessageRefs(c.req.OutboundAssetCollector()))
 	}

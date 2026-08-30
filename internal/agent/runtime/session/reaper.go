@@ -398,6 +398,14 @@ func (r *Reaper) markLost(ctx context.Context, runID string, fencingToken int64,
 		)
 		return nil
 	}
+	if run.State != ledger.StateLost {
+		r.logger.Info("session run finalized from durable finish proposal",
+			slog.String("run_id", run.RunID),
+			slog.String("session_id", run.SessionID),
+			slog.String("state", string(run.State)),
+		)
+		return nil
+	}
 	r.logger.Info("session run marked lost",
 		slog.String("run_id", run.RunID),
 		slog.String("session_id", run.SessionID),

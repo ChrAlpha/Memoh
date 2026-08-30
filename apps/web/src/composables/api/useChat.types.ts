@@ -377,6 +377,7 @@ export type RuntimeRunStatus =
   | 'running'
   | 'waiting_decision'
   | 'aborting'
+  | 'finishing'
   | 'completed'
   | 'aborted'
   | 'errored'
@@ -418,6 +419,8 @@ export interface RuntimeCurrentRunView {
   request_user_turn?: UIUserTurn
   error_code?: string
   error?: string
+  proposed_terminal_status?: RuntimeRunStatus
+  finish_proposed_at?: string
   steer?: RuntimeSteerState
   operation?: RuntimeRunOperation
 }

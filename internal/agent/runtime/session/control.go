@@ -150,7 +150,7 @@ func (m *Manager) releaseAllLocalRuns(ctx context.Context) error {
 	var releaseErr error
 	for _, ctrl := range controls {
 		runCtx, cancel := ctrl.cleanupContext(ctx)
-		_, err := m.finishRunState(runCtx, ctrl.handle(), RunStatusLost, "", runtimeOwnerShutdownError)
+		err := m.releaseLocalRunOnShutdown(runCtx, ctrl)
 		cancel()
 		if err == nil || errors.Is(err, ErrRunOwnershipLost) {
 			continue
@@ -161,6 +161,41 @@ func (m *Manager) releaseAllLocalRuns(ctx context.Context) error {
 		m.logger.Warn("release runtime run during shutdown failed", slog.Any("error", err), slog.String("run_id", ctrl.runID))
 	}
 	return releaseErr
+}
+
+// releaseLocalRunOnShutdown makes the durable terminal decision before the
+// live owner route disappears. A run that already crossed the finishing
+// boundary keeps its stored proposal; every other active run becomes lost.
+// If PostgreSQL is temporarily unavailable, the live lease is deliberately
+// retained so a peer reaper can make the same decision after it expires.
+func (m *Manager) releaseLocalRunOnShutdown(ctx context.Context, ctrl *runControl) error {
+	if ctrl == nil {
+		return nil
+	}
+	handle := ctrl.handle()
+	if m.runs != nil && handle.FencingToken > 0 {
+		terminal, err := m.finalizeLedgerRun(ctx, handle, RunStatusLost, "", runtimeOwnerShutdownError)
+		if terminal.RunID != "" {
+			requestRunControlStop(ctrl)
+			m.reconcileAndObserveTerminalRun(ctx, terminal)
+		}
+		return err
+	}
+	_, err := m.finishRunState(ctx, handle, RunStatusLost, "", runtimeOwnerShutdownError)
+	return err
+}
+
+func requestRunControlStop(ctrl *runControl) {
+	if ctrl == nil {
+		return
+	}
+	select {
+	case ctrl.abortCh <- struct{}{}:
+	default:
+	}
+	if ctrl.cancel != nil {
+		ctrl.cancel()
+	}
 }
 
 func (c *runControl) cleanupContext(parent context.Context) (context.Context, context.CancelFunc) {

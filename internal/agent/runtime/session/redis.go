@@ -119,7 +119,8 @@ if ref.bot_id ~= ARGV[1] or ref.session_id ~= ARGV[2] or
 end
 
 if run.status ~= 'admitting' and run.status ~= 'running' and
-   run.status ~= 'waiting_decision' and run.status ~= 'aborting' then
+   run.status ~= 'waiting_decision' and run.status ~= 'aborting' and
+   run.status ~= 'finishing' then
   return 0
 end
 
@@ -325,6 +326,17 @@ func (b *RedisBackend) UpdateActiveRun(ctx context.Context, key Key, runID, gene
 }
 
 func (b *RedisBackend) ReleaseRun(ctx context.Context, key Key, ref RunRef, update ActiveRunUpdate) (Snapshot, bool, error) {
+	return b.releaseRun(ctx, key, ref, update, true)
+}
+
+func (b *RedisBackend) ReconcileTerminalRun(ctx context.Context, key Key, ref RunRef, update ActiveRunUpdate) (Snapshot, bool, error) {
+	if ref.FencingToken <= 0 {
+		return Snapshot{}, false, ErrRunOwnershipLost
+	}
+	return b.releaseRun(ctx, key, ref, update, false)
+}
+
+func (b *RedisBackend) releaseRun(ctx context.Context, key Key, ref RunRef, update ActiveRunUpdate, requireLiveLease bool) (Snapshot, bool, error) {
 	if update == nil {
 		return Snapshot{}, false, errors.New("active run update is required")
 	}
@@ -358,7 +370,11 @@ func (b *RedisBackend) ReleaseRun(ctx context.Context, key Key, ref RunRef, upda
 				return ErrRunOwnershipLost
 			}
 			run := current.CurrentRunView
-			if !storedRef.identityMatches(ref) || run.RunID != ref.RunID || run.Generation != ref.Generation || run.OwnerID != ref.OwnerID || !isActiveRunStatus(run.Status) || run.OwnerLeaseExpiresAt == nil || !now.Before(*run.OwnerLeaseExpiresAt) {
+			identityMismatch := !storedRef.identityMatches(ref) || run.RunID != ref.RunID ||
+				run.Generation != ref.Generation || run.OwnerID != ref.OwnerID
+			leaseInvalid := !isActiveRunStatus(run.Status) || run.OwnerLeaseExpiresAt == nil || !now.Before(*run.OwnerLeaseExpiresAt)
+			fenceMismatch := !requireLiveLease && storedRef.FencingToken != ref.FencingToken
+			if identityMismatch || fenceMismatch || (requireLiveLease && leaseInvalid) {
 				return ErrRunOwnershipLost
 			}
 			next, apply, err := update(current, now)

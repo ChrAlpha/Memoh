@@ -2269,6 +2269,10 @@ CREATE TABLE IF NOT EXISTS public.session_runs (
     owner_since        TIMESTAMPTZ,
     live_generation    TEXT,
     abort_requested_at TIMESTAMPTZ,
+    proposed_terminal_state TEXT,
+    proposed_error_code TEXT,
+    proposed_error_message TEXT,
+    finish_proposed_at TIMESTAMPTZ,
     error_code         TEXT,
     error_message      TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2276,9 +2280,17 @@ CREATE TABLE IF NOT EXISTS public.session_runs (
     CONSTRAINT session_runs_team_run_key UNIQUE (team_id, run_id),
     CONSTRAINT session_runs_team_session_run_key UNIQUE (team_id, session_id, run_id),
     CONSTRAINT session_runs_state_check CHECK (state IN (
-        'accepted', 'running', 'waiting_decision',
+        'accepted', 'running', 'waiting_decision', 'finishing',
         'completed', 'aborted', 'failed', 'lost'
     )),
+    CONSTRAINT session_runs_terminal_proposal_check CHECK (
+        proposed_terminal_state IS NULL
+        OR proposed_terminal_state IN ('completed', 'aborted', 'failed')
+    ),
+    CONSTRAINT session_runs_finishing_proposal_check CHECK (
+        state <> 'finishing'
+        OR (proposed_terminal_state IS NOT NULL AND finish_proposed_at IS NOT NULL)
+    ),
     CONSTRAINT session_runs_fencing_token_check CHECK (fencing_token >= 0),
     CONSTRAINT session_runs_owner_claim_check CHECK ((owner_id IS NULL) = (owner_since IS NULL)),
     CONSTRAINT session_runs_bot_id_fkey
@@ -2296,11 +2308,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS session_runs_invocation_unique
 -- ledger reports as a stable retryable busy result.
 CREATE UNIQUE INDEX IF NOT EXISTS session_runs_single_active
     ON public.session_runs (team_id, session_id)
-    WHERE state IN ('accepted', 'running', 'waiting_decision');
+    WHERE state IN ('accepted', 'running', 'waiting_decision', 'finishing');
 
 CREATE INDEX IF NOT EXISTS idx_session_runs_recovery
     ON public.session_runs (team_id, live_generation, run_id)
-    WHERE state IN ('accepted', 'running', 'waiting_decision');
+    WHERE state IN ('accepted', 'running', 'waiting_decision', 'finishing');
 
 CREATE INDEX IF NOT EXISTS idx_session_runs_orphan
     ON public.session_runs (team_id, created_at, run_id)

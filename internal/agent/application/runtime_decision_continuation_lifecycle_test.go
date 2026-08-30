@@ -27,6 +27,15 @@ func (s *unavailableContinuationMessageService) Persist(
 	return messagepkg.Message{}, s.err
 }
 
+func (s *unavailableContinuationMessageService) PersistRound(
+	context.Context,
+	[]messagepkg.PersistInput,
+	messagepkg.RoundPersistenceOptions,
+) ([]messagepkg.Message, bool, error) {
+	s.calls++
+	return nil, true, s.err
+}
+
 type continuationRunConfigCapture struct {
 	mu     sync.Mutex
 	calls  int
@@ -165,8 +174,8 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 			fixture.service.messageService = messages
 			lifecycle := &continuationLifecycleResult{}
 
-			if err := tt.continueRun(fixture.service, lifecycle); err != nil {
-				t.Fatalf("continuation error = %v, want nil", err)
+			if err := tt.continueRun(fixture.service, lifecycle); !errors.Is(err, messages.err) {
+				t.Fatalf("continuation error = %v, want assistant persistence failure", err)
 			}
 			if lifecycle.snapshot == nil {
 				t.Fatal("runtime-owned continuation lost its in-memory lifecycle snapshot")

@@ -2,8 +2,9 @@
 // which runs were admitted, who owns them, and how they ended.
 //
 // It deliberately holds no liveness. The owner lease lives only in the live
-// backend, so PostgreSQL receives exactly four kinds of write — admission,
-// ownership/fencing change, decision, terminal transition. Nothing here is a
+// backend, so PostgreSQL receives lifecycle writes only — admission,
+// ownership/fencing change, decision, terminal proposal, and terminal
+// transition. Nothing here is a
 // keepalive or a progress sample, which is why write volume is proportional to
 // the number of runs rather than to their duration or token rate. A reader
 // therefore cannot ask this store "is the owner still alive"; only the live
@@ -29,6 +30,11 @@ const (
 	StateRunning State = "running"
 	// StateWaitingDecision means execution is parked on a decision_id.
 	StateWaitingDecision State = "waiting_decision"
+	// StateFinishing means the final output is durable and a fenced terminal
+	// outcome has been proposed, but the terminal row/live projection handshake
+	// has not completed yet. It remains active so admission and lease renewal
+	// cannot pass it.
+	StateFinishing State = "finishing"
 
 	StateCompleted State = "completed"
 	StateAborted   State = "aborted"
@@ -41,7 +47,7 @@ const (
 // Active reports whether a run occupies its session's single active slot.
 func (s State) Active() bool {
 	switch s {
-	case StateAccepted, StateRunning, StateWaitingDecision:
+	case StateAccepted, StateRunning, StateWaitingDecision, StateFinishing:
 		return true
 	default:
 		return false
@@ -135,11 +141,15 @@ type Run struct {
 	// cursor for the fail-closed recovery sweep.
 	LiveGeneration string
 
-	AbortRequestedAt time.Time
-	ErrorCode        string
-	ErrorMessage     string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	AbortRequestedAt     time.Time
+	ProposedState        State
+	ProposedErrorCode    string
+	ProposedErrorMessage string
+	FinishProposedAt     time.Time
+	ErrorCode            string
+	ErrorMessage         string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // AdmitParams is one durable admission. RunID and TurnID are minted by the
@@ -173,6 +183,19 @@ type FinalizeParams struct {
 	State        State
 	ErrorCode    string
 	ErrorMessage string
+}
+
+// PrepareFinishParams records the fenced, recoverable terminal proposal. A
+// proposal ordinarily starts from running. AllowWaitingDecision is reserved
+// for an explicit abort/failure that must terminalize a parked execution;
+// ordinary terminal stream events must leave waiting_decision parked.
+type PrepareFinishParams struct {
+	RunID                string
+	FencingToken         int64
+	State                State
+	ErrorCode            string
+	ErrorMessage         string
+	AllowWaitingDecision bool
 }
 
 // Cursor is a keyset position in the stale-generation sweep. The zero Cursor
@@ -230,6 +253,7 @@ type Store interface {
 	Claim(ctx context.Context, params ClaimParams) (run Run, applied bool, err error)
 	SetWaitingDecision(ctx context.Context, runID string, fencingToken int64) (run Run, applied bool, err error)
 	Resume(ctx context.Context, runID string, fencingToken int64) (run Run, applied bool, err error)
+	PrepareFinish(ctx context.Context, params PrepareFinishParams) (run Run, applied bool, err error)
 	Finalize(ctx context.Context, params FinalizeParams) (run Run, applied bool, err error)
 
 	// RequestAbort records the intent, which is not fenced: an abort may arrive

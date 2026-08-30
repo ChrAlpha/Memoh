@@ -38,6 +38,7 @@ const activeRunStatuses = new Set<RuntimeCurrentRunView['status']>([
   'running',
   'waiting_decision',
   'aborting',
+  'finishing',
 ])
 
 export function isRuntimeRunActive(status?: string | null): boolean {

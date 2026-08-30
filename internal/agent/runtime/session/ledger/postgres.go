@@ -662,6 +662,28 @@ func (s *PostgresStore) Resume(ctx context.Context, runID string, fencingToken i
 	return applyResult("resume run", row, err)
 }
 
+func (s *PostgresStore) PrepareFinish(ctx context.Context, params PrepareFinishParams) (Run, bool, error) {
+	if err := s.ready(); err != nil {
+		return Run{}, false, err
+	}
+	if !params.State.Terminal() || params.State == StateLost {
+		return Run{}, false, fmt.Errorf("ledger(postgres): %q is not a proposed owner terminal state", params.State)
+	}
+	runID, err := dbpkg.ParseUUID(params.RunID)
+	if err != nil {
+		return Run{}, false, fmt.Errorf("ledger(postgres): invalid run id: %w", err)
+	}
+	row, err := s.q.PrepareSessionRunFinish(ctx, dbsqlc.PrepareSessionRunFinishParams{
+		RunID:                 runID,
+		FencingToken:          params.FencingToken,
+		ProposedTerminalState: string(params.State),
+		ProposedErrorCode:     textOrNull(params.ErrorCode),
+		ProposedErrorMessage:  textOrNull(params.ErrorMessage),
+		AllowWaitingDecision:  params.AllowWaitingDecision,
+	})
+	return applyResult("prepare run finish", row, err)
+}
+
 func (s *PostgresStore) Finalize(ctx context.Context, params FinalizeParams) (Run, bool, error) {
 	if err := s.ready(); err != nil {
 		return Run{}, false, err
@@ -771,24 +793,28 @@ func runsFromRows(rows []dbsqlc.SessionRun) []Run {
 
 func runFromRow(row dbsqlc.SessionRun) Run {
 	return Run{
-		RunID:            uuidString(row.RunID),
-		BotID:            uuidString(row.BotID),
-		SessionID:        uuidString(row.SessionID),
-		InvocationID:     row.InvocationID,
-		TurnID:           uuidString(row.TurnID),
-		TurnPosition:     row.TurnPosition,
-		State:            State(row.State),
-		Input:            row.InputJson,
-		InputFingerprint: row.InputFingerprint,
-		OwnerID:          dbpkg.TextToString(row.OwnerID),
-		FencingToken:     row.FencingToken,
-		OwnerSince:       dbpkg.TimeFromPg(row.OwnerSince),
-		LiveGeneration:   dbpkg.TextToString(row.LiveGeneration),
-		AbortRequestedAt: dbpkg.TimeFromPg(row.AbortRequestedAt),
-		ErrorCode:        dbpkg.TextToString(row.ErrorCode),
-		ErrorMessage:     dbpkg.TextToString(row.ErrorMessage),
-		CreatedAt:        dbpkg.TimeFromPg(row.CreatedAt),
-		UpdatedAt:        dbpkg.TimeFromPg(row.UpdatedAt),
+		RunID:                uuidString(row.RunID),
+		BotID:                uuidString(row.BotID),
+		SessionID:            uuidString(row.SessionID),
+		InvocationID:         row.InvocationID,
+		TurnID:               uuidString(row.TurnID),
+		TurnPosition:         row.TurnPosition,
+		State:                State(row.State),
+		Input:                row.InputJson,
+		InputFingerprint:     row.InputFingerprint,
+		OwnerID:              dbpkg.TextToString(row.OwnerID),
+		FencingToken:         row.FencingToken,
+		OwnerSince:           dbpkg.TimeFromPg(row.OwnerSince),
+		LiveGeneration:       dbpkg.TextToString(row.LiveGeneration),
+		AbortRequestedAt:     dbpkg.TimeFromPg(row.AbortRequestedAt),
+		ProposedState:        State(dbpkg.TextToString(row.ProposedTerminalState)),
+		ProposedErrorCode:    dbpkg.TextToString(row.ProposedErrorCode),
+		ProposedErrorMessage: dbpkg.TextToString(row.ProposedErrorMessage),
+		FinishProposedAt:     dbpkg.TimeFromPg(row.FinishProposedAt),
+		ErrorCode:            dbpkg.TextToString(row.ErrorCode),
+		ErrorMessage:         dbpkg.TextToString(row.ErrorMessage),
+		CreatedAt:            dbpkg.TimeFromPg(row.CreatedAt),
+		UpdatedAt:            dbpkg.TimeFromPg(row.UpdatedAt),
 	}
 }
 

@@ -98,14 +98,14 @@ SELECT *
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = sqlc.arg(session_id)
-  AND state IN ('accepted', 'running', 'waiting_decision');
+  AND state IN ('accepted', 'running', 'waiting_decision', 'finishing');
 
 -- name: ListActiveSessionRunsByBot :many
 SELECT *
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND bot_id = sqlc.arg(bot_id)
-  AND state IN ('accepted', 'running', 'waiting_decision')
+  AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
 ORDER BY session_id, run_id;
 
 -- name: GetLatestSessionRun :one
@@ -205,14 +205,17 @@ RETURNING *;
 -- already applied or a newer owner superseded this token; neither is an error.
 UPDATE session_runs
 SET state = CASE
+        WHEN state = 'finishing' THEN proposed_terminal_state
         WHEN sqlc.arg(state)::text = 'lost' AND abort_requested_at IS NOT NULL THEN 'aborted'
         ELSE sqlc.arg(state)::text
     END,
     error_code = CASE
+        WHEN state = 'finishing' THEN proposed_error_code
         WHEN sqlc.arg(state)::text = 'lost' AND abort_requested_at IS NOT NULL THEN NULL
         ELSE sqlc.narg(error_code)::text
     END,
     error_message = CASE
+        WHEN state = 'finishing' THEN proposed_error_message
         WHEN sqlc.arg(state)::text = 'lost' AND abort_requested_at IS NOT NULL THEN NULL
         ELSE sqlc.narg(error_message)::text
     END,
@@ -220,7 +223,41 @@ SET state = CASE
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = sqlc.arg(run_id)
   AND fencing_token = sqlc.arg(fencing_token)
-  AND state IN ('accepted', 'running', 'waiting_decision')
+  AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
+RETURNING *;
+
+-- name: PrepareSessionRunFinish :one
+-- Persist the terminal proposal before the live projection enters finishing.
+-- Replays preserve the first proposal. A concurrent abort intent wins so an
+-- owner cannot complete a run after the user has durably requested its stop.
+UPDATE session_runs
+SET state = 'finishing',
+    proposed_terminal_state = COALESCE(
+        proposed_terminal_state,
+        CASE
+            WHEN abort_requested_at IS NOT NULL THEN 'aborted'
+            ELSE sqlc.arg(proposed_terminal_state)::text
+        END
+    ),
+    proposed_error_code = CASE
+        WHEN proposed_terminal_state IS NOT NULL THEN proposed_error_code
+        WHEN abort_requested_at IS NOT NULL THEN NULL
+        ELSE sqlc.narg(proposed_error_code)::text
+    END,
+    proposed_error_message = CASE
+        WHEN proposed_terminal_state IS NOT NULL THEN proposed_error_message
+        WHEN abort_requested_at IS NOT NULL THEN NULL
+        ELSE sqlc.narg(proposed_error_message)::text
+    END,
+    finish_proposed_at = COALESCE(finish_proposed_at, now()),
+    updated_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND run_id = sqlc.arg(run_id)
+  AND fencing_token = sqlc.arg(fencing_token)
+  AND (
+      state IN ('running', 'finishing')
+      OR (sqlc.arg(allow_waiting_decision)::boolean AND state = 'waiting_decision')
+  )
 RETURNING *;
 
 -- name: LockActiveSessionRunForHistoryReset :one
@@ -234,7 +271,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND bot_id = sqlc.arg(bot_id)
   AND session_id = sqlc.arg(session_id)
   AND fencing_token = sqlc.arg(fencing_token)
-  AND state IN ('accepted', 'running', 'waiting_decision')
+  AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
 FOR UPDATE;
 
 -- name: RequestSessionRunAbort :one
@@ -275,7 +312,7 @@ FOR UPDATE;
 SELECT *
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
-  AND state IN ('accepted', 'running', 'waiting_decision')
+  AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
   AND live_generation IS NOT NULL
   AND live_generation <> sqlc.arg(current_generation)
   AND (

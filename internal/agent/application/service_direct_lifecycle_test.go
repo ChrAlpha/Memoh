@@ -473,3 +473,47 @@ func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {
 		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.finishes)
 	}
 }
+
+func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T) {
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
+	persistErr := errors.New("history unavailable")
+	fixture.messages.roundPersistErr = persistErr
+
+	var publishedMu sync.Mutex
+	var published []native.StreamEvent
+	fixture.service.publishTurnEvent = func(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
+		publishedMu.Lock()
+		defer publishedMu.Unlock()
+		published = append(published, event)
+		return nil
+	}
+
+	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "direct-lifecycle-team",
+		Mode:                 turn.ModeChat,
+		BotID:                lifecycleTestBotID,
+		ChatID:               lifecycleTestBotID,
+		ThreadID:             lifecycleTestSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	for range handle.Events() {
+	}
+	for range handle.Errs() {
+	}
+
+	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	}
+	publishedMu.Lock()
+	defer publishedMu.Unlock()
+	for _, event := range published {
+		if event.IsTerminal() {
+			t.Fatalf("terminal event %q was published after failed history persistence", event.Type)
+		}
+	}
+}

@@ -900,7 +900,7 @@ func (m *Manager) requestAbort(ctx context.Context, ctrl *runControl) (bool, err
 		if run == nil {
 			return snapshot, false, nil
 		}
-		if run.RunID != ctrl.runID || !m.runOwnerMatches(run) || !isActiveRunStatus(run.Status) {
+		if run.RunID != ctrl.runID || !m.runOwnerMatches(run) || !isAbortableRunStatus(run.Status) {
 			return snapshot, false, nil
 		}
 		acknowledged = true

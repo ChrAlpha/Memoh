@@ -89,6 +89,11 @@ type SpawnRunConfig struct {
 	// retrying an attempt that has already produced durable output (and possibly
 	// real side effects): replaying the turn from the top would do that work twice.
 	OnStepPersisted func()
+	// BeforeTerminal is the fallback durability barrier when incremental step
+	// persistence is unavailable. The native adapter invokes it after a clean
+	// result is assembled but before publishing EventAgentEnd to the session
+	// runtime. Returning an error withholds that terminal proposal.
+	BeforeTerminal func(context.Context, *SpawnResult) error
 	// Attempt is one-based and MaxAttempts is the total outer-attempt budget.
 	// ResolveAttempt is called at most once after a failed native attempt. It is
 	// the spawn provider's authoritative disposition: retry keeps the admitted
@@ -1055,6 +1060,12 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 	// replaying the turn from the top would do that work twice.
 	var stepPersisted atomic.Bool
 	cfg.OnStepPersisted = func() { stepPersisted.Store(true) }
+	cfg.BeforeTerminal = func(persistCtx context.Context, result *SpawnResult) error {
+		if p.messageService == nil || req.agentSessionID == "" {
+			return errors.New("subagent terminal persistence is unavailable")
+		}
+		return p.persistMessages(context.WithoutCancel(persistCtx), req, result, !req.messagePersisted)
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= subagentMaxRetries; attempt++ {
@@ -1123,6 +1134,19 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 			if !dispositionResolved {
 				attemptDisposition = cfg.ResolveCompletion()
 			}
+			if attemptDisposition == SpawnAttemptCompleted && !genResult.Persisted && p.messageService != nil && req.agentSessionID != "" {
+				// Non-native SpawnAgent implementations may not implement the
+				// BeforeTerminal callback. Preserve the fallback for them, but make
+				// its failure authoritative instead of reporting false completion.
+				if persistErr := p.persistMessages(context.WithoutCancel(ctx), req, genResult, !req.messagePersisted); persistErr != nil {
+					res.AttemptResolved = true
+					res.AttemptOutcome = SpawnAttemptFailure
+					res.Error = persistErr.Error()
+					res.Cause = persistErr
+					return res
+				}
+				genResult.Persisted = true
+			}
 			res.AttemptResolved = true
 			res.AttemptOutcome = attemptDisposition
 			if attemptDisposition == SpawnAttemptAbort {
@@ -1144,9 +1168,6 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 				return res
 			}
 			res.Text = genResult.Text
-			if !genResult.Persisted && p.messageService != nil && req.agentSessionID != "" {
-				p.persistMessages(context.WithoutCancel(ctx), req, genResult, !req.messagePersisted)
-			}
 			return res
 		}
 		lastErr = err
@@ -1602,12 +1623,13 @@ func (p *SpawnProvider) persistMessages(
 	req *agentRequest,
 	result *SpawnResult,
 	includeUser bool,
-) {
+) error {
 	if includeUser {
 		id, ok := p.persistUserMessage(ctx, req)
-		if ok {
-			req.requestMessageID = id
+		if !ok {
+			return errors.New("persist subagent task message")
 		}
+		req.requestMessageID = id
 	}
 
 	lastAssistantIdx := -1
@@ -1623,6 +1645,13 @@ func (p *SpawnProvider) persistMessages(
 		}
 		content, err := historyfrag.MarshalStoredSDKMessage(msg)
 		if err != nil {
+			// A malformed SDK message is a deterministic codec defect: retrying
+			// the whole attempt would reproduce it and discard every later valid
+			// message. Preserve the legacy skip behavior, but make the defect
+			// observable. Actual storage failures below remain authoritative.
+			p.logger.Warn("marshal subagent message failed; skipping message",
+				slog.Any("error", err),
+				slog.Int("message_index", i))
 			continue
 		}
 		var usage json.RawMessage
@@ -1650,12 +1679,13 @@ func (p *SpawnProvider) persistMessages(
 		})
 		if err != nil {
 			p.logger.Warn("persist subagent message failed", slog.Any("error", err))
-			continue
+			return fmt.Errorf("persist subagent message: %w", err)
 		}
 		if i == lastAssistantIdx && result.ContextLifecycle != nil {
 			result.ContextLifecycle.AssistantMessageID = persisted.ID
 		}
 	}
+	return nil
 }
 
 // persistUserMessage files the task message as the admitted turn's request row

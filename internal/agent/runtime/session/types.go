@@ -22,6 +22,7 @@ const (
 	// execution is parked on a durable approval or ask_user decision.
 	RunStatusWaitingDecision = "waiting_decision"
 	RunStatusAborting        = "aborting"
+	RunStatusFinishing       = "finishing"
 	RunStatusCompleted       = "completed"
 	RunStatusAborted         = "aborted"
 	RunStatusErrored         = "errored"
@@ -188,6 +189,7 @@ type TerminalRun struct {
 	FencingToken int64
 	State        string
 	ErrorCode    string
+	ErrorMessage string
 }
 
 func (h RunHandle) normalized() RunHandle {
@@ -260,19 +262,21 @@ type CurrentRunView struct {
 	// while waiting for the acceptance that names the two. Subscribers that did
 	// not originate the run see an id unknown to them and treat the turn as
 	// foreign — which is the correct standalone rendering for cross-device runs.
-	InvocationID        string               `json:"invocation_id,omitempty"`
-	Generation          string               `json:"generation"`
-	Status              string               `json:"status"`
-	OwnerID             string               `json:"owner_id,omitempty"`
-	OwnerLeaseExpiresAt *time.Time           `json:"owner_lease_expires_at,omitempty"`
-	StartedAt           time.Time            `json:"started_at"`
-	UpdatedAt           time.Time            `json:"updated_at"`
-	Messages            []chatview.UIMessage `json:"messages"`
-	RequestUserTurn     *chatview.UITurn     `json:"request_user_turn,omitempty"`
-	ErrorCode           string               `json:"error_code,omitempty"`
-	Error               string               `json:"error,omitempty"`
-	Steer               *SteerState          `json:"steer,omitempty"`
-	Operation           *RunOperationView    `json:"operation,omitempty"`
+	InvocationID           string               `json:"invocation_id,omitempty"`
+	Generation             string               `json:"generation"`
+	Status                 string               `json:"status"`
+	OwnerID                string               `json:"owner_id,omitempty"`
+	OwnerLeaseExpiresAt    *time.Time           `json:"owner_lease_expires_at,omitempty"`
+	StartedAt              time.Time            `json:"started_at"`
+	UpdatedAt              time.Time            `json:"updated_at"`
+	Messages               []chatview.UIMessage `json:"messages"`
+	RequestUserTurn        *chatview.UITurn     `json:"request_user_turn,omitempty"`
+	ErrorCode              string               `json:"error_code,omitempty"`
+	Error                  string               `json:"error,omitempty"`
+	ProposedTerminalStatus string               `json:"proposed_terminal_status,omitempty"`
+	FinishProposedAt       *time.Time           `json:"finish_proposed_at,omitempty"`
+	Steer                  *SteerState          `json:"steer,omitempty"`
+	Operation              *RunOperationView    `json:"operation,omitempty"`
 }
 
 // RunAdmissionView is the canonical state published when a reserved run
@@ -461,6 +465,10 @@ type DistributedBackend interface {
 	UpdateActiveRun(ctx context.Context, key Key, runID, generation string, update ActiveRunUpdate) (Snapshot, bool, error)
 	StartRun(ctx context.Context, key Key, ref RunRef, update SnapshotUpdate) (Snapshot, bool, error)
 	ReleaseRun(ctx context.Context, key Key, ref RunRef, update ActiveRunUpdate) (Snapshot, bool, error)
+	// ReconcileTerminalRun applies an authoritative durable terminal outcome to
+	// the matching live reservation even after its lease expired. The fencing
+	// token is mandatory so a stale reaper cannot release a successor.
+	ReconcileTerminalRun(ctx context.Context, key Key, ref RunRef, update ActiveRunUpdate) (Snapshot, bool, error)
 	RenewLease(ctx context.Context, key Key, runID, ownerID, generation string, renewedAt, expiresAt time.Time) error
 	ValidateRunOwnership(ctx context.Context, key Key, ref RunRef) error
 	LoadRunRef(ctx context.Context, key Key, runID string) (RunRef, bool, error)

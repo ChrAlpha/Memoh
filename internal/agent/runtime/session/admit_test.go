@@ -27,6 +27,7 @@ type fakeLedger struct {
 	admitErr    error
 	claimErr    error
 	tokenErr    error
+	prepareErr  error
 	finalizeErr error
 	claimHook   func(runID string)
 
@@ -171,10 +172,31 @@ func (f *fakeLedger) transition(runID string, token int64, state ledger.State) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	run, ok := f.runs[runID]
-	if !ok || run.FencingToken != token || run.State.Terminal() {
+	if !ok || run.FencingToken != token || run.State.Terminal() || run.State == ledger.StateFinishing {
 		return ledger.Run{}, false, nil
 	}
 	run.State = state
+	return *run, true, nil
+}
+
+func (f *fakeLedger) PrepareFinish(_ context.Context, params ledger.PrepareFinishParams) (ledger.Run, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.prepareErr != nil {
+		return ledger.Run{}, false, f.prepareErr
+	}
+	run, ok := f.runs[params.RunID]
+	if !ok || run.FencingToken != params.FencingToken || run.State.Terminal() ||
+		(run.State == ledger.StateWaitingDecision && !params.AllowWaitingDecision) {
+		return ledger.Run{}, false, nil
+	}
+	if run.State != ledger.StateFinishing {
+		run.State = ledger.StateFinishing
+		run.ProposedState = params.State
+		run.ProposedErrorCode = params.ErrorCode
+		run.ProposedErrorMessage = params.ErrorMessage
+		run.FinishProposedAt = time.Now()
+	}
 	return *run, true, nil
 }
 
@@ -191,7 +213,11 @@ func (f *fakeLedger) Finalize(_ context.Context, params ledger.FinalizeParams) (
 	state := params.State
 	errorCode := params.ErrorCode
 	errorMessage := params.ErrorMessage
-	if state == ledger.StateLost && !run.AbortRequestedAt.IsZero() {
+	if run.State == ledger.StateFinishing {
+		state = run.ProposedState
+		errorCode = run.ProposedErrorCode
+		errorMessage = run.ProposedErrorMessage
+	} else if state == ledger.StateLost && !run.AbortRequestedAt.IsZero() {
 		state = ledger.StateAborted
 		errorCode = ""
 		errorMessage = ""
@@ -207,7 +233,7 @@ func (f *fakeLedger) RequestAbort(_ context.Context, runID string) (ledger.Run, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	run, ok := f.runs[runID]
-	if !ok || run.State.Terminal() {
+	if !ok || run.State.Terminal() || run.State == ledger.StateFinishing {
 		return ledger.Run{}, false, nil
 	}
 	run.AbortRequestedAt = time.Now()
@@ -329,6 +355,12 @@ func (f *fakeLedger) setFinalizeErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.finalizeErr = err
+}
+
+func (f *fakeLedger) setPrepareErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.prepareErr = err
 }
 
 func (f *fakeLedger) counts() (admits, claims int) {

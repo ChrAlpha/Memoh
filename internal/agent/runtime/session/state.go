@@ -107,13 +107,18 @@ func isActiveRunStatus(status string) bool {
 	return strings.EqualFold(status, RunStatusAdmitting) ||
 		strings.EqualFold(status, RunStatusRunning) ||
 		strings.EqualFold(status, RunStatusWaitingDecision) ||
-		strings.EqualFold(status, RunStatusAborting)
+		strings.EqualFold(status, RunStatusAborting) ||
+		strings.EqualFold(status, RunStatusFinishing)
 }
 
 func isEventAcceptingRunStatus(status string) bool {
 	return strings.EqualFold(status, RunStatusRunning) ||
 		strings.EqualFold(status, RunStatusWaitingDecision) ||
 		strings.EqualFold(status, RunStatusAborting)
+}
+
+func isAbortableRunStatus(status string) bool {
+	return strings.EqualFold(status, RunStatusAdmitting) || isEventAcceptingRunStatus(status)
 }
 
 func (m *Manager) markLostIfExpired(snapshot *Snapshot, now time.Time) bool {

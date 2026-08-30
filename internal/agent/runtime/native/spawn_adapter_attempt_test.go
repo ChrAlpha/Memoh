@@ -388,3 +388,85 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestSpawnAdapterPersistsFallbackBeforePublishingTerminal(t *testing.T) {
+	provider := &atomicMockProvider{
+		handler: func(_ int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+	adapter := NewSpawnAdapter(newTestAgent())
+	durable := false
+	terminalBeforeDurable := false
+	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
+		return func(event StreamEvent) SpawnRunObservation {
+			if event.Type == EventAgentEnd && !durable {
+				terminalBeforeDurable = true
+			}
+			return SpawnRunObservation{}
+		}
+	})
+
+	result, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+		Model:       &sdk.Model{ID: "spawn-terminal-barrier", Provider: provider, Type: sdk.ModelTypeChat},
+		Query:       "finish the task",
+		SessionType: sessionmode.Subagent,
+		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+		BeforeTerminal: func(_ context.Context, result *tools.SpawnResult) error {
+			if result == nil || result.Text != "done" {
+				t.Fatalf("fallback result = %#v, want assembled output", result)
+			}
+			durable = true
+			return nil
+		},
+	}, func() {})
+	if err != nil {
+		t.Fatalf("GenerateWithWatchdog() error = %v", err)
+	}
+	if terminalBeforeDurable {
+		t.Fatal("terminal event was published before fallback persistence")
+	}
+	if result == nil || !result.Persisted {
+		t.Fatalf("result = %#v, want fallback persistence recorded", result)
+	}
+}
+
+func TestSpawnAdapterWithholdsTerminalWhenFallbackPersistenceFails(t *testing.T) {
+	provider := &atomicMockProvider{
+		handler: func(_ int, _ sdk.GenerateParams) (*sdk.GenerateResult, error) {
+			return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		},
+	}
+	adapter := NewSpawnAdapter(newTestAgent())
+	var terminalSeen bool
+	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
+		return func(event StreamEvent) SpawnRunObservation {
+			terminalSeen = terminalSeen || event.Type == EventAgentEnd || event.Type == EventAgentAbort
+			return SpawnRunObservation{}
+		}
+	})
+	persistErr := errors.New("history unavailable")
+	var reconciled tools.SpawnAttemptDisposition
+
+	_, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+		Model:       &sdk.Model{ID: "spawn-terminal-barrier-failure", Provider: provider, Type: sdk.ModelTypeChat},
+		Query:       "finish the task",
+		SessionType: sessionmode.Subagent,
+		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+		BeforeTerminal: func(context.Context, *tools.SpawnResult) error {
+			return persistErr
+		},
+		ReconcileTerminal: func(outcome tools.SpawnAttemptDisposition) {
+			reconciled = outcome
+		},
+	}, func() {})
+	if !errors.Is(err, persistErr) {
+		t.Fatalf("GenerateWithWatchdog() error = %v, want persistence failure", err)
+	}
+	if terminalSeen {
+		t.Fatal("terminal event was published after fallback persistence failed")
+	}
+	if reconciled != tools.SpawnAttemptFailure {
+		t.Fatalf("reconciled outcome = %v, want failure", reconciled)
+	}
+}

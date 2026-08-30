@@ -67,11 +67,12 @@ func (p *silentTriggerProvider) attemptCount() int {
 // sink: it records every published event and can be armed to refuse the Nth
 // publish, which is how fence rejections surface to the consumer.
 type recordingTurnEventPublisher struct {
-	mu     sync.Mutex
-	events []native.StreamEvent
-	calls  int
-	errAt  int // 1-based call index to fail; 0 means never fail
-	err    error
+	mu        sync.Mutex
+	events    []native.StreamEvent
+	calls     int
+	errAt     int // 1-based call index to fail; 0 means never fail
+	err       error
+	onPublish func(native.StreamEvent)
 }
 
 func (p *recordingTurnEventPublisher) publish(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
@@ -80,6 +81,9 @@ func (p *recordingTurnEventPublisher) publish(_ context.Context, _ sessionruntim
 	p.calls++
 	if p.errAt > 0 && p.calls == p.errAt {
 		return p.err
+	}
+	if p.onPublish != nil {
+		p.onPublish(event)
 	}
 	p.events = append(p.events, event)
 	return nil
@@ -229,7 +233,12 @@ func TestConsumeTriggeredStreamProjectsEventsAndBuildsResult(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
-	pub := &recordingTurnEventPublisher{}
+	terminalPublishedBeforePersistence := false
+	pub := &recordingTurnEventPublisher{onPublish: func(event native.StreamEvent) {
+		if event.IsTerminal() && len(messages.persisted) == 0 {
+			terminalPublishedBeforePersistence = true
+		}
+	}}
 	svc := newTriggerStreamService(messages, pub)
 
 	events := make(chan native.StreamEvent, 2)
@@ -258,6 +267,9 @@ func TestConsumeTriggeredStreamProjectsEventsAndBuildsResult(t *testing.T) {
 	if published[0].Type != native.EventTextDelta || published[1].Type != native.EventAgentEnd {
 		t.Fatalf("published event types = %q, %q; want text delta then agent end", published[0].Type, published[1].Type)
 	}
+	if terminalPublishedBeforePersistence {
+		t.Fatal("terminal event was published before its history snapshot committed")
+	}
 
 	// No step committer: the terminal snapshot fallback persists the round
 	// (user query prepended + assistant output), exactly like the WS fallback.
@@ -266,6 +278,56 @@ func TestConsumeTriggeredStreamProjectsEventsAndBuildsResult(t *testing.T) {
 	}
 	if messages.persisted[0].Role != "user" || messages.persisted[1].Role != "assistant" {
 		t.Fatalf("persisted roles = %q, %q; want user then assistant", messages.persisted[0].Role, messages.persisted[1].Role)
+	}
+}
+
+func TestConsumeTriggeredStreamWithholdsTerminalWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	persistErr := errors.New("history unavailable")
+	messages := &recordingMessageService{roundPersistErr: persistErr}
+	pub := &recordingTurnEventPublisher{}
+	svc := newTriggerStreamService(messages, pub)
+
+	events := make(chan native.StreamEvent, 1)
+	events <- scheduleTerminalEvent(t, "must not look complete")
+	close(events)
+
+	_, err := svc.consumeTriggeredStream(context.Background(), events, triggerStreamRequest(), resolvedContext{}, sessionruntime.RunHandle{RunID: "run-1", TurnID: "turn-1"}, nil, nil)
+	if code := apperror.CodeOf(err); code != apperror.CodeSessionHistoryInconsistent {
+		t.Fatalf("consumeTriggeredStream() error = %v (code %q), want history inconsistency", err, code)
+	}
+	if published := pub.published(); len(published) != 0 {
+		t.Fatalf("published events = %#v, want no terminal proposal after failed persistence", published)
+	}
+}
+
+func TestConsumeTriggeredStreamPublishesEmptyCleanTerminalWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+
+	messages := &recordingMessageService{}
+	pub := &recordingTurnEventPublisher{}
+	svc := newTriggerStreamService(messages, pub)
+
+	events := make(chan native.StreamEvent, 1)
+	events <- native.StreamEvent{Type: native.EventAgentEnd}
+	close(events)
+
+	result, err := svc.consumeTriggeredStream(
+		context.Background(), events, triggerStreamRequest(), resolvedContext{},
+		sessionruntime.RunHandle{RunID: "run-empty", TurnID: "turn-empty"}, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("consumeTriggeredStream() error = %v, want clean completion", err)
+	}
+	if result.Status != "ok" || result.Text != "" {
+		t.Fatalf("result = %#v, want empty successful result", result)
+	}
+	if published := pub.published(); len(published) != 1 || published[0].Type != native.EventAgentEnd {
+		t.Fatalf("published events = %#v, want the empty terminal event", published)
+	}
+	if len(messages.persisted) != 0 {
+		t.Fatalf("persisted messages = %#v, want no synthetic output row", messages.persisted)
 	}
 }
 

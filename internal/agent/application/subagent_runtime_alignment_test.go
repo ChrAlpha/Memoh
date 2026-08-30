@@ -162,10 +162,27 @@ func (s *abortAlignmentLedger) Resume(_ context.Context, runID string, token int
 func (s *abortAlignmentLedger) transition(runID string, token int64, state ledger.State) (ledger.Run, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.run.RunID != runID || s.run.FencingToken != token || s.run.State.Terminal() {
+	if s.run.RunID != runID || s.run.FencingToken != token || s.run.State.Terminal() || s.run.State == ledger.StateFinishing {
 		return ledger.Run{}, false, nil
 	}
 	s.run.State = state
+	return s.run, true, nil
+}
+
+func (s *abortAlignmentLedger) PrepareFinish(_ context.Context, params ledger.PrepareFinishParams) (ledger.Run, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.run.RunID != params.RunID || s.run.FencingToken != params.FencingToken || s.run.State.Terminal() ||
+		(s.run.State == ledger.StateWaitingDecision && !params.AllowWaitingDecision) {
+		return s.run, false, nil
+	}
+	if s.run.State != ledger.StateFinishing {
+		s.run.State = ledger.StateFinishing
+		s.run.ProposedState = params.State
+		s.run.ProposedErrorCode = params.ErrorCode
+		s.run.ProposedErrorMessage = params.ErrorMessage
+		s.run.FinishProposedAt = time.Now()
+	}
 	return s.run, true, nil
 }
 
@@ -175,9 +192,15 @@ func (s *abortAlignmentLedger) Finalize(_ context.Context, params ledger.Finaliz
 	if s.run.RunID != params.RunID || s.run.FencingToken != params.FencingToken || s.run.State.Terminal() {
 		return s.run, false, nil
 	}
-	s.run.State = params.State
-	s.run.ErrorCode = params.ErrorCode
-	s.run.ErrorMessage = params.ErrorMessage
+	if s.run.State == ledger.StateFinishing {
+		s.run.State = s.run.ProposedState
+		s.run.ErrorCode = s.run.ProposedErrorCode
+		s.run.ErrorMessage = s.run.ProposedErrorMessage
+	} else {
+		s.run.State = params.State
+		s.run.ErrorCode = params.ErrorCode
+		s.run.ErrorMessage = params.ErrorMessage
+	}
 	s.run.UpdatedAt = time.Now()
 	return s.run, true, nil
 }
@@ -185,7 +208,7 @@ func (s *abortAlignmentLedger) Finalize(_ context.Context, params ledger.Finaliz
 func (s *abortAlignmentLedger) RequestAbort(_ context.Context, runID string) (ledger.Run, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.run.RunID != runID || s.run.State.Terminal() {
+	if s.run.RunID != runID || s.run.State.Terminal() || s.run.State == ledger.StateFinishing {
 		return s.run, false, nil
 	}
 	s.run.AbortRequestedAt = time.Now()

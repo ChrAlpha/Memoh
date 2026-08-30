@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -332,6 +333,24 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	if cfg.ResolveCompletion != nil {
 		disposition = cfg.ResolveCompletion()
 	}
+	spawnResult := &tools.SpawnResult{
+		Messages:  finalMessages,
+		Text:      allText.String(),
+		Usage:     &totalUsage,
+		Persisted: persisted,
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
+	if disposition == tools.SpawnAttemptCompleted && !persisted && cfg.BeforeTerminal != nil {
+		if persistErr := cfg.BeforeTerminal(context.WithoutCancel(ctx), spawnResult); persistErr != nil {
+			if cfg.ReconcileTerminal != nil {
+				cfg.ReconcileTerminal(tools.SpawnAttemptFailure)
+			}
+			return spawnFailureResult(rc), fmt.Errorf("persist subagent terminal before publication: %w", persistErr)
+		}
+		spawnResult.Persisted = true
+	}
 	terminal := StreamEvent{Type: EventAgentEnd}
 	if endEvent != nil {
 		terminal = *endEvent
@@ -361,15 +380,6 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 		return spawnFailureResult(rc), cause
 	}
 
-	spawnResult := &tools.SpawnResult{
-		Messages:  finalMessages,
-		Text:      allText.String(),
-		Usage:     &totalUsage,
-		Persisted: persisted,
-	}
-	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
-		spawnResult.ContextLifecycle = &snapshot
-	}
 	return spawnResult, nil
 }
 

@@ -66,6 +66,28 @@ describe('runtime projection', () => {
     expect(isRuntimeRunActive('waiting_decision')).toBe(true)
   })
 
+  it('keeps a prepared terminal run active until durable finalization', () => {
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      status: 'finishing',
+      proposed_terminal_status: 'completed',
+      finish_proposed_at: '2026-07-27T08:00:02.000Z',
+      messages: [{ id: 0, type: 'text', content: 'done' }],
+    })))
+
+    expect(isRuntimeRunActive('finishing')).toBe(true)
+    expect(state.transcript).toMatchObject({
+      status: 'finishing',
+      streaming: true,
+      turns: [
+        expect.objectContaining({ role: 'user' }),
+        expect.objectContaining({
+          role: 'assistant',
+          messages: [{ id: 0, type: 'text', content: 'done' }],
+        }),
+      ],
+    })
+  })
+
   it('projects an authoritative snapshot into stable turn identities', () => {
     const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
       messages: [{ id: 0, type: 'text', content: 'hi' }],
@@ -287,10 +309,12 @@ describe('runtime projection', () => {
     expect(empty.transcript.streaming).toBe(false)
   })
 
-  it('treats only admitting, running and aborting as active', () => {
+  it('treats every non-terminal projection state as active', () => {
     expect(isRuntimeRunActive('admitting')).toBe(true)
     expect(isRuntimeRunActive('running')).toBe(true)
+    expect(isRuntimeRunActive('waiting_decision')).toBe(true)
     expect(isRuntimeRunActive('aborting')).toBe(true)
+    expect(isRuntimeRunActive('finishing')).toBe(true)
     expect(isRuntimeRunActive('completed')).toBe(false)
     expect(isRuntimeRunActive('lost')).toBe(false)
   })
