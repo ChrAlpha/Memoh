@@ -26,6 +26,16 @@ type HistoryTurn struct {
 // Queries is the transitional database interface implemented by sqlc-backed stores.
 // Domain-specific stores should replace this broad interface module by module.
 type Queries interface {
+	CreateAgentCredential(ctx context.Context, arg dbsqlc.CreateAgentCredentialParams) (dbsqlc.AgentCredential, error)
+	GetAgentCredential(ctx context.Context, id pgtype.UUID) (dbsqlc.AgentCredential, error)
+	GetBotAgentCredential(ctx context.Context, arg dbsqlc.GetBotAgentCredentialParams) (dbsqlc.GetBotAgentCredentialRow, error)
+	SetBotAgentCredential(ctx context.Context, arg dbsqlc.SetBotAgentCredentialParams) (pgtype.UUID, error)
+	ClearBotAgentCredential(ctx context.Context, arg dbsqlc.ClearBotAgentCredentialParams) (pgtype.UUID, error)
+	CountBotAgentCredentialRefs(ctx context.Context, agentCredentialID pgtype.UUID) (int64, error)
+	GetBotAgentProvider(ctx context.Context, arg dbsqlc.GetBotAgentProviderParams) (string, error)
+	RevokeAgentCredentialByID(ctx context.Context, id pgtype.UUID) (dbsqlc.AgentCredential, error)
+	RevokeAgentCredentialsForBot(ctx context.Context, botID pgtype.UUID) error
+	UpdateAgentCredentialPayloadCAS(ctx context.Context, arg dbsqlc.UpdateAgentCredentialPayloadCASParams) (dbsqlc.AgentCredential, error)
 	AcquireProviderTemplateSyncLock(ctx context.Context) error
 	ApproveToolApprovalRequest(ctx context.Context, arg dbsqlc.ApproveToolApprovalRequestParams) (dbsqlc.ToolApprovalRequest, error)
 	BumpBotRuntimeConfigEpoch(ctx context.Context, botID pgtype.UUID) (int64, error)

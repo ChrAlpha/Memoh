@@ -143,8 +143,10 @@ export type AclUpdateRuleRequest = {
 
 export type AcpagentRuntimeStatus = {
     acp_session_id?: string;
+    agent_credential_id?: string;
     agent_id?: string;
     available_commands?: Array<AcpclientAvailableCommandInfo>;
+    bot_agent_id?: string;
     default_model_id?: string;
     models?: AcpclientModelState;
     modes?: AcpclientModeState;
@@ -208,6 +210,11 @@ export type AcpprofileManagedField = {
 };
 
 export type AcpprofileProfilesResponse = {
+    /**
+     * CredentialStoreConfigured reports whether the server can hold encrypted
+     * Agent credentials; the UI falls back to legacy metadata editing when not.
+     */
+    credential_store_configured?: boolean;
     items?: Array<AcpprofilePublicProfile>;
 };
 
@@ -217,6 +224,7 @@ export type AcpprofilePublicProfile = {
     id?: string;
     managed_fields?: Array<AcpprofileManagedField>;
     setup_modes?: Array<string>;
+    supported_auth_kinds?: Array<string>;
     supported_backends?: Array<string>;
 };
 
@@ -383,6 +391,22 @@ export type AdaptersUsageResponse = {
     total_text_bytes?: number;
 };
 
+export type AgentcredentialPublicCredential = {
+    account_metadata?: {
+        [key: string]: unknown;
+    };
+    auth_kind?: string;
+    created_at?: string;
+    credential_version?: number;
+    expires_at?: string;
+    id?: string;
+    label?: string;
+    owner_user_id?: string;
+    provider?: string;
+    revoked?: boolean;
+    updated_at?: string;
+};
+
 export type ApperrorProblem = {
     args: {
         [key: string]: string;
@@ -535,6 +559,11 @@ export type AudioVoiceInfo = {
 };
 
 export type BotagentsBotAgent = {
+    /**
+     * AgentCredentialID points at the encrypted credential this instance uses;
+     * empty means not connected (legacy metadata path).
+     */
+    agent_credential_id?: string;
     bot_id?: string;
     created_at?: string;
     deleted_at?: string;
@@ -2376,6 +2405,7 @@ export type HandlersUpdateContainerResourceLimitsRequest = {
 
 export type HandlersAcpRuntimeCreateRequest = {
     acp_agent_id?: string;
+    bot_agent_id?: string;
     project_path?: string;
 };
 
@@ -2389,6 +2419,13 @@ export type HandlersAcpRuntimeModelRequest = {
 
 export type HandlersAcpRuntimeReasoningRequest = {
     reasoning_effort?: string;
+};
+
+export type HandlersAgentCredentialPutRequest = {
+    auth_kind?: string;
+    secret?: {
+        [key: string]: string;
+    };
 };
 
 export type HandlersBrowserSessionCreateRequest = {
@@ -4632,7 +4669,12 @@ export type GetBotsByBotIdAcpClaudeCodeOauthAuthorizeData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bot Agent ID (required with the encrypted credential store)
+         */
+        bot_agent_id?: string;
+    };
     url: '/bots/{bot_id}/acp/claude-code/oauth/authorize';
 };
 
@@ -4703,7 +4745,12 @@ export type GetBotsByBotIdAcpClaudeCodeOauthStatusData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bot Agent ID
+         */
+        bot_agent_id?: string;
+    };
     url: '/bots/{bot_id}/acp/claude-code/oauth/status';
 };
 
@@ -4737,7 +4784,12 @@ export type GetBotsByBotIdAcpCodexOauthAuthorizeData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bot Agent ID (required with the encrypted credential store)
+         */
+        bot_agent_id?: string;
+    };
     url: '/bots/{bot_id}/acp/codex/oauth/authorize';
 };
 
@@ -4771,7 +4823,12 @@ export type PostBotsByBotIdAcpCodexOauthDeviceAuthorizeData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bot Agent ID (required with the encrypted credential store)
+         */
+        bot_agent_id?: string;
+    };
     url: '/bots/{bot_id}/acp/codex/oauth/device/authorize';
 };
 
@@ -4903,7 +4960,12 @@ export type GetBotsByBotIdAcpCodexOauthStatusData = {
          */
         bot_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Bot Agent ID
+         */
+        bot_agent_id?: string;
+    };
     url: '/bots/{bot_id}/acp/codex/oauth/status';
 };
 
@@ -5126,6 +5188,121 @@ export type PatchBotsByBotIdAgentsByIdResponses = {
 };
 
 export type PatchBotsByBotIdAgentsByIdResponse = PatchBotsByBotIdAgentsByIdResponses[keyof PatchBotsByBotIdAgentsByIdResponses];
+
+export type DeleteBotsByBotIdAgentsByIdCredentialData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/credential';
+};
+
+export type DeleteBotsByBotIdAgentsByIdCredentialErrors = {
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+};
+
+export type DeleteBotsByBotIdAgentsByIdCredentialError = DeleteBotsByBotIdAgentsByIdCredentialErrors[keyof DeleteBotsByBotIdAgentsByIdCredentialErrors];
+
+export type DeleteBotsByBotIdAgentsByIdCredentialResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetBotsByBotIdAgentsByIdCredentialData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/credential';
+};
+
+export type GetBotsByBotIdAgentsByIdCredentialErrors = {
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+};
+
+export type GetBotsByBotIdAgentsByIdCredentialError = GetBotsByBotIdAgentsByIdCredentialErrors[keyof GetBotsByBotIdAgentsByIdCredentialErrors];
+
+export type GetBotsByBotIdAgentsByIdCredentialResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialPublicCredential;
+};
+
+export type GetBotsByBotIdAgentsByIdCredentialResponse = GetBotsByBotIdAgentsByIdCredentialResponses[keyof GetBotsByBotIdAgentsByIdCredentialResponses];
+
+export type PutBotsByBotIdAgentsByIdCredentialData = {
+    /**
+     * Secret
+     */
+    body: HandlersAgentCredentialPutRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/credential';
+};
+
+export type PutBotsByBotIdAgentsByIdCredentialErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Unprocessable Entity
+     */
+    422: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type PutBotsByBotIdAgentsByIdCredentialError = PutBotsByBotIdAgentsByIdCredentialErrors[keyof PutBotsByBotIdAgentsByIdCredentialErrors];
+
+export type PutBotsByBotIdAgentsByIdCredentialResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialPublicCredential;
+};
+
+export type PutBotsByBotIdAgentsByIdCredentialResponse = PutBotsByBotIdAgentsByIdCredentialResponses[keyof PutBotsByBotIdAgentsByIdCredentialResponses];
 
 export type PostBotsByBotIdBackupExportData = {
     /**

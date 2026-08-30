@@ -49,10 +49,11 @@ type Profile struct {
 	ForceHTTPMCPServer bool
 	// RuntimeStorage is the internal allowlist and environment contract that
 	// separates durable configuration/credentials from process-local state.
-	RuntimeStorage    RuntimeStoragePolicy
-	ManagedFields     []ManagedField
-	SupportedBackends []string
-	SetupModes        []string
+	RuntimeStorage     RuntimeStoragePolicy
+	ManagedFields      []ManagedField
+	SupportedBackends  []string
+	SetupModes         []string
+	SupportedAuthKinds []string
 }
 
 // LaunchPolicy declares how an ACP profile resolves its process command. A
@@ -76,16 +77,20 @@ type ManagedField struct {
 } // @name acpprofile.ManagedField
 
 type PublicProfile struct {
-	ID                string         `json:"id"`
-	DisplayName       string         `json:"display_name"`
-	Description       string         `json:"description,omitempty"`
-	ManagedFields     []ManagedField `json:"managed_fields,omitempty"`
-	SupportedBackends []string       `json:"supported_backends,omitempty"`
-	SetupModes        []string       `json:"setup_modes,omitempty"`
+	ID                 string         `json:"id"`
+	DisplayName        string         `json:"display_name"`
+	Description        string         `json:"description,omitempty"`
+	ManagedFields      []ManagedField `json:"managed_fields,omitempty"`
+	SupportedBackends  []string       `json:"supported_backends,omitempty"`
+	SetupModes         []string       `json:"setup_modes,omitempty"`
+	SupportedAuthKinds []string       `json:"supported_auth_kinds,omitempty"`
 } // @name acpprofile.PublicProfile
 
 type ProfilesResponse struct {
 	Items []PublicProfile `json:"items"`
+	// CredentialStoreConfigured reports whether the server can hold encrypted
+	// Agent credentials; the UI falls back to legacy metadata editing when not.
+	CredentialStoreConfigured bool `json:"credential_store_configured"`
 } // @name acpprofile.ProfilesResponse
 
 type AgentSetup struct {
@@ -167,6 +172,33 @@ func MissingRequiredManagedFieldForPreflight(profile Profile, setup AgentSetup) 
 		return ManagedField{}, false
 	}
 	return MissingRequiredManagedField(profile, setup)
+}
+
+// HermesCredentialProviderFor maps the Hermes managed provider selection to
+// the credential provider whose key it consumes; custom endpoints speak the
+// OpenAI wire protocol.
+func HermesCredentialProviderFor(managedProvider string) string {
+	switch strings.ToLower(strings.TrimSpace(managedProvider)) {
+	case "openrouter":
+		return "openrouter"
+	case "gemini", "google", "google-gemini", "google-ai-studio":
+		return "google"
+	default:
+		return "openai"
+	}
+}
+
+// HermesManagedProviderForCredential is the inverse mapping, in Hermes' own
+// provider naming.
+func HermesManagedProviderForCredential(credentialProvider string) string {
+	switch credentialProvider {
+	case "google":
+		return "gemini"
+	case "openrouter":
+		return "openrouter"
+	default:
+		return "openai"
+	}
 }
 
 func managedFieldOrFallback(profile Profile, fieldID string, fallback ManagedField) ManagedField {
@@ -268,7 +300,8 @@ func codexProfile() Profile {
 		SupportedBackends: []string{"container"},
 		// OAuth first: signing in with a ChatGPT account is the path we want
 		// users to reach for; the API key stays available behind it.
-		SetupModes: []string{setupModeOAuth, setupModeAPIKey, setupModeSelf},
+		SetupModes:         []string{setupModeOAuth, setupModeAPIKey, setupModeSelf},
+		SupportedAuthKinds: []string{"openai_api_key", "openai_codex_oauth"},
 	}
 }
 
@@ -318,7 +351,8 @@ func claudeCodeProfile() Profile {
 		SupportedBackends: []string{"container"},
 		// OAuth first, same reasoning as Codex: the Claude account sign-in is
 		// the primary path, the API key is the fallback.
-		SetupModes: []string{setupModeOAuth, setupModeAPIKey, setupModeSelf},
+		SetupModes:         []string{setupModeOAuth, setupModeAPIKey, setupModeSelf},
+		SupportedAuthKinds: []string{"anthropic_api_key", "claude_code_oauth"},
 	}
 }
 
@@ -375,7 +409,8 @@ func hermesProfile() Profile {
 		SupportedBackends: []string{"container"},
 		// The first mode is the client's default selection, so the managed
 		// API-key path leads and self-managed stays the escape hatch.
-		SetupModes: []string{setupModeAPIKey, setupModeSelf},
+		SetupModes:         []string{setupModeAPIKey, setupModeSelf},
+		SupportedAuthKinds: []string{"openai_api_key", "google_api_key", "openrouter_api_key"},
 	}
 }
 
@@ -404,12 +439,13 @@ func ShouldForceHTTPMCPServer(agentID string) bool {
 
 func (p Profile) Public() PublicProfile {
 	return PublicProfile{
-		ID:                p.ID,
-		DisplayName:       p.DisplayName,
-		Description:       p.Description,
-		ManagedFields:     append([]ManagedField(nil), p.ManagedFields...),
-		SupportedBackends: append([]string(nil), p.SupportedBackends...),
-		SetupModes:        append([]string(nil), p.SetupModes...),
+		ID:                 p.ID,
+		DisplayName:        p.DisplayName,
+		Description:        p.Description,
+		ManagedFields:      append([]ManagedField(nil), p.ManagedFields...),
+		SupportedBackends:  append([]string(nil), p.SupportedBackends...),
+		SetupModes:         append([]string(nil), p.SetupModes...),
+		SupportedAuthKinds: append([]string(nil), p.SupportedAuthKinds...),
 	}
 }
 
@@ -556,7 +592,18 @@ func ScrubMetadataForExport(metadata map[string]any) (map[string]any, bool) {
 	return cloned, changed
 }
 
+// MergeSensitiveFieldsForUpdate re-injects existing sensitive managed fields
+// into an update whose request omitted or masked them.
 func MergeSensitiveFieldsForUpdate(existing, incoming map[string]any) map[string]any {
+	return MergeSensitiveFieldsExceptProviders(existing, incoming, nil)
+}
+
+// MergeSensitiveFieldsExceptProviders behaves like
+// MergeSensitiveFieldsForUpdate but skips the given providers: once a
+// provider has an attached encrypted credential its legacy metadata secret is
+// migrated and may be scrubbed, while unmigrated providers must keep theirs —
+// dropping them would silently destroy the only working secret.
+func MergeSensitiveFieldsExceptProviders(existing, incoming map[string]any, skipProviders map[string]bool) map[string]any {
 	merged := cloneMap(incoming)
 	existingACP, okExistingACP := metadataRecord(existing[MetadataKeyACP])
 	incomingACP, okIncomingACP := metadataRecord(merged[MetadataKeyACP])
@@ -584,6 +631,9 @@ func MergeSensitiveFieldsForUpdate(existing, incoming map[string]any) map[string
 		}
 		existingManaged, ok := metadataRecord(existingAgent["managed"])
 		if !ok {
+			continue
+		}
+		if skipProviders[NormalizeAgentID(rawAgentID)] {
 			continue
 		}
 		profile, _ := Lookup(rawAgentID)

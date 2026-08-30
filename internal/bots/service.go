@@ -668,6 +668,21 @@ func (s *Service) runDeleteLifecycle(ctx context.Context, botID string) {
 		revertToReady()
 		return
 	}
+	// Agent credentials point at bot_agents from the credential side, so the
+	// bot cascade alone would leave every attached secret active forever.
+	// Revoke the ones no other bot references while the rows still exist.
+	// The bot's agent rows are the only references that can still find these
+	// credentials; deleting past a failed revocation would orphan active
+	// secrets forever. Treat it like the other blocking cleanups and keep a
+	// retry path by reverting to ready.
+	if err := s.queries.RevokeAgentCredentialsForBot(lifecycleCtx, botUUID); err != nil {
+		s.logger.Error("revoke agent credentials for deleted bot failed",
+			slog.String("bot_id", botID),
+			slog.Any("error", err),
+		)
+		revertToReady()
+		return
+	}
 	if err := s.queries.DeleteBotByID(lifecycleCtx, botUUID); err != nil {
 		s.logger.Error("failed to delete bot after cleanup",
 			slog.String("bot_id", botID),

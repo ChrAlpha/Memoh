@@ -41,6 +41,24 @@ type AcpSessionStateLine struct {
 	ContentBytes int32       `json:"content_bytes"`
 }
 
+type AgentCredential struct {
+	ID                pgtype.UUID        `json:"id"`
+	TeamID            pgtype.UUID        `json:"team_id"`
+	OwnerUserID       pgtype.UUID        `json:"owner_user_id"`
+	Provider          string             `json:"provider"`
+	AuthKind          string             `json:"auth_kind"`
+	Label             string             `json:"label"`
+	EncryptedPayload  []byte             `json:"encrypted_payload"`
+	EncryptionNonce   []byte             `json:"encryption_nonce"`
+	KeyVersion        int32              `json:"key_version"`
+	AccountMetadata   []byte             `json:"account_metadata"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	CredentialVersion int64              `json:"credential_version"`
+	RevokedAt         pgtype.Timestamptz `json:"revoked_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Bot struct {
 	ID                      pgtype.UUID        `json:"id"`
 	OwnerUserID             pgtype.UUID        `json:"owner_user_id"`
@@ -108,16 +126,17 @@ type BotAclRule struct {
 }
 
 type BotAgent struct {
-	TeamID    pgtype.UUID        `json:"team_id"`
-	ID        pgtype.UUID        `json:"id"`
-	BotID     pgtype.UUID        `json:"bot_id"`
-	Name      string             `json:"name"`
-	Runtime   string             `json:"runtime"`
-	Enabled   bool               `json:"enabled"`
-	Metadata  []byte             `json:"metadata"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	TeamID            pgtype.UUID        `json:"team_id"`
+	ID                pgtype.UUID        `json:"id"`
+	BotID             pgtype.UUID        `json:"bot_id"`
+	Name              string             `json:"name"`
+	Runtime           string             `json:"runtime"`
+	Enabled           bool               `json:"enabled"`
+	Metadata          []byte             `json:"metadata"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	AgentCredentialID pgtype.UUID        `json:"agent_credential_id"`
 }
 
 type BotChannelAdmin struct {

@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/bots"
@@ -31,6 +32,7 @@ type SessionHandler struct {
 	runtimeResets  sessionResetService
 	workdirs       sessionWorkdirService
 	botAgents      *botagents.Service
+	credentials    *agentcredential.Service
 	botService     *bots.Service
 	accountService *accounts.Service
 	logger         *slog.Logger
@@ -45,7 +47,7 @@ type sessionWorkdirService interface {
 // warm agent process and binding a session to a runtime.
 type acpSessionRuntimeService interface {
 	CloseSession(sessionID string) error
-	BindRuntime(ctx context.Context, botID, runtimeID, sessionID, agentID, projectPath, runtimeOwnerAccountID string) error
+	BindRuntime(ctx context.Context, botID, runtimeID, sessionID, agentID, botAgentID, projectPath, runtimeOwnerAccountID string) error
 }
 
 // sessionResetService is the runtime-agnostic history reset boundary. It is a
@@ -94,6 +96,10 @@ func (h *SessionHandler) SetWorkdirService(workdirs sessionWorkdirService) {
 
 func (h *SessionHandler) SetBotAgents(service *botagents.Service) {
 	h.botAgents = service
+}
+
+func (h *SessionHandler) SetCredentialService(service *agentcredential.Service) {
+	h.credentials = service
 }
 
 // Register registers session routes.
@@ -204,7 +210,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 			}
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to resolve bot Agent")
 		}
-		if configErr := botagents.ValidateConfiguration(agent, bot.Metadata); configErr != nil {
+		if configErr := h.botAgents.ValidateConfiguration(c.Request().Context(), agent, bot.Metadata); configErr != nil {
 			if publicErr := botAgentHTTPError(configErr); publicErr != nil {
 				return publicErr
 			}
@@ -269,6 +275,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 			runtimeID,
 			sess.ID,
 			sessionMetadataString(sess.Metadata, "acp_agent_id"),
+			sess.BotAgentID,
 			sessionMetadataString(sess.Metadata, "project_path"),
 			sessionMetadataString(sess.Metadata, "runtime_owner_account_id"),
 		); bindErr != nil {
@@ -749,7 +756,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 				}
 				return echo.NewHTTPError(http.StatusInternalServerError, "failed to resolve bot Agent")
 			}
-			if configErr := botagents.ValidateConfiguration(agent, bot.Metadata); configErr != nil {
+			if configErr := h.botAgents.ValidateConfiguration(c.Request().Context(), agent, bot.Metadata); configErr != nil {
 				if publicErr := botAgentHTTPError(configErr); publicErr != nil {
 					return publicErr
 				}
@@ -1067,7 +1074,7 @@ func validateACPCreate(bot bots.Bot, metadata map[string]any) error {
 	if sessionMetadataString(metadata, "project_path") == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPProjectPathMissing.Error())
 	}
-	if err := acpAgentSetupHTTPError(bot.Metadata, agentID); err != nil {
+	if err := acpAgentSetupHTTPError(bot.Metadata, agentID, false); err != nil {
 		return err
 	}
 	return nil
@@ -1148,7 +1155,7 @@ func sessionAgentConfigChanged(existing session.Thread, targetMode, targetRuntim
 func stripACPMetadata(metadata map[string]any) map[string]any {
 	out := cloneSessionMetadata(metadata)
 	for key := range out {
-		if strings.HasPrefix(key, "acp_") || key == "project_path" {
+		if strings.HasPrefix(key, "acp_") || key == "project_path" || key == "agent_credential_id" {
 			delete(out, key)
 		}
 	}

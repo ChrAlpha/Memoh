@@ -6,6 +6,7 @@ import (
 	"github.com/felinics/memoh/internal/acl"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agentcredential"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/boot"
 	"github.com/felinics/memoh/internal/bots"
@@ -84,6 +85,7 @@ func ServerModule() fx.Option {
 			memprovider.NewService,
 			provideMemoryProviderRegistry,
 			models.NewService,
+			agentcredential.NewService,
 			provideACPRunner,
 			provideACPSessionPool,
 			provideACPCodexOAuthHandler,

@@ -18,8 +18,10 @@ import (
 	"github.com/felinics/memoh/internal/acl"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
+	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
+	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/route"
@@ -61,6 +63,8 @@ type UsersHandler struct {
 	registry       *channel.Registry
 	acpWorkspace   botCreateWorkspace
 	runtimeResets  runtimeResetService
+	credentials    *agentcredential.Service
+	botAgents      *botagents.Service
 	logger         *slog.Logger
 }
 
@@ -83,6 +87,38 @@ func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bo
 
 func (h *UsersHandler) SetRuntimeResetService(closer runtimeResetService) {
 	h.runtimeResets = closer
+}
+
+// SetBotAgentsService lets metadata updates know which providers already
+// migrated to instance credentials (and may therefore drop legacy secrets).
+func (h *UsersHandler) SetBotAgentsService(service *botagents.Service) {
+	h.botAgents = service
+}
+
+// migratedProviders lists the ACP providers of this bot that have at least
+// one instance with an attached credential.
+func (h *UsersHandler) migratedProviders(ctx context.Context, botID string) map[string]bool {
+	if h.botAgents == nil {
+		return nil
+	}
+	agents, err := h.botAgents.List(ctx, botID)
+	if err != nil {
+		return nil
+	}
+	migrated := map[string]bool{}
+	for _, agent := range agents {
+		if agent.AgentCredentialID == "" {
+			continue
+		}
+		if descriptor, descErr := botagents.DescriptorFor(agent); descErr == nil {
+			migrated[acpprofile.NormalizeAgentID(descriptor.Provider)] = true
+		}
+	}
+	return migrated
+}
+
+func (h *UsersHandler) SetCredentialService(service *agentcredential.Service) {
+	h.credentials = service
 }
 
 func (h *UsersHandler) Register(e *echo.Echo) {
@@ -825,15 +861,29 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 	needsACPWorkspaceConfigWrite := false
 	shouldResetRuntimes := false
 	if req.Metadata != nil {
+		managedCredentialStore := h.credentials != nil && h.credentials.Configured()
+		if managedCredentialStore {
+			req.Metadata, _ = acpprofile.ScrubMetadataForExport(req.Metadata)
+		}
 		if err := h.botService.ValidateUpdate(c.Request().Context(), bot.ID, req); err != nil {
 			return updateBotHTTPError(err)
 		}
 		pending := bot
-		pending.Metadata = acpprofile.MergeSensitiveFieldsForUpdate(bot.Metadata, req.Metadata)
-		if err := validateACPManagedConfig(pending.Metadata); err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid ACP metadata: "+err.Error())
+		if managedCredentialStore {
+			// The request was scrubbed above, so no new plaintext secret can
+			// enter metadata — but providers whose instances have no attached
+			// credential still authenticate through their legacy metadata
+			// secret, and replacing metadata verbatim would destroy it.
+			pending.Metadata = acpprofile.MergeSensitiveFieldsExceptProviders(bot.Metadata, req.Metadata, h.migratedProviders(c.Request().Context(), bot.ID))
+		} else {
+			pending.Metadata = acpprofile.MergeSensitiveFieldsForUpdate(bot.Metadata, req.Metadata)
 		}
-		needsACPWorkspaceConfigWrite = acpManagedConfigNeedsWrite(bot.Metadata, pending.Metadata)
+		if !managedCredentialStore {
+			if err := validateACPManagedConfig(pending.Metadata); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid ACP metadata: "+err.Error())
+			}
+		}
+		needsACPWorkspaceConfigWrite = !managedCredentialStore && acpManagedConfigNeedsWrite(bot.Metadata, pending.Metadata)
 		shouldResetRuntimes = acpRuntimeMetadataChanged(bot.Metadata, pending.Metadata)
 	}
 	if shouldResetRuntimes && h.runtimeResets == nil {
@@ -851,7 +901,12 @@ func (h *UsersHandler) UpdateBot(c echo.Context) error {
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
 	}
-	resp, err := h.botService.Update(c.Request().Context(), bot.ID, req)
+	var resp bots.Bot
+	if h.credentials != nil && h.credentials.Configured() && req.Metadata != nil {
+		resp, err = h.botService.UpdateReplacingMetadata(c.Request().Context(), bot.ID, req)
+	} else {
+		resp, err = h.botService.Update(c.Request().Context(), bot.ID, req)
+	}
 	if err != nil {
 		if leaseErr := runtimefence.ResetLeaseFailure(c.Request().Context(), err); leaseErr != nil {
 			return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, leaseErr, nil)
@@ -973,6 +1028,11 @@ func updateBotHTTPError(err error) error {
 }
 
 func (h *UsersHandler) prepareACPWorkspaceConfig(ctx context.Context, bot bots.Bot) error {
+	if h.credentials != nil && h.credentials.Configured() {
+		// Managed credentials are materialized into a runtime-private
+		// /tmp/memoh-auth directory when the Agent process starts.
+		return nil
+	}
 	if h.acpWorkspace == nil {
 		return nil
 	}

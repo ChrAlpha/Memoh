@@ -15,6 +15,10 @@ type ManagedACPConfigRequest struct {
 	Setup    acpprofile.AgentSetup
 	Mode     SetupMode
 	Resolved ResolvedSessionContext
+	// CodexOAuth carries a database-backed ChatGPT credential. When set, the
+	// durable auth.json is rewritten from it before the runtime lease stages
+	// the file; nil keeps the existing on-disk token.
+	CodexOAuth *CodexOAuthCredentials
 }
 
 type ManagedACPConfigClientGetter func() (*bridge.Client, error)
@@ -72,10 +76,15 @@ func WriteManagedACPConfig(ctx context.Context, req ManagedACPConfigRequest, get
 			return err
 		}
 		cfg := CodexManagedConfig{
-			Mode:    mode,
-			Managed: req.Setup.Managed,
+			Mode:      mode,
+			Managed:   req.Setup.Managed,
+			OAuth:     req.CodexOAuth,
+			ConfigDir: resolvedCodexDurableDir(&req.Resolved),
 		}
 		if mode == SetupModeOAuth {
+			if req.CodexOAuth != nil {
+				return WriteCodexManagedConfigWithAuth(ctx, client, cfg)
+			}
 			return WriteCodexManagedConfigFile(ctx, client, cfg)
 		}
 		return WriteCodexManagedConfigWithAuth(ctx, client, cfg)

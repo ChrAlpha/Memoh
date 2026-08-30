@@ -188,6 +188,8 @@
         :bot-id="botId"
         :profile="selectedProfile"
         :form="form"
+        :agent="selectedAgent"
+        :credential-store="profileData?.credential_store_configured === true"
         @commit="persistACPForm"
       />
     </section>
@@ -242,7 +244,7 @@ import { resolveApiErrorMessage } from '@/utils/api-error'
 import {
   emptyACPAgentForm,
   ensureACPAgentForm,
-  findMissingRequiredManagedField,
+  findMissingRequiredManagedFieldWithCredential,
   normalizeACPAgentID,
   normalizeACPForm,
   readACPConfig,
@@ -280,6 +282,8 @@ const { data: profileData } = useQuery({
   },
 })
 const profiles = computed<AcpprofilePublicProfile[]>(() => profileData.value?.items ?? [])
+// 服务端 store 不可用时，agent_credential_id 只是历史残留，不构成可用授权。
+const credentialStoreOn = computed(() => profileData.value?.credential_store_configured === true)
 
 const { data: agentData, isLoading: agentsLoading } = useQuery({
   key: () => ['bot-agents', botIdRef.value],
@@ -368,7 +372,7 @@ function agentNeedsConfig(agent: BotagentsBotAgent): boolean {
   if (!profile) return true
   const config = agentForm(profile)
   if (config.setup_mode === 'self') return false
-  return findMissingRequiredManagedField(profile, config.managed, config.setup_mode) !== null
+  return findMissingRequiredManagedFieldWithCredential(profile, config.managed, config.setup_mode, credentialStoreOn.value && !!agent.agent_credential_id) !== null
 }
 
 function agentRowState(agent: BotagentsBotAgent): 'off' | 'on_needs_config' | 'on_ready' {
@@ -445,7 +449,7 @@ async function persistACPForm() {
     const provider = botAgentProvider(agent)
     const profile = profileFor(agent)
     const config = provider ? normalized.agents[provider] : undefined
-    if (profile && config && !findMissingRequiredManagedField(profile, config.managed, config.setup_mode)) {
+    if (profile && config && !findMissingRequiredManagedFieldWithCredential(profile, config.managed, config.setup_mode, credentialStoreOn.value && !!agent.agent_credential_id)) {
       config.enabled = true
     }
   }

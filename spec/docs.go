@@ -1270,6 +1270,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID (required with the encrypted credential store)",
+                        "name": "bot_agent_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1353,6 +1359,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "bot_agent_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1390,6 +1402,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID (required with the encrypted credential store)",
+                        "name": "bot_agent_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1427,6 +1445,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID (required with the encrypted credential store)",
+                        "name": "bot_agent_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1592,6 +1616,12 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "bot_agent_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1865,6 +1895,141 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/credential": {
+            "get": {
+                "tags": [
+                    "agent-credentials"
+                ],
+                "summary": "Get the credential attached to a Bot Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.PublicCredential"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Creates an encrypted credential from the submitted secret and",
+                "tags": [
+                    "agent-credentials"
+                ],
+                "summary": "Attach a credential to a Bot Agent, replacing any previous one",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Secret",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.agentCredentialPutRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.PublicCredential"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "agent-credentials"
+                ],
+                "summary": "Disconnect a Bot Agent's credential",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/apperror.Problem"
                         }
@@ -15460,6 +15625,9 @@ const docTemplate = `{
                 "acp_session_id": {
                     "type": "string"
                 },
+                "agent_credential_id": {
+                    "type": "string"
+                },
                 "agent_id": {
                     "type": "string"
                 },
@@ -15468,6 +15636,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/acpclient.AvailableCommandInfo"
                     }
+                },
+                "bot_agent_id": {
+                    "type": "string"
                 },
                 "default_model_id": {
                     "type": "string"
@@ -15631,6 +15802,10 @@ const docTemplate = `{
         "acpprofile.ProfilesResponse": {
             "type": "object",
             "properties": {
+                "credential_store_configured": {
+                    "description": "CredentialStoreConfigured reports whether the server can hold encrypted\nAgent credentials; the UI falls back to legacy metadata editing when not.",
+                    "type": "boolean"
+                },
                 "items": {
                     "type": "array",
                     "items": {
@@ -15658,6 +15833,12 @@ const docTemplate = `{
                     }
                 },
                 "setup_modes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "supported_auth_kinds": {
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -16040,6 +16221,45 @@ const docTemplate = `{
                 },
                 "total_text_bytes": {
                     "type": "integer"
+                }
+            }
+        },
+        "agentcredential.PublicCredential": {
+            "type": "object",
+            "properties": {
+                "account_metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "auth_kind": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "credential_version": {
+                    "type": "integer"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "owner_user_id": {
+                    "type": "string"
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "revoked": {
+                    "type": "boolean"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },
@@ -16434,6 +16654,10 @@ const docTemplate = `{
         "botagents.BotAgent": {
             "type": "object",
             "properties": {
+                "agent_credential_id": {
+                    "description": "AgentCredentialID points at the encrypted credential this instance uses;\nempty means not connected (legacy metadata path).",
+                    "type": "string"
+                },
                 "bot_id": {
                     "type": "string"
                 },
@@ -21335,6 +21559,9 @@ const docTemplate = `{
                 "acp_agent_id": {
                     "type": "string"
                 },
+                "bot_agent_id": {
+                    "type": "string"
+                },
                 "project_path": {
                     "type": "string"
                 }
@@ -21364,6 +21591,20 @@ const docTemplate = `{
             "properties": {
                 "reasoning_effort": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.agentCredentialPutRequest": {
+            "type": "object",
+            "properties": {
+                "auth_kind": {
+                    "type": "string"
+                },
+                "secret": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },

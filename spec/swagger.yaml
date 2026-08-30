@@ -231,12 +231,16 @@ definitions:
     properties:
       acp_session_id:
         type: string
+      agent_credential_id:
+        type: string
       agent_id:
         type: string
       available_commands:
         items:
           $ref: '#/definitions/acpclient.AvailableCommandInfo'
         type: array
+      bot_agent_id:
+        type: string
       default_model_id:
         type: string
       models:
@@ -342,6 +346,11 @@ definitions:
     type: object
   acpprofile.ProfilesResponse:
     properties:
+      credential_store_configured:
+        description: |-
+          CredentialStoreConfigured reports whether the server can hold encrypted
+          Agent credentials; the UI falls back to legacy metadata editing when not.
+        type: boolean
       items:
         items:
           $ref: '#/definitions/acpprofile.PublicProfile'
@@ -360,6 +369,10 @@ definitions:
           $ref: '#/definitions/acpprofile.ManagedField'
         type: array
       setup_modes:
+        items:
+          type: string
+        type: array
+      supported_auth_kinds:
         items:
           type: string
         type: array
@@ -620,6 +633,32 @@ definitions:
       total_text_bytes:
         type: integer
     type: object
+  agentcredential.PublicCredential:
+    properties:
+      account_metadata:
+        additionalProperties: {}
+        type: object
+      auth_kind:
+        type: string
+      created_at:
+        type: string
+      credential_version:
+        type: integer
+      expires_at:
+        type: string
+      id:
+        type: string
+      label:
+        type: string
+      owner_user_id:
+        type: string
+      provider:
+        type: string
+      revoked:
+        type: boolean
+      updated_at:
+        type: string
+    type: object
   apperror.Problem:
     properties:
       args:
@@ -879,6 +918,11 @@ definitions:
     type: object
   botagents.BotAgent:
     properties:
+      agent_credential_id:
+        description: |-
+          AgentCredentialID points at the encrypted credential this instance uses;
+          empty means not connected (legacy metadata path).
+        type: string
       bot_id:
         type: string
       created_at:
@@ -4212,6 +4256,8 @@ definitions:
     properties:
       acp_agent_id:
         type: string
+      bot_agent_id:
+        type: string
       project_path:
         type: string
     type: object
@@ -4231,6 +4277,15 @@ definitions:
     properties:
       reasoning_effort:
         type: string
+    type: object
+  handlers.agentCredentialPutRequest:
+    properties:
+      auth_kind:
+        type: string
+      secret:
+        additionalProperties:
+          type: string
+        type: object
     type: object
   handlers.browserSessionCreateRequest:
     properties:
@@ -6902,6 +6957,10 @@ paths:
         name: bot_id
         required: true
         type: string
+      - description: Bot Agent ID (required with the encrypted credential store)
+        in: query
+        name: bot_agent_id
+        type: string
       responses:
         "200":
           description: OK
@@ -6956,6 +7015,10 @@ paths:
         name: bot_id
         required: true
         type: string
+      - description: Bot Agent ID
+        in: query
+        name: bot_agent_id
+        type: string
       responses:
         "200":
           description: OK
@@ -6980,6 +7043,10 @@ paths:
         name: bot_id
         required: true
         type: string
+      - description: Bot Agent ID (required with the encrypted credential store)
+        in: query
+        name: bot_agent_id
+        type: string
       responses:
         "200":
           description: OK
@@ -7003,6 +7070,10 @@ paths:
         in: path
         name: bot_id
         required: true
+        type: string
+      - description: Bot Agent ID (required with the encrypted credential store)
+        in: query
+        name: bot_agent_id
         type: string
       responses:
         "200":
@@ -7111,6 +7182,10 @@ paths:
         in: path
         name: bot_id
         required: true
+        type: string
+      - description: Bot Agent ID
+        in: query
+        name: bot_agent_id
         type: string
       responses:
         "200":
@@ -7299,6 +7374,96 @@ paths:
       summary: Update a bot Agent
       tags:
       - bot-agents
+  /bots/{bot_id}/agents/{id}/credential:
+    delete:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Bot Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Disconnect a Bot Agent's credential
+      tags:
+      - agent-credentials
+    get:
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Bot Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agentcredential.PublicCredential'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Get the credential attached to a Bot Agent
+      tags:
+      - agent-credentials
+    put:
+      description: Creates an encrypted credential from the submitted secret and
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Bot Agent ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Secret
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.agentCredentialPutRequest'
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/agentcredential.PublicCredential'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/apperror.Problem'
+      summary: Attach a credential to a Bot Agent, replacing any previous one
+      tags:
+      - agent-credentials
   /bots/{bot_id}/backup/export:
     post:
       consumes:

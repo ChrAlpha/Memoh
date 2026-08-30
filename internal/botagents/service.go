@@ -54,8 +54,48 @@ type transactionalQueries interface {
 }
 
 type Service struct {
-	queries queries
-	logger  *slog.Logger
+	queries            queries
+	logger             *slog.Logger
+	releaser           credentialReleaser
+	credentialVerifier func(ctx context.Context, botID, botAgentID string) bool
+}
+
+// credentialReleaser revokes a credential that lost its referencing Agent row,
+// once nothing else points at it. Optional so tests and embedders without the
+// encrypted store skip cleanup.
+type credentialReleaser interface {
+	ReleaseCredential(ctx context.Context, credentialID string) error
+}
+
+// SetCredentialReleaser enables orphan-credential cleanup on Agent deletion.
+func (s *Service) SetCredentialReleaser(releaser credentialReleaser) {
+	if s != nil {
+		s.releaser = releaser
+	}
+}
+
+// SetCredentialVerifier installs the per-instance decryptability check used
+// by preflight. It must actually open the ciphertext: after a restart with a
+// different-but-valid encryption key the credential row still exists and the
+// key shape is fine, but every runtime start would fail — preflight has to
+// fail the same way instead of deferring the error.
+func (s *Service) SetCredentialVerifier(verifier func(ctx context.Context, botID, botAgentID string) bool) {
+	if s != nil {
+		s.credentialVerifier = verifier
+	}
+}
+
+func (s *Service) credentialUsable(ctx context.Context, agent BotAgent) bool {
+	if s == nil || s.credentialVerifier == nil || agent.AgentCredentialID == "" {
+		return false
+	}
+	return s.credentialVerifier(ctx, agent.BotID, agent.ID)
+}
+
+// ValidateConfiguration is the credential-store-aware preflight; see the
+// package-level ValidateConfigurationWithStore for the pure form.
+func (s *Service) ValidateConfiguration(ctx context.Context, agent BotAgent, botMetadata map[string]any) error {
+	return ValidateConfigurationWithStore(agent, botMetadata, s.credentialUsable(ctx, agent))
 }
 
 func NewService(log *slog.Logger, q queries) *Service {
@@ -229,9 +269,13 @@ func (s *Service) Delete(ctx context.Context, botID, id string) error {
 	if err != nil {
 		return ErrNotFound
 	}
-	return s.withBotMutationLock(ctx, pgBotID, func(q queries) error {
-		_, deleteErr := q.SoftDeleteBotAgent(ctx, sqlc.SoftDeleteBotAgentParams{BotID: pgBotID, ID: pgID})
+	var orphanedCredential string
+	err = s.withBotMutationLock(ctx, pgBotID, func(q queries) error {
+		row, deleteErr := q.SoftDeleteBotAgent(ctx, sqlc.SoftDeleteBotAgentParams{BotID: pgBotID, ID: pgID})
 		if !errors.Is(deleteErr, pgx.ErrNoRows) {
+			if deleteErr == nil && row.AgentCredentialID.Valid {
+				orphanedCredential = row.AgentCredentialID.String()
+			}
 			return deleteErr
 		}
 		isDefault, checkErr := q.BotAgentIsDefault(ctx, sqlc.BotAgentIsDefaultParams{BotID: pgBotID, ID: pgID})
@@ -243,6 +287,18 @@ func (s *Service) Delete(ctx context.Context, botID, id string) error {
 		}
 		return ErrNotFound
 	})
+	if err != nil {
+		return err
+	}
+	if orphanedCredential != "" && s.releaser != nil {
+		// Best-effort cleanup: the Agent row is already gone (deleted_at set),
+		// so the reference count excludes it and the credential revokes unless
+		// another Agent still uses it.
+		if releaseErr := s.releaser.ReleaseCredential(ctx, orphanedCredential); releaseErr != nil {
+			s.logger.Warn("release credential of deleted bot agent failed", slog.String("credential_id", orphanedCredential), slog.Any("error", releaseErr))
+		}
+	}
+	return nil
 }
 
 // withBotMutationLock serializes Agent availability changes with default-Agent
@@ -271,10 +327,11 @@ func DescriptorFor(agent BotAgent) (Descriptor, error) {
 	return Descriptor{BotAgentID: agent.ID, Runtime: runtime, Provider: provider}, nil
 }
 
-// ValidateConfiguration validates the shared per-provider bot metadata without
-// consulting the legacy metadata enabled flag. BotAgent.Enabled is now the
-// availability source of truth.
-func ValidateConfiguration(agent BotAgent, botMetadata map[string]any) error {
+// ValidateConfigurationWithStore validates the shared per-provider bot
+// metadata without consulting the legacy metadata enabled flag.
+// BotAgent.Enabled is the availability source of truth. credentialStoreReady
+// gates whether an attached credential may satisfy the secret fields.
+func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, credentialStoreReady bool) error {
 	descriptor, err := DescriptorFor(agent)
 	if err != nil {
 		return err
@@ -287,11 +344,34 @@ func ValidateConfiguration(agent BotAgent, botMetadata map[string]any) error {
 		return ErrInvalidMetadata
 	}
 	setup := acpprofile.ParseAgentSetup(botMetadata, descriptor.Provider)
+	if agent.AgentCredentialID != "" && credentialStoreReady {
+		// An attached encrypted credential supplies the secret fields only —
+		// the store scrubs api_key/oauth_token out of bot metadata on save, so
+		// the metadata-only preflight would reject every connected Agent.
+		// Non-secret required fields (e.g. the Hermes provider/model) must
+		// still come from metadata, so stub the secrets and re-run the check
+		// instead of skipping it.
+		managed := make(map[string]string, len(setup.Managed)+2)
+		for key, value := range setup.Managed {
+			managed[key] = value
+		}
+		for _, secretField := range []string{"api_key", "oauth_token"} {
+			if strings.TrimSpace(managed[secretField]) == "" {
+				managed[secretField] = credentialSuppliedPlaceholder
+			}
+		}
+		setup.Managed = managed
+	}
 	if field, missing := acpprofile.MissingRequiredManagedFieldForPreflight(profile, setup); missing {
 		return &ConfigurationError{Field: field.ID}
 	}
 	return nil
 }
+
+// credentialSuppliedPlaceholder marks a secret satisfied by the encrypted
+// credential store during preflight; it never reaches a runtime, which
+// receives the decrypted value via applyAgentCredential instead.
+const credentialSuppliedPlaceholder = "credential-store" //nolint:gosec // Preflight marker, not a credential value.
 
 func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[string]any, error) {
 	runtime = strings.ToLower(strings.TrimSpace(runtime))
@@ -345,6 +425,9 @@ func fromRow(row sqlc.BotAgent) (BotAgent, error) {
 		Metadata:  metadata,
 		CreatedAt: db.TimeFromPg(row.CreatedAt),
 		UpdatedAt: db.TimeFromPg(row.UpdatedAt),
+	}
+	if row.AgentCredentialID.Valid {
+		item.AgentCredentialID = row.AgentCredentialID.String()
 	}
 	if row.DeletedAt.Valid {
 		deletedAt := row.DeletedAt.Time

@@ -18,6 +18,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agentcredential"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/boot"
 	"github.com/felinics/memoh/internal/botagents"
@@ -79,17 +80,32 @@ func provideMessageHandler(log *slog.Logger, msgService *message.DBService, sess
 	return h
 }
 
-func provideSessionHandler(log *slog.Logger, sessionService *sessionpkg.Service, acpPool *acpagent.SessionPool, botService *bots.Service, accountService *accounts.Service, routeService *route.DBService, workdirService *workdir.Service, botAgentsService *botagents.Service) *handlers.SessionHandler {
+func provideSessionHandler(log *slog.Logger, sessionService *sessionpkg.Service, acpPool *acpagent.SessionPool, botService *bots.Service, accountService *accounts.Service, routeService *route.DBService, workdirService *workdir.Service, botAgentsService *botagents.Service, credentialService *agentcredential.Service) *handlers.SessionHandler {
 	handler := handlers.NewSessionHandler(log, sessionService, acpPool, botService, accountService)
 	handler.SetThreadEnricher(routeService)
 	handler.SetWorkdirService(workdirService)
 	handler.SetBotAgents(botAgentsService)
+	handler.SetCredentialService(credentialService)
 	return handler
 }
 
-func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelRuntime channel.Runtime, registry *channel.Registry, workspaceManager *workspace.Manager, acpPool *acpagent.SessionPool) *handlers.UsersHandler {
+func provideACPRuntimeHandler(pool *acpagent.SessionPool, sessionService *sessionpkg.Service, botService *bots.Service, accountService *accounts.Service, credentialService *agentcredential.Service) *handlers.ACPRuntimeHandler {
+	handler := handlers.NewACPRuntimeHandler(pool, sessionService, botService, accountService)
+	handler.SetCredentialService(credentialService)
+	return handler
+}
+
+func provideBotAgentsHandler(log *slog.Logger, service *botagents.Service, botService *bots.Service, accountService *accounts.Service, acpPool *acpagent.SessionPool) *handlers.BotAgentsHandler {
+	handler := handlers.NewBotAgentsHandler(log, service, botService, accountService)
+	handler.SetDurableAuthPurger(acpPool)
+	return handler
+}
+
+func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelRuntime channel.Runtime, registry *channel.Registry, workspaceManager *workspace.Manager, acpPool *acpagent.SessionPool, credentialService *agentcredential.Service, botAgentService *botagents.Service) *handlers.UsersHandler {
 	handler := handlers.NewUsersHandler(log, accountService, botService, routeService, channelStore, channelRuntime, registry, workspaceManager)
 	handler.SetRuntimeResetService(acpPool)
+	handler.SetCredentialService(credentialService)
+	handler.SetBotAgentsService(botAgentService)
 	return handler
 }
 
