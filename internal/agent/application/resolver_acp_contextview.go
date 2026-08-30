@@ -7,8 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/contextview"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/contextview"
 )
 
 // acpContextViaContextView builds the ACP chat context view. The current user

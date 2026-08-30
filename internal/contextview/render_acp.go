@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
 const defaultACPContextURI = "memoh://context/current-turn"

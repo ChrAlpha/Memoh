@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
 func TestLatestContextCompositionUsesNewestTurn(t *testing.T) {

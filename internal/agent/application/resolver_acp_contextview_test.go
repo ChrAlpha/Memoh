@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
-	"github.com/memohai/memoh/internal/contextview"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/contextview"
 )
 
 func TestACPContextViaContextViewAssemblesSections(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	contextfrag "github.com/memohai/memoh/internal/agent/context/fragment"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
 func TestLifecycleSnapshotFromMetadata(t *testing.T) {
