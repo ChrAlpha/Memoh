@@ -148,5 +148,7 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 		}
 		return
 	}
-	d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
+	if outcome.endedClean || !outcome.failed {
+		d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
+	}
 }
