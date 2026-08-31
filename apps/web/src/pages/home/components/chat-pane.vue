@@ -638,6 +638,12 @@
                 <!-- The controls row owns the remaining width and right-aligns,
                      so a long model name truncates instead of overflowing. -->
                 <div class="order-3 flex min-w-0 flex-1 items-center justify-end gap-2 self-end">
+                  <!-- shrink-0 keeps the model name the one that truncates. -->
+                  <SessionInfoRing
+                    class="shrink-0"
+                    :override-model-id="overrideModelId"
+                    :fallback-context-window="sessionFallbackContextWindow"
+                  />
                   <Popover v-model:open="modelPopoverOpen">
                     <PopoverTrigger as-child>
                       <Button
@@ -749,11 +755,7 @@
                          filled PRIMARY circle at rest (near-black, not brand —
                          brand stays scarce, reserved for send/stop), so the
                          slot reads as one continuous filled control that swaps
-                         its glyph and meaning on the same cross-fade timing.
-                         The context-pressure ring itself is only shelved for
-                         now, not deleted — its useSessionInfo data source
-                         stays wired below (untouched) because the /compact
-                         quick action's live percentage still reads off it. -->
+                         its glyph and meaning on the same cross-fade timing. -->
                     <Button
                       type="button"
                       variant="primary"
@@ -909,6 +911,7 @@ import { usePendingApprovals } from '../composables/usePendingApprovals'
 import ChatScrollRail, { type ScrollRailSegment } from './chat-scroll-rail.vue'
 import { provideBgTaskBeacons } from '../composables/useBgTaskBeacons'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
+import SessionInfoRing from './session-info-ring.vue'
 import { useSessionInfo } from '../composables/useSessionInfo'
 import ModelOptions from '@/pages/bots/components/model-options.vue'
 import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
@@ -1627,6 +1630,7 @@ const slashPanelHasResults = computed(() =>
 // Session usage for the /compact quick action's live description ("42% full")
 // and its availability. Shares the query key with SessionInfoRing/panel, so
 // this adds no extra fetch.
+const sessionFallbackContextWindow = computed(() => activeModel.value?.config?.context_window ?? null)
 const {
   usedTokens: sessionUsedTokens,
   contextWindow: sessionContextWindow,
@@ -1638,7 +1642,7 @@ const {
   sessionId: computed(() => paneTarget.value.sessionId),
   visible: isVisible,
   overrideModelId,
-  fallbackContextWindow: computed(() => activeModel.value?.config?.context_window ?? null),
+  fallbackContextWindow: sessionFallbackContextWindow,
 })
 const sessionContextPercentKnown = computed(() => sessionContextWindow.value != null && sessionContextWindow.value > 0)
 const canCompactViaSlash = computed(() =>
