@@ -1080,6 +1080,7 @@
     "infoContextTokensNoWindow": "{used} / --",
     "infoContextTokensEstimate": "~{used} / {window}",
     "infoContextTokensEstimateNoWindow": "~{used} / --",
+    "infoAutoCompactAt": "达到 ~{tokens} 时自动压缩",
     "contextBreakdown": {
       "system": "系统提示词",
       "rules": "工作区规则",
@@ -1089,6 +1090,7 @@
       "summary": "摘要",
       "conversation": "对话",
       "other": "其他",
+      "reserve": "输出预留",
       "free": "剩余空间"
     },
     "infoCacheHitRate": "Cache 命中率",
