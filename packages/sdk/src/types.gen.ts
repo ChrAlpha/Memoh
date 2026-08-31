@@ -1772,6 +1772,12 @@ export type HandlersCommandEventResponse = {
     type?: string;
 };
 
+export type HandlersCompactionInfo = {
+    auto_tokens?: number;
+    enabled?: boolean;
+    hard_tokens?: number;
+};
+
 export type HandlersConnectorCredentialRequest = {
     auth_method?: string;
     connector_type?: string;
@@ -1904,6 +1910,8 @@ export type HandlersContextLifecycleTurn = {
 
 export type HandlersContextUsage = {
     breakdown?: Array<ContextfragKindBreakdown>;
+    budget_plan?: ContextfragContextBudgetPlan;
+    compaction?: HandlersCompactionInfo;
     context_window?: number;
     tool_defs?: Array<HandlersToolDefBucket>;
     used_tokens?: number;
