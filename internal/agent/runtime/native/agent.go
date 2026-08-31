@@ -1267,6 +1267,7 @@ func prepareProviderAttempt(
 	}
 	inputAllowance := stepReselectionAllowance(cfg)
 	reselectionDetail := ""
+	protectedPruned := 0
 	if reselector != nil && prefixCount < len(params.Messages) {
 		beforeMessages := append([]sdk.Message(nil), params.Messages...)
 		selection := reselector(ctx, ContextStepSelectionInput{
@@ -1312,6 +1313,7 @@ func prepareProviderAttempt(
 			snapshot.Dropped = selection.Dropped
 			snapshot.Truncated = selection.Truncated
 			snapshot.DropReasons = copyDropReasons(selection.DropReasons)
+			protectedPruned = selection.ProtectedPruned
 			if selection.Dropped > 0 || selection.Truncated > 0 {
 				reselectionDetail = contextStepSelectionDetail(selection)
 			}
@@ -1327,7 +1329,7 @@ func prepareProviderAttempt(
 			inputAllowance,
 		))
 	}
-	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, reselectionDetail, provenance)
+	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, reselectionDetail, protectedPruned, provenance)
 	return params
 }
 
@@ -1337,13 +1339,14 @@ func stagePreparedProviderAttempt(
 	snapshot contextfrag.StepSnapshot,
 	systemPrepended bool,
 	reselectionDetail string,
+	protectedPruned int,
 	provenance preparedMessageProvenance,
 ) {
 	if !providerAttemptDispatchAllowed(ctx) {
 		handoff.reject(provenance)
 		return
 	}
-	handoff.stage(snapshot, systemPrepended, reselectionDetail, provenance)
+	handoff.stage(snapshot, systemPrepended, reselectionDetail, protectedPruned, provenance)
 }
 
 func providerAttemptEnvelopeOverflow(params *sdk.GenerateParams, allowance int) int {
