@@ -133,8 +133,8 @@
       "reasoning_options_unavailable": "暂时无法解析对话模型的推理选项，请稍后重试。"
     },
     "context": {
-      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。",
-      "protected_overflow": "必要的上下文内容超出了模型上下文预算。"
+      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。可尝试 /compact 压缩较早的历史、缩短请求，或改用上下文窗口更大的模型。",
+      "protected_overflow": "必要的上下文内容超出了模型上下文预算。可尝试 /compact 压缩较早的历史，或改用上下文窗口更大的模型。"
     },
     "agent": {
       "response_timeout": "模型未能及时响应，请重试。",
