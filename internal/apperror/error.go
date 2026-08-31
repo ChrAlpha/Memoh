@@ -198,11 +198,11 @@ var catalog = map[Code]Definition{
 	},
 	CodeContextBudgetUnsatisfied: {
 		HTTPStatus: http.StatusUnprocessableEntity,
-		Detail:     "The model context window is too small for this request.",
+		Detail:     "The model context window is too small for this request. Run /compact to summarize older history, shorten the request, or switch to a model with a larger context window.",
 	},
 	CodeContextProtectedOverflow: {
 		HTTPStatus: http.StatusUnprocessableEntity,
-		Detail:     "Required context exceeds the model context budget.",
+		Detail:     "Required context exceeds the model context budget. Run /compact to summarize older history, or switch to a model with a larger context window.",
 	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,
