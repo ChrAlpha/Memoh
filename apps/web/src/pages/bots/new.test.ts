@@ -81,9 +81,21 @@ vi.mock('@/composables/useAvatarInitials', () => ({
   useAvatarInitials: () => 'P',
 }))
 
+// The page seeds the workspace-members draft with the signed-in user; the test
+// mounts a bare app with no Pinia, so the store stands in as a plain object.
+vi.mock('@/store/user', () => ({
+  useUserStore: () => ({
+    userInfo: { id: 'user-1', username: 'admin', displayName: 'Admin', avatarUrl: '' },
+  }),
+}))
+
 vi.mock('@felinic/ui', async () => {
   const { h } = await import('vue')
   const Passthrough = (_props: Record<string, unknown>, { slots }: { slots: Slots }) => h('div', slots.default?.())
+  // A settings row puts its body in the #content slot, so a default-slot-only
+  // stub would drop every field on the page.
+  const SlottedRow = (_props: Record<string, unknown>, { slots }: { slots: Slots }) =>
+    h('div', [slots.content?.(), slots.default?.()])
   const Button = (props: Record<string, unknown>, { attrs, slots }: { attrs: Record<string, unknown>, slots: Slots }) =>
     h('button', { ...attrs, disabled: props.disabled, type: props.type ?? 'button' }, slots.default?.())
   const Input = Object.assign((
@@ -109,7 +121,8 @@ vi.mock('@felinic/ui', async () => {
     SelectItem: Passthrough,
     SelectTrigger: Passthrough,
     SelectValue: Passthrough,
-    Separator: Passthrough,
+    SettingsRow: SlottedRow,
+    SettingsSection: Passthrough,
     Spinner: Passthrough,
     Tabs: Passthrough,
     TabsList: Passthrough,
@@ -136,6 +149,9 @@ vi.mock('@/components/timezone-select/index.vue', () => ({ default: (_props: Rec
 vi.mock('./components/avatar-edit-dialog.vue', () => ({ default: () => h('div') }))
 vi.mock('./components/bot-import-panel.vue', () => ({ default: () => h('div') }))
 vi.mock('./components/memory-provider-select.vue', () => ({ default: () => h('select') }))
+// The members list owns its own queries and a dozen @felinic/ui imports; this
+// test is about the submit hand-off, so it stands in as an inert child.
+vi.mock('./components/bot-user-access.vue', () => ({ default: () => h('div') }))
 vi.mock('./components/model-select.vue', () => ({ default: () => h('select') }))
 vi.mock('./components/agent-type-pill.vue', async () => {
   const { defineComponent, h } = await import('vue')
