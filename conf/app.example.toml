@@ -142,6 +142,13 @@ namespace = "default"
 # Leave empty to use Docker's standard environment discovery (DOCKER_HOST,
 # DOCKER_TLS_VERIFY, DOCKER_CERT_PATH, or the platform default socket).
 host = ""
+# Dedicated user-defined network shared by a containerized server and its
+# workspace containers. Host deployments keep this empty. Network routing
+# requires [bridge_tls].mode = "strict".
+network = ""
+# Container ID or unique name of this Memoh server on the configured Docker
+# daemon. Required together with network.
+server_container = ""
 
 [bridge_tls]
 # disabled: default for local/open-source deployments.
