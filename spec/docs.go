@@ -19764,9 +19764,6 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
-                },
-                "hard_tokens": {
-                    "type": "integer"
                 }
             }
         },
