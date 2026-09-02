@@ -1071,6 +1071,9 @@ const overrideReasoningEffort = ref('')
 // Set once the user picks a model in this pane, so late-arriving defaults
 // (a subagent's pinned model, bot settings) never overwrite their choice.
 const userPickedModel = ref(false)
+// Session creation briefly changes several pieces of the direct-runtime
+// identity. That is one draft being promoted, not a switch to another chat.
+let directDraftPromotionPending = false
 const paneComposerScope = computed(() => {
   const botId = paneTarget.value.botId
   return botId ? `${botId}:${paneTarget.value.viewId}` : 'chat'
@@ -2280,11 +2283,13 @@ watch(currentBotId, () => {
 // a user picked belongs to the session they picked it in — clear the flag so the
 // next session's pinned model can still seed the composer.
 watch(() => paneTarget.value.sessionId, () => {
+  if (directDraftPromotionPending) return
   userPickedModel.value = false
 })
 
 watch(activeUsesExternalAgentComposer, (usesExternalAgent, previouslyUsedExternalAgent) => {
   if (usesExternalAgent === previouslyUsedExternalAgent) return
+  if (directDraftPromotionPending) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
   userPickedModel.value = false
@@ -2304,7 +2309,7 @@ const directSessionIdentity = computed(() => JSON.stringify([
   activeDirectRuntime.value,
 ]))
 watch(directSessionIdentity, (identity, previousIdentity) => {
-  if (!activeUsesDirectRuntime.value || identity === previousIdentity) return
+  if (!activeUsesDirectRuntime.value || identity === previousIdentity || directDraftPromotionPending) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
   userPickedModel.value = false
@@ -3277,6 +3282,7 @@ async function handleSend() {
   const sentModelId = overrideModelId.value
   const sentReasoningEffort = overrideReasoningEffort.value
   const sentWorkspaceTargetId = sendWorkspaceTargetId.value
+  const preserveDirectDraftSelection = activeUsesDirectRuntime.value && !sentContext.target.sessionId
   composerError.value = ''
   inputText.value = ''
   saveInputDraft(sentDraftKey, '')
@@ -3305,6 +3311,7 @@ async function handleSend() {
   // setup and is about to start a real turn. Command-only sends therefore do
   // not leave a latent pin behind; startup failures roll the arm back.
   let rollbackPin: (() => void) | null = null
+  directDraftPromotionPending = preserveDirectDraftSelection
   const result = await chatStore.sendMessage(text, attachments, {
     target: sentContext.target,
     modelId: sentModelId,
@@ -3313,6 +3320,9 @@ async function handleSend() {
     requestedSkills: skills,
     composerScope: sentContext.composerScope,
     onBeforeTurnAppend: () => {
+      if (preserveDirectDraftSelection) {
+        void nextTick(() => { directDraftPromotionPending = false })
+      }
       if (!matchesChatPaneSendContext(
         sentContext,
         paneTarget.value,
@@ -3324,6 +3334,8 @@ async function handleSend() {
       rollbackPin?.()
       rollbackPin = null
     },
+  }).finally(() => {
+    directDraftPromotionPending = false
   })
   rollbackPin = null
   await refreshACPComposerConfigAfterSelectionError(result)
