@@ -541,7 +541,7 @@
                         >
                         <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
                         <Check
-                          v-if="!activeIsACP"
+                          v-if="!activeIsExternalAgent"
                           class="ml-auto"
                         />
                       </DropdownMenuItem>
@@ -638,14 +638,20 @@
                 <!-- The controls row owns the remaining width and right-aligns,
                      so a long model name truncates instead of overflowing. -->
                 <div class="order-3 flex min-w-0 flex-1 items-center justify-end gap-2 self-end">
-                  <!-- shrink-0 keeps the model name the one that truncates. -->
+                  <!-- shrink-0 keeps the model name the one that truncates.
+                       Native and ACP turns persist a context lifecycle; direct
+                       runtimes own their own context, so the ring stays off. -->
                   <SessionInfoRing
+                    v-if="showSessionInfoRing"
                     class="shrink-0"
                     :visible="isVisible"
                     :override-model-id="overrideModelId"
                     :fallback-context-window="sessionFallbackContextWindow"
                   />
-                  <Popover v-model:open="modelPopoverOpen">
+                  <Popover
+                    v-if="!activeUsesExternalAgentComposer || activeUsesACPRuntime || activeUsesDirectRuntime"
+                    v-model:open="modelPopoverOpen"
+                  >
                     <PopoverTrigger as-child>
                       <Button
                         type="button"
@@ -660,7 +666,7 @@
                              same contract as composer-continue-on's pill. -->
                         <span class="composer-pill-content inline-flex min-w-0 items-center gap-2">
                           <Spinner
-                            v-if="composerConfigPending || acpModelsLoading"
+                            v-if="composerConfigPending || composerModelsLoading"
                             class="size-3.5 shrink-0"
                           />
                           <span class="min-w-0 truncate text-label text-composer-control-label">{{ modelTriggerLabel }}</span>
@@ -692,9 +698,35 @@
                         >
                           {{ $t('common.loading') }}
                         </InlineLoadingRow>
+                        <div
+                          v-else-if="directModelCatalogError"
+                          class="space-y-3 p-3"
+                        >
+                          <p class="text-body text-muted-foreground">
+                            {{ directModelCatalogError }}
+                          </p>
+                          <Button
+                            v-if="directRuntimeAuthRequired"
+                            variant="outline"
+                            size="sm"
+                            class="w-full"
+                            @click="openDirectAgentSettings"
+                          >
+                            {{ $t('bots.agent.openSettings') }}
+                          </Button>
+                          <Button
+                            v-else
+                            variant="outline"
+                            size="sm"
+                            class="w-full"
+                            @click="retryDirectModelCatalog"
+                          >
+                            {{ $t('common.retry') }}
+                          </Button>
+                        </div>
                         <template v-else>
                           <div
-                            v-if="activeUsesACPComposer && !activeIsPendingACP && acpModes.length"
+                            v-if="activeUsesACPRuntime && !activeIsPendingExternalAgent && acpModes.length"
                             class="border-b border-border p-3"
                           >
                             <div class="mb-2 text-label text-foreground">
@@ -738,9 +770,10 @@
                             :reasoning-options="composerReasoningOptions"
                             :models="composerModels"
                             :providers="composerModelProviders"
+                            :none-label="activeUsesDirectRuntime ? composerDefaultModelLabel : undefined"
                             model-type="chat"
                             :open="modelPopoverOpen"
-                            show-reasoning
+                            :show-reasoning="!activeUsesDirectRuntime || !!composerReasoningOptions?.length"
                             @update:model-value="onComposerModelValueSelected"
                             @update:reasoning-effort="onComposerReasoningEffortSelected"
                           />
@@ -885,15 +918,15 @@ import {
   ShieldCheck,
 } from 'lucide-vue-next'
 import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Spinner, menuChromeClass, toast } from '@felinic/ui'
-import { useChatStore, type ACPAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
+import { useChatStore, type ExternalAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { storeToRefs } from 'pinia'
 import { useElementSize, useIntersectionObserver } from '@vueuse/core'
 import { useQuery } from '@pinia/colada'
-import { getAcpProfiles, getBotsByBotIdAgents, getModels, getProviders, getBotsByBotIdSettings, getBotsByBotIdWorkspaceTargets, postTranscriptionModelsByIdTest } from '@memohai/sdk'
-import type { AcpprofilePublicProfile, BotagentsBotAgent, ModelsGetResponse, ProvidersGetResponse, WorkspaceWorkspaceTarget } from '@memohai/sdk'
+import { getAcpProfiles, getBotsByBotIdAgents, getBotsByBotIdSettings, getBotsByBotIdWorkspaceTargets, postTranscriptionModelsByIdTest } from '@memohai/sdk'
+import type { AcpprofilePublicProfile, BotagentsBotAgent, WorkspaceWorkspaceTarget } from '@memohai/sdk'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import FileDropOverlay from '@/components/file-drop-overlay/index.vue'
@@ -927,11 +960,12 @@ import { commandResultPresentation, isCommandResultItemVisible, resolveCommandRe
 import { captureChatPaneSendContext, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
+import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
-import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, findMissingRequiredManagedFieldWithCredential, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
-import { botAgentIcon, botAgentName, botAgentProvider } from '@/utils/bot-agent'
-import { resolveApiErrorMessage } from '@/utils/api-error'
+import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, findMissingRequiredManagedField, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
+import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { workspaceTargetAvailable } from '@/utils/workspace-target'
 import { findLatestPendingChatDecision } from './chat-pending-decision'
@@ -1094,17 +1128,14 @@ const canForkAssistant = computed(() =>
   !streaming.value
   && !loadingMessages.value
   && !activeChatReadOnly.value
-  && activeChatCanFork.value,
+  && activeChatCanFork.value
+  && (activeChatTarget.value.runtimeType === 'model'
+    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX),
 )
 
-// ACP has no rewind primitive: the external agent keeps its own in-process
-// context, so a replaced turn stays in the agent's memory no matter what the
-// visible history shows. Retry/edit therefore cannot be implemented honestly
-// for ACP sessions and the affordances are hidden, like image upload is for
-// models without vision.
-const activeSupportsTurnReplacement = computed(() =>
-  !activeChatTarget.value.isACP && !activeChatTarget.value.isPendingACP,
-)
+// Retry/edit rewrite persisted history and replay it, which only runtimes
+// whose context Memoh itself assembles can honor.
+const activeSupportsTurnReplacement = computed(() => activeChatTarget.value.runtimeType === 'model')
 
 // The turn id, not a message id: a turn carries it from admission, so the
 // affordance is live the moment the round exists rather than after the
@@ -1144,22 +1175,6 @@ function isEditableTurn(message: ChatMessage): boolean {
   const turnId = latestEditableUserTurnId.value
   return message.role === 'user' && turnId !== '' && turnId === (message.turnId?.trim() ?? '')
 }
-
-const { data: modelData } = useQuery({
-  key: ['models'],
-  query: async () => {
-    const { data } = await getModels({ throwOnError: true })
-    return data
-  },
-})
-
-const { data: providerData } = useQuery({
-  key: ['providers'],
-  query: async () => {
-    const { data } = await getProviders({ throwOnError: true })
-    return data
-  },
-})
 
 const { data: botSettings, isLoading: botSettingsLoading } = useQuery({
   key: () => ['bot-settings', currentBotId.value],
@@ -1257,7 +1272,6 @@ interface ForkSourceMeta {
 }
 
 const acpProfiles = computed<AcpprofilePublicProfile[]>(() => acpProfileData.value?.items ?? [])
-const acpCredentialStoreOn = computed(() => acpProfileData.value?.credential_store_configured === true)
 const currentBotMetadata = computed(() => currentBot.value?.metadata as Record<string, unknown> | undefined)
 const botAgents = computed<BotagentsBotAgent[]>(() => botAgentData.value?.items ?? [])
 const enabledBotAgents = computed(() => botAgents.value.filter(agent => agent.enabled !== false && !!agent.id))
@@ -1289,9 +1303,9 @@ const forkSourceDividerAfterIndex = computed<number | null>(() => {
   const index = messages.value.findIndex(messageMatchesForkSource)
   return index >= 0 ? index : null
 })
-const activeIsPendingACP = computed(() => activeChatTarget.value.isPendingACP)
-const activeIsACP = computed(() => activeChatTarget.value.isACP)
-const activeUsesACPComposer = computed(() => activeIsPendingACP.value || activeIsACP.value)
+const activeIsPendingExternalAgent = computed(() => activeChatTarget.value.isPendingExternalAgent)
+const activeIsExternalAgent = computed(() => activeChatTarget.value.isExternalAgent)
+const activeUsesExternalAgentComposer = computed(() => activeIsPendingExternalAgent.value || activeIsExternalAgent.value)
 // ---- workdir binding ----
 // A session bound to a bot workdir (or a draft under the bot's working
 // folder) has its workspace target pinned by that binding: the computer
@@ -1306,9 +1320,9 @@ const draftWorkingFolder = computed(() => {
   if (activeSession.value || !currentBotId.value) return null
   const workdir = workdirsStore.workingWorkdirFor(currentBotId.value)
   if (!workdir) return null
-  // ACP sessions can only bind native-workspace workdirs; a remote working
+  // External Agent sessions can only bind native-workspace workdirs; a remote working
   // workdir is skipped at creation, so don't pretend it applies here.
-  if (activeUsesACPComposer.value && workdir.target_kind === 'remote') return null
+  if (activeUsesExternalAgentComposer.value && workdir.target_kind === 'remote') return null
   return workdir
 })
 const composerFolderLocked = computed(() => (
@@ -1325,7 +1339,7 @@ const composerFolderName = computed(() => {
 // remote folder is left out rather than offered as a choice that binds nothing.
 const selectableFolders = computed(() => {
   const folders = workdirsStore.workdirsFor(currentBotId.value).filter(folder => !folder.archived && !!folder.id)
-  if (activeUsesACPComposer.value) return folders.filter(folder => folder.target_kind !== 'remote')
+  if (activeUsesExternalAgentComposer.value) return folders.filter(folder => folder.target_kind !== 'remote')
   return folders
 })
 // The picker only makes sense before the session exists; an empty folder list
@@ -1349,8 +1363,8 @@ const sendWorkspaceTargetId = computed(() => (
 ))
 
 const showComputersMenu = computed(() => (
-  !activeIsACP.value
-  && !activeIsPendingACP.value
+  !activeIsExternalAgent.value
+  && !activeIsPendingExternalAgent.value
   && canWorkspaceRead.value
   && !composerFolderLocked.value
 ))
@@ -1411,13 +1425,13 @@ function selectWorkspaceTarget(target: ValidWorkspaceTarget) {
 }
 
 watch([
-  activeIsACP,
-  activeIsPendingACP,
+  activeIsExternalAgent,
+  activeIsPendingExternalAgent,
   activeSessionMetadata,
   workspaceTargets,
   paneTarget,
 ], () => {
-  if (activeIsACP.value || activeIsPendingACP.value) {
+  if (activeIsExternalAgent.value || activeIsPendingExternalAgent.value) {
     chatStore.resetWorkspaceTargetSelection(paneTarget.value)
     return
   }
@@ -1444,9 +1458,20 @@ watch([
 }, { immediate: true })
 const activeBotAgentID = computed(() =>
   activeSession.value?.bot_agent_id?.trim()
-  || chatStore.pendingACPSessionInput?.botAgentId?.trim()
+  || chatStore.pendingExternalAgentStateFor(paneTarget.value)?.input.botAgentId?.trim()
   || '',
 )
+const activeUsesACPRuntime = computed(() => (
+  activeUsesExternalAgentComposer.value && activeChatTarget.value.runtimeType === 'acp_agent'
+))
+const activeDirectRuntime = computed(() => {
+  if (!activeUsesExternalAgentComposer.value) return ''
+  const runtime = activeChatTarget.value.runtimeType
+  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
+  return ''
+})
+const activeUsesDirectRuntime = computed(() => activeDirectRuntime.value !== '')
+const showSessionInfoRing = computed(() => !activeUsesExternalAgentComposer.value || activeUsesACPRuntime.value)
 const activeACPAgentId = computed(() => normalizeACPAgentID(activeSessionMetadata.value.acp_agent_id))
 const activeACPProjectPath = computed(() => String(activeSessionMetadata.value.project_path ?? '').trim())
 const activeACPProjectMode = computed(() => String(activeSessionMetadata.value.acp_project_mode ?? '').trim())
@@ -1485,7 +1510,7 @@ function showForkSourceDividerBefore(index: number): boolean {
 const activeSessionId = computed(() => paneTarget.value.sessionId ?? activeSession.value?.id ?? '')
 const requestedSkills = ref<RequestedSkillSelection[]>([])
 const slashPanelSuppressedPrefix = ref('')
-const skillSlashEnabled = computed(() => !activeIsACP.value && !activeIsPendingACP.value)
+const skillSlashEnabled = computed(() => !activeIsExternalAgent.value && !activeIsPendingExternalAgent.value)
 const { data: safeSkillCatalog, isLoading: safeSkillCatalogLoading } = useQuery({
   key: () => ['bot-safe-skills-catalog', currentBotId.value ?? ''],
   query: () => fetchSafeSkillCatalog(currentBotId.value!),
@@ -1558,7 +1583,7 @@ const slashQuickActions = computed(() => [
     description: t('chat.slash.newDescription'),
     icon: SquarePen,
   },
-  ...((boundLiveACPRuntime.value || activeIsPendingACP.value)
+  ...((boundLiveACPRuntime.value || activeIsPendingExternalAgent.value)
     && acpModes.value.length > 0
     ? [{
         id: 'permission',
@@ -1577,7 +1602,7 @@ const slashQuickActions = computed(() => [
         icon: Minimize2,
       }]
     : []),
-  ...(!activeIsACP.value && !activeIsPendingACP.value
+  ...(!activeIsExternalAgent.value && !activeIsPendingExternalAgent.value
     ? [{
         id: 'model',
         label: '/model',
@@ -1615,7 +1640,7 @@ const visibleSlashSkills = computed(() =>
   safeSkills.value.filter(skill => slashMatches(skill.name, skill.description ?? '')),
 )
 const composerACPAvailableCommands = computed(() => (
-  (boundLiveACPRuntime.value || activeIsPendingACP.value)
+  activeUsesACPRuntime.value && (boundLiveACPRuntime.value || activeIsPendingExternalAgent.value)
     ? acpAvailableCommands.value
     : []
 ))
@@ -1647,7 +1672,7 @@ const {
 })
 const sessionContextPercentKnown = computed(() => sessionContextWindow.value != null && sessionContextWindow.value > 0)
 const canCompactViaSlash = computed(() =>
-  !!activeSessionId.value && !activeIsACP.value && sessionUsedTokens.value > 0 && !isCompactingSession.value,
+  !!activeSessionId.value && !activeIsExternalAgent.value && sessionUsedTokens.value > 0 && !isCompactingSession.value,
 )
 
 // Client-side quick actions run an existing UI affordance directly instead of
@@ -1698,7 +1723,7 @@ function runLocalQuickAction(id: string, text = ''): boolean {
     modelPopoverOpen.value = true
     return true
   }
-  if (id === 'permission' && activeIsPendingACP.value) {
+  if (id === 'permission' && activeIsPendingExternalAgent.value) {
     void runPendingPermission(text || '/permission')
     return true
   }
@@ -1752,10 +1777,10 @@ function selectACPAgentCommand(command: ACPAvailableCommand) {
 // be intercepted before the store send path, which would otherwise classify
 // them as skill activation and fail with requested_skill_not_found.
 function localQuickActionIDForSlash(text: string): string {
-  if (activeIsPendingACP.value && /^\/permission(?:\s|$)/i.test(text.trim())) return 'permission'
+  if (activeIsPendingExternalAgent.value && /^\/permission(?:\s|$)/i.test(text.trim())) return 'permission'
   return composerLocalQuickActionID(
     text,
-    activeIsACP.value || activeIsPendingACP.value,
+    activeIsExternalAgent.value || activeIsPendingExternalAgent.value,
   )
 }
 
@@ -1858,79 +1883,120 @@ const {
   setReasoning: setACPReasoning,
 } = useACPRuntime({
   target: paneTarget,
-  pending: activeIsPendingACP,
-  enabled: computed(() => activeUsesACPComposer.value && !!currentBotId.value),
+  pending: activeIsPendingExternalAgent,
+  enabled: computed(() => activeUsesACPRuntime.value && !!currentBotId.value),
   agentId: activeACPAgentId,
   projectPath: activeACPProjectPath,
 })
 const boundLiveACPRuntime = computed(() => {
-  return activeIsACP.value
-    && !activeIsPendingACP.value
+  return activeIsExternalAgent.value
+    && !activeIsPendingExternalAgent.value
     && isBoundACPRuntimeForTarget(acpCapabilityRuntime.value, {
       sessionId: paneTarget.value.sessionId ?? '',
       agentId: activeACPAgentId.value,
       projectPath: activeACPProjectPath.value,
-    })
+  })
 })
 
-const models = computed<ModelsGetResponse[]>(() => modelData.value ?? [])
-const providers = computed<ProvidersGetResponse[]>(() => providerData.value ?? [])
 const acpModelsLoading = computed(() =>
-  activeUsesACPComposer.value
+  activeUsesACPRuntime.value
   && !acpCapabilityRuntime.value?.models
   && (agentChanging.value || acpRuntimeEnsuring.value),
 )
-const composerConfigPending = computed(() => activeUsesACPComposer.value && (
-  agentChanging.value || acpConfigChanging.value || acpConfigPreparing.value
+const {
+  catalog: composerModelCatalog,
+  nativeModels: models,
+  isLoading: composerModelsLoading,
+  error: composerModelCatalogError,
+  refresh: refreshComposerModelCatalog,
+} = useAgentModelCatalog({
+  botId: currentBotId,
+  botAgentId: activeBotAgentID,
+  runtime: computed(() => activeChatTarget.value.runtimeType),
+  selectedModelId: overrideModelId,
+  acpModels,
+  acpCurrentModelId: currentACPModelId,
+  acpReasoningEfforts,
+  acpCurrentReasoningEffort: currentACPReasoningEffort,
+  acpLoading: computed(() => acpModelsLoading.value || acpConfigPreparing.value),
+  refreshACP: () => refreshACPComposerConfig(),
+})
+
+const directRuntimeAuthRequired = computed(() =>
+  !!activeDirectRuntime.value
+  && (
+    isApiErrorCode(composerModelCatalogError.value, 'external_runtime.auth_required')
+    || isApiErrorCode(composerModelCatalogError.value, 'agent_credential.not_found')
+    || isApiErrorCode(composerModelCatalogError.value, 'agent_credential.reauthorization_required')
+  ),
+)
+const directModelCatalogError = computed(() => {
+  if (!activeUsesDirectRuntime.value || !composerModelCatalogError.value) return ''
+  return resolveApiErrorMessage(composerModelCatalogError.value, t('bots.agent.modelsLoadFailed'))
+})
+
+const composerConfigPending = computed(() => activeUsesExternalAgentComposer.value && (
+  agentChanging.value || (activeUsesACPRuntime.value && (acpConfigChanging.value || acpConfigPreparing.value))
 ))
 const canChangeAgent = computed(() => !streaming.value
   && !creatingSession.value
   && !composerConfigPending.value
   && messages.value.length === 0)
 
-const acpModelPickerModels = computed<ModelsGetResponse[]>(() => {
-  const adapted: ModelsGetResponse[] = []
-  for (const model of acpModels.value) {
-    const value = model.id?.trim() ?? ''
-    if (!value) continue
-    adapted.push({
-      id: value,
-      model_id: value,
-      name: model.name?.trim() || value,
-      provider_id: '',
-      type: 'chat',
-      config: {
-        description: model.description?.trim() || undefined,
-      },
-    })
-  }
-  return adapted
-})
+const composerModels = computed(() => composerModelCatalog.value.models)
+const composerModelProviders = computed(() => composerModelCatalog.value.providers)
 
-// Normalize runtime-specific model metadata into the one contract consumed by
-// Memoh's existing picker. The template stays runtime-agnostic; only this
-// adapter knows whether the values came from a native model or an ACP session.
-const composerModels = computed(() =>
-  activeUsesACPComposer.value ? acpModelPickerModels.value : models.value,
-)
-const composerModelProviders = computed(() =>
-  activeUsesACPComposer.value ? [] : providers.value,
-)
+// "Default" alone tells the user nothing — resolve what it actually means:
+// the runtime's configured model for direct runtimes, the bot's chat model
+// for the native composer. Falls back to the bare label while the catalog is
+// still loading (or, for Claude Code, when the runtime keeps its default to
+// itself).
+const composerDefaultModelName = computed(() => {
+  let id = ''
+  if (activeUsesDirectRuntime.value) {
+    id = composerModelCatalog.value.configuredModelId || composerModelCatalog.value.defaultModelId
+  } else if (!activeUsesExternalAgentComposer.value) {
+    id = botSettings.value?.chat_model_id ?? ''
+  }
+  id = id.trim()
+  if (!id) return ''
+  const model = composerModels.value.find(m => m.id === id || m.model_id === id)
+  return model?.name || model?.model_id || id
+})
+const composerDefaultModelLabel = computed(() =>
+  composerDefaultModelName.value
+    ? t('chat.modelDefaultNamed', { model: composerDefaultModelName.value })
+    : t('chat.modelDefault'))
 const composerReasoningOptions = computed(() => {
-  if (!activeUsesACPComposer.value) return undefined
-  return acpReasoningEfforts.value.flatMap((effort) => {
+  const efforts = composerModelCatalog.value.reasoningEfforts
+  if (!efforts) return undefined
+  return efforts.flatMap((effort) => {
     const value = effort.id?.trim() ?? ''
     if (!value) return []
+    const runtimeLabel = effort.name?.trim() ?? ''
+    const translatedLabel = EFFORT_LABELS[value] ? t(EFFORT_LABELS[value]) : value
     return [{
       value,
-      label: effort.name?.trim() || value,
+      label: runtimeLabel && runtimeLabel !== value ? runtimeLabel : translatedLabel,
       description: effort.description?.trim() || undefined,
     }]
   })
 })
-const composerModelsLoading = computed(() =>
-  activeUsesACPComposer.value && (acpModelsLoading.value || acpConfigPreparing.value),
-)
+
+function openDirectAgentSettings() {
+  const botName = currentBot.value?.name || currentBot.value?.id || currentBotId.value
+  if (!botName) return
+  modelPopoverOpen.value = false
+  void router.push({
+    name: 'bot-detail',
+    params: { botName },
+    query: { tab: 'agents' },
+  })
+}
+
+function retryDirectModelCatalog() {
+  void refreshComposerModelCatalog()
+}
 
 const activeModel = computed(() => {
   const id = overrideModelId.value || botSettings.value?.chat_model_id || ''
@@ -1940,7 +2006,7 @@ const activeModel = computed(() => {
 // PDFs reach the model natively only when it carries the file-input
 // capability; without it the file lands in the workspace as a path the model
 // cannot open. Warn at attach time so the user is not surprised mid-turn.
-// ACP sessions are exempt — Claude Code / Codex read PDFs themselves.
+// External Agent sessions are exempt — Claude Code / Codex read PDFs themselves.
 const isPdfFile = (file: File) =>
   file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 
@@ -1950,7 +2016,7 @@ const nativePdfMaxBytes = 12 * 1024 * 1024
 
 watch(() => pendingFiles.value.length, (len, prevLen) => {
   if (len <= (prevLen ?? 0)) return
-  if (activeUsesACPComposer.value) return
+  if (activeUsesExternalAgentComposer.value) return
   const model = activeModel.value
   if (!model) return
   const added = pendingFiles.value.slice(prevLen ?? 0)
@@ -2009,7 +2075,7 @@ watch(isActive, (focused) => {
   }))
 }, { immediate: true })
 
-type DefaultACPSettings = {
+type DefaultExternalAgentSettings = {
   default_bot_agent_id?: string
   chat_runtime?: string
   chat_acp_agent_id?: string
@@ -2017,51 +2083,58 @@ type DefaultACPSettings = {
   chat_acp_project_mode?: string
 }
 
-type DefaultACPAvailability = {
-  input: ACPAgentSessionInput | null
+type DefaultExternalAgentAvailability = {
+  input: ExternalAgentSessionInput | null
   messageKey: string
   loading: boolean
 }
 
-const defaultACPAvailability = computed<DefaultACPAvailability>(() => {
-  const settings = botSettings.value as (DefaultACPSettings | undefined)
+const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailability>(() => {
+  const settings = botSettings.value as (DefaultExternalAgentSettings | undefined)
   if (!settings) {
     return { input: null, messageKey: '', loading: !!currentBotId.value && botSettingsLoading.value }
   }
-  if (settings.chat_runtime !== 'acp_agent') return { input: null, messageKey: '', loading: false }
+  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code') return { input: null, messageKey: '', loading: false }
   if (!hasBotPermission(currentBot.value?.current_user_permissions, 'workspace_exec')) {
-    return { input: null, messageKey: 'chat.defaultACPNoWorkspaceExec', loading: false }
+    return { input: null, messageKey: 'chat.defaultAgentNoWorkspaceExec', loading: false }
   }
   const botAgentId = settings.default_bot_agent_id?.trim() ?? ''
-  if (!botAgentId) return { input: null, messageKey: 'chat.defaultACPAgentMissing', loading: false }
+  if (!botAgentId) return { input: null, messageKey: 'chat.defaultAgentMissing', loading: false }
   if (!botAgentData.value) {
     return {
       input: null,
-      messageKey: botAgentsLoading.value ? 'chat.defaultACPLoading' : 'chat.defaultACPAgentUnavailable',
+      messageKey: botAgentsLoading.value ? 'chat.defaultExternalAgentLoading' : 'chat.defaultAgentUnavailable',
       loading: botAgentsLoading.value,
     }
   }
   const agent = botAgents.value.find(item => item.id === botAgentId)
   if (!agent || agent.enabled === false) {
-    return { input: null, messageKey: 'chat.defaultACPAgentDisabled', loading: false }
+    return { input: null, messageKey: 'chat.defaultAgentDisabled', loading: false }
   }
   const agentId = botAgentProvider(agent)
-  if (!acpProfileData.value) {
-    return {
-      input: null,
-      messageKey: acpProfilesLoading.value ? 'chat.defaultACPLoading' : 'chat.defaultACPAgentUnavailable',
-      loading: acpProfilesLoading.value,
-    }
+  const directConfigured = isDirectBotAgentConfigured(agent)
+  if (directConfigured === false) {
+    return { input: null, messageKey: 'chat.defaultAgentNotConfigured', loading: false }
   }
-  const profile = acpProfiles.value.find(item => normalizeACPAgentID(item.id) === agentId)
-  if (!profile) return { input: null, messageKey: 'chat.defaultACPAgentUnavailable', loading: false }
-  const config = readACPAgentConfig(currentBotMetadata.value, agentId)
-  if (config.setupModeSet && findMissingRequiredManagedFieldWithCredential(profile, config.managed, config.setupMode, acpCredentialStoreOn.value && !!agent.agent_credential_id)) {
-    return { input: null, messageKey: 'chat.defaultACPAgentNotConfigured', loading: false }
+  if (directConfigured === null) {
+    if (!acpProfileData.value) {
+      return {
+        input: null,
+        messageKey: acpProfilesLoading.value ? 'chat.defaultExternalAgentLoading' : 'chat.defaultAgentUnavailable',
+        loading: acpProfilesLoading.value,
+      }
+    }
+    const profile = acpProfiles.value.find(item => normalizeACPAgentID(item.id) === agentId)
+    if (!profile) return { input: null, messageKey: 'chat.defaultAgentUnavailable', loading: false }
+    const config = readACPAgentConfig(currentBotMetadata.value, agentId)
+    if (config.setupModeSet && findMissingRequiredManagedField(profile, config.managed, config.setupMode)) {
+      return { input: null, messageKey: 'chat.defaultAgentNotConfigured', loading: false }
+    }
   }
   return {
     input: {
       botAgentId,
+      runtime: normalizeBotAgentRuntime(agent.runtime) || BOT_AGENT_RUNTIME_ACP,
       agentId,
       projectPath: settings.chat_acp_project_path?.trim() || ACP_DEFAULT_PROJECT_PATH,
       projectMode: settings.chat_acp_project_mode?.trim() || ACP_DEFAULT_PROJECT_MODE,
@@ -2070,18 +2143,18 @@ const defaultACPAvailability = computed<DefaultACPAvailability>(() => {
     loading: false,
   }
 })
-const defaultACPSessionInput = computed(() => defaultACPAvailability.value.input)
-const defaultACPUnavailableMessage = computed(() =>
-  defaultACPAvailability.value.messageKey ? t(defaultACPAvailability.value.messageKey) : '',
+const defaultExternalAgentSessionInput = computed(() => defaultExternalAgentAvailability.value.input)
+const defaultExternalAgentUnavailableMessage = computed(() =>
+  defaultExternalAgentAvailability.value.messageKey ? t(defaultExternalAgentAvailability.value.messageKey) : '',
 )
-const defaultACPLoading = computed(() => defaultACPAvailability.value.loading)
-const defaultACPComposerError = ref('')
+const defaultExternalAgentLoading = computed(() => defaultExternalAgentAvailability.value.loading)
+const defaultExternalAgentComposerError = ref('')
 
-function clearDefaultACPComposerError() {
-  if (defaultACPComposerError.value && composerError.value === defaultACPComposerError.value) {
+function clearDefaultExternalAgentComposerError() {
+  if (defaultExternalAgentComposerError.value && composerError.value === defaultExternalAgentComposerError.value) {
     composerError.value = ''
   }
-  defaultACPComposerError.value = ''
+  defaultExternalAgentComposerError.value = ''
 }
 
 const activeModelReasoning = computed(() => activeModel.value?.reasoning)
@@ -2092,7 +2165,7 @@ const activeModelSupportsReasoning = computed(() => activeModelReasoning.value?.
 // ("None") instead of the old "Default" placeholder, which named a model that
 // does not exist.
 const composerHasNoModel = computed(() =>
-  hasNoComposerModel(activeUsesACPComposer.value, overrideModelId.value),
+  hasNoComposerModel(activeUsesExternalAgentComposer.value, overrideModelId.value),
 )
 
 const selectedModelLabel = computed(() => {
@@ -2102,11 +2175,11 @@ const selectedModelLabel = computed(() => {
   // model list can lag behind settings, and a transient gap must not read as
   // "unconfigured".
   if (overrideModelId.value) return overrideModelId.value
-  return composerHasNoModel.value ? t('common.none') : t('chat.modelDefault')
+  return composerHasNoModel.value ? t('common.none') : composerDefaultModelLabel.value
 })
 
 const selectedReasoningLabel = computed(() => {
-  if (activeUsesACPComposer.value) {
+  if (activeUsesExternalAgentComposer.value) {
     const current = overrideReasoningEffort.value
     return composerReasoningOptions.value?.find(option => option.value === current)?.label || current
   }
@@ -2115,7 +2188,7 @@ const selectedReasoningLabel = computed(() => {
 })
 
 const reasoningActive = computed(() =>
-  activeUsesACPComposer.value
+  activeUsesExternalAgentComposer.value
     ? Boolean(
         overrideReasoningEffort.value
         && composerReasoningOptions.value?.some(option => option.value === overrideReasoningEffort.value),
@@ -2145,7 +2218,7 @@ const pinnedSubagentModelId = computed(() => resolvePinnedSubagentModelId(
 ))
 
 function initFromBotSettings() {
-  if (activeUsesACPComposer.value || !botSettings.value) return
+  if (activeUsesExternalAgentComposer.value || !botSettings.value) return
   if (!overrideModelId.value) {
     overrideModelId.value = pinnedSubagentModelId.value || botSettings.value.chat_model_id || ''
   }
@@ -2157,13 +2230,13 @@ function initFromBotSettings() {
   }
 }
 
-watch([botSettings, activeUsesACPComposer], () => initFromBotSettings(), { immediate: true })
+watch([botSettings, activeUsesExternalAgentComposer], () => initFromBotSettings(), { immediate: true })
 
 // The session summary and the model list are both fetched, so the pinned model
 // routinely lands after bot settings already seeded the default. Adopt it then
 // too — but never over a model the user picked themselves.
 watch(pinnedSubagentModelId, (pinned, previous) => {
-  if (userPickedModel.value || activeUsesACPComposer.value) return
+  if (userPickedModel.value || activeUsesExternalAgentComposer.value) return
   if (pinned) {
     overrideModelId.value = pinned
     return
@@ -2177,7 +2250,7 @@ watch(pinnedSubagentModelId, (pinned, previous) => {
 // does not offer. An empty override is left alone: it means "inherit the bot's
 // setting", not a stranded value.
 watch(activeModelReasoning, (options) => {
-  if (activeUsesACPComposer.value) return
+  if (activeUsesExternalAgentComposer.value) return
   const current = overrideReasoningEffort.value
   if (!current || !options?.supported) return
   const next = reconcileStoredEffort(current, options)
@@ -2197,18 +2270,31 @@ watch(() => paneTarget.value.sessionId, () => {
   userPickedModel.value = false
 })
 
-watch(activeUsesACPComposer, (usesACP, previouslyUsedACP) => {
-  if (usesACP === previouslyUsedACP) return
+watch(activeUsesExternalAgentComposer, (usesExternalAgent, previouslyUsedExternalAgent) => {
+  if (usesExternalAgent === previouslyUsedExternalAgent) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
   userPickedModel.value = false
-  if (!usesACP) initFromBotSettings()
+  if (!usesExternalAgent) initFromBotSettings()
 })
 
 watch(activeACPAgentId, (agentID, previousAgentID) => {
-  if (!activeUsesACPComposer.value || !previousAgentID || agentID === previousAgentID) return
+  if (!activeUsesExternalAgentComposer.value || !previousAgentID || agentID === previousAgentID) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
+})
+
+const directSessionIdentity = computed(() => JSON.stringify([
+  paneTarget.value.botId,
+  paneTarget.value.sessionId,
+  activeBotAgentID.value,
+  activeDirectRuntime.value,
+]))
+watch(directSessionIdentity, (identity, previousIdentity) => {
+  if (!activeUsesDirectRuntime.value || identity === previousIdentity) return
+  overrideModelId.value = ''
+  overrideReasoningEffort.value = ''
+  userPickedModel.value = false
 })
 
 // ACP overrides describe one runtime. An ephemeral pane is repointed to a
@@ -2225,14 +2311,14 @@ const acpSessionIdentity = computed(() => JSON.stringify([
   activeACPProjectMode.value,
 ]))
 watch(acpSessionIdentity, (identity, previousIdentity) => {
-  if (!activeUsesACPComposer.value || identity === previousIdentity) return
+  if (!activeUsesACPRuntime.value || identity === previousIdentity) return
   overrideModelId.value = ''
   overrideReasoningEffort.value = ''
 })
 
 function reconcileACPComposerConfig() {
   const runtime = acpCapabilityRuntime.value
-  if (!activeUsesACPComposer.value || !runtime) return
+  if (!activeUsesACPRuntime.value || !runtime) return
 
   if (runtime.models !== undefined) {
     const availableModels = new Set(
@@ -2264,7 +2350,7 @@ watch(acpCapabilityRuntime, () => {
 }, { immediate: true })
 
 watch(
-  () => activeUsesACPComposer.value && isVisible.value ? acpOperationScope.value : '',
+  () => activeUsesACPRuntime.value && isVisible.value ? acpOperationScope.value : '',
   (scope) => {
     if (!scope || !activeACPAgentId.value) return
     void refreshACPComposerConfig().catch((error) => {
@@ -2275,15 +2361,15 @@ watch(
 )
 
 async function refreshACPComposerConfig(): Promise<void> {
-  if (!activeUsesACPComposer.value) return
+  if (!activeUsesACPRuntime.value) return
   const desiredModelId = overrideModelId.value.trim()
   const runtime = await ensureACPRuntime(true, desiredModelId)
-  if (!runtime || !activeUsesACPComposer.value) return
+  if (!runtime || !activeUsesACPRuntime.value) return
   reconcileACPComposerConfig()
 }
 
 async function refreshACPComposerConfigAfterSelectionError(result: SendMessageResult): Promise<void> {
-  if (!shouldRefreshACPComposerConfig(result, activeUsesACPComposer.value)) return
+  if (!shouldRefreshACPComposerConfig(result, activeUsesACPRuntime.value)) return
 
   const operationScope = acpOperationScope.value
   acpConfigChangeScope.value = operationScope
@@ -2297,51 +2383,51 @@ async function refreshACPComposerConfigAfterSelectionError(result: SendMessageRe
   }
 }
 
-function pendingMatchesDefaultACP(input: ACPAgentSessionInput): boolean {
-  return activeChatTarget.value.kind === 'draft-acp'
-    && chatStore.pendingACPMatchesInput(input, paneTarget.value)
+function pendingMatchesDefaultExternalAgent(input: ExternalAgentSessionInput): boolean {
+  return activeChatTarget.value.kind === 'draft-external-agent'
+    && chatStore.pendingExternalAgentMatchesInput(input, paneTarget.value)
 }
 
-watch([defaultACPUnavailableMessage, defaultACPLoading, currentBotId, hasExplicitSessionSelection, isActive], ([message, loading, _bot, _explicit, focused]) => {
+watch([defaultExternalAgentUnavailableMessage, defaultExternalAgentLoading, currentBotId, hasExplicitSessionSelection, isActive], ([message, loading, _bot, _explicit, focused]) => {
   if (!focused) return
-  clearDefaultACPComposerError()
+  clearDefaultExternalAgentComposerError()
   if (!message || !currentBotId.value) return
   if (hasExplicitSessionSelection.value) return
   if (!loading) {
     chatStore.resetToEmptyComposer({}, paneTarget.value)
   }
-  defaultACPComposerError.value = message
+  defaultExternalAgentComposerError.value = message
   composerError.value = message
 }, { immediate: true })
 
-watch([defaultACPSessionInput, defaultACPLoading, currentBotId, hasExplicitSessionSelection, activeChatTarget, isActive], ([input, loading, _bot, _explicit, _target, focused]) => {
+watch([defaultExternalAgentSessionInput, defaultExternalAgentLoading, currentBotId, hasExplicitSessionSelection, activeChatTarget, isActive], ([input, loading, _bot, _explicit, _target, focused]) => {
   if (!focused) return
   if (!currentBotId.value) return
   if (!input) {
     if (!loading) {
-      chatStore.cacheDefaultACPSession(null)
+      chatStore.cacheDefaultExternalAgentSession(null)
     }
-    if (!loading && !hasExplicitSessionSelection.value && activeIsPendingACP.value) {
+    if (!loading && !hasExplicitSessionSelection.value && activeIsPendingExternalAgent.value) {
       chatStore.resetToEmptyComposer({}, paneTarget.value)
     }
     return
   }
-  chatStore.cacheDefaultACPSession(input)
+  chatStore.cacheDefaultExternalAgentSession(input)
   if (hasExplicitSessionSelection.value) return
-  clearDefaultACPComposerError()
-  if (pendingMatchesDefaultACP(input)) return
-  chatStore.stageDefaultACPSession(input, paneTarget.value)
+  clearDefaultExternalAgentComposerError()
+  if (pendingMatchesDefaultExternalAgent(input)) return
+  chatStore.stageDefaultExternalAgentSession(input, paneTarget.value)
 }, { immediate: true })
 
-watch([modelPopoverOpen, activeUsesACPComposer, acpOperationScope], ([open, usesACP]) => {
-  if (!open || !usesACP) return
+watch([modelPopoverOpen, activeUsesACPRuntime, acpOperationScope], ([open, usesExternalAgent]) => {
+  if (!open || !usesExternalAgent) return
   void refreshACPComposerConfig().catch((error) => {
     composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
   })
 })
 
-watch([slashPanelOpen, activeUsesACPComposer, acpOperationScope], ([open, usesACP]) => {
-  if (!open || !usesACP) return
+watch([slashPanelOpen, activeUsesACPRuntime, acpOperationScope], ([open, usesExternalAgent]) => {
+  if (!open || !usesExternalAgent) return
   void ensureACPRuntime().catch((error) => {
     composerError.value = resolveApiErrorMessage(error, t('chat.agentSwitchFailed'))
   })
@@ -2377,23 +2463,28 @@ function agentSwitchErrorMessage(error: unknown): string {
 async function selectBotAgent(agent: BotagentsBotAgent) {
   const botAgentId = agent.id?.trim() ?? ''
   const agentId = botAgentProvider(agent)
+  const runtime = normalizeBotAgentRuntime(agent.runtime) || BOT_AGENT_RUNTIME_ACP
   if (!botAgentId || !agentId || agentChanging.value || !canChangeAgent.value) return
   agentPopoverOpen.value = false
-  if (activeUsesACPComposer.value && botAgentId === activeBotAgentID.value) return
+  if (activeUsesExternalAgentComposer.value && botAgentId === activeBotAgentID.value) return
   agentChanging.value = true
   composerError.value = ''
   try {
     if (paneTarget.value.sessionId) {
       await withAgentSwitchTimeout(chatStore.updateCurrentSessionAgent({
         botAgentId,
+        runtime,
         agentId,
       }, paneTarget.value))
     } else {
-      chatStore.stageACPSession({
+      chatStore.stageExternalAgentSession({
         botAgentId,
+        runtime,
         agentId,
       }, {}, paneTarget.value)
-      await withAgentSwitchTimeout(chatStore.ensurePendingACPRuntime(paneTarget.value))
+      if (runtime === BOT_AGENT_RUNTIME_ACP) {
+        await withAgentSwitchTimeout(chatStore.ensurePendingACPRuntime(paneTarget.value))
+      }
     }
   } catch (error) {
     composerError.value = agentSwitchErrorMessage(error)
@@ -2407,12 +2498,12 @@ async function selectMemohAgent() {
   agentPopoverOpen.value = false
   if (!paneTarget.value.sessionId) {
     chatStore.resetToEmptyComposer({ explicitSelection: true }, paneTarget.value)
-    clearDefaultACPComposerError()
+    clearDefaultExternalAgentComposerError()
     composerError.value = ''
     pendingFiles.value = []
     return
   }
-  if (!activeIsACP.value) return
+  if (!activeIsExternalAgent.value) return
   agentChanging.value = true
   composerError.value = ''
   try {
@@ -2432,14 +2523,29 @@ function onModelSelected() {
   }
 }
 
+function reconcileDirectReasoningEffort() {
+  if (!activeUsesDirectRuntime.value) return
+  const available = new Set((composerReasoningOptions.value ?? []).map(option => option.value))
+  if (overrideReasoningEffort.value && available.has(overrideReasoningEffort.value)) return
+  const configured = composerModelCatalog.value.configuredReasoningEffort
+  const fallback = composerModelCatalog.value.defaultReasoningEffort
+  overrideReasoningEffort.value = available.has(configured)
+    ? configured
+    : available.has(fallback) ? fallback : ''
+}
+
 async function onComposerModelValueSelected(value: string) {
-  if (activeUsesACPComposer.value && acpConfigChanging.value) return
+  if (activeUsesACPRuntime.value && acpConfigChanging.value) return
   const previousModel = overrideModelId.value
   const previousReasoningEffort = overrideReasoningEffort.value
   userPickedModel.value = true
   overrideModelId.value = value
-  if (!activeUsesACPComposer.value) {
+  if (!activeUsesExternalAgentComposer.value) {
     onModelSelected()
+    return
+  }
+  if (activeUsesDirectRuntime.value) {
+    reconcileDirectReasoningEffort()
     return
   }
 
@@ -2456,7 +2562,7 @@ async function onComposerModelValueSelected(value: string) {
     if (runtime && acpOperationScope.value === operationScope) reconcileACPComposerConfig()
   } catch (error) {
     if (
-      activeUsesACPComposer.value
+      activeUsesExternalAgentComposer.value
       && acpOperationScope.value === operationScope
       && overrideModelId.value === value
     ) {
@@ -2487,7 +2593,7 @@ async function onACPModeSelected(value: unknown) {
       toast.warning(t('chat.sessionModeChanged'))
     }
   } catch (error) {
-    if (activeUsesACPComposer.value && acpOperationScope.value === operationScope) {
+    if (activeUsesExternalAgentComposer.value && acpOperationScope.value === operationScope) {
       composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
     }
   } finally {
@@ -2496,10 +2602,11 @@ async function onACPModeSelected(value: unknown) {
 }
 
 async function onComposerReasoningEffortSelected(value: string) {
-  if (activeUsesACPComposer.value && acpConfigChanging.value) return
+  if (activeUsesACPRuntime.value && acpConfigChanging.value) return
   const previousEffort = overrideReasoningEffort.value
   overrideReasoningEffort.value = value
-  if (!activeUsesACPComposer.value) return
+  if (!activeUsesExternalAgentComposer.value) return
+  if (activeUsesDirectRuntime.value) return
 
   const effort = value.trim()
   if (!effort) {
@@ -2514,7 +2621,7 @@ async function onComposerReasoningEffortSelected(value: string) {
     if (runtime && acpOperationScope.value === operationScope) reconcileACPComposerConfig()
   } catch (error) {
     if (
-      activeUsesACPComposer.value
+      activeUsesExternalAgentComposer.value
       && acpOperationScope.value === operationScope
       && overrideReasoningEffort.value === value
     ) {
@@ -3145,8 +3252,8 @@ async function handleSend() {
     return
   }
   const isNewCommand = /^\/new(?:\s|$)/i.test(text)
-  if (defaultACPComposerError.value && !hasExplicitSessionSelection.value && !isNewCommand) {
-    composerError.value = defaultACPComposerError.value
+  if (defaultExternalAgentComposerError.value && !hasExplicitSessionSelection.value && !isNewCommand) {
+    composerError.value = defaultExternalAgentComposerError.value
     return
   }
   const sentDraftKey = inputDraftKey.value

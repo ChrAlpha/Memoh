@@ -5,6 +5,7 @@ import { useTabScopedStorage } from '@/utils/tab-scoped-storage'
 import { useIsMobile } from '@/composables/useIsMobile'
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from 'dockview-vue'
 import { useChatStore } from '@/store/chat-list'
+import { routeConversationLabel } from '@/store/chat-list.utils'
 import { useChatSelectionStore } from '@/store/chat-selection'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { hasBotPermission, type BotPermission } from '@/utils/bot-permissions'
@@ -351,7 +352,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function chatTitleFallbackFor(sid: string | null): string {
     if (!sid) return DEFAULT_CHAT_TITLE
     const session = chatStore.knownSessionSummary(sid)
-    return (session?.title ?? '').trim() || i18n.global.t('chat.untitledSession')
+    return (session?.title ?? '').trim() || routeConversationLabel(session) || i18n.global.t('chat.untitledSession')
   }
 
   function panelTitleFallback(panel: { id: string, params?: Record<string, unknown> }): string {
@@ -1250,7 +1251,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   ) {
     // Dockview emits active-panel changes while fromJSON restores the saved layout.
     // That is not a user click, and must not promote a stale restored chat tab into
-    // an explicit chat-selection entry before chat initialization/default ACP wins.
+    // an explicit chat-selection entry before chat initialization/default External Agent wins.
     if (suppressPersist) return
     // Switch the panel-scoped chat state before the global selection changes. ACP
     // draft staging uses this transition to persist the old view before loading
@@ -1294,7 +1295,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const groupId = activeIsChat ? active.group.id : undefined
     if (sid) {
       // A non-explicit stored session may be the last auto-picked history item.
-      // While chat initialization is still deciding whether default ACP should win,
+      // While chat initialization is still deciding whether default External Agent should win,
       // do not let the restored layout promote that stale id into an explicit user
       // selection. Once loading settles, the loading watcher calls this again.
       if (!explicitSelection && chatStore.loadingChats) return
@@ -1349,7 +1350,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (!sessionId || isDeletedSessionForCurrentBot(sessionId)) {
       if (!chatStore.hasExplicitSessionSelection && (chatStore.sessionId ?? '').trim()) {
         chatStore.resetToEmptyComposer({
-          clearPendingACP: false,
+          clearPendingExternalAgent: false,
           explicitSelection: false,
           draftIntent: false,
         })
@@ -1367,8 +1368,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const dock = api.value
     if (!dock || suppressPersist) return
     if ((selection.sessionId ?? '').trim()) return
-    if (chatStore.hasExplicitSessionSelection !== true && !chatStore.pendingACPSessionInput) return
-    // Explicit empty-composer / ACP draft staging is a real request to show a
+    if (chatStore.hasExplicitSessionSelection !== true && !chatStore.pendingExternalAgentSessionInput) return
+    // Explicit empty-composer / External Agent draft staging is a real request to show a
     // draft, even after a non-empty restore — clear the cold-start guard so
     // syncRestoredChatSelection can open one.
     if (suppressSelectionDockMutations) suppressSelectionDockMutations = false
@@ -1397,8 +1398,15 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       const sid = panelSessionId(panel)
       if (!sid) continue
       const session = chatStore.knownSessionSummary(sid)
-      const title = (session?.title ?? '').trim()
-      if (title && panel.api.title !== title) panel.api.setTitle(title)
+      // Unknown session (not yet in the loaded list): leave the tab alone —
+      // deriving from nothing would overwrite a correct title with a fallback.
+      if (!session) continue
+      // Untitled sessions (channel/discuss ones) derive their tab title from the
+      // fallback chain (conversation name → untitled): this refreshes a persisted
+      // "Untitled Session" placeholder after upgrade and follows a group rename —
+      // repairEmptyPanelTitles skips non-empty titles, so without this both stay stale.
+      const next = (session.title ?? '').trim() || chatTitleFallbackFor(sid)
+      if (panel.api.title !== next) panel.api.setTitle(next)
     }
   }
 
@@ -2447,7 +2455,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }, { flush: 'sync' })
 
   // Keep the active chat tab in step with the global session when it is set from
-  // OUTSIDE a tab activation (initialize picking a session, an ACP session being
+  // OUTSIDE a tab activation (initialize picking a session, an External Agent session being
   // created, a session deleted). Declared AFTER the userSentInSession watch so a
   // send-promotion has already repointed the draft tab by the time this runs —
   // chatPanelForSession then finds it and this just focuses (no duplicate tab).
@@ -2480,7 +2488,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   })
 
   watch(
-    () => chatStore.pendingACPSessionInput,
+    () => chatStore.pendingExternalAgentSessionInput,
     (pending) => {
       if (!pending) return
       syncDraftTargetFromState()
@@ -2493,9 +2501,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   )
 
   // Server renames flow into each open chat tab's title. Keyed by a sorted
-  // id:title digest so it fires on title changes, not on every sidebar reorder.
+  // id:title:conversation-name digest so it fires on title changes AND on
+  // channel route (group/peer name) changes, not on every sidebar reorder.
   watch(
-    () => chatStore.knownSessions.map(s => `${s.id}:${s.title ?? ''}`).sort().join('|'),
+    () => chatStore.knownSessions.map(s => `${s.id}:${s.title ?? ''}:${(s.route_metadata?.conversation_name as string) ?? ''}`).sort().join('|'),
     () => syncChatTitles(),
   )
 

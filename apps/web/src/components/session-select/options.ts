@@ -2,8 +2,9 @@ import type { SessionSession } from '@memohai/sdk'
 import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
 import type { SessionKind } from './session-kind-icon.vue'
-import { acpAgentDisplayName, normalizeACPAgentID } from '@/utils/acp'
-import { normalizedRuntimeType, normalizedSessionMode } from '@/store/chat-list.utils'
+import { acpAgentDisplayName } from '@/utils/acp'
+import { sessionAgentProvider } from '@/utils/bot-agent'
+import { isAgentRuntimeType, normalizedRuntimeType, normalizedSessionMode, routeConversationLabel } from '@/store/chat-list.utils'
 
 // The per-row mark the picker paints beside a session title.
 export interface SessionMark {
@@ -25,12 +26,15 @@ export interface SessionSelectLabels {
 export const NO_MARK: SessionMark = { kind: 'chat', agentId: '', label: '' }
 
 export function sessionTitle(session: SessionSession, labels: SessionSelectLabels): string {
-  return (session.title ?? '').trim() || labels.untitled
+  return (session.title ?? '').trim() || routeConversationLabel(session) || labels.untitled
 }
 
 export function sessionMark(session: SessionSession, labels: SessionSelectLabels): SessionMark {
-  const agentId = normalizeACPAgentID(
-    session.runtime_metadata?.acp_agent_id ?? session.metadata?.acp_agent_id,
+  const runtimeType = normalizedRuntimeType(session)
+  const agentId = sessionAgentProvider(
+    runtimeType,
+    session.runtime_metadata,
+    session.metadata,
   )
   // Schedule wins over the ACP mark here, unlike the sidebar row: this picker
   // exists to tell schedule-owned sessions apart from ordinary chats, and a
@@ -38,7 +42,7 @@ export function sessionMark(session: SessionSession, labels: SessionSelectLabels
   if (normalizedSessionMode(session) === 'schedule') {
     return { kind: 'schedule', agentId, label: labels.schedule }
   }
-  if (normalizedRuntimeType(session) === 'acp_agent') {
+  if (isAgentRuntimeType(runtimeType)) {
     return { kind: 'acp', agentId, label: acpAgentDisplayName(agentId, labels.agent) }
   }
   return NO_MARK
