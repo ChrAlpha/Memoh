@@ -68,6 +68,8 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
   const outputReserve = computed(() => contextView.value.outputReserve)
   const autoCompactTokens = computed(() => contextView.value.autoCompactTokens)
   const compactionAvailable = computed(() => contextView.value.compactionAvailable)
+  // Anything that owns context is compactable, whichever basis reported it.
+  const contextTokens = computed(() => estimatedTokens.value ?? usedTokens.value)
   const contextPercent = computed(() => {
     if (contextWindow.value == null || contextWindow.value <= 0) return 0
     return ((estimatedTokens.value ?? usedTokens.value) / contextWindow.value) * 100
@@ -103,7 +105,7 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     }
   }
 
-  installTurnEndInvalidation(storeRefs.streamingSessionId, queryCache)
+  installTurnEndInvalidation(storeRefs.streamingSessionIds, queryCache)
 
   return {
     info,
@@ -113,6 +115,7 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     outputReserve,
     autoCompactTokens,
     compactionAvailable,
+    contextTokens,
     contextPercent,
     currentBotId,
     sessionId,
