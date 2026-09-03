@@ -7701,6 +7701,12 @@ const docTemplate = `{
                         "description": "Maximum number of turns to return (default 50, max 200)",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque next_cursor from a previous page; returns run-keyed turns older than it",
+                        "name": "before",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -18247,6 +18253,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/contextfrag.MutationRecord"
                     }
                 },
+                "run_trace": {
+                    "$ref": "#/definitions/contextfrag.RunTrace"
+                },
                 "selection": {
                     "$ref": "#/definitions/contextfrag.SelectionTrace"
                 },
@@ -18450,6 +18459,53 @@ const docTemplate = `{
                 "RetentionPreferred",
                 "RetentionOptional"
             ]
+        },
+        "contextfrag.RunTrace": {
+            "type": "object",
+            "properties": {
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "cached_input_tokens": {
+                    "type": "integer"
+                },
+                "decode_ms": {
+                    "type": "integer"
+                },
+                "decode_output_tokens": {
+                    "type": "integer"
+                },
+                "ended_at_ms": {
+                    "type": "integer"
+                },
+                "input_tokens": {
+                    "type": "integer"
+                },
+                "llm_ms": {
+                    "type": "integer"
+                },
+                "output_tokens": {
+                    "type": "integer"
+                },
+                "reasoning_tokens": {
+                    "type": "integer"
+                },
+                "started_at_ms": {
+                    "type": "integer"
+                },
+                "steps": {
+                    "type": "integer"
+                },
+                "tool_calls": {
+                    "type": "integer"
+                },
+                "tool_ms": {
+                    "type": "integer"
+                },
+                "ttft_ms": {
+                    "type": "integer"
+                }
+            }
         },
         "contextfrag.SelectionDecision": {
             "type": "object",
@@ -18752,6 +18808,18 @@ const docTemplate = `{
                 }
             }
         },
+        "conversation.UIContextInjection": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "steering",
+                        "prepared"
+                    ]
+                }
+            }
+        },
         "conversation.UIExecutionLocation": {
             "type": "object",
             "properties": {
@@ -18760,6 +18828,17 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                }
+            }
+        },
+        "conversation.UIExecutionTiming": {
+            "type": "object",
+            "properties": {
+                "ended_at_ms": {
+                    "type": "integer"
+                },
+                "started_at_ms": {
+                    "type": "integer"
                 }
             }
         },
@@ -18806,6 +18885,9 @@ const docTemplate = `{
                 },
                 "execution_location": {
                     "$ref": "#/definitions/conversation.UIExecutionLocation"
+                },
+                "execution_timing": {
+                    "$ref": "#/definitions/conversation.UIExecutionTiming"
                 },
                 "id": {
                     "type": "integer"
@@ -18883,6 +18965,32 @@ const docTemplate = `{
                 }
             }
         },
+        "conversation.UIStepTrace": {
+            "type": "object",
+            "properties": {
+                "ended_at_ms": {
+                    "type": "integer"
+                },
+                "finish_reason": {
+                    "type": "string"
+                },
+                "first_message_id": {
+                    "type": "integer"
+                },
+                "first_token_at_ms": {
+                    "type": "integer"
+                },
+                "started_at_ms": {
+                    "type": "integer"
+                },
+                "step_index": {
+                    "type": "integer"
+                },
+                "usage": {
+                    "$ref": "#/definitions/message.StepTraceUsage"
+                }
+            }
+        },
         "conversation.UIToolApproval": {
             "type": "object",
             "properties": {
@@ -18944,6 +19052,9 @@ const docTemplate = `{
                 "background_task": {
                     "$ref": "#/definitions/conversation.UIBackgroundTask"
                 },
+                "context_injection": {
+                    "$ref": "#/definitions/conversation.UIContextInjection"
+                },
                 "external_message_id": {
                     "type": "string"
                 },
@@ -18987,6 +19098,12 @@ const docTemplate = `{
                 },
                 "skill_activation": {
                     "$ref": "#/definitions/conversation.SkillActivation"
+                },
+                "step_traces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/conversation.UIStepTrace"
+                    }
                 },
                 "text": {
                     "type": "string"
@@ -19981,6 +20098,10 @@ const docTemplate = `{
                 "limit": {
                     "description": "Limit is the page bound the turns and aggregates were computed over.",
                     "type": "integer"
+                },
+                "next_cursor": {
+                    "description": "NextCursor is the opaque ` + "`" + `before` + "`" + ` value that continues past this page's\noldest run; absent when the page is complete or served from legacy rows.",
+                    "type": "string"
                 },
                 "turns": {
                     "type": "array",
@@ -22600,6 +22721,26 @@ const docTemplate = `{
                 },
                 "url": {
                     "type": "string"
+                }
+            }
+        },
+        "message.StepTraceUsage": {
+            "type": "object",
+            "properties": {
+                "cache_write_tokens": {
+                    "type": "integer"
+                },
+                "cached_input_tokens": {
+                    "type": "integer"
+                },
+                "input_tokens": {
+                    "type": "integer"
+                },
+                "output_tokens": {
+                    "type": "integer"
+                },
+                "reasoning_tokens": {
+                    "type": "integer"
                 }
             }
         },
