@@ -638,6 +638,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	}
 	if compactionService != nil {
 		compactionService.SetHookService(hookService)
+		compactionService.SetEventPublisher(eventHub)
 	}
 	if workspaceManager != nil {
 		workspaceManager.SetHookService(hookService)

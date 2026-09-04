@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -56,6 +58,7 @@ const compactionFailureCooldown = 5 * time.Minute
 // done closes after res/err are set, so concurrent sync callers can wait for
 // the owner and reuse its outcome instead of skipping or double-running.
 type inflightRun struct {
+	botID   string
 	done    chan struct{}
 	waiters atomic.Int32
 	res     Result
@@ -68,6 +71,7 @@ type Service struct {
 	hookService *hooks.Service
 	logger      *slog.Logger
 	nowFn       func() time.Time
+	events      messageevent.Publisher
 
 	inflightMu sync.Mutex
 	inflight   map[string]*inflightRun
@@ -139,6 +143,34 @@ func (s *Service) clearCompactionFailure(sessionID string) {
 
 func (s *Service) SetHookService(h *hooks.Service) {
 	s.hookService = h
+}
+
+// SetEventPublisher wires lightweight activity notifications at startup.
+func (s *Service) SetEventPublisher(p messageevent.Publisher) {
+	s.events = p
+}
+
+// ActiveSessions is a process-local activity snapshot, not an admission gate.
+func (s *Service) ActiveSessions(botID string) []string {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	ids := make([]string, 0)
+	for id, run := range s.inflight {
+		if run.botID == botID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (s *Service) publishActivity(botID string) {
+	if s.events != nil {
+		s.events.Publish(messageevent.Event{
+			Type: messageevent.EventTypeCompactionChanged, BotID: botID,
+			Data: json.RawMessage(`{}`),
+		})
+	}
 }
 
 // ShouldCompact returns true if inputTokens exceeds the threshold.
@@ -214,6 +246,9 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 	var compactErr error
 	defer func() {
 		s.endSessionCompaction(cfg.SessionID, run, compactRes, compactErr)
+		if run.botID != "" {
+			s.publishActivity(cfg.BotID)
+		}
 	}()
 
 	// Manual (user-initiated) compaction bypasses the cooldown: the user may
@@ -227,6 +262,11 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 		compactRes = Result{Status: StatusNoop}
 		return compactRes, nil, nil
 	}
+
+	s.inflightMu.Lock()
+	run.botID = cfg.BotID
+	s.inflightMu.Unlock()
+	s.publishActivity(cfg.BotID)
 
 	preHookRan := false
 	defer func() {
