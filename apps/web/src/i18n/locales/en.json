@@ -1093,6 +1093,7 @@
     "infoNoData": "No data available",
     "compactNow": "Compact Now",
     "compactSuccess": "Context compaction completed",
+    "compactingContext": "Compacting context…",
     "compactFailed": "Context compaction failed",
     "sessionStreaming": "Generating",
     "slash": {

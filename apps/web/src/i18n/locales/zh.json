@@ -1093,6 +1093,7 @@
     "infoNoData": "暂无数据",
     "compactNow": "立即压缩",
     "compactSuccess": "上下文压缩完成",
+    "compactingContext": "正在压缩上下文…",
     "compactFailed": "上下文压缩失败",
     "sessionStreaming": "生成中",
     "slash": {

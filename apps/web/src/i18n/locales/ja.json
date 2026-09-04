@@ -1061,6 +1061,7 @@
     "infoNoData": "利用可能なデータがありません",
     "compactNow": "今すぐコンパクトに",
     "compactSuccess": "コンテキストの圧縮が完了しました",
+    "compactingContext": "コンテキストを圧縮中…",
     "compactFailed": "コンテキストの圧縮に失敗しました",
     "sessionStreaming": "生成中",
     "slash": {
