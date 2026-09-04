@@ -54,6 +54,10 @@ const maxCompactionSummaryTokens = 4096
 // every blocking sync backstop or async trigger.
 const compactionFailureCooldown = 5 * time.Minute
 
+// compactionFailureRetryBase is the first hard-pressure retry backoff step;
+// each consecutive failure doubles it up to compactionFailureCooldown.
+const compactionFailureRetryBase = 30 * time.Second
+
 // inflightRun is the completion signal for one session's running compaction.
 // done closes after res/err are set, so concurrent sync callers can wait for
 // the owner and reuse its outcome instead of skipping or double-running.
@@ -75,7 +79,14 @@ type Service struct {
 
 	inflightMu sync.Mutex
 	inflight   map[string]*inflightRun
-	failedAt   map[string]time.Time
+	failedAt   map[string]compactionFailure
+}
+
+// compactionFailure tracks one session's most recent failure and how many
+// consecutive failures preceded it, for the hard-pressure backoff schedule.
+type compactionFailure struct {
+	at       time.Time
+	attempts int
 }
 
 // NewService creates a new compaction Service.
@@ -85,7 +96,7 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 		logger:   log,
 		nowFn:    time.Now,
 		inflight: make(map[string]*inflightRun),
-		failedAt: make(map[string]time.Time),
+		failedAt: make(map[string]compactionFailure),
 	}
 }
 
@@ -118,21 +129,55 @@ func (s *Service) endSessionCompaction(sessionID string, run *inflightRun, res R
 func (s *Service) inFailureCooldown(sessionID string) bool {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	failedAt, ok := s.failedAt[sessionID]
+	_, cooling := s.activeFailureLocked(sessionID)
+	return cooling
+}
+
+// inHardPressureCooldown applies the hard-pressure schedule instead of the
+// flat cooldown: consecutive failures back off exponentially from
+// compactionFailureRetryBase up to compactionFailureCooldown.
+func (s *Service) inHardPressureCooldown(sessionID string) bool {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	entry, cooling := s.activeFailureLocked(sessionID)
+	if !cooling {
+		return false
+	}
+	return s.nowFn().Sub(entry.at) < hardPressureBackoff(entry.attempts)
+}
+
+func (s *Service) activeFailureLocked(sessionID string) (compactionFailure, bool) {
+	entry, ok := s.failedAt[sessionID]
 	if !ok {
-		return false
+		return compactionFailure{}, false
 	}
-	if s.nowFn().Sub(failedAt) >= compactionFailureCooldown {
+	if s.nowFn().Sub(entry.at) >= compactionFailureCooldown {
 		delete(s.failedAt, sessionID)
-		return false
+		return compactionFailure{}, false
 	}
-	return true
+	return entry, true
+}
+
+// hardPressureBackoff caps strictly below compactionFailureCooldown so a
+// capped retry still finds the failure entry alive: attempts keep
+// accumulating instead of resetting through entry expiry, and the schedule
+// settles near the flat cooldown instead of sawtoothing back to the base.
+func hardPressureBackoff(attempts int) time.Duration {
+	backoffCap := compactionFailureCooldown - compactionFailureRetryBase
+	backoff := compactionFailureRetryBase
+	for i := 1; i < attempts && backoff < backoffCap; i++ {
+		backoff *= 2
+	}
+	return min(backoff, backoffCap)
 }
 
 func (s *Service) recordCompactionFailure(sessionID string) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
-	s.failedAt[sessionID] = s.nowFn()
+	entry := s.failedAt[sessionID]
+	entry.at = s.nowFn()
+	entry.attempts++
+	s.failedAt[sessionID] = entry
 }
 
 func (s *Service) clearCompactionFailure(sessionID string) {
@@ -253,8 +298,13 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 
 	// Manual (user-initiated) compaction bypasses the cooldown: the user may
 	// have just fixed the failing model, and a silent skip would report success
-	// while nothing runs. Automatic per-request paths still honor the cooldown.
-	if !cfg.Manual && s.inFailureCooldown(cfg.SessionID) {
+	// while nothing runs. Automatic per-request paths still honor the cooldown,
+	// on the hard-pressure backoff schedule when the caller is blocking on it.
+	cooling := s.inFailureCooldown(cfg.SessionID)
+	if cooling && cfg.HardPressure {
+		cooling = s.inHardPressureCooldown(cfg.SessionID)
+	}
+	if !cfg.Manual && cooling {
 		s.logger.Info("compaction: session in failure cooldown, skipping",
 			slog.String("bot_id", cfg.BotID),
 			slog.String("session_id", cfg.SessionID),

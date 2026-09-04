@@ -134,8 +134,8 @@
       "reasoning_options_unavailable": "The chat model's reasoning options could not be resolved. Please try again."
     },
     "context": {
-      "budget_unsatisfied": "The model context window is too small for this request.",
-      "protected_overflow": "Required context exceeds the model context budget."
+      "budget_unsatisfied": "The model context window is too small for this request. Run /compact to summarize older history, shorten the request, or switch to a model with a larger context window.",
+      "protected_overflow": "Required context exceeds the model context budget. Run /compact to summarize older history, or switch to a model with a larger context window."
     },
     "agent": {
       "response_timeout": "The model did not respond in time. Please try again.",
