@@ -7819,6 +7819,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/sessions/{session_id}/context-lifecycle/{run_id}/fragments": {
+            "get": {
+                "description": "Return every fragment the run put in front of the model outside the conversation (system prompt pieces, workspace rules, tool usage, skills, memory recall, tool definitions) with the text that was stored for it. Conversation messages are not included; the history holds them",
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get the injected context texts of a run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ContextLifecycleFragmentsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apperror.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions/{session_id}/fork": {
             "post": {
                 "tags": [
@@ -18208,6 +18278,26 @@ const docTemplate = `{
                 }
             }
         },
+        "contextfrag.FragmentRef": {
+            "type": "object",
+            "properties": {
+                "content_hash": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.Kind"
+                },
+                "slot": {
+                    "$ref": "#/definitions/contextfrag.Slot"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                }
+            }
+        },
         "contextfrag.Kind": {
             "type": "string",
             "enum": [
@@ -18227,7 +18317,8 @@ const docTemplate = `{
                 "background_summary",
                 "runtime_context",
                 "memory_recall",
-                "conversation_summary"
+                "conversation_summary",
+                "tool_definition"
             ],
             "x-enum-varnames": [
                 "KindSystemPrompt",
@@ -18246,7 +18337,8 @@ const docTemplate = `{
                 "KindBackgroundSummary",
                 "KindRuntimeContext",
                 "KindMemoryRecall",
-                "KindConversationSummary"
+                "KindConversationSummary",
+                "KindToolDefinition"
             ]
         },
         "contextfrag.KindBreakdown": {
@@ -18307,6 +18399,13 @@ const docTemplate = `{
                 },
                 "final_input_hash": {
                     "type": "string"
+                },
+                "fragments": {
+                    "description": "Fragments lists the injected fragments of the run, bounded by the prompt\nrather than the conversation; their texts live in the content store.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/contextfrag.FragmentRef"
+                    }
                 },
                 "loop_selection_mode": {
                     "type": "string"
@@ -18714,6 +18813,9 @@ const docTemplate = `{
             "properties": {
                 "bytes": {
                     "type": "integer"
+                },
+                "content_hash": {
+                    "type": "string"
                 },
                 "name": {
                     "type": "string"
@@ -20120,6 +20222,60 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.ContextFragmentPreview": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.Kind"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "preview": {
+                    "type": "string"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.ContextFragmentText": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "description": "Available is false when the text was never stored for this fragment,\nsuch as runs older than the text store.",
+                    "type": "boolean"
+                },
+                "content_hash": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/contextfrag.Kind"
+                },
+                "label": {
+                    "description": "Label names the fragment as the assembler did; empty when no text was\nstored, because the snapshot itself never carries names.",
+                    "type": "string"
+                },
+                "slot": {
+                    "$ref": "#/definitions/contextfrag.Slot"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "text_bytes": {
+                    "type": "integer"
+                },
+                "token_estimate": {
+                    "type": "integer"
+                },
+                "truncated": {
+                    "type": "boolean"
+                }
+            }
+        },
         "handlers.ContextLifecycleAggregates": {
             "type": "object",
             "properties": {
@@ -20160,6 +20316,20 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.ContextLifecycleFragmentsResponse": {
+            "type": "object",
+            "properties": {
+                "fragments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContextFragmentText"
+                    }
+                },
+                "run_id": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.ContextLifecycleResponse": {
             "type": "object",
             "properties": {
@@ -20169,6 +20339,13 @@ const docTemplate = `{
                 },
                 "aggregates": {
                     "$ref": "#/definitions/handlers.ContextLifecycleAggregates"
+                },
+                "fragment_previews": {
+                    "description": "FragmentPreviews maps a content hash referenced by the page's fragment\nrefs and tool definitions to the head of its stored text.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.ContextFragmentPreview"
+                    }
                 },
                 "has_more": {
                     "description": "HasMore reports whether older lifecycle turns exist beyond this page.",
