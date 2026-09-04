@@ -18980,6 +18980,9 @@ const docTemplate = `{
                 "first_token_at_ms": {
                     "type": "integer"
                 },
+                "last_message_id": {
+                    "type": "integer"
+                },
                 "started_at_ms": {
                     "type": "integer"
                 },
