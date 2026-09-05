@@ -134,8 +134,8 @@
       "reasoning_options_unavailable": "暂时无法解析对话模型的推理选项，请稍后重试。"
     },
     "context": {
-      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。",
-      "protected_overflow": "必要的上下文内容超出了模型上下文预算。"
+      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。可尝试 /compact 压缩较早的历史、缩短请求，或改用上下文窗口更大的模型。",
+      "protected_overflow": "必要的上下文内容超出了模型上下文预算。可尝试 /compact 压缩较早的历史，或改用上下文窗口更大的模型。"
     },
     "agent": {
       "response_timeout": "模型未能及时响应，请重试。",
@@ -666,6 +666,29 @@
       "thought": "已思考",
       "thoughtBriefly": "思考了几秒",
       "thoughtSeconds": "已思考 {seconds} 秒",
+      "phase": {
+        "browse": { "ing": "探索中", "done": "已探索" },
+        "edit": { "ing": "修改中", "done": "已修改" },
+        "run": { "ing": "运行中", "done": "已运行" },
+        "message": { "ing": "发送中", "done": "已发送" },
+        "schedule": { "ing": "调整中", "done": "已调整" },
+        "media": { "ing": "生成中", "done": "已生成" },
+        "agent": { "ing": "委派中", "done": "已委派" },
+        "gui": { "ing": "浏览中", "done": "已浏览" },
+        "other": { "ing": "处理中", "done": "已处理" }
+      },
+      "frag": {
+        "fileOperations": "{count} 次文件操作",
+        "searches": "{count} 次搜索",
+        "commands": "{count} 条命令",
+        "messages": "{count} 条消息",
+        "schedules": "{count} 个定时任务",
+        "media": "{count} 个媒体文件",
+        "agents": "{count} 个 Agent",
+        "steps": "{count} 步",
+        "sites": "{count} 个网站"
+      },
+      "fragmentSeparator": "、",
       "thinkingHints": [
         "正在连接线索",
         "正在拼合信息",
@@ -1150,6 +1173,7 @@
     "infoNoData": "暂无数据",
     "compactNow": "立即压缩",
     "compactSuccess": "上下文压缩完成",
+    "compactingContext": "正在压缩上下文…",
     "compactFailed": "上下文压缩失败",
     "sessionStreaming": "生成中",
     "slash": {
@@ -1972,12 +1996,10 @@
       "basicInfoDesc": "名称和头像",
       "workspace": "工作区",
       "workspaceDesc": "隔离工作区",
-      "security": "安全策略",
       "securityDesc": "访问控制",
       "model": "模型",
       "modelDesc": "选择聊天模型（可选）",
       "agent": "Agent",
-      "agentDesc": "托管 Agent 自带模型。",
       "memory": "记忆",
       "memoryDesc": "记忆提供者（可选）",
       "settings": "设置",
@@ -2032,7 +2054,7 @@
     "timezonePlaceholder": "例如 Asia/Shanghai",
     "timezoneInherited": "继承用户或系统时区",
     "timezoneInheritedHint": "留空则继承用户时区，若用户未设置则回退到系统时区。",
-    "aclPreset": "安全策略",
+    "aclPreset": "IM 应用策略",
     "aclPresetDescription": "选择初始的访问控制预设，后续可随时调整。",
     "aclPresetHint": "建议：个人助手用“仅私聊”，群机器人用“仅群聊”或“群聊和话题”，不确定时保留“允许全部”。",
     "aclPresetHelp": "这会配置默认的访问规则。你可以随时在“渠道访问”面板中修改。",
@@ -2708,9 +2730,7 @@
       "acpSetupMode": "配置方式",
       "acpLaunchSection": "启动配置",
       "acpCommand": "命令入口",
-      "acpCommandHelp": "工作区内可用的可执行文件名或绝对路径。",
       "acpArguments": "启动参数",
-      "acpArgumentsHelp": "可选，一行填写一个参数；每行会作为单独参数直接传入，不经过 Shell 解析。",
       "acpSetupApiKey": "API Key",
       "acpSetupOAuth": "OAuth",
       "acpSetupSelf": "自行配置",

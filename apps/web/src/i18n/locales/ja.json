@@ -131,8 +131,8 @@
       "reasoning_options_unavailable": "チャットModelの推論オプションを確認できませんでした。しばらくしてからもう一度お試しください。"
     },
     "context": {
-      "budget_unsatisfied": "モデルのコンテキストウィンドウが不足しているため、このリクエストを処理できません。",
-      "protected_overflow": "必須コンテキストがモデルのコンテキスト予算を超えています。"
+      "budget_unsatisfied": "モデルのコンテキストウィンドウが不足しているため、このリクエストを処理できません。/compact で古い履歴を要約するか、リクエストを短くするか、より大きなコンテキストウィンドウのモデルをお試しください。",
+      "protected_overflow": "必須コンテキストがモデルのコンテキスト予算を超えています。/compact で古い履歴を要約するか、より大きなコンテキストウィンドウのモデルをお試しください。"
     },
     "agent": {
       "response_timeout": "モデルから時間内に応答がありませんでした。もう一度お試しください。",
@@ -649,7 +649,30 @@
       "steps": "{count} ステップ",
       "thought": "考え",
       "thoughtBriefly": "少し考えた",
-      "thoughtSeconds": "{seconds}秒考えました"
+      "thoughtSeconds": "{seconds}秒考えました",
+      "phase": {
+        "browse": { "ing": "探索中", "done": "探索しました" },
+        "edit": { "ing": "編集中", "done": "編集しました" },
+        "run": { "ing": "実行中", "done": "実行しました" },
+        "message": { "ing": "送信中", "done": "送信しました" },
+        "schedule": { "ing": "変更中", "done": "変更しました" },
+        "media": { "ing": "生成中", "done": "生成しました" },
+        "agent": { "ing": "委譲中", "done": "委譲しました" },
+        "gui": { "ing": "閲覧中", "done": "閲覧しました" },
+        "other": { "ing": "作業中", "done": "作業しました" }
+      },
+      "frag": {
+        "fileOperations": "ファイル操作 {count} 件",
+        "searches": "{count} 件の検索",
+        "commands": "{count} コマンド",
+        "messages": "{count} 件のメッセージ",
+        "schedules": "{count} 件のスケジュール",
+        "media": "{count} 個のメディアファイル",
+        "agents": "{count} のAgent",
+        "steps": "{count} ステップ",
+        "sites": "{count} 件のサイト"
+      },
+      "fragmentSeparator": "、"
     },
     "currentBot": "現在のBot",
     "inputPlaceholder": "質問を入力してください…",
@@ -1118,6 +1141,7 @@
     "infoNoData": "利用可能なデータがありません",
     "compactNow": "今すぐコンパクトに",
     "compactSuccess": "コンテキストの圧縮が完了しました",
+    "compactingContext": "コンテキストを圧縮中…",
     "compactFailed": "コンテキストの圧縮に失敗しました",
     "sessionStreaming": "生成中",
     "slash": {
@@ -1961,12 +1985,10 @@
       "basicInfoDesc": "名前とアバター",
       "workspace": "Workspace",
       "workspaceDesc": "分離 Workspace",
-      "security": "セキュリティポリシー",
       "securityDesc": "アクセス制御",
       "model": "Model",
       "modelDesc": "チャット Modelを選択します (オプション)",
       "agent": "エージェント",
-      "agentDesc": "ホステッドエージェントは独自のモデルを使用します。",
       "memory": "Memory",
       "memoryDesc": "MemoryProvider (オプション)",
       "settings": "設定",
@@ -2021,7 +2043,7 @@
     "timezonePlaceholder": "例: America/New_York",
     "timezoneInherited": "ユーザー/システムから継承",
     "timezoneInheritedHint": "ユーザーのタイムゾーンを継承する場合は空のままにするか、システムのタイムゾーンにフォールバックします。",
-    "aclPreset": "セキュリティポリシー",
+    "aclPreset": "IM アプリポリシー",
     "aclPresetDescription": "標準から始めるACLプリセット。後でChannel アクセスで調整できます。",
     "aclPresetHint": "ヒント: 個人Botには「プライベートのみ」を使用し、コミュニティBotには「グループのみ」または「グループとスレッド」を使用し、完全にオープンなままにする場合は「すべてを許可」を使用します。",
     "aclPresetHelp": "これでデフォルトが設定されますACL効果と初期ルール。これらは、[Channel アクセス] ページでいつでも調整できます。",
@@ -2706,9 +2728,7 @@
       "acpSetupMode": "設定",
       "acpLaunchSection": "起動設定",
       "acpCommand": "コマンド",
-      "acpCommandHelp": "Workspace 内で利用できる実行ファイル名または絶対パスです。",
       "acpArguments": "起動引数",
-      "acpArgumentsHelp": "任意です。1 行に 1 つの引数を入力してください。各行は Shell で解析せず、そのまま個別の引数として渡されます。",
       "acpSetupApiKey": "APIキー",
       "acpSetupOAuth": "OAuth",
       "acpSetupSelf": "自己管理",

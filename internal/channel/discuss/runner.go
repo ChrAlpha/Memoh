@@ -21,8 +21,16 @@ type discussRunOutcome struct {
 	streamed    bool
 	terminal    bool
 	failed      bool
-	skipped     bool
-	cancelled   bool
+	// endedClean marks a run the runtime closed with AgentEnd. A recovered
+	// mid-stream retry emits an Error event first and still replies, so a
+	// clean end outranks the sticky failed flag for cursor commits.
+	endedClean bool
+	skipped    bool
+	cancelled  bool
+	// recomposeRequested reports that the runtime compacted the thread
+	// synchronously instead of running the model; the worker must reload
+	// artifacts, rebuild the plan, and resubmit without advancing the cursor.
+	recomposeRequested bool
 }
 
 // Run starts one Agent turn and reduces its ordered event stream to the
@@ -51,6 +59,8 @@ func (r discussTurnRunner) Run(ctx context.Context, service turn.Service, comman
 				}
 			case turn.DiscussEventSkipped:
 				outcome.skipped = true
+			case turn.DiscussEventRecompose:
+				outcome.recomposeRequested = true
 			default:
 				var streamEvent agentevent.StreamEvent
 				if decodeErr := json.Unmarshal(event.Payload, &streamEvent); decodeErr != nil {
@@ -65,6 +75,9 @@ func (r discussTurnRunner) Run(ctx context.Context, service turn.Service, comman
 				}
 				if streamEvent.Type == agentevent.AgentEnd || streamEvent.Type == agentevent.AgentAbort {
 					outcome.terminal = true
+				}
+				if streamEvent.Type == agentevent.AgentEnd {
+					outcome.endedClean = true
 				}
 				r.projector.Broadcast(command.BotID, streamEvent)
 			}

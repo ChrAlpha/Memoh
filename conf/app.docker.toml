@@ -52,7 +52,7 @@ driver = "postgres"
 # runtime bind mounts and Docker socket access.
 backend = "containerd"
 # registry = "memoh.cn"  # Uncomment for China mainland mirror
-default_image = "memohai/workspace:debian"
+default_image = "memohai/workspace:debian-latest"
 image_pull_policy = "if_not_present"
 # containerd snapshotter and CNI settings for bot workspace containers.
 snapshotter = "overlayfs"
@@ -69,6 +69,13 @@ namespace = "default"
 # Used only when [container].backend = "docker"; the official Compose stack
 # uses containerd above.
 host = ""
+# Dedicated user-defined network shared by a custom containerized
+# Docker-backend server and its workspace containers. Requires
+# [bridge_tls].mode = "strict".
+network = ""
+# Container ID or unique name of this Memoh server on the configured Docker
+# daemon. Required together with network.
+server_container = ""
 
 ## Postgres configuration.
 [postgres]

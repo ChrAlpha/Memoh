@@ -108,7 +108,9 @@ func provideLogger(cfg config.Config) *slog.Logger {
 }
 
 func provideContainerService(lc fx.Lifecycle, log *slog.Logger, cfg config.Config, rc *boot.RuntimeConfig) (ctr.Service, error) {
-	svc, cleanup, err := containerprovider.ProvideService(context.Background(), log, cfg, rc.ContainerBackend)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	svc, cleanup, err := containerprovider.ProvideService(ctx, log, cfg, rc.ContainerBackend)
 	if err != nil {
 		return nil, err
 	}
@@ -619,6 +621,11 @@ func provideExternalAgentCodexHandler(log *slog.Logger, driver *codexruntime.Dri
 func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *timeline.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, workdirService *workdir.Service, cfg config.Config) *application.Service {
 	service := application.NewService(log, modelsService, queries, msgService, settingsService, accountService, a, rc.TimezoneLocation, 120*time.Second)
 	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextAbsoluteMaxTokens())
+	syncCompactionMode, recognized := cfg.Agent.EffectiveSyncCompactionMode()
+	if !recognized {
+		log.Warn("unrecognized agent.sync_compaction value; defaulting to shadow", slog.String("value", cfg.Agent.SyncCompaction))
+	}
+	service.SetSyncCompactionMode(syncCompactionMode)
 	service.SetBotPermissionChecker(&applicationBotPermissionChecker{bots: botService, accounts: accountService})
 	// Every turn entry point goes through admission, so a service without it can
 	// start nothing: this is the thread's single-run guarantee, not an add-on.
@@ -631,6 +638,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	}
 	if compactionService != nil {
 		compactionService.SetHookService(hookService)
+		compactionService.SetEventPublisher(eventHub)
 	}
 	if workspaceManager != nil {
 		workspaceManager.SetHookService(hookService)
