@@ -171,14 +171,11 @@ func isPublicChannelMediaPath(path string) bool {
 
 func safeRequestLogURI(u *neturl.URL, fallback string) string {
 	if u == nil {
-		return fallback
+		var err error
+		u, err = neturl.ParseRequestURI(fallback)
+		if err != nil {
+			return ""
+		}
 	}
-	escapedPath := u.EscapedPath()
-	if isPublicChannelMediaPath(escapedPath) {
-		return escapedPath
-	}
-	if fallback != "" {
-		return fallback
-	}
-	return u.RequestURI()
+	return u.EscapedPath()
 }
