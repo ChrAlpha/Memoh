@@ -53,6 +53,7 @@ const originalContent = ref('')
 const baseRevision = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const savingContent = ref<string | null>(null)
 let fileGeneration = 0
 const imageUrl = ref('')
 // True once the file has been read at least once for the current path. Used
@@ -104,7 +105,8 @@ const filename = computed(() => props.file.name ?? '')
 const filePath = computed(() => props.file.path ?? '')
 const isText = computed(() => isTextFile(filename.value))
 const isImage = computed(() => isImageFile(filename.value))
-const isDirty = computed(() => content.value !== originalContent.value)
+const isDirty = computed(() => content.value !== originalContent.value
+  || (savingContent.value !== null && content.value !== savingContent.value))
 
 const chatStore = useChatStore()
 const { fsChangedAt, currentBotId, bots } = storeToRefs(chatStore)
@@ -478,6 +480,7 @@ async function handleSave(force = false): Promise<boolean> {
     revision: baseRevision.value,
     generation: fileGeneration,
   }
+  savingContent.value = snapshot.content
   saving.value = true
   // Snapshot pre-save chip context so we can:
   //   a) detect an agent bump that lands inside the POST window (the
@@ -543,6 +546,7 @@ async function handleSave(force = false): Promise<boolean> {
     toast.error(resolveApiErrorMessage(error, t('bots.files.saveFailed')))
     return false
   } finally {
+    if (snapshot.generation === fileGeneration) savingContent.value = null
     saving.value = false
   }
 }
@@ -574,6 +578,9 @@ function cleanupImageUrl() {
 
 watch([() => props.botId, () => props.file.path], () => {
   fileGeneration++
+  savingContent.value = null
+  externalPollController?.abort()
+  externalPollController = null
   // Tear down any in-flight load and the compare snapshot before the new
   // path's loaders kick off — otherwise a slow previous-path read could
   // resolve onto the new path's empty buffer and silently surface a chip on a
