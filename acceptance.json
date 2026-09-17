@@ -1,0 +1,74 @@
+{
+  "head": "db681c45c483e8ecd7a4a85cc27386d8cf6cc28a",
+  "base": "1aaef83ff55a9432da4ac7dc631fff36f5e254ab",
+  "scope": "Preserve edits made while a file save request is pending",
+  "unit_tests": "154/154 across file-viewer.save, file-conflict, file-save-command, workspace-tabs",
+  "lint": "Modified Vue/TypeScript files: zero warnings and errors",
+  "environment": "Isolated local Memoh server, PostgreSQL, Docker workspace and real Monaco editor; synthetic test account/file",
+  "browser_url": "http://127.0.0.1:48082",
+  "delay_method": "Playwright forwarded the write to the real backend, held its response, then released it after more edits",
+  "baseline": {
+    "sent": "submitted-A\n",
+    "response_status": 200,
+    "editor": "unsaved-B",
+    "dirty_after_response": 0,
+    "tab_count_after_close": 0,
+    "close_dialog_count": 0
+  },
+  "fixed": {
+    "sent": "submitted-A\n",
+    "response_status": 200,
+    "editor": "unsaved-B",
+    "dirty_after_response": 1,
+    "close_dialog": "Do you want to save the changes you made to save-race.txt?\n\nYour changes will be lost if you don't save them.\n\nCancel\nDon't save\nSave",
+    "tab_count_before_cancel": 1,
+    "second_save_content": "unsaved-B\n",
+    "second_save_status": 200,
+    "second_revision_matches_first_response": true,
+    "dirty_after_second_save": 0,
+    "tab_count_after_second_save_close": 0,
+    "close_dialog_after_second_save": 0
+  },
+  "pending_restore_to_baseline": {
+    "confirmed_baseline": "undo-base",
+    "pending_content": "undo-target",
+    "editor_while_pending": "undo-base",
+    "dirty_while_pending": 1,
+    "close_confirmation_while_pending": true,
+    "dirty_after_response": 1
+  },
+  "close_flow": {
+    "submitted": "undo-base",
+    "current_editor": "close-flow-new-B",
+    "tab_count_after_close_save_resolves": 1,
+    "dirty": 1
+  },
+  "external_change": {
+    "editor": "close-flow-new-B",
+    "dirty": 1,
+    "text": "SR\nSave race audit\nChat\n1\nFiles\nSchedule\nSupermarket\nSave race audit\n.cache\n.config\n.dbus\n.gnupg\n.local\n.memoh\nDesktop\n\ue023\n.ICEauthority\n\ue060\nAGENTS.md\n\ue060\nMEMORY.md\n\ue060\nPROFILES.md\n\ue023\nsave-race.txt\nSA\nsave-audit\nsave-race.txt\n\ue023\nsave-race.txt\nSave race audit updated this file \u00b7\nCompare\nReload\nSave anyway\n1\nclose-flow-new-B"
+  },
+  "filesystem_observations": [
+    "baseline and fixed first delayed save wrote submitted-A while editor held unsaved-B",
+    "second fixed save persisted unsaved-B with updated revision",
+    "close-save callback persisted undo-base and retained newer close-flow-new-B in dirty tab",
+    "external writer changed disk to external-C; Ctrl+S preserved external-C and showed conflict UI"
+  ],
+  "final_recheck": {
+    "fixed_race_passed": true,
+    "close_dialog_passed": true,
+    "second_save_revision_passed": true,
+    "disk_content": "unsaved-B\n",
+    "font_responses": [
+      200,
+      304,
+      200,
+      200
+    ]
+  },
+  "limits": [
+    "Agent-run local acceptance, not human QA",
+    "No provider generation or external channel delivery"
+  ],
+  "cleanup": "All temporary test services stopped"
+}
