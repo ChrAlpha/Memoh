@@ -1,0 +1,95 @@
+{
+  "checkout_commit": "11b873f415855dcdd8fa0dcd9756688ab31cc77b",
+  "checkout_clean": true,
+  "binary_sha256": "5ee8661699977018f4713a753223bab6861fd756f711ef2ef78468365ae694e0",
+  "environment": "Isolated local Memoh server built from the PR checkout, PostgreSQL, Vite UI, synthetic account; API 28080 / Web 28082",
+  "browser_flow": "Log in and open the bot chat page; no provider generation or external channel delivery",
+  "request_log_count": 34,
+  "logged_uris_containing_query": 0,
+  "websocket_request_logs": 1,
+  "probe_markers_in_request_logs": 0,
+  "probes": [
+    {
+      "name": "query-auth",
+      "status": 200,
+      "request_id": "pr3-log-query-auth"
+    },
+    {
+      "name": "media",
+      "status": 404,
+      "request_id": "pr3-log-media"
+    },
+    {
+      "name": "oauth",
+      "status": 400,
+      "request_id": "pr3-log-oauth"
+    },
+    {
+      "name": "ordinary",
+      "status": 200,
+      "request_id": "pr3-log-ordinary"
+    },
+    {
+      "name": "encoded-repeated",
+      "status": 200,
+      "request_id": "pr3-log-encoded-repeated"
+    },
+    {
+      "name": "public-media",
+      "status": 404,
+      "request_id": "pr3-log-public-media"
+    }
+  ],
+  "request_log_probes": [
+    {
+      "method": "GET",
+      "uri": "/users/me",
+      "status": 200,
+      "request_id": "pr3-log-query-auth"
+    },
+    {
+      "method": "GET",
+      "uri": "/bots/33333333-3333-4333-8333-333333333333/media/missing",
+      "status": 404,
+      "request_id": "pr3-log-media"
+    },
+    {
+      "method": "GET",
+      "uri": "/oauth/mcp/callback",
+      "status": 400,
+      "request_id": "pr3-log-oauth"
+    },
+    {
+      "method": "GET",
+      "uri": "/ping",
+      "status": 200,
+      "request_id": "pr3-log-ordinary"
+    },
+    {
+      "method": "GET",
+      "uri": "/ping",
+      "status": 200,
+      "request_id": "pr3-log-encoded-repeated"
+    },
+    {
+      "method": "GET",
+      "uri": "/channels/line/public/media/33333333-3333-4333-8333-333333333333/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/preview.jpg",
+      "status": 404,
+      "request_id": "pr3-log-public-media"
+    }
+  ],
+  "checks": [
+    {
+      "command": "go test -race -count=1 -timeout=90s ./internal/server ./internal/auth",
+      "result": "PASS"
+    },
+    {
+      "command": "golangci-lint run --new-from-rev=origin/main ./internal/server",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check origin/main...HEAD",
+      "result": "PASS"
+    }
+  ]
+}
