@@ -29,6 +29,12 @@ type AfterChatRequest struct {
 	ChannelIdentityID string
 	DisplayName       string
 	TimezoneLocation  *time.Location
+	// SkipFormation turns off automatic memory formation for this turn.
+	// External agent runtimes own the model that ran the turn: the platform
+	// neither borrows another model to extract facts nor dumps the raw
+	// transcript into the same store those facts live in. Those runtimes
+	// write their own memories through the create_memory tool instead.
+	SkipFormation bool
 }
 
 // LLM is the interface for LLM operations needed by memory service.

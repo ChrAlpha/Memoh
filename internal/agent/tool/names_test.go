@@ -527,6 +527,9 @@ func internalToolValues(t *testing.T) map[string]string {
 	values := map[string]string{}
 	constants := map[string]string{
 		"memprovider.ToolSearchMemory": "search_memory",
+		"memprovider.ToolCreateMemory": "create_memory",
+		"memprovider.ToolUpdateMemory": "update_memory",
+		"memprovider.ToolDeleteMemory": "delete_memory",
 		"userinput.ToolNameAskUser":    "ask_user",
 	}
 	for _, decl := range parsed.Decls {

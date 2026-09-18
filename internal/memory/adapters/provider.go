@@ -6,7 +6,12 @@ import (
 	"github.com/felinics/memoh/internal/mcp"
 )
 
-const ToolSearchMemory = "search_memory"
+const (
+	ToolSearchMemory = "search_memory"
+	ToolCreateMemory = "create_memory"
+	ToolUpdateMemory = "update_memory"
+	ToolDeleteMemory = "delete_memory"
+)
 
 // DefaultBuiltinProviderID is the virtual provider selected when a bot has no
 // persisted memory_provider_id. Registries materialize it per team.

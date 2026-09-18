@@ -34,6 +34,9 @@ var toolFormatters = map[string]toolFormatter{
 	"web_fetch":  formatWebFetch,
 
 	"search_memory":   formatSearchMemory,
+	"create_memory":   formatCreateMemory,
+	"update_memory":   formatUpdateMemory,
+	"delete_memory":   formatDeleteMemory,
 	"search_messages": formatSearchMessages,
 	"list_sessions":   formatListSessions,
 
@@ -621,6 +624,46 @@ func formatWebFetch(tc *StreamToolCall, status ToolCallStatus) ToolCallPresentat
 }
 
 // --- memory / history --------------------------------------------------
+
+func formatUpdateMemory(tc *StreamToolCall, status ToolCallStatus) ToolCallPresentation {
+	in := inputMap(tc)
+	memory := truncLine(pickStringField(in, "memory"))
+	p := ToolCallPresentation{Header: memory}
+	if status == ToolCallStatusRunning {
+		return p
+	}
+	if e, done := errorPresentation(p, status, tc); done {
+		return e
+	}
+	p.Header = "Updated " + memory
+	return p
+}
+
+func formatDeleteMemory(tc *StreamToolCall, status ToolCallStatus) ToolCallPresentation {
+	id := pickStringField(inputMap(tc), "id")
+	p := ToolCallPresentation{Header: id}
+	if status == ToolCallStatusRunning {
+		return p
+	}
+	if e, done := errorPresentation(p, status, tc); done {
+		return e
+	}
+	p.Header = "Deleted " + id
+	return p
+}
+
+func formatCreateMemory(tc *StreamToolCall, status ToolCallStatus) ToolCallPresentation {
+	memory := truncLine(pickStringField(inputMap(tc), "memory"))
+	p := ToolCallPresentation{Header: memory}
+	if status == ToolCallStatusRunning {
+		return p
+	}
+	if e, done := errorPresentation(p, status, tc); done {
+		return e
+	}
+	p.Header = "Saved " + memory
+	return p
+}
 
 func formatSearchMemory(tc *StreamToolCall, status ToolCallStatus) ToolCallPresentation {
 	in := inputMap(tc)

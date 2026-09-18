@@ -35,6 +35,9 @@ func ToolListSessions() ToolName   { return toolname.ToolListSessions() }
 func ToolGetMessages() ToolName    { return toolname.ToolGetMessages() }
 func ToolSearchMessages() ToolName { return toolname.ToolSearchMessages() }
 func ToolSearchMemory() ToolName   { return toolname.ToolSearchMemory() }
+func ToolCreateMemory() ToolName   { return toolname.ToolCreateMemory() }
+func ToolUpdateMemory() ToolName   { return toolname.ToolUpdateMemory() }
+func ToolDeleteMemory() ToolName   { return toolname.ToolDeleteMemory() }
 func ToolListSkills() ToolName     { return toolname.ToolListSkills() }
 func ToolUseSkill() ToolName       { return toolname.ToolUseSkill() }
 func ToolSpawnAgent() ToolName     { return toolname.ToolSpawnAgent() }

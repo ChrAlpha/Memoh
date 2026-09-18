@@ -1120,7 +1120,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		agenttools.NewScheduleProvider(log, scheduleService),
 		agenttools.NewWorkdirProvider(log, workdirService),
 		agenttools.NewACPAgentsProvider(log, &acpRuntimePoolAdapter{pool: acpPool}, queries),
-		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService, historySessions),
+		agenttools.NewMemoryProvider(log, memoryRegistry, settingsService, historySessions, hookService),
 		agenttools.NewWebProvider(log, settingsService, searchProviderService),
 		agenttools.NewContainerProvider(log, manager, bgManager, config.DefaultDataMount, hookService),
 		agenttools.NewBackgroundProvider(log, bgManager),

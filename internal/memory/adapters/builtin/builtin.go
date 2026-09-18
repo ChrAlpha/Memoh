@@ -284,6 +284,15 @@ func (p *BuiltinProvider) OnAfterChat(ctx context.Context, req adapters.AfterCha
 		return nil
 	}
 
+	if req.SkipFormation {
+		// The runtime that ran this turn owns its own model. Extracting facts
+		// would borrow a second model the user never asked to pay for, and the
+		// raw-transcript fallback below would mix unextracted turns into the
+		// same store the extracted facts live in. Those runtimes write what
+		// matters through the memory write tools while the turn is running.
+		return nil
+	}
+
 	if p.llm != nil {
 		result := runFormation(ctx, p.logger, p.llm, p.service, req)
 		p.logger.DebugContext(ctx, "memory formation completed",
