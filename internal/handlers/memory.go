@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -672,14 +674,10 @@ func graphParseTime(s string) time.Time {
 	return time.Now().UTC()
 }
 
-// requireMemoryOwnedByBot rejects memory IDs whose bot prefix does not match
-// the authorized bot. Builtin providers derive the target bot from the memory
-// ID prefix ("<botID>:mem_..."), not from the authorized bot, so without this
-// check /bots/A/memory/B:mem_x would operate on bot B's memory. The prefix is
-// parsed exactly like the provider does (everything before the first ":").
+// requireMemoryOwnedByBot rejects foreign or malformed canonical memory IDs.
+// Providers also validate the independently authorized scope before storage.
 func requireMemoryOwnedByBot(botID, memoryID string) error {
-	parts := strings.SplitN(strings.TrimSpace(memoryID), ":", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) != botID {
+	if err := memprovider.ValidateMemoryScope(botID, memoryID); err != nil {
 		return echo.NewHTTPError(http.StatusForbidden, "memory does not belong to this bot")
 	}
 	return nil
@@ -720,7 +718,21 @@ func (h *MemoryHandler) ChatDelete(c echo.Context) error {
 	}
 
 	var payload memoryDeletePayload
-	_ = c.Bind(&payload)
+	if c.Request().ContentLength != 0 {
+		// An absent body retains the documented delete-all operation. A supplied
+		// body must be exactly one valid object: malformed/unknown fields must
+		// never silently turn a targeted deletion into deleting every memory.
+		decoder := json.NewDecoder(http.MaxBytesReader(c.Response(), c.Request().Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		parsed := &payload
+		if err := decoder.Decode(&parsed); err != nil || parsed == nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid memory deletion request")
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid memory deletion request")
+		}
+	}
 
 	if len(payload.MemoryIDs) > 0 {
 		// Reject the whole batch if any ID targets another bot's memory.
@@ -729,7 +741,7 @@ func (h *MemoryHandler) ChatDelete(c echo.Context) error {
 				return err
 			}
 		}
-		resp, delErr := provider.DeleteBatch(c.Request().Context(), payload.MemoryIDs)
+		resp, delErr := provider.DeleteBatch(c.Request().Context(), botID, payload.MemoryIDs)
 		if delErr != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, delErr.Error())
 		}
@@ -781,7 +793,7 @@ func (h *MemoryHandler) ChatDeleteOne(c echo.Context) error {
 	if err := requireMemoryOwnedByBot(botID, memoryID); err != nil {
 		return err
 	}
-	resp, err := provider.Delete(c.Request().Context(), memoryID)
+	resp, err := provider.Delete(c.Request().Context(), botID, memoryID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
@@ -827,6 +839,7 @@ func (h *MemoryHandler) ChatUpdate(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "memory is required")
 	}
 	item, err := provider.Update(c.Request().Context(), memprovider.UpdateRequest{
+		BotID:    botID,
 		MemoryID: memoryID,
 		Memory:   payload.Memory,
 	})

@@ -432,8 +432,16 @@ func (s *NativeToolSource) loadTools(ctx context.Context, session mcp.ToolSessio
 }
 
 func sessionFromMCP(session mcp.ToolSessionContext) SessionContext {
+	// Public HTTP session/run headers are event-routing hints, not proof of
+	// membership in a private conversation. Only server-bound runtime mounts
+	// may use a current session to expand history scope or infer its author.
+	if session.PublicRequest {
+		session.SessionID = ""
+		session.SessionType = ""
+	}
 	return SessionContext{
 		BotID:                     session.BotID,
+		UserID:                    session.UserID,
 		ChatID:                    firstNonEmpty(session.ChatID, session.BotID),
 		SessionID:                 session.SessionID,
 		SessionType:               session.SessionType,

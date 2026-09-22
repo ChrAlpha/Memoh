@@ -368,9 +368,9 @@ func (r *graphRuntime) Update(ctx context.Context, req adapters.UpdateRequest) (
 	if text == "" {
 		return adapters.MemoryItem{}, errors.New("graph runtime: memory is required")
 	}
-	botID := runtimeBotIDFromMemoryID(memoryID)
-	if botID == "" {
-		return adapters.MemoryItem{}, errors.New("graph runtime: invalid memory_id")
+	botID := strings.TrimSpace(req.BotID)
+	if err := adapters.ValidateMemoryScope(botID, memoryID); err != nil {
+		return adapters.MemoryItem{}, err
 	}
 	existing, storedID, err := r.resolveNodeByMemoryID(ctx, botID, memoryID)
 	if err != nil {
@@ -397,11 +397,16 @@ func (r *graphRuntime) Update(ctx context.Context, req adapters.UpdateRequest) (
 	return nodeSpecToMemoryItem(saved), nil
 }
 
-func (r *graphRuntime) Delete(ctx context.Context, memoryID string) (adapters.DeleteResponse, error) {
-	return r.DeleteBatch(ctx, []string{memoryID})
+func (r *graphRuntime) Delete(ctx context.Context, botID string, memoryID string) (adapters.DeleteResponse, error) {
+	return r.DeleteBatch(ctx, botID, []string{memoryID})
 }
 
-func (r *graphRuntime) DeleteBatch(ctx context.Context, memoryIDs []string) (adapters.DeleteResponse, error) {
+func (r *graphRuntime) DeleteBatch(ctx context.Context, botID string, memoryIDs []string) (adapters.DeleteResponse, error) {
+	botID = strings.TrimSpace(botID)
+	// Validate the complete batch before the first mutation.
+	if err := adapters.ValidateMemoryScope(botID, memoryIDs...); err != nil {
+		return adapters.DeleteResponse{}, err
+	}
 	if r.store == nil {
 		return adapters.DeleteResponse{}, errors.New("graph runtime: wiki store not configured")
 	}
@@ -413,10 +418,6 @@ func (r *graphRuntime) DeleteBatch(ctx context.Context, memoryIDs []string) (ada
 			continue
 		}
 		seen[memoryID] = true
-		botID := runtimeBotIDFromMemoryID(memoryID)
-		if botID == "" {
-			continue
-		}
 		_, storedID, err := r.resolveNodeByMemoryID(ctx, botID, memoryID)
 		if err != nil {
 			if !errors.Is(err, wikistore.ErrNodeNotFound) {

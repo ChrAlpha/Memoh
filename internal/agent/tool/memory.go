@@ -237,6 +237,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 					return nil, err
 				}
 				item, err := provider.Update(ctx.Context, memprovider.UpdateRequest{
+					BotID:    strings.TrimSpace(session.BotID),
 					MemoryID: memoryID,
 					Memory:   memory,
 				})
@@ -270,7 +271,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID); err != nil {
 					return nil, err
 				}
-				if _, err := provider.Delete(ctx.Context, memoryID); err != nil {
+				if _, err := provider.Delete(ctx.Context, strings.TrimSpace(session.BotID), memoryID); err != nil {
 					p.logger.WarnContext(ctx.Context, "delete memory failed", slog.String("bot_id", session.BotID), slog.String("memory_id", memoryID), slog.Any("error", err))
 					return nil, errors.New("deleting the memory failed")
 				}
@@ -508,6 +509,7 @@ func (p *MemoryProvider) resolveProvider(ctx context.Context, botID string) memp
 func toMCPSession(s SessionContext) mcp.ToolSessionContext {
 	return mcp.ToolSessionContext{
 		BotID:                    s.BotID,
+		UserID:                   s.UserID,
 		ChatID:                   s.ChatID,
 		SessionID:                s.SessionID,
 		SessionType:              s.SessionType,

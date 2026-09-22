@@ -56,11 +56,11 @@ func (*OpenVikingProvider) Update(_ context.Context, _ adapters.UpdateRequest) (
 	return adapters.MemoryItem{}, errOpenVikingDisabled
 }
 
-func (*OpenVikingProvider) Delete(_ context.Context, _ string) (adapters.DeleteResponse, error) {
+func (*OpenVikingProvider) Delete(_ context.Context, _ string, _ string) (adapters.DeleteResponse, error) {
 	return adapters.DeleteResponse{}, errOpenVikingDisabled
 }
 
-func (*OpenVikingProvider) DeleteBatch(_ context.Context, _ []string) (adapters.DeleteResponse, error) {
+func (*OpenVikingProvider) DeleteBatch(_ context.Context, _ string, _ []string) (adapters.DeleteResponse, error) {
 	return adapters.DeleteResponse{}, errOpenVikingDisabled
 }
 

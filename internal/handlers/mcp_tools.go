@@ -95,6 +95,7 @@ func (*ContainerdHandler) buildToolSessionContext(c echo.Context, botID string) 
 	botID = strings.TrimSpace(botID)
 	session := mcpgw.ToolSessionContextFromHTTP(c.Request(), botID)
 	session.BotID = botID
+	session.PublicRequest = true
 	session.RuntimeToken = ""
 	session.ChannelIdentityID = ""
 	session.SessionToken = ""
@@ -104,6 +105,7 @@ func (*ContainerdHandler) buildToolSessionContext(c echo.Context, botID string) 
 	session.SupportsImageInput = false
 	if ctxIdentityID, err := auth.UserIDFromContext(c); err == nil {
 		session.ChannelIdentityID = strings.TrimSpace(ctxIdentityID)
+		session.UserID = strings.TrimSpace(ctxIdentityID)
 	}
 	return session
 }

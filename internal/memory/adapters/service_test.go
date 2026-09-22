@@ -70,11 +70,11 @@ func (*bootstrapProvider) Update(context.Context, UpdateRequest) (MemoryItem, er
 	return MemoryItem{}, nil
 }
 
-func (*bootstrapProvider) Delete(context.Context, string) (DeleteResponse, error) {
+func (*bootstrapProvider) Delete(context.Context, string, string) (DeleteResponse, error) {
 	return DeleteResponse{}, nil
 }
 
-func (*bootstrapProvider) DeleteBatch(context.Context, []string) (DeleteResponse, error) {
+func (*bootstrapProvider) DeleteBatch(context.Context, string, []string) (DeleteResponse, error) {
 	return DeleteResponse{}, nil
 }
 

@@ -255,10 +255,10 @@ func TestBuiltinProviderCRUDErrorsWithNilService(t *testing.T) {
 	if _, err := p.Update(context.Background(), adapters.UpdateRequest{}); err == nil {
 		t.Fatal("expected Update error")
 	}
-	if _, err := p.Delete(context.Background(), "x"); err == nil {
+	if _, err := p.Delete(context.Background(), "bot-1", "x"); err == nil {
 		t.Fatal("expected Delete error")
 	}
-	if _, err := p.DeleteBatch(context.Background(), []string{"x"}); err == nil {
+	if _, err := p.DeleteBatch(context.Background(), "bot-1", []string{"x"}); err == nil {
 		t.Fatal("expected DeleteBatch error")
 	}
 	if _, err := p.DeleteAll(context.Background(), adapters.DeleteAllRequest{}); err == nil {

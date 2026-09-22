@@ -57,11 +57,11 @@ func (*Mem0Provider) Update(_ context.Context, _ adapters.UpdateRequest) (adapte
 	return adapters.MemoryItem{}, errMem0Disabled
 }
 
-func (*Mem0Provider) Delete(_ context.Context, _ string) (adapters.DeleteResponse, error) {
+func (*Mem0Provider) Delete(_ context.Context, _ string, _ string) (adapters.DeleteResponse, error) {
 	return adapters.DeleteResponse{}, errMem0Disabled
 }
 
-func (*Mem0Provider) DeleteBatch(_ context.Context, _ []string) (adapters.DeleteResponse, error) {
+func (*Mem0Provider) DeleteBatch(_ context.Context, _ string, _ []string) (adapters.DeleteResponse, error) {
 	return adapters.DeleteResponse{}, errMem0Disabled
 }
 

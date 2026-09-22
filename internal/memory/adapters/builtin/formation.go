@@ -197,6 +197,7 @@ func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, bot
 				continue
 			}
 			if _, err := runtime.Update(ctx, adapters.UpdateRequest{
+				BotID:            botID,
 				MemoryID:         id,
 				Memory:           text,
 				SourceMessageIDs: sourceMessageIDs,
@@ -218,7 +219,7 @@ func applyActions(ctx context.Context, logger *slog.Logger, runtime Runtime, bot
 				result.Skipped++
 				continue
 			}
-			if _, err := runtime.Delete(ctx, id); err != nil {
+			if _, err := runtime.Delete(ctx, botID, id); err != nil {
 				logger.WarnContext(ctx, "memory formation: DELETE failed", slog.String("bot_id", botID), slog.String("memory_id", id), slog.Any("error", err))
 			} else {
 				deleted[id] = struct{}{}

@@ -76,6 +76,8 @@ type SearchRequest struct {
 }
 
 type UpdateRequest struct {
+	// BotID is the trusted caller scope, never inferred from MemoryID.
+	BotID            string   `json:"bot_id"`
 	MemoryID         string   `json:"memory_id"`
 	Memory           string   `json:"memory"`
 	EmbeddingEnabled *bool    `json:"embedding_enabled,omitempty"`

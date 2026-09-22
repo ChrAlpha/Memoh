@@ -369,4 +369,7 @@ func TestBuildToolSessionContextUsesAuthenticatedIdentity(t *testing.T) {
 	if session.ChannelIdentityID != "user-1" {
 		t.Fatalf("channel identity = %q, want authenticated user", session.ChannelIdentityID)
 	}
+	if !session.PublicRequest || session.UserID != "user-1" {
+		t.Fatalf("public routing must be separated from the authenticated user: %#v", session)
+	}
 }

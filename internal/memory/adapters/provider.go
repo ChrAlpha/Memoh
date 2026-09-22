@@ -39,9 +39,10 @@ type Provider interface {
 	Add(ctx context.Context, req AddRequest) (SearchResponse, error)
 	Search(ctx context.Context, req SearchRequest) (SearchResponse, error)
 	GetAll(ctx context.Context, req GetAllRequest) (SearchResponse, error)
+	// Update/Delete/DeleteBatch require the authorized bot, independently of caller-supplied IDs.
 	Update(ctx context.Context, req UpdateRequest) (MemoryItem, error)
-	Delete(ctx context.Context, memoryID string) (DeleteResponse, error)
-	DeleteBatch(ctx context.Context, memoryIDs []string) (DeleteResponse, error)
+	Delete(ctx context.Context, botID string, memoryID string) (DeleteResponse, error)
+	DeleteBatch(ctx context.Context, botID string, memoryIDs []string) (DeleteResponse, error)
 	DeleteAll(ctx context.Context, req DeleteAllRequest) (DeleteResponse, error)
 
 	// --- Lifecycle ---

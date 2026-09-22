@@ -189,6 +189,7 @@ func (s *ToolGatewayService) getRegistry(ctx context.Context, session ToolSessio
 func toolRegistryCacheKey(session ToolSessionContext) string {
 	parts := []string{
 		strings.TrimSpace(session.BotID),
+		strings.TrimSpace(session.UserID),
 		strings.TrimSpace(session.ChatID),
 		strings.TrimSpace(session.RuntimeID),
 		hashCacheKeySecret(session.RuntimeToken),
@@ -201,6 +202,9 @@ func toolRegistryCacheKey(session ToolSessionContext) string {
 		strings.TrimSpace(session.ReplyTarget),
 		strings.TrimSpace(session.ConversationType),
 		hashCacheKeySecret(session.SessionToken),
+	}
+	if session.PublicRequest {
+		parts = append(parts, "public-request")
 	}
 	if session.IsSubagent {
 		parts = append(parts, "subagent")

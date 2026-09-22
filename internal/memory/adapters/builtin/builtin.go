@@ -53,8 +53,8 @@ type Runtime interface {
 	Search(ctx context.Context, req adapters.SearchRequest) (adapters.SearchResponse, error)
 	GetAll(ctx context.Context, req adapters.GetAllRequest) (adapters.SearchResponse, error)
 	Update(ctx context.Context, req adapters.UpdateRequest) (adapters.MemoryItem, error)
-	Delete(ctx context.Context, memoryID string) (adapters.DeleteResponse, error)
-	DeleteBatch(ctx context.Context, memoryIDs []string) (adapters.DeleteResponse, error)
+	Delete(ctx context.Context, botID string, memoryID string) (adapters.DeleteResponse, error)
+	DeleteBatch(ctx context.Context, botID string, memoryIDs []string) (adapters.DeleteResponse, error)
 	DeleteAll(ctx context.Context, req adapters.DeleteAllRequest) (adapters.DeleteResponse, error)
 	Compact(ctx context.Context, filters map[string]any, ratio float64, decayDays int) (adapters.CompactResult, error)
 	Usage(ctx context.Context, filters map[string]any) (adapters.UsageResponse, error)
@@ -455,18 +455,18 @@ func (p *BuiltinProvider) Update(ctx context.Context, req adapters.UpdateRequest
 	return p.service.Update(ctx, req)
 }
 
-func (p *BuiltinProvider) Delete(ctx context.Context, memoryID string) (adapters.DeleteResponse, error) {
+func (p *BuiltinProvider) Delete(ctx context.Context, botID string, memoryID string) (adapters.DeleteResponse, error) {
 	if p.service == nil {
 		return adapters.DeleteResponse{}, errors.New("memory runtime not configured")
 	}
-	return p.service.Delete(ctx, memoryID)
+	return p.service.Delete(ctx, botID, memoryID)
 }
 
-func (p *BuiltinProvider) DeleteBatch(ctx context.Context, memoryIDs []string) (adapters.DeleteResponse, error) {
+func (p *BuiltinProvider) DeleteBatch(ctx context.Context, botID string, memoryIDs []string) (adapters.DeleteResponse, error) {
 	if p.service == nil {
 		return adapters.DeleteResponse{}, errors.New("memory runtime not configured")
 	}
-	return p.service.DeleteBatch(ctx, memoryIDs)
+	return p.service.DeleteBatch(ctx, botID, memoryIDs)
 }
 
 func (p *BuiltinProvider) DeleteAll(ctx context.Context, req adapters.DeleteAllRequest) (adapters.DeleteResponse, error) {

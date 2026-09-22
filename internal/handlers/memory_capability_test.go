@@ -86,11 +86,11 @@ func (*unsupportedCompactProvider) Update(context.Context, memprovider.UpdateReq
 	return memprovider.MemoryItem{}, nil
 }
 
-func (*unsupportedCompactProvider) Delete(context.Context, string) (memprovider.DeleteResponse, error) {
+func (*unsupportedCompactProvider) Delete(context.Context, string, string) (memprovider.DeleteResponse, error) {
 	return memprovider.DeleteResponse{}, nil
 }
 
-func (*unsupportedCompactProvider) DeleteBatch(context.Context, []string) (memprovider.DeleteResponse, error) {
+func (*unsupportedCompactProvider) DeleteBatch(context.Context, string, []string) (memprovider.DeleteResponse, error) {
 	return memprovider.DeleteResponse{}, nil
 }
 
