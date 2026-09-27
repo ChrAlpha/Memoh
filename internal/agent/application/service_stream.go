@@ -180,7 +180,15 @@ func extractTerminalSnapshot(data []byte) (terminalSnapshot, bool) {
 func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
 	chunkCh := make(chan StreamChunk)
 	errCh := make(chan error, 1)
+	endActiveTurn, err := s.activeTurns.begin()
+	if err != nil {
+		errCh <- err
+		close(chunkCh)
+		close(errCh)
+		return chunkCh, errCh
+	}
 	go func() {
+		defer endActiveTurn()
 		defer close(chunkCh)
 		defer close(errCh)
 		ctx, endTurn := startTurnSpan(ctx, req)
@@ -206,6 +214,10 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 			case errCh <- err:
 			default:
 			}
+		}
+		if err := s.recordRunResumeContext(ctx, req); err != nil {
+			fail(err)
+			return
 		}
 		streamReq := req
 		if streamReq.RawQuery == "" {
@@ -568,6 +580,14 @@ func (s *Service) streamChatWSResultWithHooks(
 	preflight func(context.Context) error,
 	postPersist func(context.Context, []messagepkg.Message) error,
 ) (_ []messagepkg.Message, turnErr error) {
+	endActiveTurn, err := s.activeTurns.begin()
+	if err != nil {
+		return nil, err
+	}
+	defer endActiveTurn()
+	if err := s.recordRunResumeContext(ctx, req); err != nil {
+		return nil, err
+	}
 	// Named so the deferred span close sees whatever any of this function's
 	// returns produced. Tracking it by hand would mean touching fifteen
 	// return statements and being wrong the first time someone adds a
