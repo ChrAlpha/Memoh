@@ -110,13 +110,18 @@
             <MetricReadout
               :label="$t('usage.avgCacheHitRate')"
               :value="summary.avgCacheHitRate"
-              :sub="summary.cacheReadReported ? undefined : $t('usage.cacheUsageUnavailable')"
             />
             <MetricReadout
               :label="$t('usage.totalReasoningTokens')"
               :value="formatNumber(summary.totalReasoningTokens)"
             />
           </div>
+          <p
+            v-if="!summary.cacheReadReported"
+            class="px-2 text-xs text-muted-foreground"
+          >
+            {{ $t('usage.cacheUsageUnavailable') }}
+          </p>
         </section>
 
         <template v-if="hasData">
