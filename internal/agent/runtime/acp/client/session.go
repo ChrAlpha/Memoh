@@ -742,6 +742,7 @@ func promptUsageFromACP(usage *acp.Usage) *sdk.Usage {
 		TotalTokens:  usage.TotalTokens,
 	}
 	if usage.CachedReadTokens != nil {
+		out.CacheReadTokensReported = true
 		out.CachedInputTokens = *usage.CachedReadTokens
 		out.InputTokenDetails.CacheReadTokens = *usage.CachedReadTokens
 	}

@@ -1,0 +1,94 @@
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+
+	acp "github.com/coder/acp-go-sdk"
+	"github.com/felinics/twilight/sdk"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	message "github.com/felinics/memoh/internal/chat/message"
+	dbpkg "github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
+	"github.com/felinics/memoh/internal/messageconv"
+)
+
+func TestPostgresACPUsageReporting(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		if os.Getenv("MEMOH_TEST_POSTGRES_REQUIRED") == "1" {
+			t.Fatal("TEST_POSTGRES_DSN is not set")
+		}
+		t.Skip("TEST_POSTGRES_DSN is not set")
+	}
+	for _, tt := range []struct {
+		name     string
+		reads    []*int
+		reported bool
+		cache    int64
+	}{
+		{name: "absent", reads: []*int{nil}},
+		{name: "zero", reads: []*int{acp.Ptr(0)}, reported: true},
+		{name: "positive", reads: []*int{acp.Ptr(3)}, reported: true, cache: 3},
+		{name: "known mixed", reads: []*int{acp.Ptr(0), acp.Ptr(3)}, reported: true, cache: 3},
+		{name: "unknown mixed", reads: []*int{acp.Ptr(3), nil}, cache: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			pool, err := dbpkg.OpenPostgresDSN(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+			userID, botID, sessionID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+			if _, err := tx.Exec(ctx, `WITH u AS (INSERT INTO users(id,username,is_active) VALUES($1,$2,true) RETURNING id) INSERT INTO team_members(user_id,role) SELECT id,'admin' FROM u`, userID, "acp-"+userID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO bots(id,owner_user_id,name) VALUES($1,$2,'acp-usage')`, botID, userID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO bot_sessions(id,bot_id,channel_type) VALUES($1,$2,'local')`, sessionID, botID); err != nil {
+				t.Fatal(err)
+			}
+			queries := sqlc.New(tx)
+			svc := message.NewService(nil, postgresstore.NewQueries(queries))
+			for _, read := range tt.reads {
+				usage := promptUsageFromACP(&acp.Usage{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: read})
+				output := attachUsageToLastAssistant([]sdk.Message{{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "ok"}}}}, usage)
+				converted := messageconv.SDKMessagesToModelMessages(output)[0]
+				saved, err := svc.Persist(ctx, message.PersistInput{BotID: botID, SessionID: sessionID, Role: converted.Role, Content: converted.Content, Usage: converted.Usage, RuntimeType: "acp_agent"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got sdk.Usage
+				if err := json.Unmarshal(saved.Usage, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.CacheReadTokensReported != (read != nil) {
+					t.Fatalf("persisted cache reporting lost: %s", saved.Usage)
+				}
+			}
+			botUUID, _ := dbpkg.ParseUUID(botID)
+			from := pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true}
+			to := pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}
+			for range 2 {
+				rows, err := queries.GetTokenUsageByDayAndType(ctx, sqlc.GetTokenUsageByDayAndTypeParams{BotID: botUUID, FromTime: from, ToTime: to})
+				if err != nil || len(rows) != 1 || rows[0].SessionType != "acp_agent" || rows[0].CacheReadTokensReported != tt.reported || rows[0].CacheReadTokens != tt.cache || rows[0].InputTokens != int64(10*len(tt.reads)) {
+					t.Fatalf("daily usage=%+v err=%v want reported=%t cache=%d", rows, err, tt.reported, tt.cache)
+				}
+			}
+		})
+	}
+}
