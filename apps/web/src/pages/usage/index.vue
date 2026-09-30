@@ -1005,7 +1005,7 @@ const cacheHitRateOption = computed(() => {
   }
   return {
     textStyle: { fontFamily: c.fontFamily },
-    tooltip: { trigger: 'axis' as const, ...tooltipSurface(c.fontFamily), formatter: axisTooltipFormatter((v: number) => `${v.toFixed(1)}%`) },
+    tooltip: { trigger: 'axis' as const, ...tooltipSurface(c.fontFamily), formatter: axisTooltipFormatter(formatCacheHitRate) },
     grid: { left: 8, right: 8, top: 14, bottom: 24, containLabel: true },
     xAxis: {
       type: 'category' as const,
@@ -1032,7 +1032,7 @@ const cacheHitRateOption = computed(() => {
         data: days.map(d => {
           const totalInput = sumField(d, 'input_tokens')
           const cacheRead = sumField(d, 'cache_read_tokens')
-          return totalInput > 0 ? parseFloat(((cacheRead / totalInput) * 100).toFixed(1)) : 0
+          return totalInput > 0 ? cacheRead / totalInput * 100 : 0
         }),
       },
     ],
