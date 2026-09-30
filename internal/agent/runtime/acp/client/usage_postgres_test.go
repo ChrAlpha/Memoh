@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	message "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -63,12 +62,14 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 				t.Fatal(err)
 			}
 			queries := sqlc.New(tx)
-			svc := message.NewService(nil, postgresstore.NewQueries(queries))
+			store := postgresstore.NewQueries(queries)
+			botUUID, _ := dbpkg.ParseUUID(botID)
+			sessionUUID, _ := dbpkg.ParseUUID(sessionID)
 			for _, read := range tt.reads {
 				usage := promptUsageFromACP(&acp.Usage{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: read})
 				output := attachUsageToLastAssistant([]sdk.Message{{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "ok"}}}}, usage)
 				converted := messageconv.SDKMessagesToModelMessages(output)[0]
-				saved, err := svc.Persist(ctx, message.PersistInput{BotID: botID, SessionID: sessionID, Role: converted.Role, Content: converted.Content, Usage: converted.Usage, RuntimeType: "acp_agent"})
+				saved, err := store.CreateMessage(ctx, sqlc.CreateMessageParams{BotID: botUUID, SessionID: sessionUUID, Role: converted.Role, Content: converted.Content, Metadata: []byte(`{}`), Usage: converted.Usage, SessionMode: "chat", RuntimeType: "acp_agent"})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -80,7 +81,6 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 					t.Fatalf("persisted cache reporting lost: %s", saved.Usage)
 				}
 			}
-			botUUID, _ := dbpkg.ParseUUID(botID)
 			from := pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true}
 			to := pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}
 			for range 2 {
