@@ -676,7 +676,7 @@ const summary = computed(() => {
   const maps = dayMaps.value
   let totalInput = 0
   let totalOutput = 0
-    let totalReasoning = 0
+  let totalReasoning = 0
   const cacheRows: HandlersDailyTokenUsage[] = []
   for (const day of days) {
     for (const tp of types) {
@@ -685,7 +685,7 @@ const summary = computed(() => {
       cacheRows.push(r)
       totalInput += r.input_tokens ?? 0
       totalOutput += r.output_tokens ?? 0
-            totalReasoning += r.reasoning_tokens ?? 0
+      totalReasoning += r.reasoning_tokens ?? 0
     }
   }
   const rate = formatCacheHitRate(cacheHitRate(cacheRows))
