@@ -19,8 +19,8 @@ describe('cache usage reporting', () => {
     ])).toBeNull()
   })
 
-  it('keeps legacy positive reads visible without changing input semantics', () => {
-    expect(cacheHitRate([{ input_tokens: 100, cache_read_tokens: 20 }])).toBe(20)
+  it('does not infer reporting from legacy positive reads', () => {
+    expect(cacheHitRate([{ input_tokens: 10, cache_read_tokens: 200 }])).toBeNull()
   })
 
   it('does not round positive cache use to zero', () => {

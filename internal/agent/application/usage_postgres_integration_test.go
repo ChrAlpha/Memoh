@@ -215,7 +215,7 @@ func TestPostgresCacheReportingPreservesUnknownRecords(t *testing.T) {
 		{"explicit zero", []string{`{"inputTokens":100,"cacheReadTokensReported":true,"inputTokenDetails":{"cacheReadTokens":0}}`}, true},
 		{"unreported positive aggregate", []string{`{"inputTokens":1000,"cacheReadTokensReported":false,"inputTokenDetails":{"cacheReadTokens":10}}`}, false},
 		{"legacy zero", []string{`{"inputTokens":100,"inputTokenDetails":{"cacheReadTokens":0}}`}, false},
-		{"legacy positive", []string{`{"inputTokens":100,"inputTokenDetails":{"cacheReadTokens":10}}`}, true},
+		{"legacy positive", []string{`{"inputTokens":10,"inputTokenDetails":{"cacheReadTokens":200}}`}, false},
 		{"mixed records", []string{`{"inputTokens":100,"cacheReadTokensReported":true,"inputTokenDetails":{"cacheReadTokens":10}}`, `{"inputTokens":900,"cacheReadTokensReported":false,"inputTokenDetails":{"cacheReadTokens":0}}`}, false},
 		{"missing usage contribution", []string{`{"inputTokens":100,"cacheReadTokensReported":true,"inputTokenDetails":{"cacheReadTokens":10}}`, `{}`}, false},
 	} {

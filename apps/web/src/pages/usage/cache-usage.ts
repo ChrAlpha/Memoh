@@ -5,7 +5,7 @@ type CacheUsageRow = {
 }
 
 export function cacheReadReported(row: CacheUsageRow): boolean {
-  return row.cache_read_tokens_reported ?? (row.cache_read_tokens ?? 0) > 0
+  return row.cache_read_tokens_reported === true
 }
 
 export function cacheHitRate(rows: readonly CacheUsageRow[]): number | null {

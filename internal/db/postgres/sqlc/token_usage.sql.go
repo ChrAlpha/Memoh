@@ -98,10 +98,7 @@ SELECT
   COALESCE(SUM((m.usage->>'inputTokens')::bigint), 0)::bigint AS input_tokens,
   COALESCE(SUM((m.usage->>'outputTokens')::bigint), 0)::bigint AS output_tokens,
   COALESCE(SUM((m.usage->'inputTokenDetails'->>'cacheReadTokens')::bigint), 0)::bigint AS cache_read_tokens,
-  COALESCE(BOOL_AND(CASE
-    WHEN m.usage ? 'cacheReadTokensReported' THEN m.usage->'cacheReadTokensReported' = 'true'::jsonb
-    ELSE COALESCE((m.usage->'inputTokenDetails'->>'cacheReadTokens')::bigint, 0) > 0
-  END), false)::boolean AS cache_read_tokens_reported,
+  COALESCE(BOOL_AND(COALESCE(m.usage->'cacheReadTokensReported' = 'true'::jsonb, false)), false)::boolean AS cache_read_tokens_reported,
   COALESCE(SUM((m.usage->'outputTokenDetails'->>'reasoningTokens')::bigint), 0)::bigint AS reasoning_tokens
 FROM bot_history_messages m
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
@@ -325,10 +322,7 @@ SELECT
   COALESCE((m.usage->>'inputTokens')::bigint, 0)::bigint AS input_tokens,
   COALESCE((m.usage->>'outputTokens')::bigint, 0)::bigint AS output_tokens,
   COALESCE((m.usage->'inputTokenDetails'->>'cacheReadTokens')::bigint, 0)::bigint AS cache_read_tokens,
-  (CASE
-    WHEN m.usage ? 'cacheReadTokensReported' THEN m.usage->'cacheReadTokensReported' = 'true'::jsonb
-    ELSE COALESCE((m.usage->'inputTokenDetails'->>'cacheReadTokens')::bigint, 0) > 0
-  END)::boolean AS cache_read_tokens_reported,
+  COALESCE(m.usage->'cacheReadTokensReported' = 'true'::jsonb, false)::boolean AS cache_read_tokens_reported,
   COALESCE((m.usage->'outputTokenDetails'->>'reasoningTokens')::bigint, 0)::bigint AS reasoning_tokens
 FROM bot_history_messages m
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
