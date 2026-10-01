@@ -1169,6 +1169,7 @@
     "modelOverride": "モデル",
     "modelDefault": "デフォルト",
     "reasoningEffort": "推論",
+    "reasoningOn": "オン",
     "reasoningOff": "オフ",
     "reasoningAdaptive": "アダプティブ",
     "reasoningMinimal": "最小限",

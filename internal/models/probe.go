@@ -147,6 +147,9 @@ func NewSDKProvider(baseURL, apiKey, codexAccountID string, clientType ClientTyp
 	}
 
 	switch clientType {
+	case ClientTypeOpenCodeGo:
+		return newOpenCodeGoProvider(baseURL, apiKey, httpClient, string(ClientTypeOpenCodeGo))
+
 	case ClientTypeOpenAIResponses:
 		opts := []openairesponses.Option{
 			openairesponses.WithAPIKey(apiKey),

@@ -19,6 +19,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/hooks"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // runStream runs the streaming agent invocation with a Memoh-owned step loop:
@@ -34,6 +35,7 @@ const streamEventBuffer = 64
 
 //nolint:gocyclo,cyclop,maintidx // the segment inlines the previous SDK-driven consumer plus its option assembly; splitting it would scatter the event-order invariants the tests pin.
 func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEvent) {
+	ctx = models.WithModelSession(ctx, cfg.Identity.SessionID)
 	// Tools report capability changes here; the loop re-assembles its tool
 	// set at the next committed step.
 	cfg.capabilityChanges = &atomic.Bool{}

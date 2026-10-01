@@ -1290,7 +1290,7 @@ import MediaGalleryLightbox from './media-gallery-lightbox.vue'
 import SessionInfoRing from './session-info-ring.vue'
 import { useSessionInfo } from '../composables/useSessionInfo'
 import ComposerModelMenu from './composer-model-menu.vue'
-import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
+import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, displayedEffort, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
 import { useMediaGallery } from '../composables/useMediaGallery'
 import { ATTACHMENT_ANIM_MS, attachmentToFile, fileToAttachment, useComposerAttachments } from '../composables/useComposerAttachments'
 import { useComposerDrafts } from '../composables/useComposerDrafts'
@@ -2839,12 +2839,14 @@ const selectedModelLabel = computed(() => {
   return composerHasNoModel.value ? t('common.none') : composerDefaultModelLabel.value
 })
 
+const nativeDisplayedEffort = computed(() => displayedEffort(overrideReasoningEffort.value, activeModelReasoning.value))
+
 const selectedReasoningLabel = computed(() => {
   if (activeUsesExternalAgentComposer.value) {
     const current = composerReasoningEffort.value
     return composerReasoningOptions.value?.find(option => option.value === current)?.label || current
   }
-  const v = overrideReasoningEffort.value
+  const v = nativeDisplayedEffort.value
   return t(EFFORT_LABELS[v] ?? 'chat.modelDefault')
 })
 
@@ -2854,9 +2856,8 @@ const reasoningActive = computed(() =>
         composerReasoningEffort.value
         && composerReasoningOptions.value?.some(option => option.value === composerReasoningEffort.value),
       )
-    : activeModelSupportsReasoning.value
-      && Boolean(overrideReasoningEffort.value)
-      && overrideReasoningEffort.value !== REASONING_EFFORT_DISABLE,
+    : Boolean(nativeDisplayedEffort.value)
+      && nativeDisplayedEffort.value !== REASONING_EFFORT_DISABLE,
 )
 
 const modelTriggerLabel = computed(() =>

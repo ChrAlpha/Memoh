@@ -50,7 +50,7 @@ import { Popover, PopoverTrigger, PopoverContent, menuChromeClass, selectTrigger
 import { useI18n } from 'vue-i18n'
 import type { ModelsGetResponse, ModelsModelType, ProvidersGetResponse } from '@memohai/sdk'
 import ModelOptions from './model-options.vue'
-import { EFFORT_LABELS, REASONING_EFFORT_DISABLE } from './reasoning-effort'
+import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, displayedEffort } from './reasoning-effort'
 
 const props = defineProps<{
   models: ModelsGetResponse[]
@@ -94,10 +94,13 @@ const modelLabel = computed(() => {
 
 // The effort moved inside this menu, so the trigger has to carry it — otherwise
 // the value is invisible until the menu is reopened. "Off" is not appended: a
-// bare model name already reads as "no reasoning".
+// bare model name leaves the provider's reasoning behavior unspecified.
 const displayLabel = computed(() => {
   if (!props.showReasoning || !modelLabel.value) return modelLabel.value
-  const effort = reasoningEffort.value
+  const model = props.models.find(m => (m.id || m.model_id) === selected.value)
+  const effort = props.reasoningOptions !== undefined
+    ? reasoningEffort.value
+    : displayedEffort(reasoningEffort.value, model?.reasoning)
   if (!effort || effort === REASONING_EFFORT_DISABLE) return modelLabel.value
   if (props.reasoningOptions) {
     const option = props.reasoningOptions.find(o => o.value === effort)

@@ -319,6 +319,14 @@ func (s *Service) Test(ctx context.Context, id string) (TestResponse, error) {
 	start := time.Now()
 	result := sdkProvider.Test(ctx)
 	message := providerTestMessage(result)
+	if clientType == models.ClientTypeOpenCodeGo && result.Status == sdk.ProviderStatusOK {
+		// Go's public catalog succeeds without valid credentials. Keep the UI
+		// verdict unverified until the user runs a real model generation probe.
+		return TestResponse{
+			Status: TestStatusUnverified, Reachable: true,
+			LatencyMs: time.Since(start).Milliseconds(), Message: message,
+		}, nil
+	}
 
 	switch result.Status {
 	case sdk.ProviderStatusUnreachable:
@@ -594,6 +602,10 @@ func (s *Service) fetchRemoteModelsViaSDK(ctx context.Context, provider sqlc.Pro
 			remote.ThinkingBudgetMax = template.ThinkingBudgetMax
 			remote.ContextWindow = template.ContextWindow
 			remote.CapabilitiesKnown = true
+		} else if clientType == models.ClientTypeOpenCodeGo {
+			remote.Compatibilities = []string{models.CompatToolCall, models.CompatReasoning}
+			remote.ThinkingMode = models.ThinkingModeAlways
+			remote.CapabilitiesKnown = true
 		}
 		remoteModels = append(remoteModels, remote)
 	}
@@ -617,6 +629,10 @@ func (s *Service) toGetResponse(provider sqlc.Provider) GetResponse {
 	var icon string
 	if provider.Icon.Valid {
 		icon = provider.Icon.String
+	}
+	// Instances created before the Go preset had an icon retain an empty value.
+	if icon == "" && provider.ClientType == string(models.ClientTypeOpenCodeGo) {
+		icon = "opencode-go"
 	}
 	var templateID string
 	if provider.ProviderTemplateID.Valid {

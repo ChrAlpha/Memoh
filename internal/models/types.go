@@ -28,6 +28,7 @@ const (
 	ClientTypeGoogleGenerativeAI      ClientType = "google-generative-ai"
 	ClientTypeOpenAICodex             ClientType = "openai-codex"
 	ClientTypeGitHubCopilot           ClientType = "github-copilot"
+	ClientTypeOpenCodeGo              ClientType = "opencode-go"
 	ClientTypeEdgeSpeech              ClientType = "edge-speech"
 	ClientTypeOpenAISpeech            ClientType = "openai-speech"
 	ClientTypeOpenAITranscription     ClientType = "openai-transcription"

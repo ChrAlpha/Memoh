@@ -25,6 +25,7 @@ import (
 //
 //nolint:gocyclo,cyclop,maintidx // the loop inlines the previous SDK loop plus its option assembly; splitting it would scatter the step-order invariants the tests pin.
 func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResult, retErr error) {
+	ctx = models.WithModelSession(ctx, cfg.Identity.SessionID)
 	if cfg.ContextLifecycle == nil {
 		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}
