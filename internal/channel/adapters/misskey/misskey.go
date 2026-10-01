@@ -13,7 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/common"
 	"github.com/felinics/memoh/internal/redact"
 	"github.com/felinics/memoh/internal/textutil"
 )
@@ -544,7 +543,6 @@ func (a *MisskeyAdapter) logInbound(configID string, msg channel.InboundMessage)
 		slog.String("config_id", configID),
 		slog.String("user_id", msg.Sender.Attribute("user_id")),
 		slog.String("username", msg.Sender.Attribute("username")),
-		slog.String("text", common.SummarizeText(msg.Message.Text)),
 	)
 }
 
@@ -653,6 +651,8 @@ func (s *misskeyBlockStream) Push(_ context.Context, event channel.PreparedStrea
 		if strings.TrimSpace(event.Delta) != "" && event.Phase != channel.StreamPhaseReasoning {
 			s.textBuilder.WriteString(event.Delta)
 		}
+	case channel.StreamEventReset:
+		s.textBuilder.Reset()
 	case channel.StreamEventAttachment:
 		s.attachments = append(s.attachments, event.Attachments...)
 	case channel.StreamEventFinal:
