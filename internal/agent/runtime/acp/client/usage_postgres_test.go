@@ -29,6 +29,7 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		reads    []*int
+		beside   bool
 		reported bool
 		cache    int64
 	}{
@@ -37,6 +38,7 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 		{name: "positive", reads: []*int{acp.Ptr(3)}, reported: true, cache: 3},
 		{name: "known mixed", reads: []*int{acp.Ptr(0), acp.Ptr(3)}, reported: true, cache: 3},
 		{name: "unknown mixed", reads: []*int{acp.Ptr(3), nil}, cache: 3},
+		{name: "cache beside input", reads: []*int{acp.Ptr(200)}, beside: true, reported: true, cache: 200},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -65,8 +67,15 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 			store := postgresstore.NewQueries(queries)
 			botUUID, _ := dbpkg.ParseUUID(botID)
 			sessionUUID, _ := dbpkg.ParseUUID(sessionID)
+			wantInput := int64(0)
 			for _, read := range tt.reads {
-				usage := promptUsageFromACP(&acp.Usage{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: read})
+				raw := acp.Usage{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: read}
+				wantInput += 10
+				if tt.beside {
+					raw.TotalTokens += *read
+					wantInput += int64(*read)
+				}
+				usage := promptUsageFromACP(&raw)
 				output := attachUsageToLastAssistant([]sdk.Message{{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "ok"}}}}, usage)
 				converted := messageconv.SDKMessagesToModelMessages(output)[0]
 				saved, err := store.CreateMessage(ctx, sqlc.CreateMessageParams{BotID: botUUID, SessionID: sessionUUID, Role: converted.Role, Content: converted.Content, Metadata: []byte(`{}`), Usage: converted.Usage, SessionMode: "chat", RuntimeType: "acp_agent"})
@@ -85,7 +94,7 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 			to := pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}
 			for range 2 {
 				rows, err := queries.GetTokenUsageByDayAndType(ctx, sqlc.GetTokenUsageByDayAndTypeParams{BotID: botUUID, FromTime: from, ToTime: to})
-				if err != nil || len(rows) != 1 || rows[0].SessionType != "acp_agent" || rows[0].CacheReadTokensReported != tt.reported || rows[0].CacheReadTokens != tt.cache || rows[0].InputTokens != int64(10*len(tt.reads)) {
+				if err != nil || len(rows) != 1 || rows[0].SessionType != "acp_agent" || rows[0].CacheReadTokensReported != tt.reported || rows[0].CacheReadTokens != tt.cache || rows[0].InputTokens != wantInput {
 					t.Fatalf("daily usage=%+v err=%v want reported=%t cache=%d", rows, err, tt.reported, tt.cache)
 				}
 			}
