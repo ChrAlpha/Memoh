@@ -236,6 +236,19 @@ func TestPostgresCacheReportingPreservesUnknownRecords(t *testing.T) {
 			if err != nil || len(rows) != 1 || rows[0].CacheReadTokensReported != tt.reported {
 				t.Fatalf("daily=%+v err=%v want reported=%t", rows, err, tt.reported)
 			}
+			records, err := queries.ListTokenUsageRecords(ctx, sqlc.ListTokenUsageRecordsParams{BotID: botID, FromTime: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true}, ToTime: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}, PageLimit: 10})
+			if err != nil || len(records) != len(tt.rows) {
+				t.Fatalf("records=%+v err=%v", records, err)
+			}
+			reported := 0
+			for _, record := range records {
+				if record.CacheReadTokensReported {
+					reported++
+				}
+			}
+			if want := strings.Count(strings.Join(tt.rows, ""), `"cacheReadTokensReported":true`); reported != want {
+				t.Fatalf("records=%+v want %d reported", records, want)
+			}
 		})
 	}
 }
