@@ -14,7 +14,6 @@ const pageBotDetail = () => import('@/pages/bots/detail.vue')
 const pageProviders = () => import('@/pages/providers/index.vue')
 const pageRuntimes = () => import('@/pages/runtimes/index.vue')
 const pageWebSearch = () => import('@/pages/web-search/index.vue')
-const pageMemory = () => import('@/pages/memory/index.vue')
 const pageVoice = () => import('@/pages/voice/index.vue')
 const pageVideo = () => import('@/pages/video/index.vue')
 const pageUsage = () => import('@/pages/usage/index.vue')
@@ -36,7 +35,7 @@ const pageAbout = () => import('@/pages/about/index.vue')
  */
 export const settingsPageLoaders = [
   pageSettings,
-  pageBots, pageProviders, pageRuntimes, pageWebSearch, pageMemory, pageVoice,
+  pageBots, pageProviders, pageRuntimes, pageWebSearch, pageVoice,
   pageVideo, pageUsage, pagePeople, pageAppearance, pageKeyboard,
   pageProfile, pageSupermarket, pageAbout,
   pageBotNew, pageBotCreateProgress, pageBotDetail,
@@ -201,14 +200,6 @@ export function createAppRoutes(platform: 'web' | 'desktop'): RouteRecordRaw[] {
           },
         },
         {
-          name: 'memory',
-          path: 'memory',
-          component: pageMemory,
-          meta: {
-            breadcrumb: i18nRef('sidebar.memory'),
-          },
-        },
-        {
           name: 'voice',
           path: 'voice',
           component: pageVoice,
@@ -233,6 +224,12 @@ export function createAppRoutes(platform: 'web' | 'desktop'): RouteRecordRaw[] {
         {
           path: 'transcription',
           redirect: { name: 'voice' },
+        },
+        // The Memory page was removed — its settings now live in each bot's
+        // Memories tab — so old links and desktop deep links land on Bots.
+        {
+          path: 'memory',
+          redirect: { name: 'bots' },
         },
         {
           name: 'usage',
