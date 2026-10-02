@@ -182,9 +182,9 @@ func TestProviderAttemptHandoffFailureIsNotRetried(t *testing.T) {
 		streamCtx: context.Background(),
 		events:    make(chan StreamEvent, 8),
 		done:      make(chan struct{}),
-		// No staged attempt: publishing it fails.
-		dispatch: generateDispatch{handoff: newProviderAttemptHandoff(cfg)},
 	}
+	// No staged attempt: publishing it fails.
+	eng.reset(generateDispatch{handoff: newProviderAttemptHandoff(cfg)})
 	eng.run()
 
 	var events []StreamEvent
