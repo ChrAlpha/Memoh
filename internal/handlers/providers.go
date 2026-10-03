@@ -438,7 +438,7 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 			m,
 			modelType,
 			req.DefaultCompatibilities,
-			provider.ProviderTemplateID == "",
+			allowCustomModelCapabilityDefaults(provider),
 		)
 		_, err := h.modelsService.Create(ctx, models.AddRequest{
 			ModelID:    m.ID,
@@ -471,6 +471,27 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, resp)
+}
+
+func allowCustomModelCapabilityDefaults(provider providers.GetResponse) bool {
+	if strings.TrimSpace(provider.ProviderTemplateID) != "" {
+		return false
+	}
+	// Providers created from an older preset/registry flow may not have a
+	// provider_template_id, but their metadata still says that a template is
+	// authoritative. An endpoint-only model from such a provider must not
+	// receive protocol-wide capability guesses.
+	for _, section := range []string{"preset", "registry"} {
+		metadata, ok := provider.Metadata[section].(map[string]any)
+		if !ok {
+			continue
+		}
+		source, _ := metadata["source"].(string)
+		if strings.TrimSpace(source) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func importedCompatibilities(remote providers.RemoteModel, modelType models.ModelType, defaults []string, allowCustomDefaults bool) []string {
