@@ -42,6 +42,8 @@ const (
 	CodeWorkspaceDependencyActionUnsupported     Code = "workspace_dependency.action_unsupported"
 	CodeWorkspaceDependencyPlatformUnsupported   Code = "workspace_dependency.platform_unsupported"
 	CodeWorkspaceDependencyBusy                  Code = "workspace_dependency.busy"
+	CodeWorkspaceDependencyRequired              Code = "workspace_dependency.required"
+	CodeWorkspaceDependencyPrerequisitesChanged  Code = "workspace_dependency.prerequisites_changed"
 	CodeWorkspaceDependencyWorkspaceNotRunning   Code = "workspace_dependency.workspace_not_running"
 	CodeWorkspaceDependencyWorkspaceMissing      Code = "workspace_dependency.workspace_missing"
 	CodeWorkspaceDependencyRollbackUnavailable   Code = "workspace_dependency.rollback_unavailable"
@@ -467,6 +469,15 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceDependencyBusy: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "Another operation on this dependency is in progress.",
+	},
+	CodeWorkspaceDependencyRequired: {
+		HTTPStatus:  http.StatusConflict,
+		Detail:      "Other installed dependencies still need this dependency. Remove them first.",
+		AllowedArgs: []string{"dependents"},
+	},
+	CodeWorkspaceDependencyPrerequisitesChanged: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The dependencies this one needs changed after you confirmed. Review the operation again.",
 	},
 	CodeWorkspaceDependencyWorkspaceNotRunning: {
 		HTTPStatus: http.StatusConflict,

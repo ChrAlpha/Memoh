@@ -1768,7 +1768,7 @@ export type HandlersAppRemovalPreviewConnector = {
 export type HandlersAppRemovalPreviewDependency = {
     action?: 'remove' | 'keep';
     id?: string;
-    reason?: 'shared' | 'image' | 'absent';
+    reason?: 'shared' | 'image' | 'absent' | 'required';
 };
 
 export type HandlersAppRemovalPreviewResponse = {
@@ -2662,6 +2662,10 @@ export type HandlersWorkspaceDependencyCatalogItem = {
     icon_url?: string;
     id?: string;
     name?: string;
+    /**
+     * Requires lists the dependency IDs installed first when missing.
+     */
+    requires?: Array<string>;
     translations?: {
         [key: string]: HandlersWorkspaceDependencyTranslation;
     };
@@ -2674,6 +2678,17 @@ export type HandlersWorkspaceDependencyCatalogResponse = {
 
 export type HandlersWorkspaceDependencyInstallRequest = {
     definition_revision?: string;
+    /**
+     * PrerequisiteRevisions are the definition revisions the confirmation
+     * showed for the dependency's prerequisites, keyed by dependency id. When
+     * present, a missing prerequisite installs only from its confirmed
+     * revision; one without an entry refuses the operation with
+     * workspace_dependency.prerequisites_changed. Omitted, prerequisites
+     * resolve when the operation starts, like an omitted definition_revision.
+     */
+    prerequisite_revisions?: {
+        [key: string]: string;
+    };
     /**
      * SessionID optionally routes operation progress to its originating conversation.
      */
@@ -2746,6 +2761,10 @@ export type HandlersWorkspaceDependencyItem = {
      */
     provides?: Array<string>;
     registry_id?: string;
+    /**
+     * Requires lists the dependency IDs installed first when missing.
+     */
+    requires?: Array<string>;
     retired?: boolean;
     /**
      * Source is image for dependencies shipped with the workspace image and
