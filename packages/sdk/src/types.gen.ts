@@ -2098,6 +2098,10 @@ export type HandlersFsListResponse = {
 
 export type HandlersFsMkdirRequest = {
     path?: string;
+    /**
+     * WorkspaceTargetID overrides the Bot's Primary target for this request.
+     */
+    workspace_target_id?: string;
 };
 
 export type HandlersFsReadResponse = {
@@ -4239,6 +4243,17 @@ export type WorkdirCreateRequest = {
     name: string;
     path: string;
     workspace_target_id?: string;
+};
+
+export type WorkdirDirectoriesResponse = {
+    directories?: Array<WorkdirDirectory>;
+    path?: string;
+    workspace_target_id?: string;
+};
+
+export type WorkdirDirectory = {
+    name?: string;
+    path?: string;
 };
 
 export type WorkdirGitBranchResponse = {
@@ -7926,6 +7941,10 @@ export type PostBotsByBotIdContainerFsMkdirErrors = {
      * Forbidden
      */
     403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
     /**
      * Internal Server Error
      */
@@ -13276,6 +13295,61 @@ export type PostBotsByBotIdWorkdirsResponses = {
 };
 
 export type PostBotsByBotIdWorkdirsResponse = PostBotsByBotIdWorkdirsResponses[keyof PostBotsByBotIdWorkdirsResponses];
+
+export type GetBotsByBotIdWorkdirsDirectoriesData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * Workspace target ID; defaults to the native workspace
+         */
+        workspace_target_id?: string;
+        /**
+         * Absolute directory path on that target
+         */
+        path?: string;
+    };
+    url: '/bots/{bot_id}/workdirs/directories';
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ApperrorProblem;
+    /**
+     * Forbidden
+     */
+    403: ApperrorProblem;
+    /**
+     * Not Found
+     */
+    404: ApperrorProblem;
+    /**
+     * Conflict
+     */
+    409: ApperrorProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ApperrorProblem;
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesError = GetBotsByBotIdWorkdirsDirectoriesErrors[keyof GetBotsByBotIdWorkdirsDirectoriesErrors];
+
+export type GetBotsByBotIdWorkdirsDirectoriesResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirDirectoriesResponse;
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesResponse = GetBotsByBotIdWorkdirsDirectoriesResponses[keyof GetBotsByBotIdWorkdirsDirectoriesResponses];
 
 export type DeleteBotsByBotIdWorkdirsByWorkdirIdData = {
     body?: never;
