@@ -750,12 +750,14 @@ func promptUsageFromACP(usage *acp.Usage) *sdk.Usage {
 	}
 	// ACP leaves open whether inputTokens includes the cache counters;
 	// claude-agent-acp reports them beside it and counts them in totalTokens.
+	// Cache reads count as reported only when the counters prove the
+	// accounting; otherwise inputTokens is merely assumed to include them.
 	cached := read + write
-	if cached > 0 && (usage.TotalTokens == usage.InputTokens+usage.OutputTokens+cached || usage.InputTokens < cached) {
+	beside := cached > 0 && (usage.TotalTokens == usage.InputTokens+usage.OutputTokens+cached || usage.InputTokens < cached)
+	if beside {
 		out.InputTokens += cached
 	}
-	known := cached == 0 || usage.TotalTokens == usage.InputTokens+usage.OutputTokens+cached || usage.TotalTokens == usage.InputTokens+usage.OutputTokens && usage.InputTokens >= cached
-	out.CacheReadTokensReported = known && usage.CachedReadTokens != nil
+	out.CacheReadTokensReported = usage.CachedReadTokens != nil && (cached == 0 || beside || usage.TotalTokens == usage.InputTokens+usage.OutputTokens)
 	out.CachedInputTokens = read
 	out.InputTokenDetails = sdk.InputTokenDetail{NoCacheTokens: out.InputTokens - read - write, CacheReadTokens: read, CacheWriteTokens: write}
 	if usage.ThoughtTokens != nil {

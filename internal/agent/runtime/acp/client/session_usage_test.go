@@ -152,7 +152,7 @@ func TestPromptUsageFromACPKeepsCacheWithinInput(t *testing.T) {
 		{name: "cache beside larger input", input: 1000, output: 100, total: 1400, read: 300, wantInput: 1300, wantNoCache: 1000, wantReported: true},
 		{name: "codex-acp cached read", input: 1500, output: 450, total: 2450, read: 500, wantInput: 2000, wantNoCache: 1500, wantReported: true},
 		{name: "cache within input", input: 310, output: 7, total: 317, read: 200, write: 100, wantInput: 310, wantNoCache: 10, wantReported: true},
-		{name: "cache larger than input", input: 10, output: 7, total: 17, read: 200, wantInput: 210, wantNoCache: 10},
+		{name: "cache larger than input", input: 10, output: 7, total: 17, read: 200, wantInput: 210, wantNoCache: 10, wantReported: true},
 		{name: "total fits neither accounting", input: 310, output: 7, total: 400, read: 200, wantInput: 310, wantNoCache: 110},
 		{name: "no cache", input: 10, output: 7, total: 17, wantInput: 10, wantNoCache: 10, wantReported: true},
 	} {
