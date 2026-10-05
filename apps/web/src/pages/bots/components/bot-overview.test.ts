@@ -64,3 +64,19 @@ describe('bot overview cache hit rate', () => {
     expect(await cacheHitText([{ day: '2026-09-30', input_tokens: 1000, cache_read_tokens: 0, cache_read_tokens_reported: false }])).toBe('—')
   })
 })
+
+describe('bot overview daily rows', () => {
+  it('adds same-day rows instead of keeping the last one', async () => {
+    expect(await cacheHitText([
+      { day: '2026-09-30', input_tokens: 1000, cache_read_tokens: 400, cache_read_tokens_reported: true },
+      { day: '2026-09-30', input_tokens: 3000, cache_read_tokens: 0, cache_read_tokens_reported: true },
+    ])).toBe('10.0%')
+  })
+
+  it('keeps an unreported same-day row from being dropped', async () => {
+    expect(await cacheHitText([
+      { day: '2026-09-30', input_tokens: 10, cache_read_tokens: 200 },
+      { day: '2026-09-30', input_tokens: 1000, cache_read_tokens: 400, cache_read_tokens_reported: true },
+    ])).toBe('—')
+  })
+})

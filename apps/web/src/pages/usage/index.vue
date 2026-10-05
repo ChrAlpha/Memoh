@@ -379,7 +379,7 @@ import BotSelect from '@/components/bot-select/index.vue'
 import { useChatSelectionStore } from '@/store/chat-selection'
 import type { HandlersDailyTokenUsage, HandlersModelTokenUsage, HandlersTokenUsageRecord } from '@memohai/sdk'
 import { useSyncedQueryParam } from '@/composables/useSyncedQueryParam'
-import { cacheHitRate, cacheReadReported, formatCacheHitRate } from './cache-usage'
+import { buildDayMap, cacheHitRate, cacheReadReported, formatCacheHitRate } from './cache-usage'
 import { formatDateTimeShort } from '@/utils/date-time'
 
 use([CanvasRenderer, LineChart, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent])
@@ -626,14 +626,6 @@ interface TypedDayMaps {
 }
 
 const usageBucketTypes: UsageBucketType[] = ['chat', 'discuss', 'acp_agent', 'schedule', 'memory']
-
-function buildDayMap(rows: HandlersDailyTokenUsage[] | undefined) {
-  const map = new Map<string, HandlersDailyTokenUsage>()
-  for (const r of rows ?? []) {
-    if (r.day) map.set(r.day, r)
-  }
-  return map
-}
 
 const dayMaps = computed<TypedDayMaps>(() => ({
   chat: buildDayMap(usageData.value?.chat),

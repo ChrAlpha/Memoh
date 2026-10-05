@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cacheHitRate, formatCacheHitRate } from './cache-usage'
+import { buildDayMap, cacheHitRate, formatCacheHitRate } from './cache-usage'
 
 describe('cache usage reporting', () => {
   it('shows an explicit zero as zero', () => {
@@ -30,5 +30,18 @@ describe('cache usage reporting', () => {
   it('keeps an empty input unavailable', () => {
     expect(formatCacheHitRate(cacheHitRate([]))).toBe('—')
     expect(cacheHitRate([{ input_tokens: 0, cache_read_tokens: 0, cache_read_tokens_reported: true }])).toBeNull()
+  })
+})
+
+describe('daily usage rows', () => {
+  it('adds rows of the same day and reports cache reads only when every row does', () => {
+    const days = buildDayMap([
+      { day: '2026-09-30', input_tokens: 10, output_tokens: 1, cache_read_tokens: 200, reasoning_tokens: 0 },
+      { day: '2026-09-30', input_tokens: 1000, output_tokens: 5, cache_read_tokens: 400, cache_read_tokens_reported: true, reasoning_tokens: 2 },
+      { day: '2026-10-01', input_tokens: 3000, output_tokens: 7, cache_read_tokens: 0, cache_read_tokens_reported: true, reasoning_tokens: 3 },
+      { day: '2026-10-01', input_tokens: 1000, output_tokens: 3, cache_read_tokens: 400, cache_read_tokens_reported: true, reasoning_tokens: 1 },
+    ])
+    expect(days.get('2026-09-30')).toEqual({ day: '2026-09-30', input_tokens: 1010, output_tokens: 6, cache_read_tokens: 600, cache_read_tokens_reported: false, reasoning_tokens: 2 })
+    expect(days.get('2026-10-01')).toEqual({ day: '2026-10-01', input_tokens: 4000, output_tokens: 10, cache_read_tokens: 400, cache_read_tokens_reported: true, reasoning_tokens: 4 })
   })
 })

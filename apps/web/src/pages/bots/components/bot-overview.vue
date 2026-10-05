@@ -299,7 +299,7 @@ import { useBotStatusMeta } from '@/composables/useBotStatusMeta'
 import { resolveBotWorkspaceBackend } from '@/utils/bot-workspace'
 import { formatMetricBytes, formatMetricPercent } from '@/utils/format-bytes'
 import { formatDateTime } from '@/utils/date-time'
-import { cacheHitRate, formatCacheHitRate } from '@/pages/usage/cache-usage'
+import { buildDayMap, cacheHitRate, formatCacheHitRate } from '@/pages/usage/cache-usage'
 
 use([CanvasRenderer, BarChart, GridComponent, TooltipComponent, LegendComponent])
 
@@ -629,14 +629,6 @@ const { data: tokenUsage, isLoading: usageLoading } = useQuery({
   },
   enabled: () => !!botId.value,
 })
-
-function buildDayMap(rows: HandlersDailyTokenUsage[] | undefined) {
-  const map = new Map<string, HandlersDailyTokenUsage>()
-  for (const r of rows ?? []) {
-    if (r.day) map.set(r.day, r)
-  }
-  return map
-}
 
 const dayMaps = computed(() => ({
   chat: buildDayMap(tokenUsage.value?.chat),
