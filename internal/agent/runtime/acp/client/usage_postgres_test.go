@@ -41,6 +41,7 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 		{name: "unknown mixed", usages: []acp.Usage{{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: acp.Ptr(3)}, {InputTokens: 10, OutputTokens: 7, TotalTokens: 17}}, input: 20, cache: 3, reportedRecords: 1},
 		{name: "claude-agent-acp cache beside input", usages: []acp.Usage{{InputTokens: 10, OutputTokens: 7, TotalTokens: 317, CachedReadTokens: acp.Ptr(200), CachedWriteTokens: acp.Ptr(100)}}, input: 310, cache: 200, reported: true, reportedRecords: 1},
 		{name: "codex-acp cached read", usages: []acp.Usage{{InputTokens: 1500, OutputTokens: 450, TotalTokens: 2450, CachedReadTokens: acp.Ptr(500)}}, input: 2000, cache: 500, reported: true, reportedRecords: 1},
+		{name: "opencode thought in total", usages: []acp.Usage{{InputTokens: 1000, OutputTokens: 7, TotalTokens: 1240, CachedReadTokens: acp.Ptr(200), ThoughtTokens: acp.Ptr(33)}}, input: 1200, cache: 200, reported: true, reportedRecords: 1},
 		{name: "cache larger than input", usages: []acp.Usage{{InputTokens: 10, OutputTokens: 7, TotalTokens: 17, CachedReadTokens: acp.Ptr(200)}}, input: 210, cache: 200, reported: true, reportedRecords: 1},
 		{name: "cache larger than input, total fits neither", usages: []acp.Usage{{InputTokens: 10, OutputTokens: 7, TotalTokens: 50, CachedReadTokens: acp.Ptr(200)}}, input: 210, cache: 200, reported: true, reportedRecords: 1},
 		{name: "total fits neither accounting", usages: []acp.Usage{{InputTokens: 310, OutputTokens: 7, TotalTokens: 400, CachedReadTokens: acp.Ptr(200)}}, input: 310, cache: 200},
