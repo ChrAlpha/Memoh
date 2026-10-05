@@ -22,10 +22,13 @@ import (
 	"github.com/felinics/memoh/internal/models"
 )
 
-// relayFailedStream is the Responses stream llm-relay emits when an Anthropic
-// upstream fails after message_start reported 10 input, 200 cache read, 100
-// cache write and 1 output token. Relay settles that usage itself; the native
-// loop must keep the call failed and must not turn it into a committed step.
+// relayFailedStream has the shape of the Responses stream llm-relay emits when
+// an Anthropic upstream fails after message_start reported 10 input, 200 cache
+// read, 100 cache write and 1 output token. Relay settles that usage itself;
+// the native loop must keep the call failed and must not turn it into a
+// committed step. Each case picks the error code for its retry classification,
+// not for being Relay's verbatim output: Relay forwards Anthropic error types,
+// and OpenAI's server_error in the retried case is not one of them.
 func relayFailedStream(code string) string {
 	return "event: response.created\ndata: {\"response\":{\"created_at\":946684800,\"id\":\"resp_msg_failure\",\"model\":\"review-model\",\"object\":\"response\",\"output\":[],\"status\":\"in_progress\"},\"type\":\"response.created\"}\n\n" +
 		"event: response.output_item.added\ndata: {\"item\":{\"type\":\"message\",\"id\":\"msg_msg_failure_0\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}]},\"output_index\":0,\"type\":\"response.output_item.added\"}\n\n" +
@@ -48,7 +51,7 @@ func TestPostgresProviderUsageExcludesFailedAttempts(t *testing.T) {
 		input    int
 		read     int
 	}{
-		{name: "failure", streams: []string{relayFailedStream("overloaded_error")}, terminal: native.EventAgentAbort},
+		{name: "failure", streams: []string{relayFailedStream("invalid_request_error")}, terminal: native.EventAgentAbort},
 		{name: "retried failure", streams: []string{relayFailedStream("server_error"), relayCompletedStream}, terminal: native.EventAgentEnd, retries: 1, input: 400, read: 300},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
