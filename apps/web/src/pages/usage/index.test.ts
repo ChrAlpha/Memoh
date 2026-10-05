@@ -8,14 +8,15 @@ const charts = vi.hoisted(() => [] as Array<{
   tooltip: { formatter: (params: unknown) => string }
 }>)
 
+const usage = vi.hoisted(() => ({ data: {} as Record<string, unknown> }))
+const tinyRateUsage = {
+  chat: [{ day: '2026-09-30', input_tokens: 350000, cache_read_tokens: 1, cache_read_tokens_reported: true }],
+  by_model: [],
+}
+
 vi.mock('@pinia/colada', () => ({
   useQuery: ({ key }: { key: () => string[] }) => ({
-    data: ref(key()[0] === 'token-usage'
-      ? {
-          chat: [{ day: '2026-09-30', input_tokens: 350000, cache_read_tokens: 1, cache_read_tokens_reported: true }],
-          by_model: [],
-        }
-      : { items: [] }),
+    data: ref(key()[0] === 'token-usage' ? usage.data : { items: [] }),
     asyncStatus: ref('idle'),
     refetch: vi.fn(),
   }),
@@ -54,6 +55,18 @@ vi.mock('vue-echarts', () => ({
 let app: ReturnType<typeof createApp> | undefined
 let root: HTMLDivElement | undefined
 
+async function mountUsagePage(data: Record<string, unknown>) {
+  usage.data = data
+  const UsagePage = (await import('./index.vue')).default
+  root = document.createElement('div')
+  document.body.append(root)
+  app = createApp(UsagePage)
+  app.config.globalProperties.$t = (key: string) => key
+  app.mount(root)
+  await nextTick()
+  return root
+}
+
 afterEach(() => {
   app?.unmount()
   root?.remove()
@@ -65,13 +78,7 @@ describe('cache hit rate chart', () => {
   it('passes a positive rate to the chart and displays it below 0.1 percent', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-09-30T12:00:00Z'))
-    const UsagePage = (await import('./index.vue')).default
-    root = document.createElement('div')
-    document.body.append(root)
-    app = createApp(UsagePage)
-    app.config.globalProperties.$t = (key: string) => key
-    app.mount(root)
-    await nextTick()
+    await mountUsagePage(tinyRateUsage)
 
     const chart = charts.find(option => option.series[0]?.name === 'usage.cacheHitRate')
     expect(chart).toBeDefined()
@@ -79,5 +86,16 @@ describe('cache hit rate chart', () => {
     expect(value).toBeGreaterThan(0)
     expect(value).toBeCloseTo(1 / 350000 * 100, 10)
     expect(chart?.tooltip.formatter({ axisValueLabel: '2026-09-30', seriesName: 'usage.cacheHitRate', value })).toContain('<0.1%')
+  })
+})
+
+describe('cache usage hint', () => {
+  it.each([
+    ['no usage in range', { by_model: [] }, false],
+    ['only reported rows', tinyRateUsage, false],
+    ['an unreported row', { chat: [{ day: '2026-09-30', input_tokens: 10, cache_read_tokens: 200 }], by_model: [] }, true],
+  ])('with %s', async (_name, data, shown) => {
+    const page = await mountUsagePage(data)
+    expect(page.textContent?.includes('usage.cacheUsageUnavailable')).toBe(shown)
   })
 })

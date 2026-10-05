@@ -120,7 +120,7 @@
             />
           </div>
           <p
-            v-if="!summary.cacheReadReported"
+            v-if="summary.cacheReadUnconfirmed"
             class="px-2 text-xs text-muted-foreground"
           >
             {{ $t('usage.cacheUsageUnavailable') }}
@@ -700,6 +700,7 @@ const summary = computed(() => {
     totalOutputTokens: totalOutput,
     avgCacheHitRate: rate,
     cacheReadReported: cacheRows.length > 0 && cacheRows.every(cacheReadReported),
+    cacheReadUnconfirmed: cacheRows.some(row => !cacheReadReported(row)),
     totalReasoningTokens: totalReasoning,
   }
 })
