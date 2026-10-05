@@ -763,6 +763,7 @@ func promptUsageFromACP(usage *acp.Usage) *sdk.Usage {
 		usage.TotalTokens == usage.InputTokens+usage.OutputTokens+thought+cached || usage.InputTokens < cached)
 	if beside {
 		out.InputTokens += cached
+		out.TotalTokens = max(out.TotalTokens, out.InputTokens+out.OutputTokens)
 	}
 	out.CacheReadTokensReported = usage.CachedReadTokens != nil && (cached == 0 || beside || usage.TotalTokens == usage.InputTokens+usage.OutputTokens)
 	out.CachedInputTokens = read

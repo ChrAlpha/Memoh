@@ -146,6 +146,7 @@ func TestPromptUsageFromACPKeepsCacheWithinInput(t *testing.T) {
 		read, write, thought int
 		wantInput            int
 		wantNoCache          int
+		wantTotal            int
 		wantReported         bool
 	}{
 		{name: "cache beside input", input: 10, output: 7, total: 317, read: 200, write: 100, wantInput: 310, wantNoCache: 10, wantReported: true},
@@ -153,15 +154,19 @@ func TestPromptUsageFromACPKeepsCacheWithinInput(t *testing.T) {
 		{name: "codex-acp cached read", input: 1500, output: 450, total: 2450, read: 500, wantInput: 2000, wantNoCache: 1500, wantReported: true},
 		{name: "opencode thought in total", input: 1000, output: 7, thought: 33, total: 1240, read: 200, wantInput: 1200, wantNoCache: 1000, wantReported: true},
 		{name: "cache within input", input: 310, output: 7, total: 317, read: 200, write: 100, wantInput: 310, wantNoCache: 10, wantReported: true},
-		{name: "cache larger than input", input: 10, output: 7, total: 17, read: 200, wantInput: 210, wantNoCache: 10, wantReported: true},
-		{name: "cache larger than input, total fits neither", input: 10, output: 7, total: 50, read: 200, wantInput: 210, wantNoCache: 10, wantReported: true},
+		{name: "cache larger than input", input: 10, output: 7, total: 17, read: 200, wantInput: 210, wantNoCache: 10, wantTotal: 217, wantReported: true},
+		{name: "cache larger than input, total fits neither", input: 10, output: 7, total: 50, read: 200, wantInput: 210, wantNoCache: 10, wantTotal: 217, wantReported: true},
 		{name: "total fits neither accounting", input: 310, output: 7, total: 400, read: 200, wantInput: 310, wantNoCache: 110},
 		{name: "no cache", input: 10, output: 7, total: 17, wantInput: 10, wantNoCache: 10, wantReported: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := promptUsageFromACP(&acp.Usage{InputTokens: tt.input, OutputTokens: tt.output, TotalTokens: tt.total, CachedReadTokens: acp.Ptr(tt.read), CachedWriteTokens: acp.Ptr(tt.write), ThoughtTokens: acp.Ptr(tt.thought)})
 			detail := got.InputTokenDetails
-			if got.InputTokens != tt.wantInput || detail.NoCacheTokens != tt.wantNoCache || detail.CacheReadTokens != tt.read || detail.CacheWriteTokens != tt.write ||
+			wantTotal := tt.total
+			if tt.wantTotal != 0 {
+				wantTotal = tt.wantTotal
+			}
+			if got.InputTokens != tt.wantInput || got.TotalTokens != wantTotal || detail.NoCacheTokens != tt.wantNoCache || detail.CacheReadTokens != tt.read || detail.CacheWriteTokens != tt.write ||
 				detail.NoCacheTokens+detail.CacheReadTokens+detail.CacheWriteTokens != got.InputTokens || got.CachedInputTokens != tt.read || got.CacheReadTokensReported != tt.wantReported {
 				t.Fatalf("usage = %+v", got)
 			}
