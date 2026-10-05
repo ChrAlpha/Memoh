@@ -483,9 +483,8 @@
     "providers": "Providers",
     "webSearch": "Web Search",
     "group": {
-      "capabilities": "Models & Capabilities",
       "team": "Team",
-      "preferences": "Preferences"
+      "personal": "Personal"
     },
     "network": "Network",
     "speech": "Speech",
@@ -493,13 +492,13 @@
     "voice": "Voice",
     "video": "Video",
     "settings": "Settings",
-    "profile": "Profile",
+    "profile": "Account",
     "home": "Home",
     "mcp": "MCP",
     "usage": "Usage",
     "people": "Members",
     "appearance": "Appearance",
-    "keyboard": "Keyboard",
+    "keyboard": "Keyboard Shortcuts",
     "supermarket": "Supermarket",
     "about": "About",
     "userMenu": "Account menu",
