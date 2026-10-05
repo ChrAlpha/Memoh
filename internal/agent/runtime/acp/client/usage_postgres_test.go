@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
-	message "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -69,7 +68,9 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 				t.Fatal(err)
 			}
 			queries := sqlc.New(tx)
-			messages := message.NewService(nil, postgresstore.NewQueries(queries))
+			store := postgresstore.NewQueries(queries)
+			botUUID, _ := dbpkg.ParseUUID(botID)
+			sessionUUID, _ := dbpkg.ParseUUID(sessionID)
 			runner, agentPath := newStartSessionTestRunner(t)
 			for _, usage := range tt.usages {
 				reported, err := json.Marshal(usage)
@@ -87,12 +88,11 @@ func TestPostgresACPUsageReporting(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, msg := range messageconv.SDKMessagesToModelMessages(result.Output) {
-					if _, err := messages.Persist(ctx, message.PersistInput{BotID: botID, SessionID: sessionID, Role: msg.Role, Content: msg.Content, Usage: msg.Usage, RuntimeType: "acp_agent"}); err != nil {
+					if _, err := store.CreateMessage(ctx, sqlc.CreateMessageParams{BotID: botUUID, SessionID: sessionUUID, Role: msg.Role, Content: msg.Content, Metadata: []byte(`{}`), Usage: msg.Usage, SessionMode: "chat", RuntimeType: "acp_agent"}); err != nil {
 						t.Fatal(err)
 					}
 				}
 			}
-			botUUID, _ := dbpkg.ParseUUID(botID)
 			from := pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true}
 			to := pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true}
 			days, err := queries.GetTokenUsageByDayAndType(ctx, sqlc.GetTokenUsageByDayAndTypeParams{BotID: botUUID, FromTime: from, ToTime: to})
