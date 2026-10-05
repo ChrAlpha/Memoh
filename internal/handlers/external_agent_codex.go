@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/application"
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -100,8 +102,8 @@ type CodexDeviceLoginPollResponse struct {
 // @Tags external-agents
 // @Param bot_id path string true "Bot ID"
 // @Success 200 {object} CodexDeviceLoginAuthorizeResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
+// @Failure 400 {object} apperror.Problem
+// @Failure 403 {object} apperror.Problem
 // @Failure 503 {object} apperror.Problem
 // @Param id path string true "Bot Agent ID"
 // @Router /bots/{bot_id}/agents/{id}/codex/login/device/authorize [post].
@@ -112,12 +114,8 @@ func (h *ExternalAgentCodexHandler) AuthorizeDevice(c echo.Context) error {
 	}
 	start, err := h.driver.StartChatGPTDeviceLogin(c.Request().Context(), botID, botAgentID)
 	if err != nil {
-		h.logger.ErrorContext(c.Request().Context(), "codex device login start failed", slog.String("bot_id", botID), slog.Any("error", err))
-		if feedbackErr := externalAgentFeedbackHTTPError(err); feedbackErr != nil {
-			return feedbackErr
-		}
-		if apperror.CodeOf(err) != "" {
-			return err
+		if translated := application.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
+			return translated
 		}
 		return apperror.Wrap(
 			apperror.CodeExternalRuntimeUnavailable,
@@ -138,8 +136,8 @@ func (h *ExternalAgentCodexHandler) AuthorizeDevice(c echo.Context) error {
 // @Param bot_id path string true "Bot ID"
 // @Param body body CodexDeviceLoginPollRequest true "Login reference"
 // @Success 200 {object} CodexDeviceLoginPollResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
+// @Failure 400 {object} apperror.Problem
+// @Failure 403 {object} apperror.Problem
 // @Param id path string true "Bot Agent ID"
 // @Router /bots/{bot_id}/agents/{id}/codex/login/device/poll [post].
 func (h *ExternalAgentCodexHandler) PollDevice(c echo.Context) error {
@@ -155,6 +153,7 @@ func (h *ExternalAgentCodexHandler) PollDevice(c echo.Context) error {
 	status := h.driver.PollDeviceLogin(botID, botAgentID, loginID)
 	if status.Status == "success" {
 		if err := h.driver.CompleteChatGPTDeviceLogin(c.Request().Context(), ownerUserID, botID, botAgentID, loginID); err != nil {
+			err = application.ExternalRuntimeError(err)
 			if apperror.CodeOf(err) != "" {
 				return err
 			}
@@ -170,8 +169,8 @@ func (h *ExternalAgentCodexHandler) PollDevice(c echo.Context) error {
 // @Param bot_id path string true "Bot ID"
 // @Param body body CodexDeviceLoginPollRequest true "Login reference"
 // @Success 204
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
+// @Failure 400 {object} apperror.Problem
+// @Failure 403 {object} apperror.Problem
 // @Param id path string true "Bot Agent ID"
 // @Router /bots/{bot_id}/agents/{id}/codex/login/device/cancel [post].
 func (h *ExternalAgentCodexHandler) CancelDevice(c echo.Context) error {
@@ -215,7 +214,7 @@ type CodexUsageResponse struct {
 // @Param bot_id path string true "Bot ID"
 // @Param id path string true "Bot Agent ID"
 // @Success 200 {object} CodexUsageResponse
-// @Failure 403 {object} ErrorResponse
+// @Failure 403 {object} apperror.Problem
 // @Failure 404 {object} apperror.Problem
 // @Failure 409 {object} apperror.Problem
 // @Failure 422 {object} apperror.Problem
@@ -228,10 +227,7 @@ func (h *ExternalAgentCodexHandler) Usage(c echo.Context) error {
 	}
 	usage, err := h.driver.AccountUsage(c.Request().Context(), botID, botAgentID)
 	if err != nil {
-		if apperror.CodeOf(err) == apperror.CodeAgentCredentialUsageUnavailable {
-			h.logger.WarnContext(c.Request().Context(), "codex usage request failed", slog.String("bot_id", botID), slog.Any("error", err))
-		}
-		return err
+		return codexUsageError(err)
 	}
 	response := CodexUsageResponse{LimitReached: usage.LimitReached, Windows: make([]CodexUsageWindow, 0, len(usage.Windows))}
 	for _, window := range usage.Windows {
@@ -242,4 +238,18 @@ func (h *ExternalAgentCodexHandler) Usage(c echo.Context) error {
 		})
 	}
 	return c.JSON(http.StatusOK, response)
+}
+
+// codexUsageError translates a failed usage read: an Agent credential or
+// runtime failure by its kind, and a rejected sign-in or an unreadable usage
+// endpoint by its own code.
+func codexUsageError(err error) error {
+	switch {
+	case errors.Is(err, codexruntime.ErrUsageSignInExpired):
+		return apperror.Wrap(apperror.CodeAgentCredentialUsageAuthExpired, err, nil)
+	case errors.Is(err, codexruntime.ErrUsageUnavailable):
+		return apperror.Wrap(apperror.CodeAgentCredentialUsageUnavailable, err, nil)
+	default:
+		return application.ExternalRuntimeError(err)
+	}
 }
