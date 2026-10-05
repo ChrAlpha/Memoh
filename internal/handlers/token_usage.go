@@ -242,11 +242,12 @@ func (h *TokenUsageHandler) fetchMemoryUsageByDay(ctx context.Context, botID pgt
 	result := make([]DailyTokenUsage, 0, len(rows))
 	for _, r := range rows {
 		result = append(result, DailyTokenUsage{
-			Day:             formatPgDate(r.Day),
-			InputTokens:     r.InputTokens,
-			OutputTokens:    r.OutputTokens,
-			CacheReadTokens: r.CacheReadTokens,
-			ReasoningTokens: r.ReasoningTokens,
+			Day:                     formatPgDate(r.Day),
+			InputTokens:             r.InputTokens,
+			OutputTokens:            r.OutputTokens,
+			CacheReadTokens:         r.CacheReadTokens,
+			CacheReadTokensReported: r.CacheReadTokensReported,
+			ReasoningTokens:         r.ReasoningTokens,
 		})
 	}
 	return result, nil

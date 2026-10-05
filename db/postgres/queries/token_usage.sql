@@ -275,6 +275,7 @@ SELECT
   COALESCE(SUM((mu.usage->>'inputTokens')::bigint), 0)::bigint AS input_tokens,
   COALESCE(SUM((mu.usage->>'outputTokens')::bigint), 0)::bigint AS output_tokens,
   COALESCE(SUM((mu.usage->'inputTokenDetails'->>'cacheReadTokens')::bigint), 0)::bigint AS cache_read_tokens,
+  COALESCE(BOOL_AND(COALESCE(mu.usage->'cacheReadTokensReported' = 'true'::jsonb, false)), false)::boolean AS cache_read_tokens_reported,
   COALESCE(SUM((mu.usage->'outputTokenDetails'->>'reasoningTokens')::bigint), 0)::bigint AS reasoning_tokens
 FROM bot_memory_usage mu
 WHERE mu.team_id = public.memoh_current_team_id() AND mu.bot_id = sqlc.arg(bot_id)
