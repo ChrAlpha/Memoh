@@ -49,7 +49,7 @@ func TestPostgresProviderUsageExcludesFailedAttempts(t *testing.T) {
 		read     int
 	}{
 		{name: "failure", streams: []string{relayFailedStream("overloaded_error")}, terminal: native.EventAgentAbort},
-		{name: "retried failure", streams: []string{relayFailedStream("rate_limit_error"), relayCompletedStream}, terminal: native.EventAgentEnd, retries: 1, input: 400, read: 300},
+		{name: "retried failure", streams: []string{relayFailedStream("server_error"), relayCompletedStream}, terminal: native.EventAgentEnd, retries: 1, input: 400, read: 300},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
