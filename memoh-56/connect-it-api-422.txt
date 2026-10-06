@@ -1,0 +1,5 @@
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/json
+Content-Length: 158
+
+{"error":"oauth_client_not_configured","message":"the connector's OAuth client is not configured; an administrator must set its client ID and client secret"}
