@@ -99,3 +99,35 @@ describe('cache usage hint', () => {
     expect(page.textContent?.includes('usage.cacheUsageUnavailable')).toBe(shown)
   })
 })
+
+describe('rows for the same day', () => {
+  const day = '2026-09-30'
+  const reported = [
+    { day, input_tokens: 1000, output_tokens: 10, cache_read_tokens: 400, cache_read_tokens_reported: true },
+    { day, input_tokens: 3000, output_tokens: 20, cache_read_tokens: 0, cache_read_tokens_reported: true },
+  ]
+  const mixed = [
+    { day, input_tokens: 10, cache_read_tokens: 200 },
+    { day, input_tokens: 100, cache_read_tokens: 0, cache_read_tokens_reported: true },
+  ]
+  const seriesValue = (name: string) => charts.find(option => option.series.some(series => series.name === name))
+    ?.series.find(series => series.name === name)?.data[0]
+
+  it.each([['in order', reported], ['reversed', [...reported].reverse()]])('add up when %s', async (_name, chat) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-30T12:00:00Z'))
+    await mountUsagePage({ chat, by_model: [] })
+
+    expect(seriesValue('usage.cacheRead')).toBe(400)
+    expect(seriesValue('usage.noCache')).toBe(3600)
+    expect(seriesValue('usage.cacheHitRate')).toBeCloseTo(10, 10)
+  })
+
+  it.each([['in order', mixed], ['reversed', [...mixed].reverse()]])('keep an unreported row visible when %s', async (_name, chat) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-30T12:00:00Z'))
+    const page = await mountUsagePage({ chat, by_model: [] })
+
+    expect(page.textContent?.includes('usage.cacheUsageUnavailable')).toBe(true)
+  })
+})
