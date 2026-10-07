@@ -1,0 +1,8 @@
+platform MacIntel
+after ⌘⌥Enter in edit box -> provider requests [] edit box open 1 focused TEXTAREA
+ok the focus shortcut keeps the edit open, sends nothing and moves to the composer
+shot 14-after-mac-edit-focus-shortcut-keeps-draft
+⌘Enter -> provider ["reply","reply"] edit box open 0
+ok ⌘Enter submits the edit
+shot 15-after-mac-edit-cmd-enter-submits
+errors []

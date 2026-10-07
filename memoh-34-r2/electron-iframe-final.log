@@ -1,0 +1,23 @@
+after shot 39-after-electron-start
+after start file:///workspaces/Memoh/.worktrees/keyboard-shortcuts-workbench/apps/desktop/out/renderer/index.html *New Session
+after opened via X11 Alt+Shift+X/O/O New Session | Terminal 1 | localhost:5173/ | *localhost:5173/
+after ok focus is inside the browser iframe
+after X11 Ctrl+W inside iframe: 4 -> 3 tabs New Session | Terminal 1 | *localhost:5173/
+after ok Ctrl+W inside the iframe closes exactly one tab
+after shot 41-after-electron-iframe-ctrl-w-closes-tab
+after ok focus is inside the browser iframe before holding Ctrl+W
+after X11 Ctrl+W held 1.5s inside iframe: 5 -> 4 tabs New Session | Terminal 1 | localhost:5173/ | *localhost:5173/
+after ok held Ctrl+W inside the iframe closes exactly one tab
+after shot 42-after-electron-iframe-held-ctrl-w-closes-one
+after menu Close accelerator after rebind CmdOrCtrl+Alt+U
+after ok focus is inside the browser iframe after rebinding
+after rebound: old Ctrl+W inside iframe 4 -> 4; new Ctrl+Alt+U 4 -> 3 New Session | Terminal 1 | *localhost:5173/
+after ok after rebinding, only Ctrl+Alt+U closes one tab from the iframe
+after shot 43-after-electron-iframe-rebound-close
+after ok focus is back in the main frame
+after X11 Ctrl+W in main frame: 3 -> 2 New Session | *Terminal 1
+after ok Ctrl+W in the main frame closes exactly one tab
+after X11 Alt+Shift+PageUp in terminal: New Session | *Terminal 1 -> *New Session | Terminal 1
+after ok Alt+Shift+PageUp leaves the terminal for the previous tab
+after shot 44-after-electron-terminal-yields-tab-switch
+after errors? done

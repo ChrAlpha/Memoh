@@ -1,0 +1,12 @@
+platform MacIntel
+after ⌘⌥Enter in edit box -> provider requests ["reply","reply"] edit box open 0 focused BODY
+FAIL the focus shortcut keeps the edit open, sends nothing and moves to the composer
+shot 14-after-mac-edit-focus-shortcut-keeps-draft
+locator.focus: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('textarea[aria-label="Edit"]')[22m
+
+    at /home/vscode/evidence/s4-shortcuts-20261007/edit.js:26:55 {
+  log: [ `  - waiting for locator('textarea[aria-label="Edit"]')` ],
+  name: 'TimeoutError'
+}

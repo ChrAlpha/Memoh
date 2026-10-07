@@ -1,0 +1,17 @@
+de physical Alt+Shift+2 -> Alt+Shift+key=" code=Digit2 altgr=false prevented=false | sidebar Files | composer ""
+ok de: physical Alt+Shift+2 shows Files and types nothing
+de physical Alt+Shift+1 -> Alt+Shift+key=! code=Digit1 altgr=false prevented=false | sidebar Chat
+ok de: physical Alt+Shift+1 shows Chat
+de physical Alt+Shift+X -> Alt+Shift+key=X code=KeyX altgr=false prevented=false | *New Session -> New Session | *Terminal 1
+ok de: physical Alt+Shift+X opens a terminal
+de physical Alt+Shift+PageDown inside terminal -> Alt+Shift+key=PageDown code=PageDown altgr=false prevented=false | *New Session | Terminal 1
+ok de: physical Alt+Shift+PageDown leaves the terminal
+de old default Ctrl+Alt+] (US ] position, then Ctrl+AltGr+9) -> Ctrl+Alt+key=+ code=BracketRight altgr=false prevented=false ; Ctrl+key=AltGraph code=AltRight altgr=false prevented=false ; Ctrl+key=] code=Digit9 altgr=true prevented=false
+fr physical Alt+Shift+2 -> Alt+Shift+key=2 code=Digit2 altgr=false prevented=false | sidebar Files | composer ""
+ok fr: physical Alt+Shift+2 shows Files and types nothing
+fr physical Alt+Shift+1 -> Alt+Shift+key=1 code=Digit1 altgr=false prevented=false | sidebar Chat
+ok fr: physical Alt+Shift+1 shows Chat
+fr physical Alt+Shift+X -> Alt+Shift+key=X code=KeyX altgr=false prevented=false | *New Session | Terminal 1 -> New Session | Terminal 1 | *Terminal 2
+ok fr: physical Alt+Shift+X opens a terminal
+fr physical Alt+Shift+PageDown inside terminal -> Alt+Shift+key=PageDown code=PageDown altgr=false prevented=false | *New Session | Terminal 1 | Terminal 2
+ok fr: physical Alt+Shift+PageDown leaves the terminal

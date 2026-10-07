@@ -1,0 +1,15 @@
+after start New Session | *Terminal 1 focus in xterm true
+after Alt+Shift+PageUp in terminal -> New Session | *Terminal 1
+FAIL Alt+Shift+PageUp leaves the terminal for the previous tab
+shot 25-after-terminal-yields-tab-switch
+Alt+Shift+2 in terminal -> rail Chat
+FAIL Alt+Shift+2 shows Files from the terminal
+Alt+Shift+Enter in terminal -> New Session | *Terminal 1 focused TEXTAREA xterm-helper-textarea
+FAIL Alt+Shift+Enter moves focus from the terminal to the composer
+shot 26-after-terminal-focus-chat-input
+Ctrl+W and Alt+Shift+X in terminal -> New Session | *Terminal 1
+ok Ctrl+W and Alt+Shift+X stay with the shell
+terminal tail ["shell-42","root@3d1cadcecac3:~# echo done","done","root@3d1cadcecac3:~#"]
+ok Ctrl+W deleted the word in the shell and later input still reaches it
+shot 27-after-terminal-keeps-shell-keys
+errors []

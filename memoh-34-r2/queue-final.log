@@ -1,0 +1,4 @@
+after Alt+Shift+Enter in queued follow-up -> composer (Ask anything)
+shot 17-after-queue-item-focus-moves-to-composer
+ok Alt+Shift+Enter moves focus from the queued follow-up to the composer
+errors []

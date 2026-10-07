@@ -1,0 +1,17 @@
+{"Open Settings":"Ctrl+K","Close current workspace tab":"Ctrl+W","Save active file":"Ctrl+S","Toggle sidebar":"Ctrl+B","New session":"Alt+Shift+N","Focus chat input":"Alt+Shift+Enter","Show Chat":"Alt+Shift+1","Show Files":"Alt+Shift+2","Show Schedule":"Alt+Shift+3","Show Supermarket":"Alt+Shift+4","Next tab":"Alt+Shift+PageDown","Previous tab":"Alt+Shift+PageUp","Split right":"Alt+Shift+R","Split below":"Alt+Shift+B","New terminal":"Alt+Shift+X","New browser":"Alt+Shift+O","Close media lightbox":"Esc","Previous media":"←","Next media":"→"}
+ok final Windows/Linux defaults shown
+ok Alt+Shift+2 shows Files
+ok Alt+Shift+X/O open terminal and browser: New Session | Terminal 1 | *localhost:5173/
+ok Alt+Shift+PageUp focuses the previous tab
+ok Alt+Shift+PageDown focuses the next tab
+ok Alt+Shift+R/B split right/below: groups 1->2->3
+shot 51-final-alt-shift-r-b-split
+Alt+Shift+Enter is assigned to New terminal, so this shortcut is off. Choose another combination. | Saved shortcut Ctrl+C isn't available here, so the default is used. This combination is used for text editing (copy, paste, undo…).
+ok settings explain the taken default and the unusable override
+shot 52-final-taken-default-and-ignored-override
+ok Ctrl+C copies; the ignored Mod+C override does not open a browser
+ok saved Alt+Shift+Enter still opens a terminal: New Session | Terminal 1 | localhost:5173/ | *Terminal 2 | *localhost:5173/ | *localhost:5173/
+"Edit shortcut\n\nNew terminal\n\nCtrl\nShift\n1\nThis combination is already used by New browser.\nReset to default\nCancel\nSave"
+ok capture blocks Ctrl+Shift+1 when Ctrl+Shift+! is saved
+shot 53-final-capture-digit-alias-conflict
+errors []

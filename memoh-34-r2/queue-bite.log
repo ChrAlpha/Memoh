@@ -1,0 +1,4 @@
+after Alt+Shift+Enter in queued follow-up -> queue item input
+shot 17-after-queue-item-focus-moves-to-composer
+FAIL Alt+Shift+Enter moves focus from the queued follow-up to the composer
+errors []

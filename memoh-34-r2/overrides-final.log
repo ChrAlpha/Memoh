@@ -1,0 +1,19 @@
+notice Saved shortcut Ctrl+C isn't available here, so the default is used. This combination is used for text editing (copy, paste, undo…). | keys [ 'Alt', 'Shift', 'X' ]
+ok an unusable saved Ctrl+C is explained and the default shows
+shot 30-ignored-override-notice
+Ctrl+C in composer -> tabs *New Session | clipboard "copy me please"
+ok Ctrl+C copies and opens nothing
+legal override Ctrl+Alt+Shift+F9 -> rail Files
+ok a valid saved override still works
+default Alt+Shift+X still opens a terminal -> New Session | *Terminal 1
+ok the command keeps its default key
+shot 31-ignored-override-copy-still-works
+after reset overrides {"show-files":"Mod+Alt+Shift+F9"} notice 0
+ok reset removes only that override and its notice
+F11 for Next media -> "Edit shortcut\n\nNext media\n\nF11\nThis combination is reserved by the browser, the OS or the app menu.\nReset to default\nCancel\nSave"
+ok F11 is reserved on Linux
+shot 32-capture-f11-reserved-linux
+Ctrl+Alt+H for New terminal -> "Edit shortcut\n\nNew terminal\n\nCtrl\nAlt\nH\nReset to default\nCancel\nSave"
+ok Ctrl+Alt+H, a macOS-only menu key, is free on Linux
+shot 33-capture-ctrl-alt-h-allowed-linux
+errors []

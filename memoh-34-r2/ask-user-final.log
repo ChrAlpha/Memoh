@@ -1,0 +1,7 @@
+after Alt+Shift+Enter -> provider requests [] form still pending true answer value Ada
+ok the focus shortcut leaves the answer unsent and in place
+shot 11-after-ask-user-focus-shortcut-keeps-answer
+Enter -> provider ["answer"]
+ok a plain Enter sends the answer once
+shot 12-after-ask-user-enter-submits
+errors []

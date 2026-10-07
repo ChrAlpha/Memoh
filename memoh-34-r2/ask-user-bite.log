@@ -1,0 +1,11 @@
+after Alt+Shift+Enter -> provider requests ["ask","answer"] form still pending false answer value gone
+FAIL the focus shortcut leaves the answer unsent and in place
+shot 11-after-ask-user-focus-shortcut-keeps-answer
+locator.focus: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('input[placeholder]').last()[22m
+
+    at /home/vscode/evidence/s4-shortcuts-20261007/ask-user.js:21:17 {
+  log: [ "  - waiting for locator('input[placeholder]').last()" ],
+  name: 'TimeoutError'
+}

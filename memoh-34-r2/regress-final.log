@@ -1,0 +1,13 @@
+ok Alt+Shift+X during IME composition opens nothing
+shot 70-final-ime-composition-no-command
+ok the composition commits into the composer
+ok Alt+Shift+X after the composition opens a terminal
+ok an open dialog blocks workspace shortcuts
+shot 71-final-modal-blocks-workspace-keys
+ok after the dialog closes Alt+Shift+3 shows Schedule
+ok ArrowRight moves to the next image in the lightbox
+ok the open lightbox blocks workspace shortcuts
+shot 72-final-lightbox-scope
+ok Escape closes the lightbox
+ok after the lightbox closes Alt+Shift+X opens a terminal
+errors []

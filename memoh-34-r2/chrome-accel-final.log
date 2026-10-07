@@ -1,0 +1,5 @@
+chromium 151.0.7922.34
+plain page Alt+Shift+N -> pages 1 [ 'data:text/html,<title>plain</title><text' ]
+X -> New Session | *Terminal 1 | N -> *New Session | Terminal 1 | R/B groups 1 -> 1 -> 1 | page handled KeyX:true KeyN:true KeyR:true KeyB:true
+ok Memoh handles Alt+Shift+X/N/R/B before Chromium 151 browser accelerators
+Memoh page Alt+Shift+X, N, R -> pages 1 | workspace tabs *New Session -> New Session | Terminal 1 | New Session | *New Session
