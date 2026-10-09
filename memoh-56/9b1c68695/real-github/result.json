@@ -1,0 +1,41 @@
+{
+  "result": "passed",
+  "source_commit": "9b1c686951fc96025c075f343029e2e638fd03d4",
+  "connect_it_revision": "92d1c5862aefe0a508e76a652704ae3fd10ef2b1",
+  "manual_github_authorization": "completed by user",
+  "real_github_token_exchange": "passed",
+  "connection_transition": [
+    "pending",
+    "active"
+  ],
+  "readonly_tool": "github__get_me",
+  "readonly_calls": 2,
+  "nonempty_login_and_positive_id": true,
+  "identity_details_recorded": false,
+  "repository_write_calls": 0,
+  "requested_scopes": [
+    "repo",
+    "read:user"
+  ],
+  "granted_scopes_independently_verified": false,
+  "browser_actions": [
+    "login to local OSS as fixture member",
+    "open real GitHub App connection",
+    "assert Connected",
+    "reload page",
+    "assert Connected again",
+    "capture screenshot"
+  ],
+  "reload_keeps_connected": true,
+  "persistent_binding_count_before_cleanup": 1,
+  "persistent_app_ref_count_before_cleanup": 1,
+  "pending_oauth_authorizations_after_exchange": 0,
+  "local_cleanup_verified": true,
+  "github_grant_revoked": false,
+  "limits": [
+    "No production deployment acceptance",
+    "No full Human QA confirmation",
+    "Natural expiry/refresh/revocation not tested",
+    "App metadata is a local fixture; GitHub authorization, token exchange and get_me used real GitHub"
+  ]
+}
