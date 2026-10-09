@@ -1,0 +1,26 @@
+{
+  "source_repository": "felinics/Memoh",
+  "source_commit": "9b1c686951fc96025c075f343029e2e638fd03d4",
+  "integrated_main": "5cdc7a662b028aa7f04a7fb7be164ea4c9d9be8d",
+  "connect_it_revision": "92d1c5862aefe0a508e76a652704ae3fd10ef2b1",
+  "go_packages_passed": 5,
+  "focused_go_race": "passed",
+  "vitest_tests_passed": 147,
+  "mounted_bot_apps_cases_passed": 3,
+  "browser_cases_passed": 8,
+  "docker_service_logs_checked": 4,
+  "diagnostic_or_credential_sentinel_hits": 0,
+  "final_http_request_ids_matched_to_logs": 4,
+  "active_connections": 2,
+  "duplicate_bindings": 0,
+  "ci": {
+    "success": 20,
+    "skipped_publish": 1
+  },
+  "screenshots_sha256": {
+    "reauthorize-admin.png": "3803bb624355fbe4a2b7103a78048c8d8296ac5eded1a511bb31adcf8c421765",
+    "reauthorize-member.png": "7f8547ae8f27d5c31a0a88c8d107cc71d1a5cb7b11cce899e0daf8ef5a6009f7",
+    "reauthorize-recovered-member.png": "32b83b99ab6086d0000f8481b3acc14556a9a17ba3592a0024bfd5759d7ef49e"
+  },
+  "scope": "Real OSS auth/API/PostgreSQL/Connect-It/Docker workspace and UI. Local fixtures replace GitHub consent/token endpoints and unrelated dependency catalog. Test App metadata and reauth_required state are seeded. No real GitHub account authorization or Human QA claimed."
+}
