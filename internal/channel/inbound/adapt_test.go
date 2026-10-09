@@ -313,3 +313,17 @@ func TestAdaptInbound_RoundTripsThroughRenderer(t *testing.T) {
 		t.Fatalf("expected rendered link tag, got: %s", xml)
 	}
 }
+
+func TestAdaptInbound_CarriesReplyAttachments(t *testing.T) {
+	msg := channel.InboundMessage{Message: channel.Message{
+		ID:   "m1",
+		Text: "what is this",
+		Reply: &channel.ReplyRef{MessageID: "m0", Attachments: []channel.Attachment{
+			{Type: channel.AttachmentImage, ContentHash: "img-hash", Mime: "image/png"},
+		}},
+	}}
+	me := AdaptInbound(msg, "sess", "", "").(timeline.MessageEvent)
+	if len(me.ReplyToAttachments) != 1 || me.ReplyToAttachments[0].ContentHash != "img-hash" {
+		t.Fatalf("reply attachments = %+v", me.ReplyToAttachments)
+	}
+}

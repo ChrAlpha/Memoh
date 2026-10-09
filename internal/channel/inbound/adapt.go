@@ -45,10 +45,12 @@ func adaptMessage(msg channel.InboundMessage, sessionID, channelIdentityID, disp
 	forwardInfo := adaptForward(msg.Message.Forward)
 
 	var replyToMessageID, replyToSender, replyToPreview string
+	var replyToAttachments []timeline.Attachment
 	if msg.Message.Reply != nil {
 		replyToMessageID = strings.TrimSpace(msg.Message.Reply.MessageID)
 		replyToSender = strings.TrimSpace(msg.Message.Reply.Sender)
 		replyToPreview = strings.TrimSpace(msg.Message.Reply.Preview)
+		replyToAttachments = adaptAttachments(msg.Message.Reply.Attachments)
 	}
 
 	_, offset := now.Zone()
@@ -57,20 +59,21 @@ func adaptMessage(msg channel.InboundMessage, sessionID, channelIdentityID, disp
 	convType := channel.NormalizeConversationType(msg.Conversation.Type)
 
 	return timeline.MessageEvent{
-		SessionID:        sessionID,
-		MessageID:        strings.TrimSpace(msg.Message.ID),
-		Sender:           sender,
-		ReceivedAtMs:     now.UnixMilli(),
-		TimestampSec:     now.Unix(),
-		UTCOffsetMin:     utcOffsetMin,
-		Content:          content,
-		ReplyToMessageID: replyToMessageID,
-		ReplyToSender:    replyToSender,
-		ReplyToPreview:   replyToPreview,
-		ForwardInfo:      forwardInfo,
-		Attachments:      attachments,
-		MentionsMe:       adaptMetadataBool(msg.Metadata, "is_mentioned"),
-		RepliesToMe:      adaptMetadataBool(msg.Metadata, "is_reply_to_bot"),
+		SessionID:          sessionID,
+		MessageID:          strings.TrimSpace(msg.Message.ID),
+		Sender:             sender,
+		ReceivedAtMs:       now.UnixMilli(),
+		TimestampSec:       now.Unix(),
+		UTCOffsetMin:       utcOffsetMin,
+		Content:            content,
+		ReplyToMessageID:   replyToMessageID,
+		ReplyToSender:      replyToSender,
+		ReplyToPreview:     replyToPreview,
+		ReplyToAttachments: replyToAttachments,
+		ForwardInfo:        forwardInfo,
+		Attachments:        attachments,
+		MentionsMe:         adaptMetadataBool(msg.Metadata, "is_mentioned"),
+		RepliesToMe:        adaptMetadataBool(msg.Metadata, "is_reply_to_bot"),
 		Conversation: timeline.ConversationMeta{
 			Channel:          msg.Channel.String(),
 			ConversationName: strings.TrimSpace(msg.Conversation.Name),
