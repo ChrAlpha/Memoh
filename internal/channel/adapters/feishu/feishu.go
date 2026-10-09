@@ -138,6 +138,7 @@ func (*FeishuAdapter) Descriptor() channel.Descriptor {
 			Reactions:      true,
 			Reply:          true,
 			Streaming:      true,
+			NativeApproval: true,
 			BlockStreaming: true,
 		},
 		OutboundPolicy: channel.OutboundPolicy{
