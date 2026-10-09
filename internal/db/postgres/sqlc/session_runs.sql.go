@@ -600,6 +600,84 @@ func (q *Queries) ListActiveSessionRunsByBot(ctx context.Context, botID pgtype.U
 	return items, nil
 }
 
+const listClaimedSessionRuns = `-- name: ListClaimedSessionRuns :many
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+FROM session_runs
+WHERE team_id = public.memoh_current_team_id()
+  AND state = 'running'
+  AND owner_id IS NOT NULL
+  AND live_generation = $1
+  AND owner_since < now() - make_interval(secs => $2::double precision)
+  AND run_id > $3::uuid
+ORDER BY run_id
+LIMIT $4
+`
+
+type ListClaimedSessionRunsParams struct {
+	CurrentGeneration pgtype.Text `json:"current_generation"`
+	GraceSeconds      float64     `json:"grace_seconds"`
+	AfterRunID        pgtype.UUID `json:"after_run_id"`
+	BatchSize         int32       `json:"batch_size"`
+}
+
+// Claimed rows that might never have reached the live backend: the claiming
+// process died, or lost the claim's response, before reserving the run, or it
+// could not release a run it failed to start. Their owner and generation look
+// current and no lease was written, so neither the expiry pass nor the stale
+// generation sweep can find them. The ledger cannot tell them from healthy
+// long runs; the reaper asks the live backend about each row. Restricting to
+// the current generation leaves older incarnations to the stale sweep, and
+// lets idx_session_runs_recovery serve the keyset. The zero UUID cursor starts
+// a pass.
+func (q *Queries) ListClaimedSessionRuns(ctx context.Context, arg ListClaimedSessionRunsParams) ([]SessionRun, error) {
+	rows, err := q.db.Query(ctx, listClaimedSessionRuns,
+		arg.CurrentGeneration,
+		arg.GraceSeconds,
+		arg.AfterRunID,
+		arg.BatchSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionRun
+	for rows.Next() {
+		var i SessionRun
+		if err := rows.Scan(
+			&i.RunID,
+			&i.TeamID,
+			&i.BotID,
+			&i.SessionID,
+			&i.InvocationID,
+			&i.TurnID,
+			&i.TurnPosition,
+			&i.State,
+			&i.InputJson,
+			&i.InputFingerprint,
+			&i.OwnerID,
+			&i.FencingToken,
+			&i.OwnerSince,
+			&i.LiveGeneration,
+			&i.AbortRequestedAt,
+			&i.ProposedTerminalState,
+			&i.ProposedErrorCode,
+			&i.ProposedErrorMessage,
+			&i.FinishProposedAt,
+			&i.ErrorCode,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInterruptedSessionRuns = `-- name: ListInterruptedSessionRuns :many
 SELECT r.run_id, r.team_id, r.bot_id, r.session_id, r.invocation_id, r.turn_id, r.turn_position, r.state, r.input_json, r.input_fingerprint, r.owner_id, r.fencing_token, r.owner_since, r.live_generation, r.abort_requested_at, r.proposed_terminal_state, r.proposed_error_code, r.proposed_error_message, r.finish_proposed_at, r.error_code, r.error_message, r.created_at, r.updated_at FROM session_runs r
 JOIN bot_sessions s ON s.team_id = r.team_id AND s.id = r.session_id

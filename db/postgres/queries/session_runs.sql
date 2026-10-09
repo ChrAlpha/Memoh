@@ -369,6 +369,27 @@ WHERE team_id = public.memoh_current_team_id()
 ORDER BY created_at, run_id
 LIMIT sqlc.arg(batch_size);
 
+-- name: ListClaimedSessionRuns :many
+-- Claimed rows that might never have reached the live backend: the claiming
+-- process died, or lost the claim's response, before reserving the run, or it
+-- could not release a run it failed to start. Their owner and generation look
+-- current and no lease was written, so neither the expiry pass nor the stale
+-- generation sweep can find them. The ledger cannot tell them from healthy
+-- long runs; the reaper asks the live backend about each row. Restricting to
+-- the current generation leaves older incarnations to the stale sweep, and
+-- lets idx_session_runs_recovery serve the keyset. The zero UUID cursor starts
+-- a pass.
+SELECT *
+FROM session_runs
+WHERE team_id = public.memoh_current_team_id()
+  AND state = 'running'
+  AND owner_id IS NOT NULL
+  AND live_generation = sqlc.arg(current_generation)
+  AND owner_since < now() - make_interval(secs => sqlc.arg(grace_seconds)::double precision)
+  AND run_id > sqlc.arg(after_run_id)::uuid
+ORDER BY run_id
+LIMIT sqlc.arg(batch_size);
+
 -- name: NextSessionRunFencingToken :one
 SELECT nextval('session_runtime_fencing_token_seq')::bigint AS token;
 

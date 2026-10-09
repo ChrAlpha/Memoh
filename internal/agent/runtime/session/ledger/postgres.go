@@ -778,6 +778,32 @@ func (s *PostgresStore) OrphanedRuns(ctx context.Context, query OrphanQuery) ([]
 	return runsFromRows(rows), nil
 }
 
+func (s *PostgresStore) ClaimedRuns(ctx context.Context, query ClaimedRunQuery) ([]Run, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	// The zero UUID sorts before every run ID, so an empty cursor starts the
+	// keyset; a NULL one would match nothing.
+	after := pgtype.UUID{Valid: true}
+	if strings.TrimSpace(query.After) != "" {
+		parsed, err := dbpkg.ParseUUID(query.After)
+		if err != nil {
+			return nil, fmt.Errorf("ledger(postgres): invalid claimed run cursor: %w", err)
+		}
+		after = parsed
+	}
+	rows, err := s.q.ListClaimedSessionRuns(ctx, dbsqlc.ListClaimedSessionRunsParams{
+		CurrentGeneration: textOrNull(query.CurrentGeneration),
+		GraceSeconds:      query.MinAge.Seconds(),
+		AfterRunID:        after,
+		BatchSize:         query.Limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ledger(postgres): list claimed runs: %w", err)
+	}
+	return runsFromRows(rows), nil
+}
+
 // applyResult folds the fenced-CAS contract into one place: no rows means the
 // transition was already applied or a newer owner superseded this token, which
 // is an ordinary outcome rather than an error.
