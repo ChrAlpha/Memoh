@@ -1,0 +1,12 @@
+{
+  "type": "runtime_delta",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 8,
+  "delta": {
+    "run": {
+      "run_id": "33333333-3333-3333-3333-333333333333",
+      "clear_retry": true
+    }
+  }
+}

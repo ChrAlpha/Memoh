@@ -1,0 +1,464 @@
+{
+  "type": "runtime_delta",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 8,
+  "delta": {
+    "current_run_view": {
+      "run_id": "33333333-3333-3333-3333-333333333333",
+      "turn_id": "44444444-4444-4444-4444-444444444444",
+      "turn_position": 5,
+      "invocation_id": "inv-1",
+      "generation": "gen-1",
+      "status": "running",
+      "owner_id": "owner-1",
+      "owner_lease_expires_at": "2026-10-09T08:00:30Z",
+      "started_at": "2026-10-09T08:00:00Z",
+      "updated_at": "2026-10-09T08:00:01Z",
+      "messages": [
+        {
+          "id": 1,
+          "type": "reasoning",
+          "content": "thinking",
+          "reasoning_timing": {
+            "duration_ms": 1200
+          }
+        },
+        {
+          "id": 2,
+          "type": "text",
+          "content": "hello"
+        },
+        {
+          "id": 3,
+          "type": "tool",
+          "name": "exec",
+          "input": {
+            "command": "ls"
+          },
+          "output": {
+            "stdout": "a\n"
+          },
+          "tool_call_id": "call-1",
+          "running": false,
+          "progress": [
+            "line 1",
+            {
+              "pct": 50
+            }
+          ],
+          "elapsed_time_seconds": 1.5,
+          "execution_location": {
+            "kind": "workspace",
+            "name": "main"
+          },
+          "diff": "--- a\n+++ b\n",
+          "background_task": {
+            "task_id": "task-1",
+            "status": "running",
+            "command": "sleep 9",
+            "agent_id": "agent-1",
+            "agent_session_id": "as-1",
+            "output_file": "/tmp/out",
+            "duration": "3s",
+            "output_tail": "tail",
+            "stream": "stdout",
+            "chunk": "c",
+            "stalled": true
+          }
+        },
+        {
+          "id": 4,
+          "type": "tool",
+          "name": "write",
+          "input": {
+            "path": "x"
+          },
+          "tool_call_id": "call-2",
+          "running": true,
+          "approval": {
+            "approval_id": "ap-1",
+            "short_id": 7,
+            "status": "pending",
+            "decision_reason": "needs review",
+            "can_approve": true,
+            "options": [
+              {
+                "id": "o1",
+                "name": "Allow once",
+                "kind": "allow_once"
+              },
+              {
+                "id": "o2",
+                "name": "Reject",
+                "kind": "reject_once"
+              }
+            ],
+            "selected_option_id": "o1"
+          }
+        },
+        {
+          "id": 5,
+          "type": "tool",
+          "name": "ask_user",
+          "tool_call_id": "call-3",
+          "running": true,
+          "user_input": {
+            "user_input_id": "ui-1",
+            "short_id": 3,
+            "status": "pending",
+            "questions": [
+              {
+                "id": "q1",
+                "text": "Pick one",
+                "kind": "single_select",
+                "options": [
+                  {
+                    "label_key": "opt.a",
+                    "id": "a",
+                    "label": "A",
+                    "description": "first"
+                  },
+                  {
+                    "id": "b",
+                    "label": "B"
+                  }
+                ],
+                "allow_custom": true,
+                "custom_exclusive": true,
+                "required": true,
+                "placeholder": "other"
+              }
+            ],
+            "answers": [
+              {
+                "question_id": "q1",
+                "question": "Pick one",
+                "selected": [
+                  {
+                    "id": "a",
+                    "label": "A"
+                  }
+                ],
+                "custom_text": "c",
+                "text": "t"
+              }
+            ],
+            "can_respond": true
+          }
+        },
+        {
+          "id": 6,
+          "type": "attachments",
+          "attachments": [
+            {
+              "id": "att-1",
+              "type": "image",
+              "path": "/data/a.png",
+              "url": "https://example.test/a.png",
+              "name": "a.png",
+              "content_hash": "sha256:abc",
+              "bot_id": "11111111-1111-1111-1111-111111111111",
+              "mime": "image/png",
+              "size": 2048,
+              "storage_key": "bots/a.png",
+              "metadata": {
+                "height": 480,
+                "width": 640
+              }
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "error",
+          "content": "busy",
+          "code": "session_runtime.session_busy",
+          "args": {
+            "k": "v"
+          }
+        },
+        {
+          "id": 8,
+          "type": "notice",
+          "content": "tools are unavailable",
+          "name": "tools_unavailable",
+          "args": {
+            "dep_id": "d1"
+          }
+        },
+        {
+          "id": 9,
+          "type": "command",
+          "content": "/help",
+          "name": "help"
+        },
+        {
+          "id": 10,
+          "type": "status",
+          "name": "compacting",
+          "args": {
+            "phase": "start"
+          }
+        }
+      ],
+      "user_turns": [
+        {
+          "runtime_forkable": false,
+          "turn_id": "44444444-4444-4444-4444-444444444444",
+          "turn_position": 5,
+          "role": "user",
+          "text": "do it",
+          "user_message_kind": "normal",
+          "skill_activation": {
+            "skills": [
+              {
+                "name": "s1",
+                "display_name": "S1",
+                "description": "d",
+                "source_kind": "bot",
+                "state": "active"
+              }
+            ],
+            "prompt": "use s1"
+          },
+          "attachments": [
+            {
+              "id": "att-1",
+              "type": "image",
+              "path": "/data/a.png",
+              "url": "https://example.test/a.png",
+              "name": "a.png",
+              "content_hash": "sha256:abc",
+              "bot_id": "11111111-1111-1111-1111-111111111111",
+              "mime": "image/png",
+              "size": 2048,
+              "storage_key": "bots/a.png",
+              "metadata": {
+                "height": 480,
+                "width": 640
+              }
+            }
+          ],
+          "reply": {
+            "message_id": "m0",
+            "sender": "bob",
+            "preview": "earlier",
+            "attachments": [
+              {
+                "id": "att-1",
+                "type": "image",
+                "path": "/data/a.png",
+                "url": "https://example.test/a.png",
+                "name": "a.png",
+                "content_hash": "sha256:abc",
+                "bot_id": "11111111-1111-1111-1111-111111111111",
+                "mime": "image/png",
+                "size": 2048,
+                "storage_key": "bots/a.png",
+                "metadata": {
+                  "height": 480,
+                  "width": 640
+                }
+              }
+            ]
+          },
+          "forward": {
+            "message_id": "m9",
+            "from_user_id": "u9",
+            "from_conversation_id": "c9",
+            "sender": "eve",
+            "date": 1760000000
+          },
+          "timestamp": "2026-10-09T08:00:00Z",
+          "platform": "web",
+          "sender_display_name": "Alice",
+          "sender_avatar_url": "https://example.test/alice.png",
+          "sender_user_id": "u1",
+          "external_message_id": "ext-1",
+          "id": "row-1"
+        }
+      ],
+      "steer_supported": true,
+      "steer_turns": [
+        {
+          "item_id": "55555555-5555-5555-5555-555555555555",
+          "status": "claimed",
+          "text": "also this",
+          "turn_id": "66666666-6666-6666-6666-666666666666",
+          "turn_position": 6,
+          "after_message_id": 2,
+          "timestamp": "2026-10-09T08:00:00Z"
+        },
+        {
+          "item_id": "77777777-7777-7777-7777-777777777777",
+          "status": "applied",
+          "text": "and this",
+          "after_message_id": 3,
+          "timestamp": "2026-10-09T08:00:00Z"
+        }
+      ],
+      "operation": {
+        "kind": "edit",
+        "replace_from_message_id": "m1",
+        "replacement_user_turn": {
+          "runtime_forkable": false,
+          "turn_id": "44444444-4444-4444-4444-444444444444",
+          "turn_position": 5,
+          "role": "user",
+          "text": "do it",
+          "user_message_kind": "normal",
+          "skill_activation": {
+            "skills": [
+              {
+                "name": "s1",
+                "display_name": "S1",
+                "description": "d",
+                "source_kind": "bot",
+                "state": "active"
+              }
+            ],
+            "prompt": "use s1"
+          },
+          "attachments": [
+            {
+              "id": "att-1",
+              "type": "image",
+              "path": "/data/a.png",
+              "url": "https://example.test/a.png",
+              "name": "a.png",
+              "content_hash": "sha256:abc",
+              "bot_id": "11111111-1111-1111-1111-111111111111",
+              "mime": "image/png",
+              "size": 2048,
+              "storage_key": "bots/a.png",
+              "metadata": {
+                "height": 480,
+                "width": 640
+              }
+            }
+          ],
+          "reply": {
+            "message_id": "m0",
+            "sender": "bob",
+            "preview": "earlier",
+            "attachments": [
+              {
+                "id": "att-1",
+                "type": "image",
+                "path": "/data/a.png",
+                "url": "https://example.test/a.png",
+                "name": "a.png",
+                "content_hash": "sha256:abc",
+                "bot_id": "11111111-1111-1111-1111-111111111111",
+                "mime": "image/png",
+                "size": 2048,
+                "storage_key": "bots/a.png",
+                "metadata": {
+                  "height": 480,
+                  "width": 640
+                }
+              }
+            ]
+          },
+          "forward": {
+            "message_id": "m9",
+            "from_user_id": "u9",
+            "from_conversation_id": "c9",
+            "sender": "eve",
+            "date": 1760000000
+          },
+          "timestamp": "2026-10-09T08:00:00Z",
+          "platform": "web",
+          "sender_display_name": "Alice",
+          "sender_avatar_url": "https://example.test/alice.png",
+          "sender_user_id": "u1",
+          "external_message_id": "ext-1",
+          "id": "row-1"
+        }
+      },
+      "retry": {
+        "attempt": 2,
+        "max_attempt": 5,
+        "delay_ms": 4000,
+        "reason": "rate_limited",
+        "retry_at": "2026-10-09T08:00:04Z"
+      },
+      "request_user_turn": {
+        "runtime_forkable": false,
+        "turn_id": "44444444-4444-4444-4444-444444444444",
+        "turn_position": 5,
+        "role": "user",
+        "text": "do it",
+        "user_message_kind": "normal",
+        "skill_activation": {
+          "skills": [
+            {
+              "name": "s1",
+              "display_name": "S1",
+              "description": "d",
+              "source_kind": "bot",
+              "state": "active"
+            }
+          ],
+          "prompt": "use s1"
+        },
+        "attachments": [
+          {
+            "id": "att-1",
+            "type": "image",
+            "path": "/data/a.png",
+            "url": "https://example.test/a.png",
+            "name": "a.png",
+            "content_hash": "sha256:abc",
+            "bot_id": "11111111-1111-1111-1111-111111111111",
+            "mime": "image/png",
+            "size": 2048,
+            "storage_key": "bots/a.png",
+            "metadata": {
+              "height": 480,
+              "width": 640
+            }
+          }
+        ],
+        "reply": {
+          "message_id": "m0",
+          "sender": "bob",
+          "preview": "earlier",
+          "attachments": [
+            {
+              "id": "att-1",
+              "type": "image",
+              "path": "/data/a.png",
+              "url": "https://example.test/a.png",
+              "name": "a.png",
+              "content_hash": "sha256:abc",
+              "bot_id": "11111111-1111-1111-1111-111111111111",
+              "mime": "image/png",
+              "size": 2048,
+              "storage_key": "bots/a.png",
+              "metadata": {
+                "height": 480,
+                "width": 640
+              }
+            }
+          ]
+        },
+        "forward": {
+          "message_id": "m9",
+          "from_user_id": "u9",
+          "from_conversation_id": "c9",
+          "sender": "eve",
+          "date": 1760000000
+        },
+        "timestamp": "2026-10-09T08:00:00Z",
+        "platform": "web",
+        "sender_display_name": "Alice",
+        "sender_avatar_url": "https://example.test/alice.png",
+        "sender_user_id": "u1",
+        "external_message_id": "ext-1",
+        "id": "row-1"
+      }
+    }
+  }
+}

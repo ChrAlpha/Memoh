@@ -1,0 +1,7 @@
+{
+  "type": "runtime_dropped",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 9,
+  "message": "runtime subscription gap"
+}
