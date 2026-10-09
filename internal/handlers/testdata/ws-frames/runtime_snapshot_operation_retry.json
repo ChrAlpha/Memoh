@@ -1,0 +1,30 @@
+{
+  "type": "runtime_snapshot",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 7,
+  "snapshot": {
+    "bot_id": "11111111-1111-1111-1111-111111111111",
+    "session_id": "22222222-2222-2222-2222-222222222222",
+    "epoch": "epoch-1",
+    "seq": 7,
+    "current_run_view": {
+      "run_id": "33333333-3333-3333-3333-333333333333",
+      "turn_id": "44444444-4444-4444-4444-444444444444",
+      "turn_position": 5,
+      "invocation_id": "inv-1",
+      "generation": "gen-1",
+      "status": "running",
+      "owner_id": "owner-1",
+      "owner_lease_expires_at": "2026-10-09T08:00:30Z",
+      "started_at": "2026-10-09T08:00:00Z",
+      "updated_at": "2026-10-09T08:00:01Z",
+      "messages": [],
+      "operation": {
+        "kind": "retry",
+        "replace_from_message_id": "m1"
+      }
+    },
+    "updated_at": "2026-10-09T08:00:00Z"
+  }
+}

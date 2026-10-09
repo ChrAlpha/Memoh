@@ -1,0 +1,27 @@
+{
+  "type": "command_result",
+  "invocation_id": "inv-2",
+  "composer_scope": "scope-1",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "action_id": "skill.list",
+  "terminal": true,
+  "result": {
+    "data": {
+      "n": 1
+    },
+    "notice": "n",
+    "text_key": "k",
+    "kind": "list",
+    "title": "Skills",
+    "text": "text",
+    "items": [
+      {
+        "i18n_key": "i",
+        "id": "s1",
+        "title": "S1",
+        "description": "d",
+        "kind": "skill"
+      }
+    ]
+  }
+}

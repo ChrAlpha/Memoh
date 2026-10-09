@@ -1,0 +1,18 @@
+{
+  "type": "runtime_delta",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 8,
+  "delta": {
+    "run": {
+      "run_id": "33333333-3333-3333-3333-333333333333",
+      "retry": {
+        "attempt": 2,
+        "max_attempt": 5,
+        "delay_ms": 4000,
+        "reason": "network",
+        "retry_at": "2026-10-09T08:00:04Z"
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "type": "error",
+  "invocation_id": "inv-1",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "code": "session_runtime.session_busy",
+  "message": "busy",
+  "args": {
+    "k": "v"
+  },
+  "fault": "client"
+}

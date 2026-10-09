@@ -1,0 +1,23 @@
+{
+  "type": "runtime_delta",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "epoch": "epoch-1",
+  "seq": 8,
+  "delta": {
+    "progress_appends": [
+      {
+        "id": 3,
+        "progress": "line 2",
+        "input": {
+          "command": "ls -l"
+        }
+      },
+      {
+        "id": 3,
+        "progress": {
+          "pct": 80
+        }
+      }
+    ]
+  }
+}

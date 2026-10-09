@@ -1,0 +1,9 @@
+{
+  "type": "command_error",
+  "invocation_id": "inv-2",
+  "composer_scope": "scope-1",
+  "session_id": "22222222-2222-2222-2222-222222222222",
+  "terminal": true,
+  "code": "slash.unknown_command",
+  "message": "Slash command failed."
+}
