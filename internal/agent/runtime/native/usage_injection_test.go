@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 // usageTestProvider is a ToolProvider that also implements tools.ToolUsage. It
@@ -400,6 +401,7 @@ func TestAssembleToolsDoesNotExposeAskUserWithoutCapability(t *testing.T) {
 
 	gotTools, usage, _, _, err = a.assembleTools(context.Background(), RunConfig{
 		SessionType:         sessionmode.Chat,
+		DecisionMode:        sessionfacts.DecisionPark,
 		CanRequestUserInput: true,
 	}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true)
 	if err != nil {

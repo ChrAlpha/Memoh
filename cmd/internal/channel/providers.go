@@ -415,6 +415,7 @@ func (a *sessionEnsurerAdapter) CreateNewSession(ctx context.Context, botID, rou
 		RuntimeMetadata: spec.Metadata,
 		Title:           spec.Title,
 		CreatedByUserID: createdByUserID,
+		Audience:        spec.Audience,
 	})
 	if err != nil {
 		return inbound.SessionResult{}, err
@@ -436,6 +437,7 @@ func inboundSessionResult(sess sessionpkg.Thread) inbound.SessionResult {
 		Mode:                  sess.SessionMode,
 		Runtime:               sess.RuntimeType,
 		RuntimeOwnerAccountID: sessionRuntimeOwnerAccountID(sess),
+		ExternalRuntimeDriver: sess.Facts.ExternalRuntimeDriver,
 	}
 }
 

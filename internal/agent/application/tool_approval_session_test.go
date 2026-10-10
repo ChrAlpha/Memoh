@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -34,19 +35,56 @@ func (denyToolApprovalPolicyProvider) ToolApprovalPolicy(context.Context, string
 	}, nil
 }
 
-func TestIsInteractiveApprovalSession(t *testing.T) {
+func TestRunFactsKeepSessionFactsExceptScheduleDecisions(t *testing.T) {
 	t.Parallel()
 
-	for _, sessionType := range []string{"", sessionmode.Chat, "CHAT", sessionmode.ACPAgent} {
-		if !isInteractiveApprovalSession(sessionType) {
-			t.Fatalf("expected %q to allow interactive approvals", sessionType)
+	tests := []struct {
+		name     string
+		session  sessionfacts.Facts
+		runMode  string
+		decision sessionfacts.DecisionMode
+		delivery sessionfacts.ReplyDelivery
+	}{
+		{name: "chat session", session: sessionfacts.Preset(sessionmode.Chat), runMode: sessionmode.Chat, decision: sessionfacts.DecisionPark, delivery: sessionfacts.ReplyStream},
+		{name: "discuss session", session: sessionfacts.Preset(sessionmode.Discuss), runMode: sessionmode.Discuss, decision: sessionfacts.DecisionAutoReject, delivery: sessionfacts.ReplyExplicit},
+		{name: "subagent session", session: sessionfacts.Preset(sessionmode.Subagent), runMode: sessionmode.Subagent, decision: sessionfacts.DecisionAutoReject, delivery: sessionfacts.ReplyStream},
+		{name: "schedule session", session: sessionfacts.Preset(sessionmode.Schedule), runMode: sessionmode.Schedule, decision: sessionfacts.DecisionAutoReject, delivery: sessionfacts.ReplyStream},
+		{name: "schedule fire in a chat session", session: sessionfacts.Preset(sessionmode.Chat), runMode: sessionmode.Schedule, decision: sessionfacts.DecisionAutoReject, delivery: sessionfacts.ReplyStream},
+	}
+	for _, tt := range tests {
+		got := runFacts(tt.session, tt.runMode)
+		if got.DecisionMode != tt.decision || got.ReplyDelivery != tt.delivery {
+			t.Fatalf("%s: facts = %+v, want decision %q delivery %q", tt.name, got, tt.decision, tt.delivery)
 		}
 	}
+}
 
-	for _, sessionType := range []string{sessionmode.Discuss, sessionmode.Schedule, sessionmode.Subagent} {
-		if isInteractiveApprovalSession(sessionType) {
-			t.Fatalf("expected %q to reject interactive approvals", sessionType)
-		}
+// The run follows what the session records, not what its mode label says.
+func TestResolveRunConfigReadsRecordedSessionFacts(t *testing.T) {
+	t.Parallel()
+
+	recorded := sessionfacts.Preset(sessionmode.Chat)
+	resolver := &Service{
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				return session.Thread{
+					ID:          sessionID,
+					Type:        session.TypeDiscuss,
+					SessionMode: session.TypeDiscuss,
+					RuntimeType: session.RuntimeACPAgent,
+					Facts:       recorded,
+				}, nil
+			},
+		},
+	}
+
+	got, err := resolver.ResolveRunConfig(context.Background(), "bot-1", "session-1", "user-1", "telegram", "", "group", "")
+	if err != nil {
+		t.Fatalf("ResolveRunConfig() error = %v", err)
+	}
+	if got.RunConfig.ReplyDelivery != recorded.ReplyDelivery || got.RunConfig.DecisionMode != recorded.DecisionMode {
+		t.Fatalf("run facts = %q/%q, want the recorded %q/%q",
+			got.RunConfig.ReplyDelivery, got.RunConfig.DecisionMode, recorded.ReplyDelivery, recorded.DecisionMode)
 	}
 }
 
@@ -63,6 +101,7 @@ func TestToolApprovalHandlerLimitsForcedApprovalRejectionReason(t *testing.T) {
 		BotID:       "bot-1",
 		SessionID:   "session-1",
 		SessionType: sessionmode.Chat,
+		Facts:       sessionfacts.Preset(sessionmode.Chat),
 	})
 
 	result, err := handler(native.ContextWithHookForcedApproval(context.Background(), large), sdk.ToolCall{
@@ -94,6 +133,7 @@ func TestToolApprovalPolicyDenyWinsOverHookForcedApproval(t *testing.T) {
 		BotID:       "11111111-1111-1111-1111-111111111111",
 		SessionID:   "22222222-2222-2222-2222-222222222222",
 		SessionType: sessionmode.Chat,
+		Facts:       sessionfacts.Preset(sessionmode.Chat),
 	})
 
 	result, err := handler(native.ContextWithHookForcedApproval(context.Background(), "hook asks for review"), sdk.ToolCall{
@@ -134,6 +174,7 @@ func TestToolApprovalHandlerOnlyRecoversMissingWorkspaceTarget(t *testing.T) {
 				BotID:       "bot-1",
 				SessionID:   "session-1",
 				SessionType: sessionmode.Chat,
+				Facts:       sessionfacts.Preset(sessionmode.Chat),
 			})
 
 			result, err := handler(context.Background(), sdk.ToolCall{
@@ -310,6 +351,7 @@ func TestToolApprovalHandlerPinsWorkspaceTargetOnBypass(t *testing.T) {
 		BotID:       "bot-1",
 		SessionID:   "session-1",
 		SessionType: sessionmode.Chat,
+		Facts:       sessionfacts.Preset(sessionmode.Chat),
 	})
 
 	result, err := handler(context.Background(), sdk.ToolCall{

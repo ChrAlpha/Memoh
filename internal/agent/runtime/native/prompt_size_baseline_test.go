@@ -5,6 +5,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 const (
@@ -42,8 +43,9 @@ func TestStaticPromptSizeBaselines(t *testing.T) {
 			t.Parallel()
 
 			prompt := renderSystemSections(GenerateSystemSections(SystemPromptParams{
-				SessionType: mode,
-				Timezone:    "UTC",
+				SessionType:   mode,
+				ReplyDelivery: sessionfacts.Preset(mode).ReplyDelivery,
+				Timezone:      "UTC",
 			}))
 			got := contextfrag.TokensFromBytes(len(prompt))
 			baseline, ok := staticPromptTokenBaselines[mode]
@@ -104,6 +106,7 @@ func TestGenerateSystemSectionsPolicyForRemainingNativeModes(t *testing.T) {
 
 			sections := GenerateSystemSections(SystemPromptParams{
 				SessionType:               mode,
+				ReplyDelivery:             sessionfacts.Preset(mode).ReplyDelivery,
 				Timezone:                  "UTC",
 				Bot:                       goldenFullBot,
 				Skills:                    goldenFullSkills,

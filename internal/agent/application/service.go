@@ -49,6 +49,7 @@ import (
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
 	"github.com/felinics/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/workspace"
 )
@@ -493,6 +494,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		sessionPrefModelID, sessionPrefEffort = s.sessionModelPreference(ctx, req.ThreadID)
 	}
 	req = s.applySubagentThreadDefaults(ctx, req, sessionPrefModelID != "")
+	facts := s.requestRunFacts(ctx, req)
 
 	runCfg, chatModel, provider, err := s.buildBaseRunConfig(ctx, baseRunConfigParams{
 		BotID:              req.BotID,
@@ -506,6 +508,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		ConversationType:   req.ConversationType,
 		SessionToken:       req.ChatToken,
 		SessionType:        req.SessionType,
+		Facts:              facts,
 		SessionPrefModelID: sessionPrefModelID,
 		SessionPrefEffort:  sessionPrefEffort,
 		Model:              req.Model,
@@ -902,6 +905,8 @@ type baseRunConfigParams struct {
 	ConversationType  string
 	SessionToken      string //nolint:gosec // session credential material, not a hardcoded secret
 	SessionType       string
+	// Facts are the session facts the run executes under (see runFacts).
+	Facts sessionfacts.Facts
 	// SessionPrefModelID/SessionPrefEffort carry the session's persisted
 	// (model, effort) pair (issue #879), loaded by the caller before the
 	// subagent pin may fill the request. Empty = no memory.
@@ -1004,6 +1009,8 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		ChatCompletionsCompat:    chatCompletionsCompat,
 		PromptCacheTTL:           providers.ProviderConfigString(provider, "prompt_cache_ttl"),
 		SessionType:              p.SessionType,
+		ReplyDelivery:            p.Facts.ReplyDelivery,
+		DecisionMode:             p.Facts.DecisionMode,
 		SupportsImageInput:       supportsImageInputForModel(chatModel),
 		SupportsFileInput:        supportsFileInputForModel(chatModel),
 		SupportsToolCall:         chatModel.HasCompatibility(models.CompatToolCall),
@@ -1133,7 +1140,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 					Reason:   "user input service is not configured",
 				}, call.ToolName), nil
 			}
-			if !isInteractiveApprovalSession(p.SessionType) {
+			if p.Facts.DecisionMode != sessionfacts.DecisionPark {
 				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
 					Decision: toolexec.ToolApprovalDecisionRejected,
 					Reason:   "user input requested in a non-interactive session",
@@ -1247,7 +1254,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 				Input:    approvedInput,
 			}, nil
 		}
-		if !isInteractiveApprovalSession(p.SessionType) {
+		if p.Facts.DecisionMode != sessionfacts.DecisionPark {
 			reason := "tool execution requires approval, but this session type cannot request approval"
 			rejected, err := s.toolApproval.CreateSystemRejected(ctx, input, reason)
 			if err != nil {
@@ -1306,14 +1313,31 @@ func executionLocationResultMetadata(location *toolapproval.ExecutionLocation) m
 	return map[string]any{toolapproval.ExecutionLocationMetadataKey: location}
 }
 
-func isInteractiveApprovalSession(sessionType string) bool {
-	return sessionmode.IsInteractive(sessionType)
+// requestRunFacts returns the facts a chat request runs under. A request that
+// names no mode is a message answered on the streaming path: its reply reaches
+// the sender, who can also answer decisions.
+func (s *Service) requestRunFacts(ctx context.Context, req ChatRequest) sessionfacts.Facts {
+	if strings.TrimSpace(req.SessionType) == "" {
+		return sessionfacts.Preset(sessionmode.Chat)
+	}
+	_, _, stored := s.resolveRunConfigSessionDescriptor(ctx, req.ThreadID)
+	return runFacts(stored, req.SessionType)
 }
 
-func (s *Service) resolveRunConfigSessionDescriptor(ctx context.Context, sessionID string) (string, string) {
+// runFacts returns the facts one run executes under: the session's own,
+// except that a schedule fire has nobody to answer a decision even in a
+// session people converse in.
+func runFacts(session sessionfacts.Facts, runMode string) sessionfacts.Facts {
+	if strings.TrimSpace(runMode) == sessionmode.Schedule {
+		session.DecisionMode = sessionfacts.DecisionAutoReject
+	}
+	return session
+}
+
+func (s *Service) resolveRunConfigSessionDescriptor(ctx context.Context, sessionID string) (string, string, sessionfacts.Facts) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || s == nil || s.sessionService == nil {
-		return sessionpkg.TypeChat, sessionpkg.RuntimeModel
+		return sessionpkg.TypeChat, sessionpkg.RuntimeModel, sessionfacts.Preset(sessionpkg.TypeChat)
 	}
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
@@ -1323,7 +1347,7 @@ func (s *Service) resolveRunConfigSessionDescriptor(ctx context.Context, session
 				slog.Any("error", err),
 			)
 		}
-		return sessionpkg.TypeChat, sessionpkg.RuntimeModel
+		return sessionpkg.TypeChat, sessionpkg.RuntimeModel, sessionfacts.Preset(sessionpkg.TypeChat)
 	}
 	typ := strings.TrimSpace(sess.Type)
 	if typ == "" {
@@ -1337,11 +1361,11 @@ func (s *Service) resolveRunConfigSessionDescriptor(ctx context.Context, session
 			runtimeType = sessionpkg.RuntimeModel
 		}
 	}
-	return typ, runtimeType
+	return typ, runtimeType, sess.Facts
 }
 
 func (s *Service) resolveRunConfigSessionType(ctx context.Context, sessionID string) string {
-	typ, _ := s.resolveRunConfigSessionDescriptor(ctx, sessionID)
+	typ, _, _ := s.resolveRunConfigSessionDescriptor(ctx, sessionID)
 	return typ
 }
 
@@ -1365,12 +1389,15 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 		return ResolveRunConfigResult{}, errors.New("bot id is required")
 	}
 
-	sessionType, runtimeType := s.resolveRunConfigSessionDescriptor(ctx, sessionID)
+	sessionType, runtimeType, stored := s.resolveRunConfigSessionDescriptor(ctx, sessionID)
+	facts := runFacts(stored, sessionType)
 	if runtimeType == sessionpkg.RuntimeACPAgent || sessionpkg.IsDirectRuntimeType(runtimeType) {
 		// Agent runtimes (ACP and the direct external agents) resolve their
 		// own model and prompt; only the identity travels in the run config.
 		cfg := native.RunConfig{
-			SessionType: sessionType,
+			SessionType:   sessionType,
+			ReplyDelivery: facts.ReplyDelivery,
+			DecisionMode:  facts.DecisionMode,
 			Identity: native.SessionContext{
 				BotID:             botID,
 				ChatID:            botID,
@@ -1403,6 +1430,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 		ConversationType:   conversationType,
 		SessionToken:       chatToken,
 		SessionType:        sessionType,
+		Facts:              facts,
 		SessionPrefModelID: sessionPrefModelID,
 		SessionPrefEffort:  sessionPrefEffort,
 	})
@@ -1460,6 +1488,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	}
 	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,
+		ReplyDelivery:             cfg.ReplyDelivery,
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
 		Files:                     files,

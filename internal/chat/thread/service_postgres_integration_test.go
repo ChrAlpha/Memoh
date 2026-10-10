@@ -14,12 +14,19 @@ import (
 	dbpkg "github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 func TestPostgresForkFromAssistantTurnCopiesVisibleTurns(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresSessionTestTx(t, ctx)
 	setupPostgresSessionForkFixtures(t, ctx, tx)
+	// Non-default facts, so the fork can only match them by copying.
+	if _, err := tx.Exec(ctx, `
+		UPDATE bot_sessions SET audience = 'shared', decision_mode = 'auto_reject' WHERE id = $1
+	`, postgresSessionTestSessionID); err != nil {
+		t.Fatalf("record source facts: %v", err)
+	}
 
 	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)), nil)
 	fork, err := svc.ForkFromAssistantTurn(ctx, ForkFromAssistantInput{
@@ -31,6 +38,9 @@ func TestPostgresForkFromAssistantTurnCopiesVisibleTurns(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("fork assistant turn: %v", err)
+	}
+	if fork.Audience != sessionfacts.AudienceShared || fork.Facts.DecisionMode != sessionfacts.DecisionAutoReject || fork.Facts.ReplyDelivery != sessionfacts.ReplyStream {
+		t.Fatalf("fork facts = %+v audience %q, want the source's", fork.Facts, fork.Audience)
 	}
 
 	forkedFrom, ok := fork.Metadata["forked_from"].(map[string]any)

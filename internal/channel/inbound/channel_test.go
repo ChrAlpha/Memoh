@@ -34,6 +34,7 @@ import (
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/i18n"
 	"github.com/felinics/memoh/internal/media"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	skillset "github.com/felinics/memoh/internal/skills"
 	"github.com/felinics/memoh/internal/slash"
 )
@@ -1576,7 +1577,11 @@ func TestChannelInboundProcessorActiveACPRequiresCurrentActorOwnerOrManage(t *te
 	})
 }
 
-func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *testing.T) {
+// newDiscussACPMemberFixture is a group member who is not the runtime owner
+// addressing an ACP session labelled discuss; driver says who may drive the
+// owner's runtime from it.
+func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntimeDriver) (*ChannelInboundProcessor, *discuss.DiscussDriver, *fakeChatGateway, *fakeReplySender, channel.ChannelConfig, channel.InboundMessage) {
+	t.Helper()
 	const (
 		ownerID = "account-owner"
 		actorID = "account-member"
@@ -1592,6 +1597,7 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 		Type:                  sessionpkg.TypeDiscuss,
 		Runtime:               sessionpkg.RuntimeACPAgent,
 		RuntimeOwnerAccountID: ownerID,
+		ExternalRuntimeDriver: driver,
 	}}
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
 	processor.SetSessionEnsurer(ensurer)
@@ -1600,10 +1606,9 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 		"bot-1:" + actorID + ":" + bots.PermissionWorkspaceExec: true,
 	}})
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{})
-	defer driver.StopAll()
-	processor.SetPipeline(pipeline, nil, driver)
-	sender := &fakeReplySender{}
+	discussDriver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{})
+	t.Cleanup(discussDriver.StopAll)
+	processor.SetPipeline(pipeline, nil, discussDriver)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("feishu")}
 	msg := channel.InboundMessage{
@@ -1621,6 +1626,11 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 			"is_mentioned": true,
 		},
 	}
+	return processor, discussDriver, gateway, &fakeReplySender{}, cfg, msg
+}
+
+func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *testing.T) {
+	processor, driver, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverParticipants)
 
 	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1633,6 +1643,25 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 	}
 	if gateway.gotReq.Query != "" {
 		t.Fatalf("discuss mode should not run the regular chat gateway, got query %q", gateway.gotReq.Query)
+	}
+}
+
+// The discuss label alone grants nothing: without the owner's grant recorded
+// on the session, a member cannot drive the owner's runtime.
+func TestChannelInboundProcessorDiscussLabelWithoutGrantKeepsRuntimeOwnerOnly(t *testing.T) {
+	processor, driver, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverOwnerOnly)
+
+	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err == nil {
+		t.Fatal("the failure is not returned for the result record")
+	}
+	if driver.HasSession("active-discuss-acp-session") {
+		t.Fatal("a member drove the owner's runtime through a session without the grant")
+	}
+	if gateway.gotReq.Query != "" {
+		t.Fatalf("chat should not run for a non-owner member, got query %q", gateway.gotReq.Query)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("expected runtime owner feedback, got %+v", sender.sent)
 	}
 }
 

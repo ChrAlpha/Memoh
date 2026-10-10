@@ -10,9 +10,11 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel/inbound"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/httpx"
 	"github.com/felinics/memoh/internal/logger"
 	"github.com/felinics/memoh/internal/server"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 func TestNewSessionCreatedByUserIDPrefersCreator(t *testing.T) {
@@ -29,6 +31,20 @@ func TestNewSessionCreatedByUserIDPrefersCreator(t *testing.T) {
 	})
 	if got != "runtime-owner" {
 		t.Fatalf("created_by_user_id fallback = %q, want runtime-owner", got)
+	}
+}
+
+func TestInboundSessionResultCarriesRecordedRuntimeDriver(t *testing.T) {
+	for _, driver := range []sessionfacts.ExternalRuntimeDriver{sessionfacts.RuntimeDriverOwnerOnly, sessionfacts.RuntimeDriverParticipants} {
+		got := inboundSessionResult(sessionpkg.Thread{
+			ID:          "session-1",
+			Type:        sessionpkg.TypeDiscuss,
+			SessionMode: sessionpkg.TypeDiscuss,
+			Facts:       sessionfacts.Facts{ExternalRuntimeDriver: driver},
+		})
+		if got.ExternalRuntimeDriver != driver {
+			t.Fatalf("runtime driver = %q, want the recorded %q", got.ExternalRuntimeDriver, driver)
+		}
 	}
 }
 

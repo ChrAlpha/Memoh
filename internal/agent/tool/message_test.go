@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/messaging"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 func TestChannelAttachmentsToToolAttachments_NormalizesLocalPath(t *testing.T) {
@@ -157,6 +158,7 @@ func TestExecSendDiscussTextUsesChannelAdapter(t *testing.T) {
 	result, err := provider.execSend(context.Background(), SessionContext{
 		BotID:           "bot_1",
 		SessionType:     sessionmode.Discuss,
+		ReplyDelivery:   sessionfacts.ReplyExplicit,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
 	}, "call-test", map[string]any{
@@ -185,6 +187,7 @@ func TestExecSendDiscussExplicitTargetReportsTargetDelivery(t *testing.T) {
 	result, err := provider.execSend(context.Background(), SessionContext{
 		BotID:           "bot_1",
 		SessionType:     sessionmode.Discuss,
+		ReplyDelivery:   sessionfacts.ReplyExplicit,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
 	}, "call-test", map[string]any{

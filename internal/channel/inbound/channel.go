@@ -37,6 +37,7 @@ import (
 	"github.com/felinics/memoh/internal/i18n"
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/runtimekind"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	skillset "github.com/felinics/memoh/internal/skills"
 	"github.com/felinics/memoh/internal/slash"
 )
@@ -172,6 +173,7 @@ type SessionResult struct {
 	Mode                  string
 	Runtime               string
 	RuntimeOwnerAccountID string
+	ExternalRuntimeDriver sessionfacts.ExternalRuntimeDriver
 }
 
 type NewSessionSpec struct {
@@ -183,6 +185,7 @@ type NewSessionSpec struct {
 	Title                 string
 	CreatedByUserID       string
 	RuntimeOwnerAccountID string
+	Audience              sessionfacts.Audience
 }
 
 // ChannelInboundProcessor routes channel inbound messages to the chat gateway.
@@ -644,6 +647,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	sessionType := ""
 	sessionRuntime := ""
 	sessionRuntimeOwner := ""
+	var sessionRuntimeDriver sessionfacts.ExternalRuntimeDriver
 	if p.sessionEnsurer != nil {
 		sess, sessErr := p.sessionEnsurer.GetActiveSession(ctx, resolved.RouteID)
 		if sessErr == nil {
@@ -651,6 +655,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			sessionType = sess.Type
 			sessionRuntime = sess.Runtime
 			sessionRuntimeOwner = sess.RuntimeOwnerAccountID
+			sessionRuntimeDriver = sess.ExternalRuntimeDriver
 		} else if p.logger != nil {
 			p.logger.DebugContext(ctx, "no active session for route; will create after gates if needed",
 				slog.String("route_id", strings.TrimSpace(resolved.RouteID)),
@@ -810,6 +815,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			if pendingSkillIntent != nil && !newSessionSpecSupportsRequestedSkills(spec) {
 				return p.sendSlashError(ctx, sender, msg, slash.CodeUnsupportedSkillSlashContext)
 			}
+			spec.Audience = sessionAudience(msg)
 			sess, createErr := p.sessionEnsurer.CreateNewSession(ctx, identity.BotID, resolved.RouteID, msg.Channel.String(), spec)
 			if createErr != nil {
 				return p.replyFailure(ctx, sender, msg, identity, createErr, friendlyOps(p.localizer(ctx, identity.BotID), "ops.verb.startSession"))
@@ -818,10 +824,11 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			sessionType = sess.Type
 			sessionRuntime = sess.Runtime
 			sessionRuntimeOwner = sess.RuntimeOwnerAccountID
+			sessionRuntimeDriver = sess.ExternalRuntimeDriver
 		}
 	}
 
-	runtimeSession := SessionResult{Type: sessionType, Runtime: sessionRuntime}
+	runtimeSession := SessionResult{Type: sessionType, Runtime: sessionRuntime, ExternalRuntimeDriver: sessionRuntimeDriver}
 	if sessionUsesExternalRuntime(runtimeSession) {
 		ownerPrincipal := strings.TrimSpace(sessionRuntimeOwner)
 		var err error
@@ -4342,6 +4349,7 @@ func (p *ChannelInboundProcessor) handleNewSessionCommand(
 	} else {
 		spec.CreatedByUserID = strings.TrimSpace(spec.CreatedByUserID)
 	}
+	spec.Audience = sessionAudience(msg)
 	sess, err := p.sessionEnsurer.CreateNewSession(ctx, identity.BotID, resolved.RouteID, msg.Channel.String(), spec)
 	if err != nil {
 		return p.replyFailure(ctx, sender, msg, identity, errs.Wrap(err, "create new session via /new command"), startFailed)
@@ -4711,11 +4719,23 @@ func newSessionSpecSupportsRequestedSkills(spec NewSessionSpec) bool {
 	return sessionpkg.SupportsSkillActivation("", typ, spec.Runtime)
 }
 
+// sessionRequiresExternalRuntimeActor reports whether only the runtime owner
+// may drive the session's external runtime. Participants drive it only where
+// the session records that grant; the session mode alone never implies it.
 func sessionRequiresExternalRuntimeActor(sess SessionResult) bool {
 	if !sessionUsesExternalRuntime(sess) {
 		return false
 	}
-	return strings.TrimSpace(sess.Type) != sessionpkg.TypeDiscuss
+	return sess.ExternalRuntimeDriver != sessionfacts.RuntimeDriverParticipants
+}
+
+// sessionAudience observes whether a session created for this message belongs
+// to a shared conversation rather than to one person.
+func sessionAudience(msg channel.InboundMessage) sessionfacts.Audience {
+	if isGroupConversation(msg) {
+		return sessionfacts.AudienceShared
+	}
+	return sessionfacts.AudiencePersonal
 }
 
 func externalRuntimeOwnerPrincipal(identity InboundIdentity, explicitOwner string) string {

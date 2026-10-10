@@ -12,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type testACPSetupValidator struct{}
@@ -404,6 +405,68 @@ func TestCreatePersistsCanonicalChannelType(t *testing.T) {
 	}
 }
 
+func TestCreateRecordsModePresetAndObservedAudience(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		typ      string
+		audience sessionfacts.Audience
+		want     sessionfacts.Audience
+	}{
+		{typ: TypeChat, want: sessionfacts.AudiencePersonal},
+		{typ: TypeChat, audience: sessionfacts.AudienceShared, want: sessionfacts.AudienceShared},
+		{typ: TypeDiscuss, audience: sessionfacts.AudienceShared, want: sessionfacts.AudienceShared},
+		{typ: TypeSchedule, want: sessionfacts.AudiencePersonal},
+		{typ: TypeSubagent, want: sessionfacts.AudiencePersonal},
+	}
+	for _, tc := range cases {
+		queries := &createACPQueries{}
+		created, err := NewService(nil, queries, nil).Create(context.Background(), CreateInput{
+			BotID:    "00000000-0000-0000-0000-000000000001",
+			Type:     tc.typ,
+			Audience: tc.audience,
+		})
+		if err != nil {
+			t.Fatalf("Create(%s) error = %v", tc.typ, err)
+		}
+		want := sessionfacts.Preset(tc.typ)
+		got := storedFacts(queries.createParams.ReplyDelivery, queries.createParams.TriggerScope, queries.createParams.DecisionMode, queries.createParams.ExternalRuntimeDriver)
+		if got != want || created.Facts != want {
+			t.Fatalf("Create(%s) facts = %+v (returned %+v), want preset %+v", tc.typ, got, created.Facts, want)
+		}
+		if queries.createParams.Audience != string(tc.want) || created.Audience != tc.want {
+			t.Fatalf("Create(%s) audience = %q (returned %q), want %q", tc.typ, queries.createParams.Audience, created.Audience, tc.want)
+		}
+	}
+
+	if _, err := NewService(nil, &createACPQueries{}, nil).Create(context.Background(), CreateInput{
+		BotID:    "00000000-0000-0000-0000-000000000001",
+		Audience: "everyone",
+	}); err == nil {
+		t.Fatal("Create accepted an unknown audience")
+	}
+}
+
+func TestUpdateDescriptorOffersTheNewModePreset(t *testing.T) {
+	t.Parallel()
+
+	sessionID := "00000000-0000-0000-0000-000000000002"
+	queries := &updateACPQueries{session: sqlc.BotSession{
+		ID:          mustPGUUID(sessionID),
+		BotID:       mustPGUUID("00000000-0000-0000-0000-000000000001"),
+		Type:        TypeChat,
+		SessionMode: TypeChat,
+		RuntimeType: RuntimeModel,
+	}}
+	if _, err := NewService(nil, queries, nil).UpdateDescriptorAndMetadataWithOwner(context.Background(), sessionID, TypeDiscuss, TypeDiscuss, RuntimeModel, nil, nil, nil, ""); err != nil {
+		t.Fatalf("UpdateDescriptorAndMetadataWithOwner() error = %v", err)
+	}
+	got := storedFacts(queries.updateParams.ReplyDelivery, queries.updateParams.TriggerScope, queries.updateParams.DecisionMode, queries.updateParams.ExternalRuntimeDriver)
+	if want := sessionfacts.Preset(TypeDiscuss); got != want {
+		t.Fatalf("update facts = %+v, want the discuss preset %+v", got, want)
+	}
+}
+
 func TestNormalizeDescriptorAllowsDiscussACP(t *testing.T) {
 	t.Parallel()
 
@@ -451,18 +514,23 @@ func (q *createACPQueries) ListSessionsByBot(context.Context, pgtype.UUID) ([]sq
 func (q *createACPQueries) CreateSession(_ context.Context, params sqlc.CreateSessionParams) (sqlc.BotSession, error) {
 	q.createParams = params
 	return sqlc.BotSession{
-		ID:              mustPGUUID("00000000-0000-0000-0000-000000000002"),
-		BotID:           params.BotID,
-		RouteID:         params.RouteID,
-		ChannelType:     params.ChannelType,
-		Type:            params.Type,
-		SessionMode:     params.SessionMode,
-		RuntimeType:     params.RuntimeType,
-		RuntimeMetadata: params.RuntimeMetadata,
-		Title:           params.Title,
-		Metadata:        params.Metadata,
-		ParentSessionID: params.ParentSessionID,
-		CreatedByUserID: params.CreatedByUserID,
+		ID:                    mustPGUUID("00000000-0000-0000-0000-000000000002"),
+		BotID:                 params.BotID,
+		RouteID:               params.RouteID,
+		ChannelType:           params.ChannelType,
+		Type:                  params.Type,
+		SessionMode:           params.SessionMode,
+		RuntimeType:           params.RuntimeType,
+		ReplyDelivery:         params.ReplyDelivery,
+		TriggerScope:          params.TriggerScope,
+		DecisionMode:          params.DecisionMode,
+		Audience:              params.Audience,
+		ExternalRuntimeDriver: params.ExternalRuntimeDriver,
+		RuntimeMetadata:       params.RuntimeMetadata,
+		Title:                 params.Title,
+		Metadata:              params.Metadata,
+		ParentSessionID:       params.ParentSessionID,
+		CreatedByUserID:       params.CreatedByUserID,
 	}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/mcp"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/toolcontext"
 )
 
@@ -434,12 +435,17 @@ func sessionFromMCP(session mcp.ToolSessionContext) SessionContext {
 		session.SessionID = ""
 		session.SessionType = ""
 	}
+	// The external tool protocol carries only the run's session mode, so the
+	// run executes under that mode's preset facts.
+	facts := sessionfacts.Preset(session.SessionType)
 	return SessionContext{
 		BotID:                     session.BotID,
 		UserID:                    session.UserID,
 		ChatID:                    firstNonEmpty(session.ChatID, session.BotID),
 		SessionID:                 session.SessionID,
 		SessionType:               session.SessionType,
+		ReplyDelivery:             facts.ReplyDelivery,
+		DecisionMode:              facts.DecisionMode,
 		ChannelIdentityID:         session.ChannelIdentityID,
 		SessionToken:              session.SessionToken,
 		CurrentPlatform:           session.CurrentPlatform,

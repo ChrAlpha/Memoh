@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/models/modelretry"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 // SessionContext carries request-scoped identity and routing information.
@@ -206,6 +207,10 @@ type RunConfig struct {
 	SupportsFileInput              bool
 	SupportsToolCall               bool
 	InlineImages                   []sdk.ImagePart
+	// ReplyDelivery and DecisionMode are the session facts this run executes
+	// under; see sessionfacts.
+	ReplyDelivery sessionfacts.ReplyDelivery
+	DecisionMode  sessionfacts.DecisionMode
 	// InlineAttachments carries non-image native attachment parts (documents
 	// as sdk.FilePart, small text files as wrapped sdk.TextPart) appended to
 	// the current user message. Images stay in InlineImages, which also feeds

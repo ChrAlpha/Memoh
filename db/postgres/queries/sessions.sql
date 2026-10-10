@@ -1,6 +1,8 @@
 -- name: CreateSession :one
 INSERT INTO bot_sessions (
-  bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility, runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
+  bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility,
+  reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver,
+  runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
 )
 VALUES (
   sqlc.arg(bot_id),
@@ -11,6 +13,11 @@ VALUES (
   sqlc.arg(session_mode),
   sqlc.arg(runtime_type),
   sqlc.arg(visibility),
+  sqlc.arg(reply_delivery),
+  sqlc.arg(trigger_scope),
+  sqlc.arg(decision_mode),
+  sqlc.arg(audience),
+  sqlc.arg(external_runtime_driver),
   sqlc.arg(runtime_metadata),
   sqlc.arg(title),
   sqlc.arg(metadata),
@@ -120,6 +127,11 @@ created_session AS (
     session_mode,
     runtime_type,
     visibility,
+    reply_delivery,
+    trigger_scope,
+    decision_mode,
+    audience,
+    external_runtime_driver,
     runtime_metadata,
     title,
     metadata,
@@ -139,6 +151,12 @@ created_session AS (
     fp.runtime_type,
     -- A fork of a user-visible session is itself user-visible.
     fp.visibility,
+    -- A fork continues the same conversation, so it keeps its facts.
+    fp.reply_delivery,
+    fp.trigger_scope,
+    fp.decision_mode,
+    fp.audience,
+    fp.external_runtime_driver,
     -- External runtimes fork their own runtime-side session: the caller
     -- passes the new driver-owned keys (e.g. the forked codex thread id) so
     -- the two Memoh sessions never share one runtime session.
@@ -312,7 +330,8 @@ FOR UPDATE;
 
 -- name: ListSessionsByBot :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -322,7 +341,8 @@ ORDER BY s.updated_at DESC;
 
 -- name: ListSessionsByBotAndCreatedByUser :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -338,7 +358,8 @@ ORDER BY s.updated_at DESC;
 -- disabled, "sessions of this workdir", or "sessions with no workdir"
 -- (workdir_unassigned) for the sidebar's ungrouped bucket.
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -369,7 +390,8 @@ LIMIT sqlc.arg(limit_count)::int;
 
 -- name: ListSessionsByBotAndCreatedByUserPaged :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -458,10 +480,20 @@ RETURNING *;
 
 -- name: UpdateSessionTypeAndMetadata :one
 -- A different runtime or Agent owns a different model namespace. Clear the
--- old preference and invalidate pending picker writes when changing it.
+-- old preference and invalidate pending picker writes when changing it. A
+-- different session mode is a different preset: its facts replace the old
+-- ones. Audience describes the conversation, not the mode, and stays.
 UPDATE bot_sessions
 SET type = sqlc.arg(type),
     session_mode = sqlc.arg(session_mode),
+    reply_delivery = CASE WHEN session_mode IS DISTINCT FROM sqlc.arg(session_mode)
+      THEN sqlc.arg(reply_delivery) ELSE reply_delivery END,
+    trigger_scope = CASE WHEN session_mode IS DISTINCT FROM sqlc.arg(session_mode)
+      THEN sqlc.arg(trigger_scope) ELSE trigger_scope END,
+    decision_mode = CASE WHEN session_mode IS DISTINCT FROM sqlc.arg(session_mode)
+      THEN sqlc.arg(decision_mode) ELSE decision_mode END,
+    external_runtime_driver = CASE WHEN session_mode IS DISTINCT FROM sqlc.arg(session_mode)
+      THEN sqlc.arg(external_runtime_driver) ELSE external_runtime_driver END,
     runtime_type = sqlc.arg(runtime_type),
     bot_agent_id = sqlc.arg(bot_agent_id),
     runtime_metadata = sqlc.arg(runtime_metadata),

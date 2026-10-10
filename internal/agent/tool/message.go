@@ -10,6 +10,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/messaging"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type MessageProvider struct {
@@ -36,10 +37,10 @@ func NewMessageProvider(log *slog.Logger, sender messaging.Sender, reactor messa
 func (*MessageProvider) Usage(_ context.Context, session SessionContext, available AvailableTools) string {
 	var parts []string
 	if sendRef, ok := available.Ref(ToolSend()); ok {
-		switch session.SessionType {
-		case sessionmode.Discuss:
+		switch {
+		case session.ReplyDelivery == sessionfacts.ReplyExplicit:
 			parts = append(parts, "Use "+sendRef+" to speak in the observed conversation; if you do not call it, you stay silent.")
-		case sessionmode.Schedule:
+		case session.SessionType == sessionmode.Schedule:
 			parts = append(parts, "Use "+sendRef+" only when the background task needs to notify a person or channel; specify `platform` and `target`.")
 		default:
 			if session.CanOmitMessagingTarget() {
@@ -273,7 +274,7 @@ func messagingSessionSupportsMarkdownMath(session SessionContext) bool {
 }
 
 func sendToolPromptMetadata(session SessionContext) (description string, platformDescription string, targetDescription string, required []string) {
-	if session.SessionType == sessionmode.Discuss {
+	if session.ReplyDelivery == sessionfacts.ReplyExplicit {
 		if session.CanOmitMessagingTarget() {
 			return "Send a message into the observed conversation. When target is omitted, sends to the observed conversation. When target is specified, sends to that channel/person.",
 				"Channel platform name. Defaults to current session platform.",
@@ -311,7 +312,7 @@ func reactToolPromptMetadata(session SessionContext) (description string, platfo
 }
 
 func (p *MessageProvider) execSend(ctx context.Context, session SessionContext, toolCallID string, args map[string]any) (any, error) {
-	if session.SessionType == sessionmode.Discuss {
+	if session.ReplyDelivery == sessionfacts.ReplyExplicit {
 		sendResult, err := p.exec.SendDirect(ctx, toMessagingSession(session), "", args)
 		if err != nil {
 			return nil, err
@@ -425,7 +426,7 @@ func toMessagingSession(s SessionContext) messaging.SessionContext {
 	return messaging.SessionContext{
 		BotID:              s.BotID,
 		ChatID:             s.ChatID,
-		CanOmitTarget:      s.CanOmitMessagingTarget() || s.SessionType == sessionmode.Discuss,
+		CanOmitTarget:      s.CanOmitMessagingTarget() || s.ReplyDelivery == sessionfacts.ReplyExplicit,
 		AllowLocalShortcut: s.CanUseLocalMessagingShortcut(),
 		CurrentPlatform:    s.CurrentPlatform,
 		ReplyTarget:        s.ReplyTarget,

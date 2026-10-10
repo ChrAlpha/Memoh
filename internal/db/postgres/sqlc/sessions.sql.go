@@ -76,7 +76,9 @@ func (q *Queries) CompareAndSetSessionModelPreference(ctx context.Context, arg C
 
 const createSession = `-- name: CreateSession :one
 INSERT INTO bot_sessions (
-  bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility, runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
+  bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility,
+  reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver,
+  runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
 )
 VALUES (
   $1,
@@ -90,13 +92,18 @@ VALUES (
   $9,
   $10,
   $11,
-  $12::uuid,
-  $13::uuid,
-  $14::uuid,
-  $15::uuid,
-  $16::text
+  $12,
+  $13,
+  $14,
+  $15,
+  $16,
+  $17::uuid,
+  $18::uuid,
+  $19::uuid,
+  $20::uuid,
+  $21::text
 )
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type CreateSessionParams struct {
@@ -108,6 +115,11 @@ type CreateSessionParams struct {
 	SessionMode              string      `json:"session_mode"`
 	RuntimeType              string      `json:"runtime_type"`
 	Visibility               string      `json:"visibility"`
+	ReplyDelivery            string      `json:"reply_delivery"`
+	TriggerScope             string      `json:"trigger_scope"`
+	DecisionMode             string      `json:"decision_mode"`
+	Audience                 string      `json:"audience"`
+	ExternalRuntimeDriver    string      `json:"external_runtime_driver"`
 	RuntimeMetadata          []byte      `json:"runtime_metadata"`
 	Title                    string      `json:"title"`
 	Metadata                 []byte      `json:"metadata"`
@@ -128,6 +140,11 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 		arg.SessionMode,
 		arg.RuntimeType,
 		arg.Visibility,
+		arg.ReplyDelivery,
+		arg.TriggerScope,
+		arg.DecisionMode,
+		arg.Audience,
+		arg.ExternalRuntimeDriver,
 		arg.RuntimeMetadata,
 		arg.Title,
 		arg.Metadata,
@@ -152,6 +169,11 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (B
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -190,7 +212,7 @@ func (q *Queries) DeleteSessionDiscussCursorsByBot(ctx context.Context, botID pg
 
 const forkSessionFromAssistantTurn = `-- name: ForkSessionFromAssistantTurn :one
 WITH source_session AS (
-  SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision, s.visibility, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.runtime_reset_token, s.runtime_reset_expires_at, s.runtime_config_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.workdir_id, s.bot_agent_id
+  SELECT s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision, s.visibility, s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.runtime_reset_token, s.runtime_reset_expires_at, s.runtime_config_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.workdir_id, s.bot_agent_id
   FROM bot_sessions s
   WHERE s.team_id = public.memoh_current_team_id()
     AND s.id = $1
@@ -267,7 +289,7 @@ prepared_metadata AS (
 ),
 fork_plan AS (
   SELECT
-    s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision, s.visibility, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.runtime_reset_token, s.runtime_reset_expires_at, s.runtime_config_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.workdir_id, s.bot_agent_id,
+    s.id, s.bot_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.runtime_metadata, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision, s.visibility, s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.title, s.metadata, s.next_turn_position, s.compaction_epoch, s.runtime_fencing_token, s.runtime_reset_token, s.runtime_reset_expires_at, s.runtime_config_epoch, s.parent_session_id, s.created_by_user_id, s.created_at, s.updated_at, s.deleted_at, s.team_id, s.workdir_id, s.bot_agent_id,
     fam.new_message_id AS fork_message_id,
     tt.message_id AS source_message_id,
     ntp.value AS next_turn_position_value
@@ -286,6 +308,11 @@ created_session AS (
     session_mode,
     runtime_type,
     visibility,
+    reply_delivery,
+    trigger_scope,
+    decision_mode,
+    audience,
+    external_runtime_driver,
     runtime_metadata,
     title,
     metadata,
@@ -305,6 +332,12 @@ created_session AS (
     fp.runtime_type,
     -- A fork of a user-visible session is itself user-visible.
     fp.visibility,
+    -- A fork continues the same conversation, so it keeps its facts.
+    fp.reply_delivery,
+    fp.trigger_scope,
+    fp.decision_mode,
+    fp.audience,
+    fp.external_runtime_driver,
     -- External runtimes fork their own runtime-side session: the caller
     -- passes the new driver-owned keys (e.g. the forked codex thread id) so
     -- the two Memoh sessions never share one runtime session.
@@ -332,7 +365,7 @@ created_session AS (
     fp.preferred_external_model_id
   FROM fork_plan fp
   CROSS JOIN prepared_metadata pm
-  RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+  RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 ),
 inserted_messages AS (
   INSERT INTO bot_history_messages (
@@ -411,7 +444,7 @@ copied_assets AS (
   WHERE a.team_id = public.memoh_current_team_id()
   RETURNING id
 )
-SELECT cs.id, cs.bot_id, cs.route_id, cs.channel_type, cs.type, cs.session_mode, cs.runtime_type, cs.runtime_metadata, cs.preferred_chat_model_id, cs.preferred_reasoning_effort, cs.preferred_external_model_id, cs.model_preference_revision, cs.visibility, cs.title, cs.metadata, cs.next_turn_position, cs.compaction_epoch, cs.runtime_fencing_token, cs.runtime_reset_token, cs.runtime_reset_expires_at, cs.runtime_config_epoch, cs.parent_session_id, cs.created_by_user_id, cs.created_at, cs.updated_at, cs.deleted_at, cs.team_id, cs.workdir_id, cs.bot_agent_id
+SELECT cs.id, cs.bot_id, cs.route_id, cs.channel_type, cs.type, cs.session_mode, cs.runtime_type, cs.runtime_metadata, cs.preferred_chat_model_id, cs.preferred_reasoning_effort, cs.preferred_external_model_id, cs.model_preference_revision, cs.visibility, cs.reply_delivery, cs.trigger_scope, cs.decision_mode, cs.audience, cs.external_runtime_driver, cs.title, cs.metadata, cs.next_turn_position, cs.compaction_epoch, cs.runtime_fencing_token, cs.runtime_reset_token, cs.runtime_reset_expires_at, cs.runtime_config_epoch, cs.parent_session_id, cs.created_by_user_id, cs.created_at, cs.updated_at, cs.deleted_at, cs.team_id, cs.workdir_id, cs.bot_agent_id
 FROM created_session cs
 CROSS JOIN (SELECT count(*) AS copied_asset_count FROM copied_assets) copied_asset_counts
 `
@@ -440,6 +473,11 @@ type ForkSessionFromAssistantTurnRow struct {
 	PreferredExternalModelID pgtype.Text        `json:"preferred_external_model_id"`
 	ModelPreferenceRevision  pgtype.UUID        `json:"model_preference_revision"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
 	NextTurnPosition         int64              `json:"next_turn_position"`
@@ -483,6 +521,11 @@ func (q *Queries) ForkSessionFromAssistantTurn(ctx context.Context, arg ForkSess
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -542,7 +585,7 @@ func (q *Queries) GetLatestSessionModelPreference(ctx context.Context, arg GetLa
 }
 
 const getSessionByID = `-- name: GetSessionByID :one
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 FROM bot_sessions
 WHERE team_id = public.memoh_current_team_id()
   AND id = $1
@@ -566,6 +609,11 @@ func (q *Queries) GetSessionByID(ctx context.Context, id pgtype.UUID) (BotSessio
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -656,7 +704,8 @@ func (q *Queries) ListSessionDiscussCursorsByBot(ctx context.Context, botID pgty
 
 const listSessionsByBot = `-- name: ListSessionsByBot :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -675,6 +724,11 @@ type ListSessionsByBotRow struct {
 	SessionMode              string             `json:"session_mode"`
 	RuntimeType              string             `json:"runtime_type"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	RuntimeMetadata          []byte             `json:"runtime_metadata"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
@@ -709,6 +763,11 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 			&i.SessionMode,
 			&i.RuntimeType,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.RuntimeMetadata,
 			&i.Title,
 			&i.Metadata,
@@ -735,7 +794,8 @@ func (q *Queries) ListSessionsByBot(ctx context.Context, botID pgtype.UUID) ([]L
 
 const listSessionsByBotAndCreatedByUser = `-- name: ListSessionsByBotAndCreatedByUser :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -760,6 +820,11 @@ type ListSessionsByBotAndCreatedByUserRow struct {
 	SessionMode              string             `json:"session_mode"`
 	RuntimeType              string             `json:"runtime_type"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	RuntimeMetadata          []byte             `json:"runtime_metadata"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
@@ -794,6 +859,11 @@ func (q *Queries) ListSessionsByBotAndCreatedByUser(ctx context.Context, arg Lis
 			&i.SessionMode,
 			&i.RuntimeType,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.RuntimeMetadata,
 			&i.Title,
 			&i.Metadata,
@@ -820,7 +890,8 @@ func (q *Queries) ListSessionsByBotAndCreatedByUser(ctx context.Context, arg Lis
 
 const listSessionsByBotAndCreatedByUserPaged = `-- name: ListSessionsByBotAndCreatedByUserPaged :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -878,6 +949,11 @@ type ListSessionsByBotAndCreatedByUserPagedRow struct {
 	SessionMode              string             `json:"session_mode"`
 	RuntimeType              string             `json:"runtime_type"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	RuntimeMetadata          []byte             `json:"runtime_metadata"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
@@ -927,6 +1003,11 @@ func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, ar
 			&i.SessionMode,
 			&i.RuntimeType,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.RuntimeMetadata,
 			&i.Title,
 			&i.Metadata,
@@ -953,7 +1034,8 @@ func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, ar
 
 const listSessionsByBotPaged = `-- name: ListSessionsByBotPaged :many
 SELECT
-  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
+  s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
+  s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
 FROM bot_sessions s
 WHERE s.team_id = public.memoh_current_team_id()
@@ -1009,6 +1091,11 @@ type ListSessionsByBotPagedRow struct {
 	SessionMode              string             `json:"session_mode"`
 	RuntimeType              string             `json:"runtime_type"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	RuntimeMetadata          []byte             `json:"runtime_metadata"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
@@ -1062,6 +1149,11 @@ func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsBy
 			&i.SessionMode,
 			&i.RuntimeType,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.RuntimeMetadata,
 			&i.Title,
 			&i.Metadata,
@@ -1087,7 +1179,7 @@ func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsBy
 }
 
 const listSessionsByRoute = `-- name: ListSessionsByRoute :many
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 FROM bot_sessions
 WHERE team_id = public.memoh_current_team_id()
   AND route_id = $1
@@ -1118,6 +1210,11 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 			&i.PreferredExternalModelID,
 			&i.ModelPreferenceRevision,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.Title,
 			&i.Metadata,
 			&i.NextTurnPosition,
@@ -1146,7 +1243,7 @@ func (q *Queries) ListSessionsByRoute(ctx context.Context, routeID pgtype.UUID) 
 }
 
 const listSubagentSessionsByParent = `-- name: ListSubagentSessionsByParent :many
-SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+SELECT id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 FROM bot_sessions
 WHERE team_id = public.memoh_current_team_id()
   AND parent_session_id = $1
@@ -1184,6 +1281,11 @@ func (q *Queries) ListSubagentSessionsByParent(ctx context.Context, parentSessio
 			&i.PreferredExternalModelID,
 			&i.ModelPreferenceRevision,
 			&i.Visibility,
+			&i.ReplyDelivery,
+			&i.TriggerScope,
+			&i.DecisionMode,
+			&i.Audience,
+			&i.ExternalRuntimeDriver,
 			&i.Title,
 			&i.Metadata,
 			&i.NextTurnPosition,
@@ -1402,7 +1504,7 @@ const updateSessionMetadata = `-- name: UpdateSessionMetadata :one
 UPDATE bot_sessions
 SET metadata = $1, updated_at = now()
 WHERE team_id = public.memoh_current_team_id() AND id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionMetadataParams struct {
@@ -1427,6 +1529,11 @@ func (q *Queries) UpdateSessionMetadata(ctx context.Context, arg UpdateSessionMe
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -1455,7 +1562,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $3
   AND runtime_fencing_token = $4
   AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionMetadataWithRuntimeFenceParams struct {
@@ -1487,6 +1594,11 @@ func (q *Queries) UpdateSessionMetadataWithRuntimeFence(ctx context.Context, arg
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -1548,7 +1660,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND runtime_type = $3
   AND ($4::bigint IS NULL OR runtime_fencing_token <= $4::bigint)
   AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionRuntimeMetadataParams struct {
@@ -1587,6 +1699,11 @@ func (q *Queries) UpdateSessionRuntimeMetadata(ctx context.Context, arg UpdateSe
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -1611,7 +1728,7 @@ const updateSessionTitle = `-- name: UpdateSessionTitle :one
 UPDATE bot_sessions
 SET title = $1, updated_at = now()
 WHERE team_id = public.memoh_current_team_id() AND id = $2 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionTitleParams struct {
@@ -1636,6 +1753,11 @@ func (q *Queries) UpdateSessionTitle(ctx context.Context, arg UpdateSessionTitle
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -1664,7 +1786,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $3
   AND runtime_fencing_token = $4
   AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionTitleWithRuntimeFenceParams struct {
@@ -1696,6 +1818,11 @@ func (q *Queries) UpdateSessionTitleWithRuntimeFence(ctx context.Context, arg Up
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,
@@ -1720,40 +1847,58 @@ const updateSessionTypeAndMetadata = `-- name: UpdateSessionTypeAndMetadata :one
 UPDATE bot_sessions
 SET type = $1,
     session_mode = $2,
-    runtime_type = $3,
-    bot_agent_id = $4,
-    runtime_metadata = $5,
-    metadata = $6,
-    preferred_chat_model_id = CASE WHEN runtime_type IS DISTINCT FROM $3 OR bot_agent_id IS DISTINCT FROM $4
+    reply_delivery = CASE WHEN session_mode IS DISTINCT FROM $2
+      THEN $3 ELSE reply_delivery END,
+    trigger_scope = CASE WHEN session_mode IS DISTINCT FROM $2
+      THEN $4 ELSE trigger_scope END,
+    decision_mode = CASE WHEN session_mode IS DISTINCT FROM $2
+      THEN $5 ELSE decision_mode END,
+    external_runtime_driver = CASE WHEN session_mode IS DISTINCT FROM $2
+      THEN $6 ELSE external_runtime_driver END,
+    runtime_type = $7,
+    bot_agent_id = $8,
+    runtime_metadata = $9,
+    metadata = $10,
+    preferred_chat_model_id = CASE WHEN runtime_type IS DISTINCT FROM $7 OR bot_agent_id IS DISTINCT FROM $8
       THEN NULL ELSE preferred_chat_model_id END,
-    preferred_external_model_id = CASE WHEN runtime_type IS DISTINCT FROM $3 OR bot_agent_id IS DISTINCT FROM $4
+    preferred_external_model_id = CASE WHEN runtime_type IS DISTINCT FROM $7 OR bot_agent_id IS DISTINCT FROM $8
       THEN NULL ELSE preferred_external_model_id END,
-    preferred_reasoning_effort = CASE WHEN runtime_type IS DISTINCT FROM $3 OR bot_agent_id IS DISTINCT FROM $4
+    preferred_reasoning_effort = CASE WHEN runtime_type IS DISTINCT FROM $7 OR bot_agent_id IS DISTINCT FROM $8
       THEN NULL ELSE preferred_reasoning_effort END,
-    model_preference_revision = CASE WHEN runtime_type IS DISTINCT FROM $3 OR bot_agent_id IS DISTINCT FROM $4
+    model_preference_revision = CASE WHEN runtime_type IS DISTINCT FROM $7 OR bot_agent_id IS DISTINCT FROM $8
       THEN gen_random_uuid() ELSE model_preference_revision END,
     runtime_config_epoch = runtime_config_epoch + 1,
     updated_at = now()
-WHERE team_id = public.memoh_current_team_id() AND id = $7 AND deleted_at IS NULL
-RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
+WHERE team_id = public.memoh_current_team_id() AND id = $11 AND deleted_at IS NULL
+RETURNING id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, preferred_chat_model_id, preferred_reasoning_effort, preferred_external_model_id, model_preference_revision, visibility, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver, title, metadata, next_turn_position, compaction_epoch, runtime_fencing_token, runtime_reset_token, runtime_reset_expires_at, runtime_config_epoch, parent_session_id, created_by_user_id, created_at, updated_at, deleted_at, team_id, workdir_id, bot_agent_id
 `
 
 type UpdateSessionTypeAndMetadataParams struct {
-	Type            string      `json:"type"`
-	SessionMode     string      `json:"session_mode"`
-	RuntimeType     string      `json:"runtime_type"`
-	BotAgentID      pgtype.UUID `json:"bot_agent_id"`
-	RuntimeMetadata []byte      `json:"runtime_metadata"`
-	Metadata        []byte      `json:"metadata"`
-	ID              pgtype.UUID `json:"id"`
+	Type                  string      `json:"type"`
+	SessionMode           string      `json:"session_mode"`
+	ReplyDelivery         string      `json:"reply_delivery"`
+	TriggerScope          string      `json:"trigger_scope"`
+	DecisionMode          string      `json:"decision_mode"`
+	ExternalRuntimeDriver string      `json:"external_runtime_driver"`
+	RuntimeType           string      `json:"runtime_type"`
+	BotAgentID            pgtype.UUID `json:"bot_agent_id"`
+	RuntimeMetadata       []byte      `json:"runtime_metadata"`
+	Metadata              []byte      `json:"metadata"`
+	ID                    pgtype.UUID `json:"id"`
 }
 
 // A different runtime or Agent owns a different model namespace. Clear the
-// old preference and invalidate pending picker writes when changing it.
+// old preference and invalidate pending picker writes when changing it. A
+// different session mode is a different preset: its facts replace the old
+// ones. Audience describes the conversation, not the mode, and stays.
 func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg UpdateSessionTypeAndMetadataParams) (BotSession, error) {
 	row := q.db.QueryRow(ctx, updateSessionTypeAndMetadata,
 		arg.Type,
 		arg.SessionMode,
+		arg.ReplyDelivery,
+		arg.TriggerScope,
+		arg.DecisionMode,
+		arg.ExternalRuntimeDriver,
 		arg.RuntimeType,
 		arg.BotAgentID,
 		arg.RuntimeMetadata,
@@ -1775,6 +1920,11 @@ func (q *Queries) UpdateSessionTypeAndMetadata(ctx context.Context, arg UpdateSe
 		&i.PreferredExternalModelID,
 		&i.ModelPreferenceRevision,
 		&i.Visibility,
+		&i.ReplyDelivery,
+		&i.TriggerScope,
+		&i.DecisionMode,
+		&i.Audience,
+		&i.ExternalRuntimeDriver,
 		&i.Title,
 		&i.Metadata,
 		&i.NextTurnPosition,

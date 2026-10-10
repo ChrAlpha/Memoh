@@ -368,6 +368,11 @@ type BotSession struct {
 	PreferredExternalModelID pgtype.Text        `json:"preferred_external_model_id"`
 	ModelPreferenceRevision  pgtype.UUID        `json:"model_preference_revision"`
 	Visibility               string             `json:"visibility"`
+	ReplyDelivery            string             `json:"reply_delivery"`
+	TriggerScope             string             `json:"trigger_scope"`
+	DecisionMode             string             `json:"decision_mode"`
+	Audience                 string             `json:"audience"`
+	ExternalRuntimeDriver    string             `json:"external_runtime_driver"`
 	Title                    string             `json:"title"`
 	Metadata                 []byte             `json:"metadata"`
 	NextTurnPosition         int64              `json:"next_turn_position"`

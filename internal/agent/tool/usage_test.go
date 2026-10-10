@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/messaging"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type usageTestResolver struct{}
@@ -580,7 +581,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("Usage without ask_user = %q, want empty", got)
 	}
 
-	got := provider.Usage(context.Background(), SessionContext{CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
+	got := provider.Usage(context.Background(), SessionContext{DecisionMode: sessionfacts.DecisionPark, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`ask_user`", "multiple-choice question", "custom_text", "`multi_select`", "（多选）"} {
 		if !strings.Contains(got, want) {
@@ -593,7 +594,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("Usage without user input delivery = %q, want empty", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Chat, DecisionMode: sessionfacts.DecisionPark, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
 	assertUsageItemsAreBulleted(t, got)
 	for _, want := range []string{"`ask_user`", "multiple-choice question", "custom_text", "`multi_select`", "（多选）"} {
 		if !strings.Contains(got, want) {
@@ -601,22 +602,22 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		}
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, DecisionMode: sessionfacts.DecisionAutoReject, CanListUserInput: true}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage with non-ACP list-only user input discovery = %q, want empty", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Schedule, DecisionMode: sessionfacts.DecisionAutoReject, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage in schedule = %q, want empty", got)
 	}
 
-	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Discuss, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
+	got = provider.Usage(context.Background(), SessionContext{SessionType: sessionmode.Discuss, ReplyDelivery: sessionfacts.ReplyExplicit, DecisionMode: sessionfacts.DecisionAutoReject, CanRequestUserInput: true}, availableToolsForTest(ToolAskUser()))
 	if got != "" {
 		t.Fatalf("Usage in discuss = %q, want empty", got)
 	}
 
-	chatTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Chat, CanRequestUserInput: true})
+	chatTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Chat, DecisionMode: sessionfacts.DecisionPark, CanRequestUserInput: true})
 	if err != nil {
 		t.Fatalf("Tools in chat: %v", err)
 	}
@@ -635,7 +636,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("tools without user input delivery = %#v, want none", noDeliveryTools)
 	}
 
-	listOnlyChatTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Chat, CanListUserInput: true})
+	listOnlyChatTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Chat, DecisionMode: sessionfacts.DecisionPark, CanListUserInput: true})
 	if err != nil {
 		t.Fatalf("Tools with list-only user input discovery: %v", err)
 	}
@@ -643,7 +644,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("list-only chat tools = %#v, want ask_user", listOnlyChatTools)
 	}
 
-	listOnlyACPTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.ACPAgent, CanListUserInput: true})
+	listOnlyACPTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.ACPAgent, DecisionMode: sessionfacts.DecisionPark, CanListUserInput: true})
 	if err != nil {
 		t.Fatalf("Tools with ACP list-only user input discovery: %v", err)
 	}
@@ -651,7 +652,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("ACP list-only tools = %#v, want ask_user", listOnlyACPTools)
 	}
 
-	backgroundTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Schedule, CanRequestUserInput: true})
+	backgroundTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Schedule, DecisionMode: sessionfacts.DecisionAutoReject, CanRequestUserInput: true})
 	if err != nil {
 		t.Fatalf("Tools in schedule: %v", err)
 	}
@@ -659,7 +660,7 @@ func TestAskUserProviderUsageGatesAskUser(t *testing.T) {
 		t.Fatalf("schedule tools = %#v, want none", backgroundTools)
 	}
 
-	discussTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Discuss, CanRequestUserInput: true})
+	discussTools, err := provider.Tools(context.Background(), SessionContext{SessionType: sessionmode.Discuss, ReplyDelivery: sessionfacts.ReplyExplicit, DecisionMode: sessionfacts.DecisionAutoReject, CanRequestUserInput: true})
 	if err != nil {
 		t.Fatalf("Tools in discuss: %v", err)
 	}

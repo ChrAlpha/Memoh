@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 func TestGenerateSystemPromptIncludesPlatformIdentitiesInChat(t *testing.T) {
@@ -88,8 +89,9 @@ func TestGenerateSystemPromptIncludesCommonAndModeContracts(t *testing.T) {
 		t.Run(tc.sessionType, func(t *testing.T) {
 			t.Parallel()
 			prompt := GenerateSystemPrompt(SystemPromptParams{
-				SessionType: tc.sessionType,
-				Timezone:    "UTC",
+				SessionType:   tc.sessionType,
+				ReplyDelivery: sessionfacts.Preset(tc.sessionType).ReplyDelivery,
+				Timezone:      "UTC",
 			})
 			for _, want := range tc.want {
 				if !strings.Contains(prompt, want) {
@@ -339,6 +341,7 @@ func TestGenerateSystemPromptIncludesPlatformIdentitiesInDiscuss(t *testing.T) {
 
 	prompt := GenerateSystemPrompt(SystemPromptParams{
 		SessionType:               sessionmode.Discuss,
+		ReplyDelivery:             sessionfacts.ReplyExplicit,
 		Timezone:                  "UTC",
 		PlatformIdentitiesSection: "## Platform Identities\n\n<identity channel=\"discord\" username=\"@memoh\"/>",
 	})
@@ -357,5 +360,19 @@ func allPromptSessionTypes() []string {
 		sessionmode.Discuss,
 		sessionmode.Schedule,
 		sessionmode.Subagent,
+	}
+}
+
+// The mode contract follows where ordinary output goes, not the label.
+func TestModeContractFollowsReplyDelivery(t *testing.T) {
+	t.Parallel()
+
+	explicit := GenerateSystemPrompt(SystemPromptParams{SessionType: sessionmode.Chat, ReplyDelivery: sessionfacts.ReplyExplicit, Timezone: "UTC"})
+	if !strings.Contains(explicit, "## Session mode: discuss") {
+		t.Fatal("explicit delivery did not get the explicit-send contract")
+	}
+	stream := GenerateSystemPrompt(SystemPromptParams{SessionType: sessionmode.Discuss, ReplyDelivery: sessionfacts.ReplyStream, Timezone: "UTC"})
+	if !strings.Contains(stream, "## Session mode: chat") {
+		t.Fatal("stream delivery did not get the direct-reply contract")
 	}
 }

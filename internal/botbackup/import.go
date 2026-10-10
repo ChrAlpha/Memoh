@@ -35,6 +35,7 @@ import (
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/schedule"
 	searchpkg "github.com/felinics/memoh/internal/searchproviders"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/workspace"
 )
@@ -1292,6 +1293,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		if item.WorkdirID.Valid {
 			workdirID = state.workdirMap[item.WorkdirID.String()]
 		}
+		facts, audience := restoredSessionFacts(item, sessionMode)
 		created, err := q.CreateSession(ctx, sqlc.CreateSessionParams{
 			BotID:       pgBotID,
 			ChannelType: item.ChannelType,
@@ -1300,13 +1302,18 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			RuntimeType: runtimeType,
 			// Archives from before the visibility column carry an empty
 			// string; normalize against the session mode's default.
-			Visibility:      string(sessionpkg.NormalizeVisibility(item.Visibility, sessionMode)),
-			RuntimeMetadata: runtimeMetadata,
-			Title:           item.Title,
-			Metadata:        metadata,
-			ParentSessionID: parentSessionID,
-			CreatedByUserID: optionalUUID(actorUserID),
-			WorkdirID:       workdirID,
+			Visibility:            string(sessionpkg.NormalizeVisibility(item.Visibility, sessionMode)),
+			ReplyDelivery:         string(facts.ReplyDelivery),
+			TriggerScope:          string(facts.TriggerScope),
+			DecisionMode:          string(facts.DecisionMode),
+			Audience:              string(audience),
+			ExternalRuntimeDriver: string(facts.ExternalRuntimeDriver),
+			RuntimeMetadata:       runtimeMetadata,
+			Title:                 item.Title,
+			Metadata:              metadata,
+			ParentSessionID:       parentSessionID,
+			CreatedByUserID:       optionalUUID(actorUserID),
+			WorkdirID:             workdirID,
 		})
 		if err != nil {
 			return fmt.Errorf("session: %w", err)
@@ -2084,6 +2091,27 @@ func restoredSessionDescriptor(legacyType, sessionMode, runtimeType string) (str
 		}
 	}
 	return sessionpkg.ResolveDescriptor(legacyType, sessionMode, runtimeType)
+}
+
+// restoredSessionFacts keeps the facts an archive recorded for the session.
+// Archives from before the facts existed carry none, and an archive whose mode
+// was normalized on restore no longer matches its facts; both take the preset
+// of the restored mode. Audience falls back to personal the same way.
+func restoredSessionFacts(item sqlc.ListSessionsByBotRow, restoredMode string) (sessionfacts.Facts, sessionfacts.Audience) {
+	facts := sessionfacts.Facts{
+		ReplyDelivery:         sessionfacts.ReplyDelivery(item.ReplyDelivery),
+		TriggerScope:          sessionfacts.TriggerScope(item.TriggerScope),
+		DecisionMode:          sessionfacts.DecisionMode(item.DecisionMode),
+		ExternalRuntimeDriver: sessionfacts.ExternalRuntimeDriver(item.ExternalRuntimeDriver),
+	}
+	if !facts.Valid() || strings.TrimSpace(item.SessionMode) != restoredMode {
+		facts = sessionfacts.Preset(restoredMode)
+	}
+	audience := sessionfacts.Audience(item.Audience)
+	if !audience.Valid() {
+		audience = sessionfacts.AudiencePersonal
+	}
+	return facts, audience
 }
 
 func isRetiredAutomationSession(legacyType, sessionMode string) bool {

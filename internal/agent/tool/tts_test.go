@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/messaging"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/settings"
 )
 
@@ -153,6 +154,7 @@ func TestExecSpeakDiscussCurrentTargetUsesChannelAdapter(t *testing.T) {
 	_, err := provider.execSpeak(context.Background(), SessionContext{
 		BotID:           "bot_1",
 		SessionType:     sessionmode.Discuss,
+		ReplyDelivery:   sessionfacts.ReplyExplicit,
 		CurrentPlatform: "telegram",
 		ReplyTarget:     "chat-1",
 		Emitter: func(ToolStreamEvent) {

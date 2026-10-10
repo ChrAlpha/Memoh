@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
@@ -13,7 +14,9 @@ import (
 
 	"github.com/felinics/memoh/internal/botbackup/secure"
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/mcp"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 // buildSampleBundle assembles a complete plaintext .memoh.zip the way Export
@@ -271,5 +274,37 @@ func TestMCPRequestFromConnection(t *testing.T) {
 	}
 	if sse.Headers["Authorization"] != "Bearer x" {
 		t.Fatalf("sse headers = %v", sse.Headers)
+	}
+}
+
+func TestRestoredSessionFactsFromArchives(t *testing.T) {
+	// An archive written before the facts existed carries only the mode.
+	var legacy sqlc.ListSessionsByBotRow
+	if err := json.Unmarshal([]byte(`{"type":"discuss","session_mode":"discuss","runtime_type":"model","visibility":"user"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	facts, audience := restoredSessionFacts(legacy, "discuss")
+	if facts != sessionfacts.Preset("discuss") || audience != sessionfacts.AudiencePersonal {
+		t.Fatalf("legacy archive facts = %+v/%q, want the discuss preset and personal", facts, audience)
+	}
+
+	// Recorded facts survive the round trip.
+	recorded := sqlc.ListSessionsByBotRow{
+		SessionMode:           "discuss",
+		ReplyDelivery:         string(sessionfacts.ReplyExplicit),
+		TriggerScope:          string(sessionfacts.TriggerUncoveredEvents),
+		DecisionMode:          string(sessionfacts.DecisionPark),
+		Audience:              string(sessionfacts.AudienceShared),
+		ExternalRuntimeDriver: string(sessionfacts.RuntimeDriverOwnerOnly),
+	}
+	facts, audience = restoredSessionFacts(recorded, "discuss")
+	if facts.DecisionMode != sessionfacts.DecisionPark || facts.ExternalRuntimeDriver != sessionfacts.RuntimeDriverOwnerOnly || audience != sessionfacts.AudienceShared {
+		t.Fatalf("recorded facts = %+v/%q, want them kept", facts, audience)
+	}
+
+	// A mode normalized on restore takes that mode's preset.
+	facts, _ = restoredSessionFacts(recorded, "chat")
+	if facts != sessionfacts.Preset("chat") {
+		t.Fatalf("normalized mode facts = %+v, want the chat preset", facts)
 	}
 }

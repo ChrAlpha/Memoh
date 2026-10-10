@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/runtimekind"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type runtimeFencedThreadWriter interface {
@@ -69,6 +70,11 @@ type Thread struct {
 	RouteMetadata            map[string]any `json:"route_metadata,omitempty"`
 	RouteConversationType    string         `json:"route_conversation_type,omitempty"`
 	Visibility               Visibility     `json:"-"`
+	// Facts and Audience are recorded when the session is created (see
+	// sessionfacts). They are internal state, not part of the session API
+	// resource.
+	Facts    sessionfacts.Facts    `json:"-"`
+	Audience sessionfacts.Audience `json:"-"`
 } // @name session.Session
 
 // The runtime vocabulary is owned by runtimekind (a leaf package shared with
@@ -225,6 +231,10 @@ type CreateInput struct {
 	// session lists while keeping session_mode='schedule' for prompt and
 	// tool gating. Empty means "derive from mode".
 	Visibility Visibility
+	// Audience is observed by the caller that knows the conversation the
+	// session is created for: shared for a group or thread route. Empty means
+	// personal.
+	Audience sessionfacts.Audience
 }
 
 // SubagentConfig is the persisted runtime selection for a managed subagent.
@@ -493,22 +503,35 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 	default:
 		return Thread{}, fmt.Errorf("unknown session visibility %q", visibility)
 	}
+	audience := input.Audience
+	switch {
+	case audience == "":
+		audience = sessionfacts.AudiencePersonal
+	case !audience.Valid():
+		return Thread{}, fmt.Errorf("unknown session audience %q", audience)
+	}
+	facts := sessionfacts.Preset(desc.SessionMode)
 
 	row, err := s.queries.CreateSession(ctx, sqlc.CreateSessionParams{
-		BotID:           pgBotID,
-		BotAgentID:      pgBotAgentID,
-		RouteID:         pgRouteID,
-		ChannelType:     channelType,
-		Type:            sessionType,
-		SessionMode:     desc.SessionMode,
-		RuntimeType:     desc.RuntimeType,
-		Visibility:      string(visibility),
-		RuntimeMetadata: runtimeMetaBytes,
-		Title:           input.Title,
-		Metadata:        metaBytes,
-		ParentSessionID: pgParentSessionID,
-		CreatedByUserID: pgCreatedByUserID,
-		WorkdirID:       pgWorkdirID,
+		BotID:                 pgBotID,
+		BotAgentID:            pgBotAgentID,
+		RouteID:               pgRouteID,
+		ChannelType:           channelType,
+		Type:                  sessionType,
+		SessionMode:           desc.SessionMode,
+		RuntimeType:           desc.RuntimeType,
+		Visibility:            string(visibility),
+		ReplyDelivery:         string(facts.ReplyDelivery),
+		TriggerScope:          string(facts.TriggerScope),
+		DecisionMode:          string(facts.DecisionMode),
+		Audience:              string(audience),
+		ExternalRuntimeDriver: string(facts.ExternalRuntimeDriver),
+		RuntimeMetadata:       runtimeMetaBytes,
+		Title:                 input.Title,
+		Metadata:              metaBytes,
+		ParentSessionID:       pgParentSessionID,
+		CreatedByUserID:       pgCreatedByUserID,
+		WorkdirID:             pgWorkdirID,
 		// First-message pair (issue #879): degrade silently to NULL rather
 		// than fail creation on a slug reference or empty value.
 		PreferredChatModelID:     dbpkg.ParseUUIDOrEmpty(input.PreferredChatModelID),
@@ -1043,14 +1066,19 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 	if err != nil {
 		return Thread{}, fmt.Errorf("marshal runtime metadata: %w", err)
 	}
+	facts := sessionfacts.Preset(desc.SessionMode)
 	row, err := queries.UpdateSessionTypeAndMetadata(ctx, sqlc.UpdateSessionTypeAndMetadataParams{
-		ID:              pgID,
-		Type:            sessionType,
-		SessionMode:     desc.SessionMode,
-		RuntimeType:     desc.RuntimeType,
-		BotAgentID:      pgBotAgentID,
-		RuntimeMetadata: runtimeMetaBytes,
-		Metadata:        metaBytes,
+		ID:                    pgID,
+		Type:                  sessionType,
+		SessionMode:           desc.SessionMode,
+		ReplyDelivery:         string(facts.ReplyDelivery),
+		TriggerScope:          string(facts.TriggerScope),
+		DecisionMode:          string(facts.DecisionMode),
+		ExternalRuntimeDriver: string(facts.ExternalRuntimeDriver),
+		RuntimeType:           desc.RuntimeType,
+		BotAgentID:            pgBotAgentID,
+		RuntimeMetadata:       runtimeMetaBytes,
+		Metadata:              metaBytes,
 	})
 	if err != nil {
 		return Thread{}, err
@@ -1614,6 +1642,17 @@ func toThread(row sqlc.BotSession) Thread {
 		ModelPreferenceRevision:  uuidText(row.ModelPreferenceRevision),
 		PreferredChatModelID:     prefModelID,
 		PreferredReasoningEffort: prefEffort,
+		Facts:                    storedFacts(row.ReplyDelivery, row.TriggerScope, row.DecisionMode, row.ExternalRuntimeDriver),
+		Audience:                 sessionfacts.Audience(row.Audience),
+	}
+}
+
+func storedFacts(replyDelivery, triggerScope, decisionMode, externalRuntimeDriver string) sessionfacts.Facts {
+	return sessionfacts.Facts{
+		ReplyDelivery:         sessionfacts.ReplyDelivery(replyDelivery),
+		TriggerScope:          sessionfacts.TriggerScope(triggerScope),
+		DecisionMode:          sessionfacts.DecisionMode(decisionMode),
+		ExternalRuntimeDriver: sessionfacts.ExternalRuntimeDriver(externalRuntimeDriver),
 	}
 }
 
@@ -1994,6 +2033,8 @@ func toThreadFromListRow(row sqlc.ListSessionsByBotRow) Thread {
 		ModelPreferenceRevision:  uuidText(row.ModelPreferenceRevision),
 		PreferredChatModelID:     uuidText(row.PreferredChatModelID),
 		PreferredReasoningEffort: dbpkg.TextToString(row.PreferredReasoningEffort),
+		Facts:                    storedFacts(row.ReplyDelivery, row.TriggerScope, row.DecisionMode, row.ExternalRuntimeDriver),
+		Audience:                 sessionfacts.Audience(row.Audience),
 	}
 }
 
@@ -2033,6 +2074,8 @@ func toThreadFromUserListRow(row sqlc.ListSessionsByBotAndCreatedByUserRow) Thre
 		ModelPreferenceRevision:  uuidText(row.ModelPreferenceRevision),
 		PreferredChatModelID:     uuidText(row.PreferredChatModelID),
 		PreferredReasoningEffort: dbpkg.TextToString(row.PreferredReasoningEffort),
+		Facts:                    storedFacts(row.ReplyDelivery, row.TriggerScope, row.DecisionMode, row.ExternalRuntimeDriver),
+		Audience:                 sessionfacts.Audience(row.Audience),
 	}
 }
 
@@ -2040,7 +2083,9 @@ func toThreadFromPagedRow(row sqlc.ListSessionsByBotPagedRow) Thread {
 	return threadFromPagedColumns(pagedColumns{
 		ID: row.ID, BotID: row.BotID, BotAgentID: row.BotAgentID, RouteID: row.RouteID, ChannelType: row.ChannelType,
 		Type: row.Type, SessionMode: row.SessionMode, RuntimeType: row.RuntimeType, Visibility: row.Visibility, RuntimeMetadata: row.RuntimeMetadata,
-		Title: row.Title, Metadata: row.Metadata,
+		Facts:    storedFacts(row.ReplyDelivery, row.TriggerScope, row.DecisionMode, row.ExternalRuntimeDriver),
+		Audience: row.Audience,
+		Title:    row.Title, Metadata: row.Metadata,
 		ParentThreadID: row.ParentSessionID, CreatedByUserID: row.CreatedByUserID, WorkdirID: row.WorkdirID,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		PreferredChatModelID: row.PreferredChatModelID, PreferredReasoningEffort: row.PreferredReasoningEffort,
@@ -2052,7 +2097,9 @@ func toThreadFromUserPagedRow(row sqlc.ListSessionsByBotAndCreatedByUserPagedRow
 	return threadFromPagedColumns(pagedColumns{
 		ID: row.ID, BotID: row.BotID, BotAgentID: row.BotAgentID, RouteID: row.RouteID, ChannelType: row.ChannelType,
 		Type: row.Type, SessionMode: row.SessionMode, RuntimeType: row.RuntimeType, Visibility: row.Visibility, RuntimeMetadata: row.RuntimeMetadata,
-		Title: row.Title, Metadata: row.Metadata,
+		Facts:    storedFacts(row.ReplyDelivery, row.TriggerScope, row.DecisionMode, row.ExternalRuntimeDriver),
+		Audience: row.Audience,
+		Title:    row.Title, Metadata: row.Metadata,
 		ParentThreadID: row.ParentSessionID, CreatedByUserID: row.CreatedByUserID, WorkdirID: row.WorkdirID,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		PreferredChatModelID: row.PreferredChatModelID, PreferredReasoningEffort: row.PreferredReasoningEffort,
@@ -2074,6 +2121,8 @@ type pagedColumns struct {
 	SessionMode     string
 	RuntimeType     string
 	Visibility      string
+	Facts           sessionfacts.Facts
+	Audience        string
 	RuntimeMetadata []byte
 	Title           string
 	Metadata        []byte
@@ -2125,6 +2174,8 @@ func threadFromPagedColumns(c pagedColumns) Thread {
 		ModelPreferenceRevision:  uuidText(c.ModelPreferenceRevision),
 		PreferredChatModelID:     uuidText(c.PreferredChatModelID),
 		PreferredReasoningEffort: dbpkg.TextToString(c.PreferredReasoningEffort),
+		Facts:                    c.Facts,
+		Audience:                 sessionfacts.Audience(c.Audience),
 	}
 }
 

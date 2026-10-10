@@ -75,7 +75,7 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 	}
 	isSubagent := params.SessionType == sessionmode.Subagent
 
-	tail, err := buildSystemPromptTail(tailBoilerplate, params.SessionType, isSubagent)
+	tail, err := buildSystemPromptTail(tailBoilerplate, params, isSubagent)
 	if err != nil {
 		return degradedSystemSections(params, home, timezone, err)
 	}
@@ -182,7 +182,7 @@ func groupedSystemRender(groupID, joiner string) contextfrag.RenderPolicy {
 // literal {{placeholder}} or drops the bot identity.
 func degradedSystemSections(params SystemPromptParams, home, timezone string, cause error) []SystemSection {
 	slog.Default().Error("agent: system prompt template missing expected anchor; falling back to an unsplit system prompt", slog.Any("error", cause))
-	tmpl := strings.TrimSpace(systemCommonTmpl + "\n\n" + selectModeTemplate(params.SessionType))
+	tmpl := strings.TrimSpace(systemCommonTmpl + "\n\n" + selectModeTemplate(params))
 	text := render(tmpl, map[string]string{
 		"home":              home,
 		"timezone":          timezone,
@@ -274,8 +274,8 @@ func splitSystemCommonTmpl(tmpl string) (intro, body, tailBoilerplate string, er
 // boilerplate with the mode contract and, for main-agent modes, the memory
 // section — mirroring the "\n\n" joins GenerateSystemPrompt used to produce
 // via raw template concatenation and joinPromptSections.
-func buildSystemPromptTail(tailBoilerplate, sessionType string, isSubagent bool) (string, error) {
-	contract, err := modeContractTmpl(sessionType)
+func buildSystemPromptTail(tailBoilerplate string, params SystemPromptParams, isSubagent bool) (string, error) {
+	contract, err := modeContractTmpl(params)
 	if err != nil {
 		return "", err
 	}
@@ -288,10 +288,10 @@ func buildSystemPromptTail(tailBoilerplate, sessionType string, isSubagent bool)
 
 // modeContractTmpl returns the mode-specific contract text with its trailing
 // mainAgentSections/subagentSections placeholder cut off and trimmed.
-func modeContractTmpl(sessionType string) (string, error) {
-	tmpl := selectModeTemplate(sessionType)
+func modeContractTmpl(params SystemPromptParams) (string, error) {
+	tmpl := selectModeTemplate(params)
 	placeholder := "{{mainAgentSections}}"
-	if sessionType == sessionmode.Subagent {
+	if params.SessionType == sessionmode.Subagent {
 		placeholder = "{{subagentSections}}"
 	}
 	return cutModeContractTmpl(tmpl, placeholder)

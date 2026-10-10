@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/mcp"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type capabilityTestConnections struct {
@@ -116,7 +117,7 @@ func capabilityFixture(t *testing.T) (*CapabilityProvider, *capabilityTestConnec
 		}
 		return nil
 	}})
-	session := SessionContext{BotID: "bot", ChannelIdentityID: "actor", SessionID: "session", SessionType: "chat", CanRequestUserInput: true, Emitter: func(ToolStreamEvent) {}}
+	session := SessionContext{BotID: "bot", ChannelIdentityID: "actor", SessionID: "session", SessionType: "chat", DecisionMode: sessionfacts.DecisionPark, CanRequestUserInput: true, Emitter: func(ToolStreamEvent) {}}
 	return p, connections, review, session
 }
 

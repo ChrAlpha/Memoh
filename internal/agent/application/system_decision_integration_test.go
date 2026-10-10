@@ -19,6 +19,7 @@ import (
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type askWritePolicyProvider struct{}
@@ -57,6 +58,7 @@ func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 			BotID:             botID,
 			SessionID:         sessionID,
 			SessionType:       mode,
+			Facts:             runFacts(sessionfacts.Preset(mode), mode),
 			ChannelIdentityID: identityID.String(),
 		})
 		result, err := handler(ctx, sdk.ToolCall{

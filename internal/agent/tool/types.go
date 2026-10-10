@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/tool/internal/toolset"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -326,6 +327,10 @@ type SessionContext struct {
 	CurrentModelID         string
 	CurrentModelProvider   string
 	CurrentModelProviderID string
+	// ReplyDelivery and DecisionMode are the session facts the run executes
+	// under; see sessionfacts.
+	ReplyDelivery sessionfacts.ReplyDelivery
+	DecisionMode  sessionfacts.DecisionMode
 	// ReasoningStoredEffort and ReasoningRequestedEffort are the unresolved
 	// parent-turn inputs. A tool that selects another model must resolve them for
 	// that model rather than inheriting the parent's provider-specific decision.
@@ -351,7 +356,7 @@ type SessionContext struct {
 // CanAskUser reports whether ask_user can be both shown to the model and
 // delivered to the user in this run.
 func (s SessionContext) CanAskUser() bool {
-	return s.CanRequestUserInput && sessionmode.IsInteractive(s.SessionType)
+	return s.CanRequestUserInput && s.DecisionMode == sessionfacts.DecisionPark
 }
 
 // IsSameConversation reports whether the given platform+target pair refers to
@@ -385,17 +390,22 @@ func (s SessionContext) CanOmitMessagingTarget() bool {
 
 // CanUseLocalMessagingShortcut reports whether current-conversation side
 // effects can be represented by the live agent stream instead of the channel
-// sender. Non-interactive runs must use the real sender even when their target
-// equals the current conversation.
+// sender. The live stream reaches the conversation only when ordinary output
+// is delivered to it, and schedule, subagent and ACP runs have no such stream,
+// so those runs use the real sender even when their target equals the current
+// conversation.
 func (s SessionContext) CanUseLocalMessagingShortcut() bool {
 	if !s.LiveStream || s.Emitter == nil || !s.CanOmitMessagingTarget() {
 		return false
 	}
-	switch s.SessionType {
-	case "", sessionmode.Chat:
-		return true
-	default:
+	if s.ReplyDelivery == sessionfacts.ReplyExplicit {
 		return false
+	}
+	switch s.SessionType {
+	case sessionmode.Schedule, sessionmode.Subagent, sessionmode.ACPAgent:
+		return false
+	default:
+		return true
 	}
 }
 

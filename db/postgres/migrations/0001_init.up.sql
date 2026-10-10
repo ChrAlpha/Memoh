@@ -557,6 +557,14 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   -- keep session_mode='schedule' for prompt/tool gating but can be 'user'
   -- visible so they surface in the sidebar and can be continued.
   visibility TEXT NOT NULL DEFAULT 'internal' CHECK (visibility IN ('user', 'internal')),
+  -- The facts session_mode used to stand in for (see migration 0163). They
+  -- are written from the session_mode preset when the session is created;
+  -- audience comes from the route's conversation type.
+  reply_delivery TEXT NOT NULL DEFAULT 'stream' CHECK (reply_delivery IN ('stream', 'explicit')),
+  trigger_scope TEXT NOT NULL DEFAULT 'addressed_message' CHECK (trigger_scope IN ('addressed_message', 'uncovered_events')),
+  decision_mode TEXT NOT NULL DEFAULT 'park' CHECK (decision_mode IN ('park', 'auto_reject')),
+  audience TEXT NOT NULL DEFAULT 'personal' CHECK (audience IN ('personal', 'shared')),
+  external_runtime_driver TEXT NOT NULL DEFAULT 'owner_only' CHECK (external_runtime_driver IN ('owner_only', 'participants')),
   title TEXT NOT NULL DEFAULT '',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   next_turn_position BIGINT NOT NULL DEFAULT 1,

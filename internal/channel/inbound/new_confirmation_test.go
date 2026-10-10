@@ -18,6 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/command"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/i18n"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/slash"
 )
 
@@ -391,6 +392,47 @@ func TestHandleNewSessionCommandCreatesNativeSessionWithCreator(t *testing.T) {
 	}
 	if spec.RuntimeOwnerAccountID != "" {
 		t.Fatalf("runtime owner = %q, want empty for native session", spec.RuntimeOwnerAccountID)
+	}
+}
+
+func TestHandleNewSessionCommandRecordsAudienceFromConversation(t *testing.T) {
+	cases := []struct {
+		name             string
+		text             string
+		conversationType string
+		want             sessionfacts.Audience
+	}{
+		{name: "private chat", text: "/new chat", conversationType: channel.ConversationTypePrivate, want: sessionfacts.AudiencePersonal},
+		{name: "group discuss", text: "/new discuss", conversationType: channel.ConversationTypeGroup, want: sessionfacts.AudienceShared},
+		{name: "group chat", text: "/new chat", conversationType: channel.ConversationTypeGroup, want: sessionfacts.AudienceShared},
+		{name: "thread", text: "/new", conversationType: channel.ConversationTypeThread, want: sessionfacts.AudienceShared},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-1", RouteID: "11111111-1111-1111-1111-111111111111"}}
+			ensurer := &fakeSessionEnsurer{}
+			p := &ChannelInboundProcessor{
+				routeResolver:     chatSvc,
+				sessionEnsurer:    ensurer,
+				permissionChecker: &fakeBotPermissionChecker{allowed: true},
+			}
+			msg := channel.InboundMessage{
+				Channel:      channel.ChannelTypeTelegram,
+				Message:      channel.Message{ID: "msg-1", Text: tc.text},
+				ReplyTarget:  "target-1",
+				Conversation: channel.Conversation{ID: "conv-1", Type: tc.conversationType},
+			}
+			if err := p.handleNewSessionCommand(context.Background(), channel.ChannelConfig{TeamID: "team-test"}, msg, &fakeReplySender{}, InboundIdentity{
+				BotID:             "bot-1",
+				ChannelIdentityID: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+				UserID:            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+			}, mustCommandInvocation(t, msg.Message.PlainText())); err != nil {
+				t.Fatalf("handleNewSessionCommand() error = %v", err)
+			}
+			if ensurer.createCalls != 1 || ensurer.lastSpec.Audience != tc.want {
+				t.Fatalf("created %d sessions with audience %q, want one with %q", ensurer.createCalls, ensurer.lastSpec.Audience, tc.want)
+			}
+		})
 	}
 }
 

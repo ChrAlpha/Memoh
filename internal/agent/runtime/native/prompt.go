@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	textprune "github.com/felinics/memoh/internal/prune"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	skillset "github.com/felinics/memoh/internal/skills"
 )
 
@@ -82,10 +83,14 @@ func render(tmpl string, vars map[string]string) string {
 	return strings.TrimSpace(result)
 }
 
-func selectModeTemplate(sessionType string) string {
-	switch sessionType {
-	case sessionmode.Discuss:
+// selectModeTemplate picks the mode contract. A session whose ordinary output
+// never reaches the conversation gets the contract that makes speaking an
+// explicit send.
+func selectModeTemplate(params SystemPromptParams) string {
+	if params.ReplyDelivery == sessionfacts.ReplyExplicit {
 		return modeDiscussTmpl
+	}
+	switch params.SessionType {
 	case sessionmode.Schedule:
 		return modeScheduleTmpl
 	case sessionmode.Subagent:
@@ -103,6 +108,7 @@ func GenerateSystemPrompt(params SystemPromptParams) string {
 // SystemPromptParams holds all inputs for system prompt generation.
 type SystemPromptParams struct {
 	SessionType               string
+	ReplyDelivery             sessionfacts.ReplyDelivery
 	Bot                       BotInfo
 	Skills                    []SkillEntry
 	Files                     []SystemFile

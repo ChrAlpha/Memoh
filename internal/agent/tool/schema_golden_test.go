@@ -14,6 +14,7 @@ import (
 	pgstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/messaging"
 	"github.com/felinics/memoh/internal/searchproviders"
+	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/workdir"
 )
@@ -86,7 +87,8 @@ var goldenSession = SessionContext{
 	BotID: "bot", SessionID: "session", ChannelIdentityID: "identity",
 	CurrentPlatform: "telegram", ReplyTarget: "chat-1", ConversationType: "private",
 	CanRequestUserInput: true, CanListUserInput: true, SupportsImageInput: true,
-	Skills: map[string]SkillDetail{"pdf": {Description: "pdf skill", Path: "/data/.agents/skills/pdf"}},
+	DecisionMode: sessionfacts.DecisionPark,
+	Skills:       map[string]SkillDetail{"pdf": {Description: "pdf skill", Path: "/data/.agents/skills/pdf"}},
 }
 
 type goldenContactReader struct{}

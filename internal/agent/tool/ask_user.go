@@ -8,8 +8,8 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 type AskUserProvider struct{}
@@ -123,5 +123,5 @@ func canExposeAskUserTool(session SessionContext) bool {
 	}
 	// External agents can cache MCP tools before a prompt is active. Execution
 	// still requires CanRequestUserInput so an idle tool call cannot block.
-	return session.CanListUserInput && sessionmode.IsInteractive(session.SessionType)
+	return session.CanListUserInput && session.DecisionMode == sessionfacts.DecisionPark
 }

@@ -563,6 +563,8 @@ func (a *Agent) assembleTools(
 		ChatID:                    cfg.Identity.ChatID,
 		SessionID:                 cfg.Identity.SessionID,
 		SessionType:               cfg.SessionType,
+		ReplyDelivery:             cfg.ReplyDelivery,
+		DecisionMode:              cfg.DecisionMode,
 		UserID:                    cfg.Identity.UserID,
 		ChannelIdentityID:         cfg.Identity.ChannelIdentityID,
 		SessionToken:              cfg.Identity.SessionToken,
