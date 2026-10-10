@@ -102,6 +102,7 @@ type ChatRequest struct {
 
 	Query             string                       `json:"query"`
 	Model             string                       `json:"model,omitempty"`
+	RuntimeModelID    string                       `json:"runtime_model_id,omitempty"`
 	Provider          string                       `json:"provider,omitempty"`
 	ReasoningEffort   string                       `json:"reasoning_effort,omitempty"`
 	WorkspaceTargetID string                       `json:"workspace_target_id,omitempty"`

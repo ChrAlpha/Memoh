@@ -145,9 +145,13 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 		req.UserID = payload.OwnerUserID
 		req.Token = token
 		req.Model = payload.ModelID
+		req.RuntimeModelID = payload.RuntimeModelID
 		req.ReasoningEffort = payload.ReasoningEffort
 		req.SessionType = sessionmode.Schedule
 		req.ChatID = botID
+		// External schedules identify the triggering user as the channel
+		// identity, matching the native path (nativeSchedulePlan's cfg.Identity).
+		req.SourceChannelIdentityID = payload.OwnerUserID
 		if err := s.recordRunResumeContext(setupCtx, req); err != nil {
 			return runPlan{}, err
 		}

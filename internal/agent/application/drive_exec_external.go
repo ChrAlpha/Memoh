@@ -361,7 +361,7 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		Images:                    e.plan.prepared.Images,
 		AttachmentReferences:      e.plan.prepared.References,
 		CanFallbackImagesToFiles:  e.plan.prepared.CanFallbackImagesToFiles,
-		ModelID:                   strings.TrimSpace(e.req.Model),
+		ModelID:                   firstNonEmpty(strings.TrimSpace(e.req.RuntimeModelID), strings.TrimSpace(e.req.Model)),
 		ReasoningEffort:           strings.TrimSpace(e.req.ReasoningEffort),
 		SessionMode:               firstNonEmpty(e.req.SessionType, sessionmode.Chat),
 		CurrentPlatform:           e.req.CurrentChannel,
