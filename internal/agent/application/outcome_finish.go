@@ -10,13 +10,16 @@ import (
 )
 
 // runEndToStatus maps how a run ended onto the session runtime's live run
-// status. A lost run has none: nothing is written for it.
+// status. A lost run has none: nothing is written for it. A parked run has
+// none either: the session runtime keeps a run whose projection waits on a
+// decision only when it is not told an ending, and a status, even
+// waiting_decision, stops the run's commands so no answer could resume it.
 func runEndToStatus(end runEnd) string {
 	switch end {
 	case endCompleted:
 		return sessionruntime.RunStatusCompleted
 	case endParked:
-		return sessionruntime.RunStatusWaitingDecision
+		return ""
 	case endStopped:
 		return sessionruntime.RunStatusAborted
 	case endOwnershipLost:

@@ -187,8 +187,9 @@ func (s *Service) settleRun(
 	// The run's context lifecycle terminal carries the context the run
 	// assembled, and is written before the terminal state so the diagnostic
 	// row and the run's outcome describe the same ending. A run another owner
-	// ended has none.
-	if plan.Lifecycle != nil && end != endOwnershipLost {
+	// ended has none, and a parked run has not ended: the continuation that
+	// resumes it writes the row.
+	if plan.Lifecycle != nil && end != endOwnershipLost && end != endParked {
 		plan.Lifecycle(lifecycleCause(end, failure))
 	}
 
@@ -254,10 +255,17 @@ func (s *Service) publishRunOutcome(
 			return err
 		}
 	}
-	if ending == nil || ending.Terminal == nil || commitErr != nil {
-		return nil
+	if ending != nil && ending.Terminal != nil && commitErr == nil {
+		if err := s.emitRunEvent(runCtx, pub, queue, stampRunTerminal(*ending.Terminal, end, failure)); err != nil {
+			return err
+		}
 	}
-	return s.emitRunEvent(runCtx, pub, queue, stampRunTerminal(*ending.Terminal, end, failure))
+	// What the publisher keeps open for the run ends with the run's last event.
+	// A refusal here is a refused publication like any other.
+	if publisher := pub.current(); publisher != nil {
+		return publisher.close(context.WithoutCancel(runCtx), end)
+	}
+	return nil
 }
 
 // stampRunTerminal states how the run ended on its terminal event. The marker

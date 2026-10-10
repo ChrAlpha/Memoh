@@ -132,18 +132,14 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 		if e.visible {
 			return summary, runtimeHistoryError(errors.New("agent terminal event has no persistable snapshot"))
 		}
-		if row && f != nil {
-			persisted, err := e.service.persistFailureRow(ctx, e.req, e.rc, *f, "")
-			if err != nil {
-				return summary, runtimeHistoryError(err)
-			}
-			summary.Persisted = persisted
-		}
 		return summary, e.postPersist(ctx, summary)
 	}
 	snap := *e.snapshot
 	snap.failureCode = failureRowCode(f)
-	if !row {
+	if !row || !snap.visibleOutput {
+		// Without visible output the failure row is already written by
+		// recordFailure; the snapshot carrying the code too would write it a
+		// second time.
 		snap.failureCode = ""
 	}
 	persisted, err := e.service.persistTerminalSnapshotResult(ctx, e.req, e.rc, snap)
