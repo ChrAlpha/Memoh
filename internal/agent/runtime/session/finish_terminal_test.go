@@ -2,10 +2,38 @@ package sessionruntime
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 )
+
+// sameTerminal compares two observations of one run. Cause is left out: it is
+// the diagnostic the session runtime itself set, no case here ends that way,
+// and comparing errors by value says nothing about the ending they name.
+func sameTerminal(got, want TerminalRun) bool {
+	type durable struct {
+		RunID        string
+		BotID        string
+		SessionID    string
+		FencingToken int64
+		State        string
+		ErrorCode    string
+		Applied      bool
+	}
+	strip := func(r TerminalRun) durable {
+		return durable{
+			RunID:        r.RunID,
+			BotID:        r.BotID,
+			SessionID:    r.SessionID,
+			FencingToken: r.FencingToken,
+			State:        r.State,
+			ErrorCode:    r.ErrorCode,
+			Applied:      r.Applied,
+		}
+	}
+	return strip(got) == strip(want) && reflect.DeepEqual(got.ErrorArgs, want.ErrorArgs)
+}
 
 // FinishRun hands back the same terminal row the terminal observer receives.
 func TestFinishRunReturnsObservedTerminal(t *testing.T) {
@@ -27,10 +55,10 @@ func TestFinishRunReturnsObservedTerminal(t *testing.T) {
 		FencingToken: admission.Handle.FencingToken, State: string(ledger.StateFailed),
 		ErrorCode: "agent.response_timeout", Applied: true,
 	}
-	if terminal != want {
+	if !sameTerminal(terminal, want) {
 		t.Fatalf("FinishRunWithErrorCode() terminal = %+v, want %+v", terminal, want)
 	}
-	if observed != terminal {
+	if !sameTerminal(observed, terminal) {
 		t.Fatalf("observed terminal = %+v, returned %+v", observed, terminal)
 	}
 }
@@ -39,7 +67,7 @@ func TestFinishRunWithoutRuntimeReturnsNoTerminal(t *testing.T) {
 	t.Parallel()
 	var manager *Manager
 	terminal, err := manager.FinishRun(context.Background(), RunHandle{}, RunStatusCompleted)
-	if err != nil || terminal != (TerminalRun{}) {
+	if err != nil || !sameTerminal(terminal, TerminalRun{}) {
 		t.Fatalf("FinishRun() = %+v, %v; want no terminal and no error", terminal, err)
 	}
 }

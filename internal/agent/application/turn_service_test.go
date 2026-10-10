@@ -61,6 +61,7 @@ type recordedFinish struct {
 	handle  sessionruntime.RunHandle
 	status  string
 	message string
+	args    map[string]string
 }
 
 func newScriptedAdmitter() *scriptedAdmitter {
@@ -92,11 +93,46 @@ func (a *scriptedAdmitter) Admit(_ context.Context, in sessionruntime.AdmitInput
 	}, nil
 }
 
-func (a *scriptedAdmitter) FinishRunWithErrorCode(_ context.Context, handle sessionruntime.RunHandle, status, message string) (sessionruntime.TerminalRun, error) {
+func (a *scriptedAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, message string) (sessionruntime.TerminalRun, error) {
+	return a.FinishRunWithFailure(ctx, handle, status, message, nil)
+}
+
+func (a *scriptedAdmitter) FinishRunWithFailure(_ context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message})
-	return a.terminal, a.finishErr
+	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message, args: args})
+	if a.finishErr != nil {
+		return a.terminal, a.finishErr
+	}
+	if a.terminal.RunID != "" {
+		return a.terminal, nil
+	}
+	// A real write records the run it ended; the double reports the same, so a
+	// caller that reads the record sees what it wrote.
+	return sessionruntime.TerminalRun{
+		RunID:        handle.RunID,
+		BotID:        handle.BotID,
+		SessionID:    handle.SessionID,
+		FencingToken: handle.FencingToken,
+		State:        terminalStateForStatus(status),
+		ErrorCode:    message,
+		ErrorArgs:    args,
+		Applied:      true,
+	}, nil
+}
+
+// terminalStateForStatus names the durable state a live status ends as.
+func terminalStateForStatus(status string) string {
+	switch status {
+	case sessionruntime.RunStatusCompleted:
+		return "completed"
+	case sessionruntime.RunStatusAborted:
+		return "aborted"
+	case sessionruntime.RunStatusErrored:
+		return "failed"
+	default:
+		return ""
+	}
 }
 
 func (*scriptedAdmitter) MarkInlineDecisionRun(string, string, string) {}

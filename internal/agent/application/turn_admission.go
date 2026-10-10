@@ -33,6 +33,7 @@ import (
 type turnAdmitter interface {
 	Admit(context.Context, sessionruntime.AdmitInput) (sessionruntime.Admission, error)
 	FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, errorCode string) (sessionruntime.TerminalRun, error)
+	FinishRunWithFailure(ctx context.Context, handle sessionruntime.RunHandle, status, errorCode string, errorArgs map[string]string) (sessionruntime.TerminalRun, error)
 	// MarkInlineDecisionRun declares an admitted run's decision semantics:
 	// its runtime blocks inline on decisions, so terminal decision statuses
 	// resume the run (external drivers). Native runs skip the declaration
@@ -307,9 +308,9 @@ type triggeredAdmissionView func(handle sessionruntime.RunHandle) *sessionruntim
 // The finish function is always returned non-nil when the error is nil, so a
 // caller can defer it unconditionally. It takes the run's outcome; an outcome
 // without a status is resolved from its cause and the run context.
-func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, invocationID string, submission []byte, viewFn triggeredAdmissionView, resumeRunIDs ...string) (context.Context, sessionruntime.Admission, func(RunOutcome), error) {
+func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, invocationID string, submission []byte, viewFn triggeredAdmissionView, resumeRunIDs ...string) (context.Context, sessionruntime.Admission, func(RunOutcome), func(), error) {
 	if s.sessionRuntime == nil {
-		return nil, sessionruntime.Admission{}, nil, errors.New("session runtime is not configured")
+		return nil, sessionruntime.Admission{}, nil, nil, errors.New("session runtime is not configured")
 	}
 	resumeRunID := ""
 	if len(resumeRunIDs) > 0 {
@@ -338,18 +339,21 @@ func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, 
 	})
 	if err != nil {
 		cancelCause(context.Canceled)
-		return nil, sessionruntime.Admission{}, nil, err
+		return nil, sessionruntime.Admission{}, nil, nil, err
 	}
 	if !admission.Started {
 		// A trigger that finds its own invocation already admitted has nothing to
 		// do: the run exists and either someone owns it or it has finished.
 		cancelCause(context.Canceled)
-		return nil, sessionruntime.Admission{}, nil, fmt.Errorf("%w: %s", sessionruntime.ErrInvocationConflict, invocationID)
+		return nil, sessionruntime.Admission{}, nil, nil, fmt.Errorf("%w: %s", sessionruntime.ErrInvocationConflict, invocationID)
 	}
 	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 	finishRun := s.turnRunFinisher(runCtx, admission, mode)
+	// release ends the admission without naming the run's outcome, for a
+	// caller that writes the terminal state itself.
+	release := func() { cancelCause(context.Canceled) }
 	finish := func(outcome RunOutcome) {
-		defer cancelCause(context.Canceled)
+		defer release()
 		if finishRun == nil {
 			return
 		}
@@ -374,7 +378,7 @@ func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, 
 			finishRun(RunOutcome{Status: sessionruntime.RunStatusCompleted})
 		}
 	}
-	return runCtx, admission, finish, nil
+	return runCtx, admission, finish, release, nil
 }
 
 func (s *Service) withAdmissionRuntimeFence(ctx context.Context, admission sessionruntime.Admission) context.Context {
@@ -410,7 +414,7 @@ func (s *Service) AdmitSubagentRun(
 	if beginErr != nil {
 		return nil, tools.SubagentAdmission{}, nil, beginErr
 	}
-	runCtx, admission, finish, err := s.admitTriggeredRun(ctx, sessionmode.Subagent, botID, threadID, invocationID, submission, nil)
+	runCtx, admission, finish, _, err := s.admitTriggeredRun(ctx, sessionmode.Subagent, botID, threadID, invocationID, submission, nil)
 	if err != nil {
 		endActiveTurn()
 	}

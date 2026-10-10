@@ -167,6 +167,11 @@ type Service struct {
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	turnHooks                         *turnRuntimeHooks
 	sessionManager                    *sessionruntime.Manager
+	// outputMedia and outputSpeech prepare a run's events on their way to the
+	// subscribers: attachments are stored, speech is synthesized into voice
+	// attachments. Both are optional.
+	outputMedia  outputMediaStore
+	outputSpeech outputSpeech
 	// followUpStarts holds one in-flight follow-up starter per session key.
 	followUpStarts sync.Map
 }

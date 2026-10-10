@@ -125,7 +125,7 @@ func TestScheduledRuntimeNoticeIsPersistedWithoutInteractiveSubscriber(t *testin
 		input.Sink.EmitStreamEvent(event.StreamEvent{Type: event.RuntimeNotice, NoticeKind: event.NoticeToolsUnavailable, Delta: "public runtime notice"})
 		return external.PromptResult{Text: "done", Output: []sdk.Message{sdk.AssistantMessage("done")}, TurnCompleted: true}, nil
 	}}
-	_, err := service.triggerScheduleRuntime(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{SessionID: lifecycleTestSessionID, Command: "test", OwnerUserID: "user-1"}, "", lifecycleTestRunID, driver)
+	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{FireID: "fire-1", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "test", OwnerUserID: "user-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

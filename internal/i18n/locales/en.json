@@ -556,6 +556,7 @@
     "acp_runtime_start_failed": "External agent runtime failed to start.",
     "agent": {
       "chat_model_not_configured": "No chat model is selected. Set a default chat model in Bot settings → General, then try again.",
+      "loop_detected": "The agent detected a repeating pattern and stopped before looping.",
       "provider_auth_failed": "The model provider rejected the credentials. Check the provider API key.",
       "provider_overloaded": "The model provider is unavailable or overloaded right now. Please try again in a moment.",
       "provider_permission_denied": "The model provider denied access to this model or resource. Check that the provider account can use this model.",

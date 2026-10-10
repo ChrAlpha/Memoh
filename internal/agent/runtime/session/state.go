@@ -81,7 +81,7 @@ func decisionEventID(event native.StreamEvent) string {
 	return strings.TrimSpace(event.ToolCallID)
 }
 
-func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDelta {
+func runtimeRunPatch(snapshot Snapshot, status, runError, lease, runErrorArgs bool) RuntimeDelta {
 	run := snapshot.CurrentRunView
 	if run == nil {
 		return RuntimeDelta{}
@@ -100,6 +100,10 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDel
 		code := run.ErrorCode
 		patch.ErrorCode = &code
 	}
+	if runErrorArgs {
+		args := cloneErrorArgs(run.ErrorArgs)
+		patch.ErrorArgs = &args
+	}
 	if lease {
 		value := time.Time{}
 		if run.OwnerLeaseExpiresAt != nil {
@@ -108,6 +112,19 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDel
 		patch.OwnerLeaseExpiresAt = &value
 	}
 	return RuntimeDelta{Run: patch}
+}
+
+// cloneErrorArgs copies a run's failure args; nil stays nil so a patch never
+// invents an empty argument set.
+func cloneErrorArgs(args map[string]string) map[string]string {
+	if len(args) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(args))
+	for k, v := range args {
+		cloned[k] = v
+	}
+	return cloned
 }
 
 func (patch *CurrentRunPatch) setRetry(retry *RunRetryView) {

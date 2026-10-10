@@ -820,7 +820,7 @@ func (m *Manager) requestAbort(ctx context.Context, ctrl *runControl) (bool, err
 		run.UpdatedAt = now
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
-		return runtimeRunPatch(snapshot, true, false, false)
+		return runtimeRunPatch(snapshot, true, false, false, false)
 	})
 	return acknowledged, err
 }

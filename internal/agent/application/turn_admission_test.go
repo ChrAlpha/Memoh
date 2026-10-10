@@ -37,6 +37,10 @@ func (*fakeTurnAdmitter) FinishRunWithErrorCode(context.Context, sessionruntime.
 	return sessionruntime.TerminalRun{}, nil
 }
 
+func (*fakeTurnAdmitter) FinishRunWithFailure(context.Context, sessionruntime.RunHandle, string, string, map[string]string) (sessionruntime.TerminalRun, error) {
+	return sessionruntime.TerminalRun{}, nil
+}
+
 func (*fakeTurnAdmitter) MarkInlineDecisionRun(string, string, string) {}
 
 func TestAdmitTurnRunProjectsRequestUserTurn(t *testing.T) {

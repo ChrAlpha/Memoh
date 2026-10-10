@@ -14,6 +14,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -61,6 +62,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		eventGate.close()
 	}()
 	aborted := false
+	// segmentReason is the reason this segment's own loop observed, before the
+	// engine's more specific one is folded in.
+	segmentReason := event.EndReason("")
 	turnError := ""
 	defer func() {
 		event := hooks.EventTurnEnd
@@ -239,6 +243,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 				if result.Abort {
 					a.logger.WarnContext(ctx, "text loop detected, will abort")
 					eng.aborted = true
+					eng.noteEndReason(event.EndLoopDetected)
 					cancel(ErrTextLoopDetected)
 				}
 			})
@@ -257,6 +262,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		select {
 		case <-streamCtx.Done():
 			aborted = true
+			if segmentReason == "" {
+				segmentReason = event.EndCanceled
+			}
 		case evt, ok := <-eng.events:
 			if !ok {
 				engineClosed = true
@@ -264,15 +272,22 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 			if !sendEvent(ctx, ch, evt) {
 				aborted = true
+				if segmentReason == "" {
+					segmentReason = event.EndCanceled
+				}
 			}
 		}
 	}
 	if ctx.Err() != nil {
 		aborted = true
+		if segmentReason == "" {
+			segmentReason = event.EndCanceled
+		}
 	}
 	budgetErr := contextStepBudgetError(streamCtx)
 	if budgetErr != nil {
 		aborted = true
+		segmentReason = event.EndContextBudget
 	}
 
 	if aborted && !engineClosed {
@@ -314,6 +329,14 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		if turnError == "" {
 			turnError = eng.turnError
 		}
+	}
+	// The engine's reason is the specific one: it knew which guard, which
+	// budget check or which failure ended it. The segment owner's own reason is
+	// the generic cancellation and only stands in when the engine reported
+	// nothing.
+	endReason := segmentReason
+	if eng.endReason != "" && eng.endReason != event.EndCanceled {
+		endReason = eng.endReason
 	}
 
 	// Only external cancellation can represent a user/session abort. Provider
@@ -377,8 +400,18 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	if aborted {
 		termEvent.Type = EventAgentAbort
+		if endReason == "" {
+			endReason = event.EndCanceled
+		}
 	} else {
 		termEvent.Type = EventAgentEnd
+		if streamClosed && eng.deferred != nil {
+			// The stream ended because it is waiting on a decision, not
+			// because the turn is over.
+			endReason = event.EndAwaitingDecision
+		} else {
+			endReason = event.EndCompleted
+		}
 		// Warn if LLM produced no text and no tool calls — likely a context overflow.
 		if eng.allText.Len() == 0 && eng.stepNumber == 0 {
 			a.logger.WarnContext(ctx, "agent produced empty response (no text, no tool calls)",
@@ -388,6 +421,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			)
 		}
 	}
+	termEvent.EndReason = endReason
 	// The legacy recorder is append-only durability state. Flush only messages
 	// admitted by the final provider handoff whose target provider step also
 	// completed, so provider-start failures and retry-revoked injections
@@ -500,9 +534,24 @@ type streamEngine struct {
 	interruptedStep interruptedStepCapture
 	nextDurableStep int
 	aborted         bool
-	turnError       string
-	allText         strings.Builder
-	stepNumber      int
+	// endReason is why this segment ended, recorded where the reason is known.
+	// The cancellation cause cannot stand in for it: several paths cancel the
+	// same context, so a later cancel would overwrite an earlier, more specific
+	// reason.
+	endReason  event.EndReason
+	turnError  string
+	allText    strings.Builder
+	stepNumber int
+}
+
+// noteEndReason records why the segment ended. A specific reason already
+// recorded wins: only the generic cancellation yields to a later one, so a
+// loop guard's reason survives the cancellation that follows it.
+func (e *streamEngine) noteEndReason(reason event.EndReason) {
+	if e.endReason != "" && e.endReason != event.EndCanceled {
+		return
+	}
+	e.endReason = reason
 }
 
 // emit sends one event to the forwarder. It fails only when the stream
@@ -555,6 +604,7 @@ func (e *streamEngine) run() {
 		// context error in the segment owner, never as a raw provider error.
 		if contextStepBudgetError(e.streamCtx) != nil {
 			e.dispatch.handoff.reject()
+			e.noteEndReason(event.EndContextBudget)
 			e.aborted = true
 			return
 		}
@@ -636,6 +686,7 @@ func (e *streamEngine) run() {
 		}
 		e.reset(dispatch)
 		if contextStepBudgetError(e.streamCtx) != nil {
+			e.noteEndReason(event.EndContextBudget)
 			e.aborted = true
 			return
 		}
@@ -1021,6 +1072,7 @@ partLoop:
 		// nothing new arrived: the model is not converging on a call the
 		// loop can run. Ended like a detected tool loop, with the answered
 		// steps committed.
+		e.noteEndReason(event.EndLoopDetected)
 		e.cancel(ErrToolLoopDetected)
 		e.aborted = true
 		return true, nil
@@ -1038,6 +1090,7 @@ partLoop:
 func (e *streamEngine) providerFailure(err error) (retry error) {
 	err = &modelCallFailure{err: err}
 	if contextStepBudgetError(e.streamCtx) != nil {
+		e.noteEndReason(event.EndContextBudget)
 		e.aborted = true
 		return nil
 	}
@@ -1054,6 +1107,7 @@ func (e *streamEngine) providerFailure(err error) (retry error) {
 // run. The context-budget fence applies as in providerFailure.
 func (e *streamEngine) localFailure(err error) {
 	if contextStepBudgetError(e.streamCtx) != nil {
+		e.noteEndReason(event.EndContextBudget)
 		e.aborted = true
 		return
 	}
@@ -1063,6 +1117,7 @@ func (e *streamEngine) localFailure(err error) {
 // endWithFailure publishes failure as the run's failure and ends the engine.
 func (e *streamEngine) endWithFailure(failure StreamEvent) {
 	e.turnError = turnHookError(failure)
+	e.noteEndReason(event.EndFailed)
 	e.emit(failure)
 	e.aborted = true
 }
@@ -1213,6 +1268,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 		}
 		if shouldAbort {
 			e.agent.logger.WarnContext(e.streamCtx, "tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
+			e.noteEndReason(event.EndLoopDetected)
 			e.cancel(ErrToolLoopDetected)
 			e.aborted = true
 		}
@@ -1232,6 +1288,7 @@ func (e *streamEngine) forwardToolPart(part sdk.StreamPart) {
 		}
 		if shouldAbort {
 			e.agent.logger.WarnContext(e.streamCtx, "tool loop abort triggered", slog.String("tool_call_id", p.ToolCallID))
+			e.noteEndReason(event.EndLoopDetected)
 			e.cancel(ErrToolLoopDetected)
 			e.aborted = true
 		}

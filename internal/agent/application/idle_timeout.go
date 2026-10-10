@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +11,15 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/reasoning"
+)
+
+// ErrResponseTimeout and ErrToolTimeout are the idle watchdog's own stop
+// markers. They name which window expired; the code the run reports is taken
+// from them rather than from the deadline they wrap, so a timeout is reported
+// as a timeout and not as a cancellation.
+var (
+	ErrResponseTimeout = errors.New("agent response idle timeout")
+	ErrToolTimeout     = errors.New("agent tool idle timeout")
 )
 
 // idleCancel watches the currently executing phase. Model silence, tool
@@ -128,11 +139,11 @@ func (ic *idleCancel) expire() {
 		return
 	}
 	ic.fired = true
-	code := apperror.CodeAgentResponseTimeout
+	code, sentinel := apperror.CodeAgentResponseTimeout, ErrResponseTimeout
 	if len(ic.tools) > 0 {
-		code = apperror.CodeAgentToolTimeout
+		code, sentinel = apperror.CodeAgentToolTimeout, ErrToolTimeout
 	}
-	ic.cancel(apperror.Wrap(code, context.DeadlineExceeded, nil))
+	ic.cancel(fmt.Errorf("%w: %w", sentinel, apperror.Wrap(code, context.DeadlineExceeded, nil)))
 }
 
 func (ic *idleCancel) Stop() {

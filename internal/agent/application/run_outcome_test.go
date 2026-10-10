@@ -209,8 +209,8 @@ func TestOutcomeRecorderAbortCause(t *testing.T) {
 		idleCtx, idle := quietIdle()
 		r := newTestRecorder(context.Background(), idleCtx, idle)
 		_ = r.observe(native.StreamEvent{Type: native.EventAgentAbort})
-		if r.cause == nil || r.cause.Error() != "agent run aborted" {
-			t.Fatalf("cause = %v, want the generic abort", r.cause)
+		if !errors.Is(r.cause, errRunStopped) {
+			t.Fatalf("cause = %v, want the driver's stop marker", r.cause)
 		}
 	})
 }

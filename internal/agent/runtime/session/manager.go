@@ -673,7 +673,7 @@ func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRu
 	if !changed {
 		return nil
 	}
-	delta := runtimeRunPatch(snapshot, true, true, true)
+	delta := runtimeRunPatch(snapshot, true, true, true, true)
 	if err := m.publishRuntimeDelta(ctx, snapshot, terminal.RunID, delta); err != nil {
 		m.logger.WarnContext(ctx, "publish reconciled runtime terminal failed; subscribers will reload snapshot", slog.Any("error", err), slog.String("run_id", terminal.RunID))
 	}
@@ -739,7 +739,7 @@ func (m *Manager) reconcileLocalFinishHandoffs(ctx context.Context) error {
 			continue
 		}
 		status := liveRunStatus(ledger.State(terminal.State))
-		changed, liveErr := m.finishRunState(ctx, handle, status, terminal.ErrorCode)
+		changed, liveErr := m.finishRunState(ctx, handle, status, terminal.ErrorCode, terminal.ErrorArgs)
 		if liveErr != nil && !errors.Is(liveErr, ErrRunOwnershipLost) {
 			errs = append(errs, liveErr)
 			continue
@@ -1238,7 +1238,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 				m.removeLocalControl(runID, ctrl)
 				renewErr = ErrRunOwnershipLost
 			} else {
-				_, _ = m.finishRun(context.WithoutCancel(ctx), handle, RunStatusErrored, "", renewErr)
+				_, _ = m.finishRun(context.WithoutCancel(ctx), handle, RunStatusErrored, "", nil, renewErr)
 			}
 			return RunHandle{}, Cursor{}, fmt.Errorf("confirm runtime owner lease: %w", renewErr)
 		}
@@ -1269,7 +1269,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 	admission, err = normalizeRunAdmission(admission)
 	if err != nil {
 		ctrl.markReady()
-		_, _ = m.finishRun(context.WithoutCancel(ctx), handle, RunStatusErrored, "", err)
+		_, _ = m.finishRun(context.WithoutCancel(ctx), handle, RunStatusErrored, "", nil, err)
 		return RunHandle{}, Cursor{}, err
 	}
 	activated, changed, err := m.updateActiveAndPublish(context.WithoutCancel(ctx), handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
@@ -1370,7 +1370,7 @@ func (m *Manager) MarkInlineDecisionRun(botID, sessionID, runID string) {
 // decision, a run without a durable row, or an owner that lost the run before
 // the ledger answered.
 func (m *Manager) FinishRun(ctx context.Context, handle RunHandle, status string) (TerminalRun, error) {
-	return m.finishRun(ctx, handle, status, "", nil)
+	return m.finishRun(ctx, handle, status, "", nil, nil)
 }
 
 // FinishRunWithErrorCode ends the run as FinishRun does and records errorCode,
@@ -1378,7 +1378,15 @@ func (m *Manager) FinishRun(ctx context.Context, handle RunHandle, status string
 // owner reports its cause in the run's result record. It returns what
 // FinishRun returns.
 func (m *Manager) FinishRunWithErrorCode(ctx context.Context, handle RunHandle, status, errorCode string) (TerminalRun, error) {
-	return m.finishRun(ctx, handle, status, errorCode, nil)
+	return m.finishRun(ctx, handle, status, errorCode, nil, nil)
+}
+
+// FinishRunWithFailure ends the run as FinishRunWithErrorCode does and also
+// carries the failure's catalog args into the live view and the returned
+// record, so a subscriber renders the same message the owner reported. Args
+// are not persisted: a run another process ended has none.
+func (m *Manager) FinishRunWithFailure(ctx context.Context, handle RunHandle, status, errorCode string, errorArgs map[string]string) (TerminalRun, error) {
+	return m.finishRun(ctx, handle, status, errorCode, errorArgs, nil)
 }
 
 // finishUnadmittedRun ends a reserved run whose admission failed. A canceled
@@ -1388,13 +1396,13 @@ func (m *Manager) finishUnadmittedRun(ctx context.Context, handle RunHandle, err
 	if errors.Is(err, context.Canceled) {
 		status, cause = RunStatusAborted, nil
 	}
-	_, _ = m.finishRun(context.WithoutCancel(ctx), handle, status, "", cause)
+	_, _ = m.finishRun(context.WithoutCancel(ctx), handle, status, "", nil, cause)
 }
 
 // finishRun is the terminal write behind FinishRun. cause is set only when the
 // session runtime itself ends the run; it reaches the terminal observer as
 // TerminalRun.Cause.
-func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, errorCode string, cause error) (TerminalRun, error) {
+func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, errorCode string, errorArgs map[string]string, cause error) (TerminalRun, error) {
 	if m == nil || m.backend == nil {
 		return TerminalRun{}, nil
 	}
@@ -1415,7 +1423,7 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 			// Whether the run parked is unknown, so nothing may be released yet.
 			// The retry repeats this read; returning without one would keep the
 			// lease renewed and the session busy until this process exits.
-			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, cause)
+			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, errorArgs, cause)
 			return TerminalRun{}, err
 		}
 		if ok && runMatchesHandle(snapshot.CurrentRunView, handle) &&
@@ -1465,7 +1473,7 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 			m.forgetLocalControlForHandle(context.WithoutCancel(ctx), handle)
 			return terminal, err
 		} else if !errors.Is(err, ErrRunOwnershipLost) && !errors.Is(err, errInvalidOwnerTerminalState) {
-			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, cause)
+			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, errorArgs, cause)
 		}
 		return TerminalRun{}, err
 	}
@@ -1487,13 +1495,19 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 	m.mu.Unlock()
 	if finalizeDecisions != nil {
 		if err := finalizeDecisions(ctx, handle); err != nil {
-			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, cause)
+			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, errorArgs, cause)
 			return TerminalRun{}, fmt.Errorf("finalize runtime decisions: %w", err)
 		}
 	}
 	terminal, err := m.finalizeLedgerRun(ctx, handle, status, errorCode)
 	if terminal.RunID != "" {
 		terminal.Cause = cause
+		// Args never reach the ledger, so a record built from the durable row
+		// has none; this call's owner supplies them for its own observation.
+		// An observation of a run another process ended keeps the empty set.
+		if strings.TrimSpace(terminal.ErrorCode) == strings.TrimSpace(errorCode) {
+			terminal.ErrorArgs = cloneErrorArgs(errorArgs)
+		}
 		defer m.observeTerminalRun(ctx, terminal)
 	}
 	if err != nil {
@@ -1503,7 +1517,7 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 			// lease renewal before the authoritative outcome is observed.
 			m.forgetLocalControlForHandle(context.WithoutCancel(ctx), handle)
 		} else if !errors.Is(err, ErrRunOwnershipLost) && !errors.Is(err, errInvalidOwnerTerminalState) {
-			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, cause)
+			m.scheduleDurableFinishRetry(context.WithoutCancel(ctx), ctrl, status, errorCode, errorArgs, cause)
 		}
 		// The lease is deliberately left alone: it is the only pointer the
 		// reaper has to this run. Renewal continues while this owner retries the
@@ -1512,7 +1526,7 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 		// exception: no reaping remains.
 		return terminal, err
 	}
-	changed, err := m.finishRunState(ctx, handle, status, errorCode)
+	changed, err := m.finishRunState(ctx, handle, status, errorCode, errorArgs)
 	if err == nil || changed {
 		m.cleanupFinishedRun(context.WithoutCancel(ctx), handle)
 		return terminal, err
@@ -1529,7 +1543,7 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 	if ctrl != nil && m.localControlForHandle(handle) == ctrl {
 		retryCtx := context.WithoutCancel(ctx)
 		ctrl.finishRetryOnce.Do(func() {
-			go m.retryFinishRun(retryCtx, ctrl, status, errorCode)
+			go m.retryFinishRun(retryCtx, ctrl, status, errorCode, errorArgs)
 		})
 	}
 	return terminal, err
@@ -1539,13 +1553,14 @@ func (m *Manager) scheduleDurableFinishRetry(
 	ctx context.Context,
 	ctrl *runControl,
 	status, errorCode string,
+	errorArgs map[string]string,
 	cause error,
 ) {
 	if m == nil || ctrl == nil || m.localControlForHandle(ctrl.handle()) != ctrl {
 		return
 	}
 	ctrl.durableFinishRetryOnce.Do(func() {
-		go m.retryDurableFinish(ctx, ctrl, status, errorCode, cause)
+		go m.retryDurableFinish(ctx, ctrl, status, errorCode, errorArgs, cause)
 	})
 }
 
@@ -1553,6 +1568,7 @@ func (m *Manager) retryDurableFinish(
 	ctx context.Context,
 	ctrl *runControl,
 	status, errorCode string,
+	errorArgs map[string]string,
 	cause error,
 ) {
 	retryCtx, cancel := context.WithTimeout(ctx, m.durableFinishRetryBudget)
@@ -1579,7 +1595,7 @@ func (m *Manager) retryDurableFinish(
 		if m.localControlForHandle(ctrl.handle()) != ctrl {
 			return
 		}
-		_, err := m.finishRun(retryCtx, ctrl.handle(), status, errorCode, cause)
+		_, err := m.finishRun(retryCtx, ctrl.handle(), status, errorCode, errorArgs, cause)
 		if err == nil {
 			return
 		}
@@ -1638,7 +1654,7 @@ func (m *Manager) resolveTerminalStatus(ctx context.Context, handle RunHandle, s
 	}
 }
 
-func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, errorCode string) (bool, error) {
+func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, errorCode string, errorArgs map[string]string) (bool, error) {
 	admissionTerminal := false
 	_, changed, err := m.releaseActiveAndPublish(ctx, handle, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
 		run := snapshot.CurrentRunView
@@ -1664,9 +1680,11 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 		snapshot.CurrentRunView.UpdatedAt = now
 		if errorCode != "" {
 			snapshot.CurrentRunView.ErrorCode = errorCode
+			snapshot.CurrentRunView.ErrorArgs = cloneErrorArgs(errorArgs)
 		}
 		if finalStatus == RunStatusCompleted || finalStatus == RunStatusAborted {
 			snapshot.CurrentRunView.ErrorCode = ""
+			snapshot.CurrentRunView.ErrorArgs = nil
 		}
 		snapshot.CurrentRunView.OwnerLeaseExpiresAt = nil
 		snapshot.CurrentRunView.ProposedTerminalStatus = ""
@@ -1677,7 +1695,7 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 		if admissionTerminal {
 			return RuntimeDelta{CurrentRunView: snapshot.CurrentRunView}
 		}
-		return runtimeRunPatch(snapshot, true, true, m.distributed != nil)
+		return runtimeRunPatch(snapshot, true, true, m.distributed != nil, true)
 	})
 	return changed, err
 }
@@ -1686,7 +1704,7 @@ func (m *Manager) finishRunState(ctx context.Context, handle RunHandle, status, 
 // already committed. It is bounded like the durable retry: a live backend that
 // stays unavailable must not keep this owner renewing a finished run, because
 // renewal is what keeps the reaper from repairing the projection.
-func (m *Manager) retryFinishRun(ctx context.Context, ctrl *runControl, status, errorCode string) {
+func (m *Manager) retryFinishRun(ctx context.Context, ctrl *runControl, status, errorCode string, errorArgs map[string]string) {
 	if ctrl == nil {
 		return
 	}
@@ -1715,7 +1733,7 @@ func (m *Manager) retryFinishRun(ctx context.Context, ctrl *runControl, status, 
 		if m.localControlForHandle(ctrl.handle()) != ctrl {
 			return
 		}
-		changed, err := m.finishRunState(ctx, ctrl.handle(), status, errorCode)
+		changed, err := m.finishRunState(ctx, ctrl.handle(), status, errorCode, errorArgs)
 		if err == nil || changed {
 			if err != nil {
 				m.logger.WarnContext(ctx, "publish runtime finish failed after state commit", slog.Any("error", err), slog.String("run_id", ctrl.runID))
@@ -1781,7 +1799,11 @@ func (m *Manager) prepareAgentTerminalEvent(
 	// A terminal event that carries a code names the failure its owner
 	// classified; the live view's code is only the last stream error it saw.
 	errorCode := strings.TrimSpace(event.Code)
-	if errorCode == "" {
+	if errorCode == "" && !event.OwnerNamed {
+		// A runtime that did not name its own outcome reports whichever error
+		// its stream last saw. A driver-named terminal event is authoritative
+		// instead: a run its owner ended as a stop must not read as failed
+		// because the stream errored before the stop arrived.
 		errorCode = strings.TrimSpace(run.ErrorCode)
 	}
 	status := RunStatusCompleted
@@ -2007,24 +2029,26 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 			// The code is what marks the run failed. An error without one is
 			// named as the ledger names a failure its owner did not name.
 			run.ErrorCode = strings.TrimSpace(event.Code)
+			run.ErrorArgs = cloneErrorArgs(event.Args)
 			if run.ErrorCode == "" {
 				run.ErrorCode = runErrorRunFailed
+				run.ErrorArgs = nil
 			}
 		}
 		return snapshot, true, nil
 	}, func(snapshot Snapshot) RuntimeDelta {
 		switch event.Type {
 		case native.EventAgentEnd, native.EventAgentAbort:
-			delta.Run = runtimeRunPatch(snapshot, true, terminalProposal.prepared, false).Run
+			delta.Run = runtimeRunPatch(snapshot, true, terminalProposal.prepared, false, true).Run
 		case native.EventAgentStart, native.EventToolApprovalRequest, native.EventUserInputRequest:
-			delta.Run = runtimeRunPatch(snapshot, true, false, false).Run
+			delta.Run = runtimeRunPatch(snapshot, true, false, false, false).Run
 		case native.EventError, native.EventRetry:
-			delta.Run = runtimeRunPatch(snapshot, false, true, false).Run
+			delta.Run = runtimeRunPatch(snapshot, false, true, false, true).Run
 		}
 		// Retry state rides every patch that follows an event changing it.
 		if event.Type == native.EventRetry || retryCleared {
 			if delta.Run == nil {
-				delta.Run = runtimeRunPatch(snapshot, false, false, false).Run
+				delta.Run = runtimeRunPatch(snapshot, false, false, false, false).Run
 			}
 			if delta.Run != nil {
 				delta.Run.setRetry(snapshot.CurrentRunView.Retry)
@@ -2151,7 +2175,7 @@ func (m *Manager) liveSnapshot(ctx context.Context, botID, sessionID string) (Sn
 			}
 			return current, true, nil
 		}, func(snapshot Snapshot) RuntimeDelta {
-			return runtimeRunPatch(snapshot, true, true, true)
+			return runtimeRunPatch(snapshot, true, true, true, true)
 		})
 		if err != nil {
 			return Snapshot{}, err

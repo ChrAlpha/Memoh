@@ -104,9 +104,10 @@ func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
 	service.streamIdleTimeout = 20 * time.Millisecond
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
-	_, err := service.triggerScheduleRuntime(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{
+	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
+		FireID: "fire-1", ID: "schedule-1",
 		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-	}, "", lifecycleTestRunID, driver)
+	})
 	if apperror.CodeOf(err) != apperror.CodeAgentResponseTimeout {
 		t.Fatalf("schedule error = %v, want %s", err, apperror.CodeAgentResponseTimeout)
 	}
@@ -116,7 +117,9 @@ func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 }
 
 // A scheduled run whose runtime could not start leaves no round in history;
-// a failure the runtime reports after it started keeps one.
+// a failure the runtime reports after it started keeps one. What matters is
+// the history that survives, not whether a row was briefly written and then
+// removed on the way there.
 func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -134,14 +137,16 @@ func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 			driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 				return external.PromptResult{}, tc.err
 			}}
-			_, err := service.triggerScheduleRuntime(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{
+			_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
+				FireID: "fire-1", ID: "schedule-1",
 				SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-			}, "", lifecycleTestRunID, driver)
+			})
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("schedule error code = %q, want %q: %v", got, tc.code, err)
 			}
-			if kept := len(messages.deleted) == 0; kept != tc.keepRound {
-				t.Fatalf("persisted = %+v deleted = %v, want round kept = %v", messages.persisted, messages.deleted, tc.keepRound)
+			if got := historyRows(messages); (got > 0) != tc.keepRound {
+				t.Fatalf("surviving history rows = %d (persisted = %+v deleted = %v), want round kept = %v",
+					got, messages.persisted, messages.deleted, tc.keepRound)
 			}
 		})
 	}
@@ -158,9 +163,10 @@ func TestScheduledExecutionTimeoutIsNotAConfigurationFailure(t *testing.T) {
 		cancel(schedule.ErrExecutionTimeout)
 		return external.PromptResult{TurnCompleted: true}, external.Unavailable(context.Canceled)
 	}}
-	_, err := service.triggerScheduleRuntime(ctx, lifecycleTestBotID, schedule.TriggerPayload{
+	_, err := runScheduledExternal(ctx, t, service, driver, schedule.TriggerPayload{
+		FireID: "fire-1", ID: "schedule-1",
 		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-	}, "", lifecycleTestRunID, driver)
+	})
 	if got := apperror.CodeOf(err); got != apperror.CodeScheduleExecutionTimeout {
 		t.Fatalf("schedule error code = %q, want %q: %v", got, apperror.CodeScheduleExecutionTimeout, err)
 	}

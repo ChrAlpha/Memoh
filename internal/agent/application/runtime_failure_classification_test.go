@@ -286,9 +286,10 @@ func TestScheduledRuntimeFailureRoundHasNoFailureText(t *testing.T) {
 			driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 				return external.PromptResult{Output: tc.output}, apperror.New(apperror.CodeACPRuntimeBusy, nil)
 			}}
-			if _, err := service.triggerScheduleRuntime(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{
+			if _, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
+				FireID: "fire-1", ID: "schedule-1",
 				SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-			}, "", lifecycleTestRunID, driver); apperror.CodeOf(err) != apperror.CodeACPRuntimeBusy {
+			}); apperror.CodeOf(err) != apperror.CodeACPRuntimeBusy {
 				t.Fatalf("schedule error = %v, want %s", err, apperror.CodeACPRuntimeBusy)
 			}
 			last := messages.persisted[len(messages.persisted)-1]
@@ -310,9 +311,10 @@ func TestScheduledRuntimeFailureTextIsItsCode(t *testing.T) {
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}}, errors.New("SECRET stderr tail")
 	}}
-	_, err := service.triggerScheduleRuntime(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{
+	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
+		FireID: "fire-1", ID: "schedule-1",
 		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-	}, "", lifecycleTestRunID, driver)
+	})
 	if err == nil || err.Error() != string(apperror.CodeRuntimePromptFailed) {
 		t.Fatalf("schedule error text = %q, want exactly %q", err, apperror.CodeRuntimePromptFailed)
 	}

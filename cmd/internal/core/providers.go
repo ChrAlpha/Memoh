@@ -788,7 +788,7 @@ func provideExternalAgentCodexHandler(log *slog.Logger, driver *codexruntime.Dri
 	return handlers.NewExternalAgentCodexHandler(log, driver, botAgents, botService, accountService)
 }
 
-func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *timeline.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, workdirService *workdir.Service, cfg config.Config) *application.Service {
+func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *timeline.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, workdirService *workdir.Service, cfg config.Config) *application.Service {
 	service := application.NewService(log, modelsService, queries, msgService, settingsService, accountService, a, rc.TimezoneLocation, 120*time.Second)
 	service.SetResumeSecret(rc.JwtSecret)
 	service.SetResumeReadiness(func(ctx context.Context, botID, targetID string) error {
@@ -822,6 +822,9 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	service.SetWorkspaceTargetResolver(workspaceManager)
 	service.SetWorkdirResolver(workdirService)
 	service.SetHookService(hookService)
+	// A run's events are prepared once, in the driver: every entry gets the
+	// same attachment ingestion and the same spoken reply.
+	service.SetOutputPreparation(mediaService, &agentOutputSpeech{settings: settingsService, audio: audioService})
 	if sessionService != nil {
 		sessionService.SetHookService(hookService)
 	}
@@ -1220,6 +1223,25 @@ func provideMediaStorage(provider bridge.Provider, cfg config.Config) storagepkg
 
 func provideMediaService(log *slog.Logger, provider storagepkg.Provider) *media.Service {
 	return media.NewService(log, provider)
+}
+
+// agentOutputSpeech adapts the audio service and a bot's configured speech model
+// to the port run event preparation synthesizes speech through.
+type agentOutputSpeech struct {
+	settings *settings.Service
+	audio    *audiopkg.Service
+}
+
+func (s *agentOutputSpeech) SpeechModelID(ctx context.Context, botID string) (string, error) {
+	settings, err := s.settings.GetBot(ctx, botID)
+	if err != nil {
+		return "", err
+	}
+	return settings.TtsModelID, nil
+}
+
+func (s *agentOutputSpeech) Synthesize(ctx context.Context, modelID, text string) ([]byte, string, error) {
+	return s.audio.Synthesize(ctx, modelID, text, nil)
 }
 
 func provideAudioRegistry() *audiopkg.Registry {

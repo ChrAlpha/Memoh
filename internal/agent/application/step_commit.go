@@ -13,7 +13,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
@@ -112,7 +111,7 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 		// carries whatever input the claim admitted, so the loop continues
 		// with the new input instead of restarting the run.
 		cfg.OnSteer = func(ctx context.Context, index int, record *step.Record) (native.StepDirective, error) {
-			return c.persist(ctx, index, record, stepSteered, "")
+			return c.persist(ctx, index, record, stepSteered, RunFailure{})
 		}
 	}
 }
@@ -126,17 +125,17 @@ const (
 )
 
 func (c *agentStepCommitter) commit(ctx context.Context, stepIndex int, record *step.Record) (native.StepDirective, error) {
-	return c.persist(ctx, stepIndex, record, stepCompleted, "")
+	return c.persist(ctx, stepIndex, record, stepCompleted, RunFailure{})
 }
 
 func (c *agentStepCommitter) interrupt(ctx context.Context, stepIndex int, record *step.Record) error {
-	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, "")
+	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, RunFailure{})
 	return err
 }
 
-// persist writes one step. failureCode, when set, names the failure that ended
-// the run on an interrupted step, and is recorded on its assistant rows.
-func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failureCode apperror.Code) (native.StepDirective, error) {
+// persist writes one step. failure, when it names a code, is the failure that
+// ended the run on an interrupted step and is recorded on its assistant rows.
+func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failure RunFailure) (native.StepDirective, error) {
 	interrupted := mode != stepCompleted
 	if c == nil || record == nil {
 		return native.StepDirective{}, errors.New("agent step is missing")
@@ -194,8 +193,8 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		for i, message := range messages {
 			if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
 				opts.MessageMetadataByIndex[i] = map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true}
-				if failureCode != "" {
-					opts.MessageMetadataByIndex[i][messagepkg.HistoryErrorCodeMetadataKey] = string(failureCode)
+				if failure.Code != "" {
+					opts.MessageMetadataByIndex[i] = failureRowMetadata(failure, "", opts.MessageMetadataByIndex[i])
 				}
 			}
 		}
@@ -368,17 +367,15 @@ func (c *agentStepCommitter) err() error {
 	return c.commitErr
 }
 
-// recordFailure writes the history of a run that failed with code, a failure
-// the history shows (see wsFailureCode), before the run is finished. Text
-// the stream showed for the model call that failed is written as an
-// interrupted step carrying the code. Without such text, a run that wrote
-// nothing gets the user message and failure row persistTurnFailure writes for
-// a turn without step commits, and a run with committed steps keeps them as
-// they are. A model call the runtime already checkpointed is not written
-// again. It returns the rows persistTurnFailure wrote; a checkpoint joins the
-// committed steps.
-func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText string, code apperror.Code) ([]messagepkg.Message, error) {
-	if c == nil || code == "" {
+// recordFailure writes the history of a run that failed with f, before the run
+// is finished. Text the stream showed for the model call that failed is written
+// as an interrupted step carrying f's code and args. Without such text, a run
+// that wrote nothing gets the user message and failure row for a turn without
+// step commits, and a run with committed steps keeps them as they are. A model
+// call the runtime already checkpointed is not written again. It returns the
+// rows the failure row wrote; a checkpoint joins the committed steps.
+func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText string, f RunFailure) ([]messagepkg.Message, error) {
+	if c == nil || f.Code == "" {
 		return nil, nil
 	}
 	c.mu.Lock()
@@ -391,7 +388,7 @@ func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText stri
 	}
 	if strings.TrimSpace(partialText) != "" {
 		record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
-		_, err := c.persist(ctx, stepIndex, record, stepInterrupted, code)
+		_, err := c.persist(ctx, stepIndex, record, stepInterrupted, f)
 		return nil, err
 	}
 	// A replacement turn finalizes through its coordinator, which only a
@@ -402,7 +399,7 @@ func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText stri
 	if _, err := stepPersistenceContext(ctx, c.ownerContext); err != nil {
 		return nil, err
 	}
-	return c.service.persistTurnFailure(context.WithoutCancel(ctx), c.req, c.rc, code)
+	return c.service.persistFailureRow(context.WithoutCancel(ctx), c.req, c.rc, f, "")
 }
 
 func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error {

@@ -85,12 +85,17 @@ func (a *lifecycleTurnAdmitter) Admit(
 	return a.admission, nil
 }
 
-func (a *lifecycleTurnAdmitter) FinishRunWithErrorCode(
+func (a *lifecycleTurnAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, code string) (sessionruntime.TerminalRun, error) {
+	return a.FinishRunWithFailure(ctx, handle, status, code, nil)
+}
+
+func (a *lifecycleTurnAdmitter) FinishRunWithFailure(
 	_ context.Context,
 	handle sessionruntime.RunHandle,
 	status, code string,
+	args map[string]string,
 ) (sessionruntime.TerminalRun, error) {
-	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: code})
+	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: code, args: args})
 	return sessionruntime.TerminalRun{}, a.finishErr
 }
 

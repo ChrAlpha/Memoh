@@ -1,0 +1,223 @@
+package application
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+)
+
+// nativeStreamer is the part of *native.Agent a native run needs: it turns a
+// RunConfig into a stream of events. Narrowing it here is what lets the driver
+// be tested without a provider.
+type nativeStreamer interface {
+	Stream(ctx context.Context, cfg native.RunConfig) <-chan native.StreamEvent
+}
+
+// nativeExecutor runs one turn on the built-in agent.
+type nativeExecutor struct {
+	agent     nativeStreamer
+	cfg       native.RunConfig
+	rc        resolvedContext
+	req       ChatRequest
+	committer *agentStepCommitter // nil when steps are not committed as they complete
+	timing    *reasoningTimingTracker
+	replace   *turnReplacement
+	service   *Service
+
+	// Written by execute, read by commit after execute returned.
+	terminal    *native.StreamEvent
+	snapshot    *terminalSnapshot
+	visible     bool
+	toolCalls   int
+	uncommitted uncommittedStepText
+	// interrupted is the failure the step committer reported while the stream
+	// was still running.
+	stepErr error
+}
+
+// execute streams the turn and hands every event to emit except the terminal
+// event, which it keeps: the driver publishes that after the ending's history
+// write has succeeded.
+func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+	for ev := range e.agent.Stream(ctx, e.cfg) {
+		if ev.Type == native.EventToolCallStart {
+			e.toolCalls++
+		}
+		if hasVisibleAgentStreamOutput(ev) {
+			e.visible = true
+		}
+		e.uncommitted.observe(ev)
+		if ev.IsTerminal() {
+			terminal := ev
+			e.terminal = &terminal
+			e.observeTerminal(terminal)
+			continue
+		}
+		emit(ev)
+	}
+	ending := execEnding{
+		Terminal: e.terminal,
+		Commit:   e.commit,
+	}
+	if e.terminal != nil {
+		ending.Deferred = e.deferred()
+	}
+	if e.stepErr != nil {
+		// A step that failed to persist is the run's failure even when the
+		// stream went on to end cleanly.
+		ending.Cause = e.stepErr
+		ending.Phase = phaseCommit
+	}
+	return ending
+}
+
+// observeTerminal decodes what the terminal event carries into the snapshot
+// the ending's history write persists.
+func (e *nativeExecutor) observeTerminal(ev native.StreamEvent) {
+	if len(ev.Messages) == 0 {
+		return
+	}
+	data := marshalRunEvent(ev)
+	if len(data) == 0 {
+		return
+	}
+	snap, ok := extractTerminalSnapshot(data)
+	if !ok {
+		return
+	}
+	if e.committer == nil {
+		snap.reasoningTiming = takeTerminalReasoningTiming(e.timing, ev.Type)
+	}
+	snap.visibleOutput = e.visible
+	e.snapshot = &snap
+}
+
+// deferred reports whether the terminal event parked the run on a decision.
+func (e *nativeExecutor) deferred() bool {
+	if e.snapshot != nil && e.snapshot.deferredToolID != "" {
+		return true
+	}
+	return e.terminal != nil && e.terminal.ApprovalID != ""
+}
+
+// commit writes the ending's history: the failure row or the interrupted step
+// when the run failed, and the run's final messages in every case.
+func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+	summary := commitSummary{ModelID: e.modelID()}
+	if row && f != nil {
+		persisted, err := e.recordFailure(ctx, *f, summary)
+		if err != nil {
+			return summary, err
+		}
+		summary.Persisted = append(summary.Persisted, persisted...)
+	}
+	if e.committer != nil {
+		tokens := e.inputTokens()
+		if err := e.committer.finish(ctx, tokens); err != nil {
+			return summary, runtimeHistoryError(err)
+		}
+		summary.Persisted = append(summary.Persisted, e.committer.persistedMessages()...)
+		summary.UsageTokens = tokens
+		return summary, e.postPersist(ctx, summary)
+	}
+	if e.snapshot == nil {
+		// Nothing was checkpointed and the stream never produced a terminal
+		// snapshot. A run with visible output has nowhere to write it, which is
+		// a history failure rather than a success.
+		if e.visible {
+			return summary, runtimeHistoryError(errors.New("agent terminal event has no persistable snapshot"))
+		}
+		if row && f != nil {
+			persisted, err := e.service.persistFailureRow(ctx, e.req, e.rc, *f, "")
+			if err != nil {
+				return summary, runtimeHistoryError(err)
+			}
+			summary.Persisted = persisted
+		}
+		return summary, e.postPersist(ctx, summary)
+	}
+	snap := *e.snapshot
+	snap.failureCode = failureRowCode(f)
+	if !row {
+		snap.failureCode = ""
+	}
+	persisted, err := e.service.persistTerminalSnapshotResult(ctx, e.req, e.rc, snap)
+	if err != nil {
+		return summary, runtimeHistoryError(err)
+	}
+	summary.Persisted = persisted
+	summary.Text = terminalText(snap)
+	summary.Usage = snap.usage
+	summary.UsageTokens = extractInputTokensFromUsage(snap.usage)
+	return summary, e.postPersist(ctx, summary)
+}
+
+// recordFailure writes the failure into the run's history: the text the failed
+// step showed, or the turn-level failure row when nothing was committed.
+func (e *nativeExecutor) recordFailure(ctx context.Context, f RunFailure, _ commitSummary) ([]messagepkg.Message, error) {
+	if e.committer != nil {
+		persisted, err := e.committer.recordFailure(ctx, e.uncommitted.String(), f)
+		if err != nil {
+			return nil, runtimeHistoryError(err)
+		}
+		return persisted, nil
+	}
+	if e.snapshot != nil && e.snapshot.visibleOutput {
+		// A committed-ish snapshot carries the failure as its own row; the
+		// snapshot path writes it.
+		return nil, nil
+	}
+	return e.service.persistFailureRow(ctx, e.req, e.rc, f, "")
+}
+
+// postPersist rewrites the replaced turn once its own history is written. A
+// replacement turn that cannot be rewritten failed, and the failure belongs to
+// the ending rather than to the turn it replaced.
+func (e *nativeExecutor) postPersist(ctx context.Context, summary commitSummary) error {
+	if e.replace == nil || e.replace.PostPersist == nil {
+		return nil
+	}
+	if err := e.replace.PostPersist(ctx, summary.Persisted); err != nil {
+		return runtimeHistoryError(err)
+	}
+	return nil
+}
+
+// inputTokens is the token count the ending's history write accounts the run
+// with: what the terminal event reported, or the resolution's estimate when the
+// run ended without one.
+func (e *nativeExecutor) inputTokens() int {
+	if e.snapshot != nil {
+		if tokens := extractInputTokensFromUsage(e.snapshot.usage); tokens > 0 {
+			return tokens
+		}
+	}
+	return e.rc.estimatedTokens
+}
+
+func (e *nativeExecutor) modelID() string {
+	return e.rc.model.ID
+}
+
+// terminalText is the assistant text the run's final snapshot carries. A
+// schedule fire reports it as the run's result; every other entry reads its
+// text from the projection.
+func terminalText(snap terminalSnapshot) string {
+	var builder strings.Builder
+	for _, msg := range snap.sdkMessages {
+		if msg.Role != sdk.MessageRoleAssistant {
+			continue
+		}
+		for _, part := range msg.Content {
+			if text, ok := part.(sdk.TextPart); ok {
+				builder.WriteString(text.Text)
+			}
+		}
+	}
+	return builder.String()
+}

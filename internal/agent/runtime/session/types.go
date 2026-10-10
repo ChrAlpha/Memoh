@@ -191,6 +191,10 @@ type TerminalRun struct {
 	FencingToken int64
 	State        string
 	ErrorCode    string
+	// ErrorArgs are the catalog args of the failure ErrorCode names. They are
+	// not persisted: a run another process ended has none, and the code alone
+	// is the durable record.
+	ErrorArgs map[string]string
 	// Cause is why this process ended the run when the session runtime, not
 	// the run's owner, ended it: an admission it could not complete, or a
 	// shutdown. It is a diagnostic for the run's result record and is never
@@ -307,7 +311,10 @@ type CurrentRunView struct {
 	SteerTurns []SteerTurnView `json:"steer_turns,omitempty"`
 	// ErrorCode is the catalog code of the run's failure. The view carries no
 	// error text: a subscriber renders the copy for the code.
-	ErrorCode              string            `json:"error_code,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	// ErrorArgs are the catalog args of that code, which the catalog entry
+	// interpolates into the copy it renders.
+	ErrorArgs              map[string]string `json:"error_args,omitempty"`
 	ProposedTerminalStatus string            `json:"proposed_terminal_status,omitempty"`
 	FinishProposedAt       *time.Time        `json:"finish_proposed_at,omitempty"`
 	Operation              *RunOperationView `json:"operation,omitempty"`
@@ -384,11 +391,12 @@ type RuntimeDelta struct {
 }
 
 type CurrentRunPatch struct {
-	RunID               string     `json:"run_id"`
-	Status              *string    `json:"status,omitempty"`
-	ErrorCode           *string    `json:"error_code,omitempty"`
-	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
-	OwnerLeaseExpiresAt *time.Time `json:"owner_lease_expires_at,omitempty"`
+	RunID               string             `json:"run_id"`
+	Status              *string            `json:"status,omitempty"`
+	ErrorCode           *string            `json:"error_code,omitempty"`
+	ErrorArgs           *map[string]string `json:"error_args,omitempty"`
+	UpdatedAt           *time.Time         `json:"updated_at,omitempty"`
+	OwnerLeaseExpiresAt *time.Time         `json:"owner_lease_expires_at,omitempty"`
 	// Retry replaces the run's retry state; ClearRetry removes it. Both absent
 	// means the retry state is unchanged. A status patch always carries one.
 	Retry      *RunRetryView `json:"retry,omitempty"`

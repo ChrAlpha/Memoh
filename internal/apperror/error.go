@@ -161,6 +161,7 @@ const (
 	CodeVideoJobOutcomeUnknown                   Code = "video.job_outcome_unknown"
 	CodeScheduleExecutionTimeout                 Code = "schedule.execution_timeout"
 	CodeAgentResponseInterrupted                 Code = "agent.response_interrupted"
+	CodeAgentLoopDetected                        Code = "agent.loop_detected"
 	CodeAgentProviderOverloaded                  Code = "agent.provider_overloaded"
 	CodeAgentProviderRateLimited                 Code = "agent.provider_rate_limited"
 	CodeAgentProviderQuotaExhausted              Code = "agent.provider_quota_exhausted"
@@ -989,6 +990,10 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusBadGateway,
 		Detail:     "The model response was interrupted. Please try again.",
 		Fault:      FaultDependency,
+	},
+	CodeAgentLoopDetected: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The agent detected a repeating pattern and stopped before looping.",
 	},
 	CodeAgentProviderOverloaded: {
 		HTTPStatus: http.StatusServiceUnavailable,

@@ -113,7 +113,27 @@ type StreamEvent struct {
 	// Args are the catalog args of the public error an Error event reports
 	// under Code.
 	Args map[string]string `json:"args,omitempty"`
+
+	// EndReason says why a runtime ended its turn. It is set on agent_end and
+	// agent_abort by native and external runtimes.
+	EndReason EndReason `json:"endReason,omitempty"`
+
+	// OwnerNamed marks that the driver named the outcome; session runtime
+	// should not infer a different conclusion from the live view.
+	OwnerNamed bool `json:"ownerNamed,omitempty"`
 }
+
+// EndReason says why a runtime ended its turn.
+type EndReason string
+
+const (
+	EndCompleted        EndReason = "completed"
+	EndAwaitingDecision EndReason = "awaiting_decision"
+	EndCanceled         EndReason = "canceled"       // the turn's context was canceled from outside the runtime
+	EndFailed           EndReason = "failed"         // the runtime reported the failure in an error event before this terminal
+	EndContextBudget    EndReason = "context_budget" // a step's context did not fit; the error event names context.*
+	EndLoopDetected     EndReason = "loop_detected"  // text loop, tool loop, or refused-batch streak
+)
 
 // IsTerminal returns true for events that signal end of stream.
 func (e StreamEvent) IsTerminal() bool {

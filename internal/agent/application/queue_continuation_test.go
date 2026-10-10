@@ -492,7 +492,15 @@ type terminalNotifyingAdmitter struct {
 }
 
 func (a *terminalNotifyingAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, message string) (sessionruntime.TerminalRun, error) {
-	if _, err := a.scriptedAdmitter.FinishRunWithErrorCode(ctx, handle, status, message); err != nil {
+	return a.finishAndNotify(ctx, handle, status, message, nil)
+}
+
+func (a *terminalNotifyingAdmitter) FinishRunWithFailure(ctx context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
+	return a.finishAndNotify(ctx, handle, status, message, args)
+}
+
+func (a *terminalNotifyingAdmitter) finishAndNotify(ctx context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
+	if _, err := a.scriptedAdmitter.FinishRunWithFailure(ctx, handle, status, message, args); err != nil {
 		return sessionruntime.TerminalRun{}, err
 	}
 	// Force the valid schedule in which the terminal observer runs before

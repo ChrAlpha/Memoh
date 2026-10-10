@@ -222,7 +222,7 @@ func (m *Manager) releaseLocalRunOnShutdown(ctx context.Context, ctrl *runContro
 		}
 		return err
 	}
-	_, err := m.finishRunState(ctx, handle, RunStatusLost, "")
+	_, err := m.finishRunState(ctx, handle, RunStatusLost, "", nil)
 	return err
 }
 

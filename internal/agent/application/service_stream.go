@@ -232,6 +232,11 @@ func publicAgentStreamEvent(event native.StreamEvent) native.StreamEvent {
 	return event
 }
 
+// agentAbortCause is the cause a run that ended without naming a failure is
+// reported with: the context's own cause, or the driver's stop marker when
+// something outside the run ended it. Returning the marker rather than a bare
+// error is what keeps "someone stopped this" distinguishable from "this run
+// failed for a reason nobody named".
 func agentAbortCause(ctx context.Context) error {
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
@@ -241,7 +246,7 @@ func agentAbortCause(ctx context.Context) error {
 			return cause
 		}
 	}
-	return errors.New("agent run aborted")
+	return errRunStopped
 }
 
 // extractTerminalSnapshot decodes a terminal stream event payload into the
@@ -919,7 +924,7 @@ func (s *Service) recordStepRunFailure(ctx context.Context, committer *agentStep
 	if code == "" {
 		return nil
 	}
-	persisted, err := committer.recordFailure(ctx, partialText, code)
+	persisted, err := committer.recordFailure(ctx, partialText, RunFailure{Code: code})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "ws step failure persist failed",
 			slog.String("code", string(code)),

@@ -40,7 +40,7 @@ func TestFinishRunObservesAuthoritativeLedgerTerminal(t *testing.T) {
 		FencingToken: admission.Handle.FencingToken, State: string(ledger.StateFailed),
 		ErrorCode: "runtime_run_failed", Applied: true,
 	}
-	if observed[0] != want {
+	if !sameTerminal(observed[0], want) {
 		t.Fatalf("terminal observation = %+v, want %+v", observed[0], want)
 	}
 }
