@@ -78,3 +78,33 @@ var (
 	_ = sessionruntime.RunStatusCompleted
 	_ = slices.Contains[[]string]
 )
+
+// The admitted turn's identity has to reach the request the schedule setup
+// builds. Without it the step committer refuses to arm and a scheduled run
+// persists only a terminal snapshot instead of a step at a time.
+func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
+	t.Parallel()
+
+	pool := &recordingACPPrompter{}
+	service, _ := scheduleLifecycleService(t, pool, &recordingMessageService{}, &recordingContextLifecycleStore{})
+	driver := &incompleteScheduleDriver{}
+	position := int64(7)
+	spec := runSpec{
+		Run: admittedRun{Handle: sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
+		Req: ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID},
+	}
+	setup := service.scheduleSetup(spec, schedule.TriggerPayload{
+		FireID: "fire-1", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+	}, lifecycleTestBotID, "", runtimeDispatch{kind: dispatchExternal, driver: driver})
+
+	plan, err := setup(context.Background(), spec.Req)
+	if err != nil {
+		t.Fatalf("schedule setup: %v", err)
+	}
+	if plan.Req.TurnID != "turn-9" {
+		t.Fatalf("plan request turn id = %q, want the admitted turn", plan.Req.TurnID)
+	}
+	if plan.Req.TurnPosition == nil || *plan.Req.TurnPosition != position {
+		t.Fatalf("plan request turn position = %v, want %d", plan.Req.TurnPosition, position)
+	}
+}

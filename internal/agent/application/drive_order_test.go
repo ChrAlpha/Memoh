@@ -51,7 +51,7 @@ func TestOrderTerminalWriteFollowsDeliveryAndHistory(t *testing.T) {
 	svc := newDriveService(pub, admitter)
 	delivery := &orderedDelivery{clock: clock}
 	spec := scheduledSpec(exec, delivery)
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &clockExecutor{inner: exec, clock: clock}}, nil
 	}
 

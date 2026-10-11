@@ -135,11 +135,16 @@ func attachCurrentTurnPrompt(cfg native.RunConfig, prompt string) native.RunConf
 }
 
 // scheduleSetup resolves one fire's executor: the built-in agent, or the
-// External Agent runtime the session runs on.
-func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context) (runPlan, error) {
-	return func(setupCtx context.Context) (runPlan, error) {
-		req := spec.Req
+// External Agent runtime the session runs on. It resolves around the request
+// the driver handed it, which already carries the per-run wiring.
+func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, ChatRequest) (runPlan, error) {
+	return func(setupCtx context.Context, req ChatRequest) (runPlan, error) {
 		req.RunHandle = spec.Run.Handle
+		// The admitted turn's identity travels with the request: the step
+		// committer refuses to arm without it, and a scheduled run without one
+		// would persist only as a terminal snapshot.
+		req.TurnID = spec.Run.TurnID
+		req.TurnPosition = spec.Run.TurnPosition
 		req.Query = payload.Command
 		req.RawQuery = payload.Command
 		req.UserID = payload.OwnerUserID

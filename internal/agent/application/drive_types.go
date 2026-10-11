@@ -14,11 +14,15 @@ type runSpec struct {
 	// admitted: the driver neither publishes it nor writes its terminal state.
 	Run admittedRun
 	// Req is the request as the entry built it: identity, route, query, turn.
+	// The driver finishes the wiring the entry cannot do itself — the asset
+	// collector it builds per run — and hands the result to Setup.
 	Req ChatRequest
-	// Setup resolves the executor. It runs inside the run, after the run's
-	// execution context exists, so its failure is a setup failure under the
-	// run's failure policy.
-	Setup func(ctx context.Context) (runPlan, error)
+	// Setup resolves the executor from the run's request as the driver finished
+	// wiring it. It runs inside the run, after the run's execution context
+	// exists, so its failure is a setup failure under the run's failure policy.
+	// The request arrives as an argument rather than through the closure: an
+	// entry closes over the spec it built, which predates the driver's wiring.
+	Setup func(ctx context.Context, req ChatRequest) (runPlan, error)
 	// Delivery is the caller's end of the run's events.
 	Delivery RunDelivery
 	// Input says who holds the run's input, which is the one fact that decides

@@ -62,12 +62,15 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 	pub := &runPublisherSet{pub: s.publisherFor(spec)}
 	obs := newRunObserver()
 	assets := newOutboundAssets()
-	spec.Req.OutboundAssetCollector = assets.collected
 	queue := startDeliveryQueue(runCtx, spec.Delivery)
 	stopWatch := watchRunStop(execCtx, stopExec, spec)
 	defer stopWatch.stop()
 
-	plan, setupErr := spec.Setup(execCtx)
+	// The driver finishes the request's wiring before Setup builds the run
+	// around it: the collector is per run and the entry cannot build it.
+	setupReq := spec.Req
+	setupReq.OutboundAssetCollector = assets.collected
+	plan, setupErr := spec.Setup(execCtx, setupReq)
 	if setupErr != nil {
 		if isHookRefusal(setupErr) {
 			obs.declareHook(setupErr, runStopped(execCtx))
@@ -76,7 +79,9 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 		}
 		return s.settleRun(execCtx, spec, plan, pub, obs, queue, phaseSetup, nil)
 	}
-	spec.Req = plan.ReqFor(spec.Req)
+	// The plan's request is the run's from here on; the collector rides on it
+	// because Setup was handed the wired request.
+	spec.Req = plan.ReqFor(setupReq)
 
 	// The idle watchdog bounds model and tool silence. It cancels the execution
 	// context with its own sentinel, which the failure policy reads as a

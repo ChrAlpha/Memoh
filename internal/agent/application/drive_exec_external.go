@@ -92,7 +92,6 @@ func (s *Service) prepareExternal(ctx context.Context, req ChatRequest, driver e
 // externalExecutor runs one turn on an External Agent driver.
 type externalExecutor struct {
 	service *Service
-	spec    runSpec
 	plan    externalPlan
 	req     ChatRequest
 	// prompt is what the driver is prompted with; a schedule fire prompts with
@@ -376,7 +375,7 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		SessionToken:              e.req.Token,
 		ToolHTTPURL:               e.req.ToolHTTPURL,
 		ToolOutputLimit:           e.service.toolOutputLimit(),
-		CanRequestUserInput:       !e.unattended && e.spec.Delivery != nil,
+		CanRequestUserInput:       !e.unattended && e.service.canDeliverUserInputStream(),
 		Sink:                      external.EventSinkFunc(func(ev native.StreamEvent) { e.deliver(ctx, emit, ev) }),
 	}
 }

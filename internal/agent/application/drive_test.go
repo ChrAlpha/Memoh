@@ -146,7 +146,7 @@ func scheduledSpec(exec runExecutor, delivery RunDelivery) runSpec {
 		Delivery:   delivery,
 		Input:      inputSynthetic,
 		Unattended: true,
-		Setup: func(context.Context) (runPlan, error) {
+		Setup: func(context.Context, ChatRequest) (runPlan, error) {
 			return runPlan{Exec: exec, Req: triggerStreamRequest()}, nil
 		},
 	}
@@ -212,7 +212,7 @@ func TestDrivePublishesTheTerminalAfterTheHistoryWrite(t *testing.T) {
 	}}
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &markedExecutor{inner: exec, order: &order}}, nil
 	}
 
@@ -692,7 +692,7 @@ func TestDriveCleanupRunsEvenAfterOwnershipLoss(t *testing.T) {
 	pub := &recordingTurnEventPublisher{errAt: 1, err: sessionruntime.ErrRunOwnershipLost}
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &cleanupExecutor{inner: exec, cleaned: &cleaned}}, nil
 	}
 
@@ -828,7 +828,7 @@ func TestDriveSetupFailureNamesTheSetupPhase(t *testing.T) {
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(nil, delivery)
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("resolve failed")
 	}
 
@@ -859,7 +859,7 @@ func TestDriveHookRefusalLeavesAMarkedFailureRow(t *testing.T) {
 	spec := scheduledSpec(nil, delivery)
 	spec.Req = ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
 	spec.Input = inputHeld
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{}, apperror.Wrap(apperror.CodeHookUserMessageFailed, errors.New("policy refused"), nil)
 	}
 
@@ -889,7 +889,7 @@ func TestDriveNonHookSetupFailureWritesNoRow(t *testing.T) {
 	spec := scheduledSpec(nil, &recordingDelivery{})
 	spec.Req = ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
 	spec.Input = inputHeld
-	spec.Setup = func(context.Context) (runPlan, error) {
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("resolve failed")
 	}
 
@@ -1006,3 +1006,25 @@ var (
 	_ = errs.Recorded
 	_ = sdk.Usage{}
 )
+
+// The driver builds the run's asset collector and must hand it to Setup: an
+// entry closes over the spec it built, so a collector installed after Setup
+// ran would never reach the request the run's history writes read, and every
+// run's outbound assets would go unlinked with nothing failing.
+func TestSetupReceivesTheRequestWithTheDriversAssetCollector(t *testing.T) {
+	t.Parallel()
+
+	var seen ChatRequest
+	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	spec := scheduledSpec(nil, &recordingDelivery{})
+	spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+		seen = req
+		return runPlan{Exec: &scriptedExecutor{}, Req: triggerStreamRequest()}, nil
+	}
+
+	svc.drive(context.Background(), spec)
+
+	if seen.OutboundAssetCollector == nil {
+		t.Fatal("Setup received a request with no asset collector")
+	}
+}
