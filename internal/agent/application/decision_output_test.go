@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/apperror"
 )
 
 type decisionOutputBackend struct {
@@ -38,21 +39,17 @@ func TestContinuationPublishesTextAndNextQuestionToChannel(t *testing.T) {
 		t.Run(map[bool]string{false: "ordinary reply", true: "second question"}[nextQuestion], func(t *testing.T) {
 			backend := &decisionOutputBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 			manager, handle := newWaitingDecisionRuntime(t, backend)
-			service := &Service{decisionRuntime: manager}
+			service := continuationService(manager)
 			events := []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "收到你的答案"}}
 			terminal := native.StreamEvent{Type: native.EventAgentEnd}
 			if nextQuestion {
 				events = append(events, native.StreamEvent{Type: native.EventUserInputRequest, UserInputID: "next-question", Status: "pending"})
+				terminal.ApprovalID = "next-question"
 				terminal.UserInputID = "next-question"
 				terminal.Status = "pending"
 			}
 			events = append(events, terminal)
-			service.continueRuntimeDecision(context.Background(), sessionruntime.Command{StreamOutput: true, ID: "answer-command", BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation}, func(_ context.Context, _ *continuationLifecycleResult, ch chan<- WSStreamEvent) error {
-				for _, event := range events {
-					ch <- runtimeDecisionEvent(t, event)
-				}
-				return nil
-			})
+			continueDecision(t, service, manager, decisionCommand(handle, "answer-command"), scriptedRun(events, nil))
 			if len(backend.output) != len(events)+1 {
 				t.Fatalf("channel output count=%d, want %d", len(backend.output), len(events)+1)
 			}
@@ -84,17 +81,17 @@ func (b failedEndCheckpointBackend) AppendDecisionOutput(ctx context.Context, re
 func TestContinuationClosesRunWhenEndCheckpointCannotPersist(t *testing.T) {
 	backend := failedEndCheckpointBackend{sessionruntime.NewMemoryBackend()}
 	manager, handle := newWaitingDecisionRuntime(t, backend)
-	service := &Service{decisionRuntime: manager}
-	service.continueRuntimeDecision(context.Background(), sessionruntime.Command{StreamOutput: true, ID: "answer", BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation}, func(_ context.Context, _ *continuationLifecycleResult, ch chan<- WSStreamEvent) error {
-		ch <- runtimeDecisionEvent(t, native.StreamEvent{Type: native.EventUserInputRequest, UserInputID: "next", Status: "pending"})
-		ch <- runtimeDecisionEvent(t, native.StreamEvent{Type: native.EventAgentEnd, UserInputID: "next", Status: "pending"})
-		return nil
-	})
+	service := continuationService(manager)
+	continueDecision(t, service, manager, decisionCommand(handle, "answer"), scriptedRun([]native.StreamEvent{
+		{Type: native.EventUserInputRequest, UserInputID: "next", Status: "pending"},
+		{Type: native.EventAgentEnd, ApprovalID: "next", UserInputID: "next", Status: "pending"},
+	}, nil))
 	snapshot, err := manager.Snapshot(context.Background(), handle.BotID, handle.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored {
+	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored ||
+		snapshot.CurrentRunView.ErrorCode != string(apperror.CodeSessionPublishFailed) {
 		t.Fatalf("failed end write left run parked: %+v", snapshot.CurrentRunView)
 	}
 }

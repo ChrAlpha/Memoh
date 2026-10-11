@@ -48,7 +48,6 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	t.Parallel()
 
 	resolver := &Service{userInput: &userinput.Service{}}
-	eventCh := make(chan WSStreamEvent)
 	staleIndex := 0
 	staleMemoryIndex := 0
 	base := native.RunConfig{
@@ -71,7 +70,7 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 		base,
 		historyfrag.ScopeFallback{},
 		contextfrag.Scope{},
-		eventCh,
+		true,
 	)
 	if err != nil {
 		t.Fatalf("prepareContinuationRunConfig() error = %v", err)
@@ -114,7 +113,7 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 		native.RunConfig{Query: "must not survive"},
 		historyfrag.ScopeFallback{},
 		contextfrag.Scope{SessionID: "00000000-0000-0000-0000-00000000f401"},
-		nil,
+		false,
 	)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("prepareContinuationRunConfig() error = %v, want %v", err, sentinel)
@@ -130,5 +129,22 @@ func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) 
 	got, err := service.PendingRuntimeDecisions(t.Context(), "00000000-0000-0000-0000-000000000001")
 	if !errors.Is(err, sentinel) || got != nil {
 		t.Fatalf("runtime lookup error treated as native: %v %v", got, err)
+	}
+}
+
+// A continuation offers ask_user, and streams tool progress, only to a run
+// someone follows live: a question nobody receives could never be answered.
+func TestPrepareContinuationRunConfigOffersQuestionsOnlyToALiveRun(t *testing.T) {
+	t.Parallel()
+
+	resolver := &Service{userInput: &fakeUserInputService{}}
+	for _, live := range []bool{true, false} {
+		got, err := resolver.prepareContinuationRunConfig(context.Background(), native.RunConfig{}, historyfrag.ScopeFallback{}, contextfrag.Scope{}, live)
+		if err != nil {
+			t.Fatalf("prepareContinuationRunConfig(live=%t) error = %v", live, err)
+		}
+		if got.CanRequestUserInput != live || got.LiveToolStream != live {
+			t.Fatalf("live=%t: CanRequestUserInput=%t LiveToolStream=%t, want both %t", live, got.CanRequestUserInput, got.LiveToolStream, live)
+		}
 	}
 }

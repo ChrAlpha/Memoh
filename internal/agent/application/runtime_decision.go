@@ -6,28 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/workspace"
 )
-
-type continuationLifecycleResult struct {
-	snapshot *contextfrag.LifecycleSnapshot
-	cause    error
-	deferred bool
-}
 
 // ResolveRuntimeDecision reads the authoritative decision row before any live
 // owner lookup. Terminal rows are returned too: the router needs to distinguish
@@ -294,13 +289,7 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 		}
 		go func() {
 			defer runCancel()
-			s.continueRuntimeDecision(runCtx, command, func(
-				continuationCtx context.Context,
-				lifecycle *continuationLifecycleResult,
-				eventCh chan<- WSStreamEvent,
-			) error {
-				return s.continueCommittedUserInputResponse(continuationCtx, committed, lifecycle, eventCh)
-			})
+			s.driveRoutedContinuation(runCtx, command, runHandle, s.userInputContinuation(runCtx, committed, true))
 		}()
 		return nil
 	case sessionruntime.CommandToolApprovalResponse:
@@ -345,13 +334,7 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 		}
 		go func() {
 			defer runCancel()
-			s.continueRuntimeDecision(runCtx, command, func(
-				continuationCtx context.Context,
-				lifecycle *continuationLifecycleResult,
-				eventCh chan<- WSStreamEvent,
-			) error {
-				return s.continueCommittedToolApprovalResponse(continuationCtx, committed, lifecycle, eventCh)
-			})
+			s.driveRoutedContinuation(runCtx, command, runHandle, s.toolApprovalContinuation(runCtx, committed, true))
 		}()
 		return nil
 	default:
@@ -398,229 +381,122 @@ func (s *Service) publishCommittedRuntimeDecision(ctx context.Context, command s
 	}
 }
 
-func (s *Service) continueRuntimeDecision(
-	ctx context.Context,
-	command sessionruntime.Command,
-	continueRun func(context.Context, *continuationLifecycleResult, chan<- WSStreamEvent) error,
-) {
-	handle := sessionruntime.RunHandle{
-		BotID:      command.BotID,
-		SessionID:  command.SessionID,
-		RunID:      command.RunID,
-		Generation: command.Generation,
-	}
-	var outputSeq int64
-	var outputCause error
-	// failurePublished records that the continuation's own failure event
-	// reached the output, so the run's failure is not appended a second time.
-	var failurePublished bool
-	defer func() {
-		if outputCause != nil && !failurePublished {
-			raw, _ := json.Marshal(agentFailureStreamEvent(outputCause))
-			if err := s.decisionRuntime.PublishDecisionOutput(context.WithoutCancel(ctx), command, outputSeq+1, raw); err == nil {
-				outputSeq++
+// decisionContinuation is the run an answered decision resumes.
+type decisionContinuation struct {
+	// Req is the request the resumed run executes as. It names the turn the
+	// decision parked, so a failure row the run leaves lands in that turn.
+	Req ChatRequest
+	// Setup stores the answer as the parked call's result and resolves the
+	// resumed run. It runs inside the run, so its failure is the run's.
+	//
+	// The request arrives as an argument for the same reason it does in
+	// runSpec.Setup: the entry built this continuation before the driver ran,
+	// so the request it closed over has no asset collector, and a resumed run
+	// that used it would write its outbound assets unlinked.
+	Setup func(ctx context.Context, req ChatRequest) (runPlan, error)
+}
+
+// driveRoutedContinuation drives the run an answer the session runtime routed
+// to this owner resumes. The run is the one the decision parked; its events
+// reach the session projection and the answering command's output log, and
+// nobody is waiting on this goroutine for them.
+func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessionruntime.Command, handle sessionruntime.RunHandle, cont decisionContinuation) {
+	ctx, release := continuationContext(workspace.WithWorkspaceTarget(runCtx, cont.Req.WorkspaceTargetID))
+	defer release()
+	s.drive(ctx, runSpec{
+		Run: admittedRun{Handle: handle, TurnID: handle.TurnID, Mode: sessionmode.Chat},
+		Req: cont.Req,
+		Setup: func(ctx context.Context, req ChatRequest) (runPlan, error) {
+			// The answer may arrive before the run that parked has finished
+			// writing the call it answers; its result must not land first.
+			if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
+				return runPlan{}, err
 			}
-		}
-		if err := s.decisionRuntime.PublishDecisionOutput(context.WithoutCancel(ctx), command, outputSeq+1, nil); err != nil {
-			if s.logger != nil {
-				s.logger.WarnContext(ctx, "close decision output failed", slog.Any("error", err))
-			}
-			// A failed checkpoint write must not leave a parked run owning an output
-			// subscription that can never finish. Use the normal run failure lifecycle.
-			s.finishRuntimeDecision(context.WithoutCancel(ctx), handle, err)
-		}
-	}()
-
-	if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
-		outputCause = err
-		s.recoverContextLifecycleFromAssistantMetadata(ctx, command.RunID, command.BotID, command.SessionID, err)
-		s.finishRuntimeDecision(ctx, handle, err)
-		return
-	}
-	eventCh := make(chan WSStreamEvent, 64)
-	runDone := make(chan error, 1)
-	lifecycle := &continuationLifecycleResult{}
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		runDone <- continueRun(runCtx, lifecycle, eventCh)
-		close(eventCh)
-	}()
-
-	var (
-		publishErr        error
-		eventCause        error
-		lifecycleDeferred bool
-	)
-	for raw := range eventCh {
-		// Cancellation may leave already-buffered events. Drain them so the runner
-		// can return and finish through the same lifecycle as other stream failures.
-		if publishErr != nil {
-			continue
-		}
-		var event native.StreamEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			continue
-		}
-		eventErr := agentStreamFailure(event)
-		if eventErr != nil && eventCause == nil {
-			eventCause = eventErr
-		}
-		if event.IsTerminal() {
-			lifecycleDeferred = pendingContinuationDecision(event)
-			if !lifecycleDeferred {
-				switch event.Type {
-				case native.EventAgentEnd:
-					eventCause = nil
-				case native.EventAgentAbort:
-					if context.Cause(ctx) != nil || eventCause == nil {
-						eventCause = agentAbortCause(ctx)
-					}
-				}
-			}
-		}
-		if _, err := s.decisionRuntime.HandleAgentEvent(runCtx, handle, event); err != nil {
-			publishErr = err
-			cancel()
-			continue
-		}
-		if err := s.decisionRuntime.PublishDecisionOutput(runCtx, command, outputSeq+1, raw); err != nil {
-			publishErr = err
-			cancel()
-			continue
-		}
-		outputSeq++
-		failurePublished = failurePublished || eventErr != nil
-	}
-	runErr := <-runDone
-	lifecycleDeferred = lifecycleDeferred || lifecycle.deferred
-	lifecycleCause := firstLifecycleCause(runErr, eventCause, lifecycle.cause)
-	if publishErr != nil {
-		runErr = publishErr
-		lifecycleCause = publishErr
-		lifecycleDeferred = false
-	}
-	if runErr != nil {
-		outputCause = runErr
-		s.persistRuntimeDecisionLifecycle(ctx, command, lifecycle, lifecycleCause)
-		s.finishRuntimeDecision(ctx, handle, runErr)
-		return
-	}
-	if lifecycleDeferred {
-		_, _ = s.decisionRuntime.FinishRun(context.WithoutCancel(ctx), handle, "")
-		return
-	}
-	s.persistRuntimeDecisionLifecycle(ctx, command, lifecycle, lifecycleCause)
-	s.finishRuntimeDecision(ctx, handle, lifecycleCause)
+			return cont.Setup(ctx, req)
+		},
+		Delivery:  noDelivery{},
+		Input:     inputAccepted,
+		Publisher: &decisionOutputPublisher{sink: s.decisionRuntime, handle: handle, command: command},
+	})
 }
 
-// logContinuationStreamError records the cause of a native error event
-// observed while a decision continuation streams. publicAgentStreamEvent
-// replaces the event with its code before it leaves the application, so this
-// is the only place the cause is retained.
-func (s *Service) logContinuationStreamError(runID string, event native.StreamEvent) {
-	if s == nil || s.logger == nil {
-		return
+// driveUnroutedContinuation drives the run an answer resumes when no session
+// runtime routed it, so no run was admitted for it: the caller that submitted
+// the answer follows the run on eventCh, or nobody does when it is nil.
+//
+// A caller without an event stream learns a failure only from the return
+// value; one with a stream already received it as the run's error event.
+func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionContinuation, eventCh chan<- WSStreamEvent) error {
+	ctx, release := continuationContext(workspace.WithWorkspaceTarget(ctx, cont.Req.WorkspaceTargetID))
+	defer release()
+	var delivery RunDelivery = noDelivery{}
+	if eventCh != nil {
+		delivery = channelDelivery{ch: eventCh}
 	}
-	s.logger.Error("decision continuation stream error",
-		slog.String("run_id", strings.TrimSpace(runID)),
-		slog.String("event_type", string(event.Type)),
-		slog.String("code", strings.TrimSpace(event.Code)),
-		slog.Any("error", event.Cause),
-	)
+	result := s.drive(ctx, runSpec{
+		Req:      cont.Req,
+		Setup:    cont.Setup,
+		Delivery: delivery,
+		Input:    inputAccepted,
+	})
+	if eventCh != nil {
+		return nil
+	}
+	return publicRunFailure(result.Failure)
 }
 
-func firstLifecycleCause(causes ...error) error {
-	for _, cause := range causes {
-		if cause != nil {
-			return cause
+// continuationContext is the context a decision continuation runs in. Its
+// owner ends it by cancelling it: a routed run's commands stop when the run is
+// aborted, and an unrouted run's caller cancels when it leaves. Both are a
+// stop, which the driver only recognizes by its own marker, so a plain
+// cancellation is carried over as one. A cancellation with a cause of its own,
+// such as a revoked ownership, keeps that cause.
+func continuationContext(ctx context.Context) (context.Context, func()) {
+	runCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	carry := func() {
+		cause := context.Cause(ctx)
+		if errors.Is(cause, context.Canceled) {
+			cause = errRunStopped
 		}
+		cancel(cause)
 	}
-	return nil
-}
-
-func pendingContinuationDecision(event native.StreamEvent) bool {
-	if !event.IsTerminal() ||
-		(strings.TrimSpace(event.ApprovalID) == "" && strings.TrimSpace(event.UserInputID) == "") {
-		return false
+	stop := context.AfterFunc(ctx, carry)
+	// AfterFunc runs its callback on a goroutine of its own. A context already
+	// ended is carried over now, so the run does not start before it learns it
+	// was stopped.
+	if ctx.Err() != nil {
+		carry()
 	}
-	status := strings.TrimSpace(event.Status)
-	return status == "" || strings.EqualFold(status, "pending")
-}
-
-func (s *Service) persistRuntimeDecisionLifecycle(
-	ctx context.Context,
-	command sessionruntime.Command,
-	result *continuationLifecycleResult,
-	cause error,
-) {
-	if result != nil && result.snapshot != nil {
-		s.persistContextLifecycleSnapshot(
-			ctx,
-			command.RunID,
-			command.BotID,
-			command.SessionID,
-			result.snapshot,
-			cause,
-			true,
-		)
-		return
-	}
-	s.recoverContextLifecycleFromAssistantMetadata(
-		ctx,
-		command.RunID,
-		command.BotID,
-		command.SessionID,
-		cause,
-	)
-}
-
-func (s *Service) finishRuntimeDecision(ctx context.Context, handle sessionruntime.RunHandle, cause error) {
-	outcome := runtimeDecisionTerminal(ctx, cause)
-	lifecycleCtx := frozenContextCause(ctx)
-	minimal := minimalContextLifecycleSnapshot()
-	staged := s.stageContextLifecycleCandidate(
-		lifecycleCtx,
-		handle.RunID,
-		handle.BotID,
-		handle.SessionID,
-		&minimal,
-		cause,
-		contextLifecycleCandidateMinimal,
-	)
-	finishCtx := WithRunOutcome(context.WithoutCancel(nonNilContext(ctx)), handle.RunID, outcome)
-	if _, err := s.decisionRuntime.FinishRunWithErrorCode(finishCtx, handle, outcome.Status, outcome.ErrorCode()); err == nil && !staged {
-		s.EnsureTerminalContextLifecycle(
-			lifecycleCtx,
-			handle.RunID,
-			handle.BotID,
-			handle.SessionID,
-			cause,
-		)
+	return runCtx, func() {
+		stop()
+		cancel(context.Canceled)
 	}
 }
 
-func frozenContextCause(ctx context.Context) context.Context {
-	ctx = nonNilContext(ctx)
-	frozen := context.WithoutCancel(ctx)
-	cause := context.Cause(ctx)
-	if cause == nil {
-		return frozen
+// nativeContinuationPlan resolves the built-in agent run that resumes after an
+// answered decision. Its steps commit through the live queue the run was
+// admitted with, so the resumed steps continue the parked run's numbering.
+func (s *Service) nativeContinuationPlan(ctx context.Context, req ChatRequest, cfg native.RunConfig, modelID string) (runPlan, error) {
+	rc := resolvedContext{runConfig: cfg, model: models.GetResponse{ID: modelID}}
+	committer, err := s.bindQueueContinuation(ctx, &req, &cfg, rc)
+	if err != nil {
+		return runPlan{}, err
 	}
-	frozen, cancel := context.WithCancelCause(frozen)
-	cancel(cause)
-	return frozen
-}
-
-// runtimeDecisionTerminal is the outcome a decision continuation reports: a
-// failure unless the continuation was explicitly canceled, in which case the
-// session runtime resolves it from the abort intent recorded against the run.
-func runtimeDecisionTerminal(ctx context.Context, cause error) RunOutcome {
-	explicitlyCanceled := ctx != nil &&
-		errors.Is(cause, context.Canceled) &&
-		errors.Is(context.Cause(ctx), context.Canceled)
-	if cause != nil && !explicitlyCanceled {
-		return RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: cause}
-	}
-	return RunOutcome{}
+	timing := newReasoningTimingTracker(nil)
+	configureNativeReasoningTiming(&cfg, timing, committer)
+	rc.runConfig = cfg
+	return runPlan{
+		Exec: &nativeExecutor{
+			agent:     s.agent,
+			cfg:       cfg,
+			rc:        rc,
+			req:       req,
+			committer: committer,
+			timing:    timing,
+			service:   s,
+		},
+		Req:        req,
+		IdleEffort: reasoningEffortForIdle(cfg),
+		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+	}, nil
 }

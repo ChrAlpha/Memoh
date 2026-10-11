@@ -9,7 +9,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -61,48 +61,49 @@ func (c *continuationRunConfigCapture) snapshot() (calls, budget int, runID stri
 	return c.calls, c.budget, c.runID
 }
 
-func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAgentStream(t *testing.T) {
-	tests := []struct {
-		name        string
-		continueRun func(*Service) error
-	}{
-		{
-			name: "user input",
-			continueRun: func(service *Service) error {
-				return service.continueUserInputSession(
-					context.Background(),
-					userinput.Request{
-						ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-						ToolCallID: "ask-user-call", ToolName: "ask_user", SourcePlatform: "web",
-					},
-					UserInputResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-					lifecycleTestRunID,
-					sessionruntime.RunHandle{},
-					&continuationLifecycleResult{},
-					nil,
-				)
-			},
+// continuationSessions are the two decision kinds' resolutions of the run an
+// answer resumes, each called the way its continuation's setup calls it.
+var continuationSessions = []struct {
+	name    string
+	resolve func(context.Context, *Service, ChatRequest) (runPlan, error)
+}{
+	{
+		name: "user input",
+		resolve: func(ctx context.Context, service *Service, req ChatRequest) (runPlan, error) {
+			return service.continueUserInputSession(ctx,
+				userinput.Request{
+					ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+					ToolCallID: "ask-user-call", ToolName: "ask_user", SourcePlatform: "web",
+				},
+				UserInputResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
+				req, false,
+			)
 		},
-		{
-			name: "tool approval",
-			continueRun: func(service *Service) error {
-				return service.continueToolApprovalSession(
-					context.Background(),
-					toolapproval.Request{
-						ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-						ToolCallID: "approved-tool-call", ToolName: "container_exec", SourcePlatform: "web",
-					},
-					ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-					lifecycleTestRunID,
-					sessionruntime.RunHandle{},
-					&continuationLifecycleResult{},
-					nil,
-				)
-			},
+	},
+	{
+		name: "tool approval",
+		resolve: func(ctx context.Context, service *Service, req ChatRequest) (runPlan, error) {
+			return service.continueToolApprovalSession(ctx,
+				toolapproval.Request{
+					ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+					ToolCallID: "approved-tool-call", ToolName: "container_exec", SourcePlatform: "web",
+				},
+				ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
+				req, false,
+			)
 		},
-	}
+	},
+}
 
-	for _, tt := range tests {
+func continuationSessionRequest() ChatRequest {
+	return ChatRequest{
+		RunID: lifecycleTestRunID, BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID,
+		ThreadID: lifecycleTestSessionID, CurrentChannel: "web", UserMessagePersisted: true,
+	}
+}
+
+func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAgentStream(t *testing.T) {
+	for _, tt := range continuationSessions {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 			capture := &continuationRunConfigCapture{}
@@ -111,9 +112,11 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 				ContextViewApplier: capture.apply,
 			})
 
-			if err := tt.continueRun(fixture.service); err != nil {
-				t.Fatalf("continuation error = %v", err)
+			plan, err := tt.resolve(context.Background(), fixture.service, continuationSessionRequest())
+			if err != nil {
+				t.Fatalf("continuation setup error = %v", err)
 			}
+			plan.Exec.execute(context.Background(), func(native.StreamEvent) {})
 			calls, budget, runID := capture.snapshot()
 			if calls == 0 {
 				t.Fatal("ContextView applier was not reached through agent.Stream")
@@ -128,47 +131,11 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 	}
 }
 
+// A continuation whose assistant rows cannot be written still leaves the
+// lifecycle row of the context it assembled: the run's own lifecycle carries
+// it, not a fallback recovered from the rows that were never written.
 func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadata(t *testing.T) {
-	tests := []struct {
-		name        string
-		continueRun func(*Service, *continuationLifecycleResult) error
-	}{
-		{
-			name: "user input",
-			continueRun: func(service *Service, lifecycle *continuationLifecycleResult) error {
-				return service.continueUserInputSession(
-					context.Background(),
-					userinput.Request{
-						ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-						ToolCallID: "ask-user-call", ToolName: "ask_user", SourcePlatform: "web",
-					},
-					UserInputResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-					lifecycleTestRunID,
-					sessionruntime.RunHandle{},
-					lifecycle,
-					nil,
-				)
-			},
-		},
-		{
-			name: "tool approval",
-			continueRun: func(service *Service, lifecycle *continuationLifecycleResult) error {
-				return service.continueToolApprovalSession(
-					context.Background(),
-					toolapproval.Request{
-						ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-						ToolCallID: "approved-tool-call", ToolName: "container_exec", SourcePlatform: "web",
-					},
-					ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-					lifecycleTestRunID,
-					sessionruntime.RunHandle{},
-					lifecycle,
-					nil,
-				)
-			},
-		},
-	}
-	for _, tt := range tests {
+	for _, tt := range continuationSessions {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 			messages := &unavailableContinuationMessageService{
@@ -176,30 +143,20 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 				err:                     errors.New("assistant message store unavailable"),
 			}
 			fixture.service.messageService = messages
-			lifecycle := &continuationLifecycleResult{}
+			req := continuationSessionRequest()
 
-			if err := tt.continueRun(fixture.service, lifecycle); !errors.Is(err, messages.err) {
-				t.Fatalf("continuation error = %v, want assistant persistence failure", err)
-			}
-			if lifecycle.snapshot == nil {
-				t.Fatal("runtime-owned continuation lost its in-memory lifecycle snapshot")
+			err := fixture.service.driveUnroutedContinuation(context.Background(), decisionContinuation{
+				Req: req,
+				Setup: func(ctx context.Context, _ ChatRequest) (runPlan, error) {
+					return tt.resolve(ctx, fixture.service, req)
+				},
+			}, nil)
+			if apperror.CodeOf(err) != apperror.CodeSessionHistoryInconsistent {
+				t.Fatalf("continuation error = %v, want the history write failure", err)
 			}
 			if messages.calls == 0 {
 				t.Fatal("test did not exercise unavailable assistant persistence")
 			}
-			if creates := fixture.lifecycles.creates(); len(creates) != 0 {
-				t.Fatalf("inner continuation lifecycle writes = %d, want 0", len(creates))
-			}
-
-			fixture.service.persistRuntimeDecisionLifecycle(
-				context.Background(),
-				sessionruntime.Command{
-					RunID: lifecycleTestRunID, BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-				},
-				lifecycle,
-				errors.New("runtime publication failed after assistant persistence"),
-			)
-
 			assertDirectLifecycle(
 				t,
 				fixture.lifecycles,

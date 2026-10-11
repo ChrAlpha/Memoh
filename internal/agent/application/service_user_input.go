@@ -166,20 +166,11 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	}, nil
 }
 
+// ContinueCommittedUserInputResponse resumes what a question parked when no
+// session runtime routed the answer: an inline runtime's waiter, or a
+// built-in agent run driven here with eventCh as the caller's end of it.
 func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- WSStreamEvent) error {
-	return s.continueCommittedUserInputResponse(ctx, committed, nil, eventCh)
-}
-
-func (s *Service) continueCommittedUserInputResponse(
-	ctx context.Context,
-	committed CommittedUserInputResponse,
-	lifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
 	resolved := committed.request
-	if strings.TrimSpace(resolved.ID) == "" {
-		return errors.New("committed user input response is missing its request")
-	}
 	if committed.ackOnly {
 		return emitApprovalAck(ctx, eventCh)
 	}
@@ -196,18 +187,57 @@ func (s *Service) continueCommittedUserInputResponse(
 		}
 		return emitApprovalAck(ctx, eventCh)
 	}
+	return s.driveUnroutedContinuation(ctx, s.userInputContinuation(ctx, committed, eventCh != nil), eventCh)
+}
 
-	runID := runIDForChatRequest(committed.runID)
-	toolResult := sdk.ToolResultPart{
-		ToolCallID: resolved.ToolCallID,
-		ToolName:   resolved.ToolName,
-		Result:     toolexec.OutputFromValue(s.limitToolResultValue(resolved.Result, resolved.ToolName)),
-		IsError:    false,
+// userInputContinuation is the run an answered question resumes: the answer is
+// stored as the ask_user call's result, and the model runs on from there. live
+// says whether a caller receives the run's events as they happen.
+func (s *Service) userInputContinuation(ctx context.Context, committed CommittedUserInputResponse, live bool) decisionContinuation {
+	resolved := withLocalWebUserInputReplyTarget(committed.request)
+	input := committed.input
+	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, resolved.SessionID, committed.runHandle)
+	req := ChatRequest{
+		RunID:                   runIDForChatRequest(committed.runID),
+		RunHandle:               committed.runHandle,
+		BotID:                   input.BotID,
+		ChatID:                  input.BotID,
+		ThreadID:                resolved.SessionID,
+		SourceChannelIdentityID: firstNonEmpty(resolved.ChannelIdentityID, input.ActorChannelIdentityID),
+		CurrentChannel:          resolved.SourcePlatform,
+		ReplyTarget:             resolved.ReplyTarget,
+		ConversationType:        resolved.ConversationType,
+		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
+		// The answer is stored as the ask_user call's result, not as a new user
+		// message, so neither write may schedule a user-message memory
+		// extraction.
+		SkipMemoryExtraction: true,
+		WorkspaceTargetID:    resolved.WorkspaceTargetID,
 	}
-	if s.continueUserInputFn != nil {
-		return s.continueUserInputFn(ctx, resolved, committed.input, toolResult, eventCh)
+	return decisionContinuation{
+		Req: req,
+		// The resumed run is the driver's request, which carries the per-run
+		// asset collector. Everything else in it is what this entry built.
+		Setup: func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+			if reqErr != nil {
+				return runPlan{}, reqErr
+			}
+			if strings.TrimSpace(resolved.ID) == "" {
+				return runPlan{}, errors.New("committed user input response is missing its request")
+			}
+			toolResult := sdk.ToolResultPart{
+				ToolCallID: resolved.ToolCallID,
+				ToolName:   resolved.ToolName,
+				Result:     toolexec.OutputFromValue(s.limitToolResultValue(resolved.Result, resolved.ToolName)),
+				IsError:    false,
+			}
+			if s.continueUserInputFn != nil {
+				return s.continueUserInputFn(ctx, resolved, input, toolResult)
+			}
+			return s.storeUserInputResultAndContinue(ctx, resolved, input, toolResult, runReq, live)
+		},
 	}
-	return s.storeUserInputResultAndContinue(ctx, resolved, committed.input, toolResult, runID, committed.runHandle, lifecycle, eventCh)
 }
 
 // isExternalAgentUserInputSession classifies a request by its session's runtime, the
@@ -343,110 +373,65 @@ func splitUserInputAnswerText(text string) []string {
 
 func (s *Service) storeUserInputResultAndContinue(
 	ctx context.Context,
-	req userinput.Request,
+	request userinput.Request,
 	input UserInputResponseInput,
 	result sdk.ToolResultPart,
-	runID string,
-	runHandle sessionruntime.RunHandle,
-	lifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
-	req = withLocalWebUserInputReplyTarget(req)
-	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
-	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, req.WorkspaceTargetID)
+	req ChatRequest,
+	live bool,
+) (runPlan, error) {
+	request = withLocalWebUserInputReplyTarget(request)
+	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
+	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, request.WorkspaceTargetID)
 	if err != nil {
-		return err
-	}
-	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, req.SessionID, runHandle)
-	if err != nil {
-		return err
+		return runPlan{}, err
 	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
-	storeReq := ChatRequest{
-		RunID:                   runID,
-		BotID:                   input.BotID,
-		ChatID:                  input.BotID,
-		ThreadID:                req.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentChannel:          req.SourcePlatform,
-		ReplyTarget:             req.ReplyTarget,
-		ConversationType:        req.ConversationType,
-		UserMessagePersisted:    true,
-		PersistedUserMessageID:  requestMessageID,
-		// This write contains only the ask_user tool result. There is no new
-		// user history message to extract, so memory work must not schedule a
-		// second user-message extraction.
-		SkipMemoryExtraction: true,
-		WorkspaceTargetID:    req.WorkspaceTargetID,
-		WorkspaceTarget:      target,
-	}
+	storeReq := req
+	storeReq.WorkspaceTarget = target
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
-		return err
+		return runPlan{}, err
 	}
-	return s.continueUserInputSession(ctx, req, input, runID, runHandle, lifecycle, eventCh)
+	return s.continueUserInputSession(ctx, request, input, req, live)
 }
 
+// continueUserInputSession resolves the built-in agent run that resumes after
+// the answer is stored.
 func (s *Service) continueUserInputSession(
 	ctx context.Context,
-	req userinput.Request,
+	request userinput.Request,
 	input UserInputResponseInput,
-	runID string,
-	runHandle sessionruntime.RunHandle,
-	runtimeLifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
-	req = withLocalWebUserInputReplyTarget(req)
-	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
+	req ChatRequest,
+	live bool,
+) (runPlan, error) {
+	request = withLocalWebUserInputReplyTarget(request)
+	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,
 		input.BotID,
-		req.SessionID,
-		firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		req.SourcePlatform,
-		req.ReplyTarget,
-		req.ConversationType,
+		request.SessionID,
+		firstNonEmpty(request.ChannelIdentityID, input.ActorChannelIdentityID),
+		request.SourcePlatform,
+		request.ReplyTarget,
+		request.ConversationType,
 		input.ChatToken,
 	)
 	if err != nil {
-		return err
+		return runPlan{}, err
 	}
-	resolved.RunConfig.RunID = runIDForChatRequest(runID)
-	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, req.SessionID, runHandle)
-	if err != nil {
-		return err
-	}
+	resolved.RunConfig.RunID = req.RunID
 
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
 		resolved.RunConfig,
-		historyScopeFallbackFromUserInputRequest(req),
-		compactionSummaryScope(firstNonEmpty(req.BotID, input.BotID), "", req.SessionID, req.ConversationType, "", req.ReplyTarget),
-		eventCh,
+		historyScopeFallbackFromUserInputRequest(request),
+		compactionSummaryScope(firstNonEmpty(request.BotID, input.BotID), "", request.SessionID, request.ConversationType, "", request.ReplyTarget),
+		live,
 	)
 	if err != nil {
-		return err
+		return runPlan{}, err
 	}
-
-	chatReq := ChatRequest{
-		RunID:                   cfg.RunID,
-		RunHandle:               runHandle,
-		BotID:                   input.BotID,
-		ChatID:                  input.BotID,
-		ThreadID:                req.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentChannel:          req.SourcePlatform,
-		ReplyTarget:             req.ReplyTarget,
-		ConversationType:        req.ConversationType,
-		UserMessagePersisted:    true,
-		PersistedUserMessageID:  requestMessageID,
-		// The user's answer is already represented by the persisted tool
-		// result above; the resumed invocation must not schedule a second
-		// user-message memory extraction.
-		SkipMemoryExtraction: true,
-		WorkspaceTargetID:    req.WorkspaceTargetID,
-		WorkspaceTarget:      workspaceTargetFromRunConfig(resolved.RunConfig),
-	}
-
-	return s.runNativeDecisionContinuation(ctx, chatReq, cfg, resolved.ModelID, runtimeLifecycle, eventCh)
+	req.RunID = cfg.RunID
+	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)
+	return s.nativeContinuationPlan(ctx, req, cfg, resolved.ModelID)
 }
 
 func withLocalWebUserInputReplyTarget(req userinput.Request) userinput.Request {

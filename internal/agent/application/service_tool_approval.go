@@ -206,20 +206,11 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 	return "", fmt.Errorf("%w: legacy %s requires an agent-provided %s option", toolapproval.ErrOptionUnavailable, decision, wantKind)
 }
 
+// ContinueCommittedToolApprovalResponse resumes what an approval parked when
+// no session runtime routed the answer: an inline runtime's waiter, or a
+// built-in agent run driven here with eventCh as the caller's end of it.
 func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
-	return s.continueCommittedToolApprovalResponse(ctx, committed, nil, eventCh)
-}
-
-func (s *Service) continueCommittedToolApprovalResponse(
-	ctx context.Context,
-	committed CommittedToolApprovalResponse,
-	lifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
 	target := committed.request
-	if strings.TrimSpace(target.ID) == "" {
-		return errors.New("committed tool approval response is missing its request")
-	}
 	if committed.ackOnly {
 		return emitApprovalAck(ctx, eventCh)
 	}
@@ -232,30 +223,64 @@ func (s *Service) continueCommittedToolApprovalResponse(
 		}
 		return emitApprovalAck(ctx, eventCh)
 	}
+	return s.driveUnroutedContinuation(ctx, s.toolApprovalContinuation(ctx, committed, eventCh != nil), eventCh)
+}
 
-	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
-	runID := runIDForChatRequest(committed.runID)
-	var toolResult sdk.ToolResultPart
-	var toolUIMetadata map[string]any
-	switch target.Status {
-	case toolapproval.StatusApproved:
-		result, uiMetadata, err := s.executeApprovedTool(ctx, target, committed.input, runID)
-		if err != nil {
-			return err
-		}
-		toolResult = result
-		toolUIMetadata = uiMetadata
-	case toolapproval.StatusRejected:
-		toolResult = sdk.ToolResultPart{
-			ToolCallID: target.ToolCallID,
-			ToolName:   target.ToolName,
-			Result:     toolexec.OutputFromValue(s.limitToolResultText(rejectedToolResultText(committed.input.Reason), target.ToolName)),
-			IsError:    true,
-		}
-	default:
-		return fmt.Errorf("committed tool approval has unexpected status %q", target.Status)
+// toolApprovalContinuation is the run an answered approval resumes: the
+// decided call's result is stored as its answer, and the model runs on from
+// there. live says whether a caller receives the run's events as they happen.
+func (s *Service) toolApprovalContinuation(ctx context.Context, committed CommittedToolApprovalResponse, live bool) decisionContinuation {
+	approval := withLocalWebReplyTarget(committed.request)
+	input := committed.input
+	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, approval.SessionID, committed.runHandle)
+	req := ChatRequest{
+		RunID:                   runIDForChatRequest(committed.runID),
+		RunHandle:               committed.runHandle,
+		BotID:                   input.BotID,
+		ChatID:                  input.BotID,
+		ThreadID:                approval.SessionID,
+		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
+		CurrentChannel:          approval.SourcePlatform,
+		ReplyTarget:             approval.ReplyTarget,
+		ConversationType:        approval.ConversationType,
+		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
+		WorkspaceTargetID:       approval.WorkspaceTargetID,
 	}
-	return s.storeToolResultAndContinue(ctx, target, committed.input, toolResult, toolUIMetadata, runID, committed.runHandle, lifecycle, eventCh)
+	return decisionContinuation{
+		Req: req,
+		// The resumed run is the driver's request, which carries the per-run
+		// asset collector. Everything else in it is what this entry built.
+		Setup: func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+			if reqErr != nil {
+				return runPlan{}, reqErr
+			}
+			if strings.TrimSpace(approval.ID) == "" {
+				return runPlan{}, errors.New("committed tool approval response is missing its request")
+			}
+			var toolResult sdk.ToolResultPart
+			var toolUIMetadata map[string]any
+			switch approval.Status {
+			case toolapproval.StatusApproved:
+				result, uiMetadata, err := s.executeApprovedTool(ctx, approval, input, runReq.RunID)
+				if err != nil {
+					return runPlan{}, err
+				}
+				toolResult = result
+				toolUIMetadata = uiMetadata
+			case toolapproval.StatusRejected:
+				toolResult = sdk.ToolResultPart{
+					ToolCallID: approval.ToolCallID,
+					ToolName:   approval.ToolName,
+					Result:     toolexec.OutputFromValue(s.limitToolResultText(rejectedToolResultText(input.Reason), approval.ToolName)),
+					IsError:    true,
+				}
+			default:
+				return runPlan{}, fmt.Errorf("committed tool approval has unexpected status %q", approval.Status)
+			}
+			return s.storeToolResultAndContinue(ctx, approval, input, toolResult, toolUIMetadata, runReq, live)
+		},
+	}
 }
 
 func (s *Service) toolOutputLimit() contextlimit.ToolOutputLimit {
@@ -435,20 +460,14 @@ func (s *Service) storeToolResultAndContinue(
 	input ToolApprovalResponseInput,
 	result sdk.ToolResultPart,
 	uiMetadata map[string]any,
-	runID string,
-	runHandle sessionruntime.RunHandle,
-	lifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
+	req ChatRequest,
+	live bool,
+) (runPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
 	if err != nil {
-		return err
-	}
-	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, approval.SessionID, runHandle)
-	if err != nil {
-		return err
+		return runPlan{}, err
 	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeOpts := storeRoundOptions{AllowPendingToolCalls: true}
@@ -457,35 +476,23 @@ func (s *Service) storeToolResultAndContinue(
 	if len(uiMetadata) > 0 {
 		storeOpts.MessageMetadataByIndex = map[int]map[string]any{0: uiMetadata}
 	}
-	storeReq := ChatRequest{
-		RunID:                   runID,
-		BotID:                   input.BotID,
-		ChatID:                  input.BotID,
-		ThreadID:                approval.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentChannel:          approval.SourcePlatform,
-		ReplyTarget:             approval.ReplyTarget,
-		ConversationType:        approval.ConversationType,
-		UserMessagePersisted:    true,
-		PersistedUserMessageID:  requestMessageID,
-		WorkspaceTargetID:       approval.WorkspaceTargetID,
-	}
+	storeReq := req
 	storeReq.WorkspaceTarget = target
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeOpts); err != nil {
-		return err
+		return runPlan{}, err
 	}
-	return s.continueToolApprovalSession(ctx, approval, input, runID, runHandle, lifecycle, eventCh)
+	return s.continueToolApprovalSession(ctx, approval, input, req, live)
 }
 
+// continueToolApprovalSession resolves the built-in agent run that resumes
+// after the approved or rejected call's result is stored.
 func (s *Service) continueToolApprovalSession(
 	ctx context.Context,
 	approval toolapproval.Request,
 	input ToolApprovalResponseInput,
-	runID string,
-	runHandle sessionruntime.RunHandle,
-	runtimeLifecycle *continuationLifecycleResult,
-	eventCh chan<- WSStreamEvent,
-) error {
+	req ChatRequest,
+	live bool,
+) (runPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,
@@ -498,42 +505,23 @@ func (s *Service) continueToolApprovalSession(
 		input.ChatToken,
 	)
 	if err != nil {
-		return err
+		return runPlan{}, err
 	}
-	resolved.RunConfig.RunID = runIDForChatRequest(runID)
-	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, approval.SessionID, runHandle)
-	if err != nil {
-		return err
-	}
+	resolved.RunConfig.RunID = req.RunID
 
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
 		resolved.RunConfig,
 		historyScopeFallbackFromToolApprovalRequest(approval),
 		compactionSummaryScope(firstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
-		eventCh,
+		live,
 	)
 	if err != nil {
-		return err
+		return runPlan{}, err
 	}
-
-	req := ChatRequest{
-		RunID:                   cfg.RunID,
-		RunHandle:               runHandle,
-		BotID:                   input.BotID,
-		ChatID:                  input.BotID,
-		ThreadID:                approval.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
-		CurrentChannel:          approval.SourcePlatform,
-		ReplyTarget:             approval.ReplyTarget,
-		ConversationType:        approval.ConversationType,
-		UserMessagePersisted:    true,
-		PersistedUserMessageID:  requestMessageID,
-		WorkspaceTargetID:       approval.WorkspaceTargetID,
-		WorkspaceTarget:         workspaceTargetFromRunConfig(resolved.RunConfig),
-	}
-
-	return s.runNativeDecisionContinuation(ctx, req, cfg, resolved.ModelID, runtimeLifecycle, eventCh)
+	req.RunID = cfg.RunID
+	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)
+	return s.nativeContinuationPlan(ctx, req, cfg, resolved.ModelID)
 }
 
 func withLocalWebReplyTarget(req toolapproval.Request) toolapproval.Request {

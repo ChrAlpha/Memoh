@@ -11,12 +11,78 @@ import (
 	"testing"
 	"time"
 
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 )
+
+// continuationService is a service whose decision continuations run against
+// manager: the manager routes the answer, takes the run's publications, and
+// records the run's ending.
+func continuationService(manager *sessionruntime.Manager) *Service {
+	return &Service{
+		decisionRuntime: manager,
+		sessionRuntime:  manager,
+		logger:          slog.New(slog.DiscardHandler),
+	}
+}
+
+// decisionCommand is the routed command that answers the decision the parked
+// run of newWaitingDecisionRuntime waits on.
+func decisionCommand(handle sessionruntime.RunHandle, id string) sessionruntime.Command {
+	return sessionruntime.Command{
+		StreamOutput: true, ID: id, TargetID: "decision-" + id, Type: sessionruntime.CommandUserInputResponse,
+		BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation,
+	}
+}
+
+// continueDecision drives one routed continuation the way the command handler
+// does: on the context and handle the parked run's control hands out, with
+// setup standing in for storing the answer and resolving the model run.
+func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Manager, command sessionruntime.Command, setup func(context.Context, ChatRequest) (runPlan, error)) {
+	t.Helper()
+	live := command
+	live.Generation = strings.TrimSuffix(command.Generation, "-stale")
+	runCtx, cancel, handle, err := manager.DecisionContinuationContext(live)
+	if err != nil {
+		t.Fatalf("decision continuation context: %v", err)
+	}
+	defer cancel()
+	service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
+		Req:   ChatRequest{BotID: handle.BotID, ChatID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
+		Setup: setup,
+	})
+}
+
+// scriptedRun is a setup whose run produces events in order. A terminal event
+// among them ends the run, and parks it when it carries a pending decision;
+// cause, when set, is the failure the run reports besides its events.
+func scriptedRun(events []native.StreamEvent, cause error) func(context.Context, ChatRequest) (runPlan, error) {
+	exec := &scriptedExecutor{cause: cause}
+	for _, ev := range events {
+		if ev.IsTerminal() {
+			terminal := ev
+			exec.terminal = &terminal
+			exec.deferred = ev.ApprovalID != "" || ev.UserInputID != ""
+			continue
+		}
+		exec.events = append(exec.events, ev)
+	}
+	return func(context.Context, ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil }
+}
+
+func runStatus(t *testing.T, manager *sessionruntime.Manager) *sessionruntime.CurrentRunView {
+	t.Helper()
+	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot.CurrentRunView
+}
 
 // A continuation that reports its failure as an event and then returns it
 // fails once: one failure event in the decision output, a close at the next
@@ -25,21 +91,25 @@ func TestRuntimeDecisionContinuationFailureIsReportedOnce(t *testing.T) {
 	backend := &decisionOutputBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 	manager, handle := newWaitingDecisionRuntime(t, backend)
 	logger, logs := captureLogs()
-	service := &Service{decisionRuntime: manager, logger: logger}
+	service := continuationService(manager)
+	service.logger = logger
 	manager.SetTerminalObserver(service.logRunResult)
 	failure := apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("private idle timeout detail"), nil)
-	service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-		StreamOutput: true, ID: "answer-timeout", TargetID: "decision-timeout", Type: sessionruntime.CommandUserInputResponse,
-		BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation,
-	}, func(_ context.Context, _ *continuationLifecycleResult, ch chan<- WSStreamEvent) error {
-		ch <- runtimeDecisionEvent(t, agentFailureStreamEvent(failure))
-		return failure
-	})
 
-	failures := 0
+	continueDecision(t, service, manager, decisionCommand(handle, "answer-timeout"), scriptedRun([]native.StreamEvent{
+		{Type: native.EventError, Code: string(apperror.CodeAgentResponseTimeout), Cause: failure},
+	}, failure))
+
+	var outputs []native.StreamEvent
 	for _, entry := range backend.output {
 		var event native.StreamEvent
-		if entry.Output != nil && json.Unmarshal(entry.Output, &event) == nil && event.Type == native.EventError {
+		if entry.Output != nil && json.Unmarshal(entry.Output, &event) == nil {
+			outputs = append(outputs, event)
+		}
+	}
+	failures := 0
+	for _, event := range outputs {
+		if event.Type == native.EventError {
 			failures++
 		}
 	}
@@ -48,6 +118,9 @@ func TestRuntimeDecisionContinuationFailureIsReportedOnce(t *testing.T) {
 	}
 	if n := len(backend.output); n == 0 || backend.output[n-1].Type != "decision_output_end" {
 		t.Fatal("decision output did not close")
+	}
+	if n := len(backend.output); n != len(outputs)+1 {
+		t.Fatalf("decision output = %d entries, want its events and one close", n)
 	}
 	records := waitRunResults(t, logs, 1)
 	if got := recordAttrs(records[0])["error"]; !strings.Contains(got, "private idle timeout detail") {
@@ -58,33 +131,8 @@ func TestRuntimeDecisionContinuationFailureIsReportedOnce(t *testing.T) {
 			t.Fatalf("unexpected error record %q besides the run result", record.Message)
 		}
 	}
-}
-
-type failFirstDecisionOutputBackend struct {
-	*decisionOutputBackend
-	failed atomic.Bool
-}
-
-func (b *failFirstDecisionOutputBackend) AppendDecisionOutput(ctx context.Context, ref sessionruntime.DecisionOutputRef, seq int64, payload json.RawMessage, limits sessionruntime.DecisionOutputLimits) (sessionruntime.DecisionOutputState, error) {
-	if payload != nil && b.failed.CompareAndSwap(false, true) {
-		return sessionruntime.DecisionOutputState{}, errors.New("decision output write unavailable")
-	}
-	return b.decisionOutputBackend.AppendDecisionOutput(ctx, ref, seq, payload, limits)
-}
-
-// A failure event that cannot be appended does not take a sequence number, so
-// the close still lands at the next one.
-func TestRuntimeDecisionUnappendedFailureKeepsOutputSequence(t *testing.T) {
-	backend := &failFirstDecisionOutputBackend{decisionOutputBackend: &decisionOutputBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}}
-	manager, handle := newWaitingDecisionRuntime(t, backend)
-	service := &Service{decisionRuntime: manager}
-	service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-		StreamOutput: true, ID: "answer-unappended", BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation,
-	}, func(context.Context, *continuationLifecycleResult, chan<- WSStreamEvent) error {
-		return apperror.New(apperror.CodeAgentResponseTimeout, nil)
-	})
-	if len(backend.output) != 1 || backend.output[0].Type != "decision_output_end" {
-		t.Fatalf("decision output = %+v, want only its close", backend.output)
+	if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusErrored || view.ErrorCode != string(apperror.CodeAgentResponseTimeout) {
+		t.Fatalf("terminal run = %#v, want errored %s", view, apperror.CodeAgentResponseTimeout)
 	}
 }
 
@@ -128,15 +176,6 @@ func newWaitingDecisionRuntime(t *testing.T, backends ...sessionruntime.Backend)
 	return manager, handle
 }
 
-func runtimeDecisionEvent(t *testing.T, event native.StreamEvent) WSStreamEvent {
-	t.Helper()
-	raw, err := json.Marshal(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
 type failNextRuntimeDecisionBackend struct {
 	*sessionruntime.MemoryBackend
 	failNext atomic.Bool
@@ -154,211 +193,103 @@ func (b *failNextRuntimeDecisionBackend) Update(
 	return b.MemoryBackend.Update(ctx, key, update)
 }
 
-func TestRuntimeDecisionTerminalDoesNotExposePrivateErrors(t *testing.T) {
-	tests := []struct {
-		name         string
-		contextCause error
-		cause        error
-		status       string
-		code         string
-	}{
-		{name: "success"},
-		{
-			name:         "explicit cancellation",
-			contextCause: context.Canceled,
-			cause:        context.Canceled,
-		},
-		{
-			name:   "provider cancellation with active context",
-			cause:  context.Canceled,
-			status: sessionruntime.RunStatusErrored,
-		},
-		{
-			name:         "ownership loss",
-			contextCause: sessionruntime.ErrRunOwnershipLost,
-			cause:        context.Canceled,
-			status:       sessionruntime.RunStatusErrored,
-		},
-		{
-			name:   "private provider error",
-			cause:  errors.New("private provider detail"),
-			status: sessionruntime.RunStatusErrored,
-		},
-		{
-			name:   "stable application error",
-			cause:  apperror.New(apperror.CodeSessionHistoryInconsistent, nil),
-			status: sessionruntime.RunStatusErrored,
-			code:   string(apperror.CodeSessionHistoryInconsistent),
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			if tt.contextCause != nil {
-				var cancel context.CancelCauseFunc
-				ctx, cancel = context.WithCancelCause(ctx)
-				cancel(tt.contextCause)
-			}
-			outcome := runtimeDecisionTerminal(ctx, tt.cause)
-			if outcome.Status != tt.status || outcome.ErrorCode() != tt.code {
-				t.Fatalf("runtimeDecisionTerminal() = (%q, %q), want (%q, %q)", outcome.Status, outcome.ErrorCode(), tt.status, tt.code)
-			}
-		})
-	}
-}
-
+// A model call the provider cancelled is a failure of the run, not a stop: the
+// run's context is still live, so nobody asked it to end, and a run that
+// failed must not be left parked on the decision it already answered.
 func TestContinueRuntimeDecisionDoesNotParkProviderCancellation(t *testing.T) {
-	const (
-		botID     = "bot-provider-cancel"
-		sessionID = "session-provider-cancel"
-		runID     = "run-provider-cancel"
-	)
-	manager := sessiontest.New(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
-		OwnerID:       "owner-provider-cancel",
-		StateTTL:      time.Minute,
-		OwnerLeaseTTL: time.Second,
-		CommandAckTTL: time.Second,
-	})
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.Start(context.Background()); err != nil {
-		t.Fatalf("start runtime manager: %v", err)
-	}
-	handle, err := sessiontest.Start(context.Background(), manager,
-		botID,
-		sessionID,
-		runID,
-		make(chan struct{}, 1),
-		func() {},
-		make(chan turn.InjectMessage, 1),
-	)
-	if err != nil {
-		t.Fatalf("start runtime run: %v", err)
-	}
-	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
-		Type:        native.EventUserInputRequest,
-		UserInputID: "input-provider-cancel",
-		Status:      "pending",
-	}); err != nil {
-		t.Fatalf("park runtime decision: %v", err)
-	}
-	if _, err := manager.FinishRun(context.Background(), handle, ""); err != nil {
-		t.Fatalf("mark deferred producer ready: %v", err)
-	}
+	manager, handle := newWaitingDecisionRuntime(t)
+	service := continuationService(manager)
 
-	service := &Service{decisionRuntime: manager}
-	service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-		BotID:      botID,
-		SessionID:  sessionID,
-		RunID:      runID,
-		Generation: handle.Generation,
-	}, func(context.Context, *continuationLifecycleResult, chan<- WSStreamEvent) error {
-		return context.Canceled
-	})
+	continueDecision(t, service, manager, decisionCommand(handle, "provider-cancel"), scriptedRun(nil, context.Canceled))
 
-	snapshot, err := manager.Snapshot(context.Background(), botID, sessionID)
-	if err != nil {
-		t.Fatalf("load terminal snapshot: %v", err)
-	}
-	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored {
-		t.Fatalf("terminal run = %#v, want errored instead of parked", snapshot.CurrentRunView)
+	if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("terminal run = %#v, want errored instead of parked", view)
 	}
 }
 
+// A refused projection write cancels the continuation with the refusal, not a
+// bare cancellation, so the run fails under the publication's own code.
 func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *testing.T) {
-	const (
-		botID     = "bot-publish-failure"
-		sessionID = "session-publish-failure"
-		runID     = "run-publish-failure"
-	)
-	publishErr := errors.New("private runtime publication failure")
 	backend := &failNextRuntimeDecisionBackend{
 		MemoryBackend: sessionruntime.NewMemoryBackend(),
-		err:           publishErr,
+		err:           errors.New("private runtime publication failure"),
 	}
-	manager := sessiontest.New(backend, sessionruntime.Options{
-		OwnerID:       "owner-publish-failure",
-		StateTTL:      time.Minute,
-		OwnerLeaseTTL: time.Second,
-		CommandAckTTL: time.Second,
-	})
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.Start(context.Background()); err != nil {
-		t.Fatalf("start runtime manager: %v", err)
-	}
-	handle, err := sessiontest.Start(context.Background(), manager,
-		botID,
-		sessionID,
-		runID,
-		make(chan struct{}, 1),
-		func() {},
-		make(chan turn.InjectMessage, 1),
-	)
-	if err != nil {
-		t.Fatalf("start runtime run: %v", err)
-	}
-	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{
-		Type:        native.EventUserInputRequest,
-		UserInputID: "input-publish-failure",
-		Status:      "pending",
-	}); err != nil {
-		t.Fatalf("park runtime decision: %v", err)
-	}
-	if _, err := manager.FinishRun(context.Background(), handle, ""); err != nil {
-		t.Fatalf("mark deferred producer ready: %v", err)
-	}
-
-	command := sessionruntime.Command{
-		BotID:      botID,
-		SessionID:  sessionID,
-		RunID:      runID,
-		Generation: handle.Generation,
-	}
-	service := &Service{decisionRuntime: manager}
+	manager, handle := newWaitingDecisionRuntime(t, backend)
+	service := continuationService(manager)
 	continuationCause := make(chan error, 1)
-	continuationDone := make(chan struct{})
+	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+		backend.failNext.Store(true)
+		emit(native.StreamEvent{Type: native.EventTextDelta, Delta: "late"})
+		<-ctx.Done()
+		continuationCause <- context.Cause(ctx)
+		return execEnding{Cause: context.Cause(ctx), Phase: phaseExecution}
+	})
+
+	done := make(chan struct{})
 	go func() {
-		defer close(continuationDone)
-		service.continueRuntimeDecision(context.Background(), command, func(
-			continuationCtx context.Context,
-			_ *continuationLifecycleResult,
-			eventCh chan<- WSStreamEvent,
-		) error {
-			backend.failNext.Store(true)
-			select {
-			case eventCh <- WSStreamEvent(`{"type":"text_delta","delta":"late"}`):
-			case <-continuationCtx.Done():
-				continuationCause <- context.Cause(continuationCtx)
-				return context.Cause(continuationCtx)
-			}
-			<-continuationCtx.Done()
-			continuationCause <- context.Cause(continuationCtx)
-			return context.Cause(continuationCtx)
+		defer close(done)
+		continueDecision(t, service, manager, decisionCommand(handle, "publish-failure"), func(context.Context, ChatRequest) (runPlan, error) {
+			return runPlan{Exec: exec}, nil
 		})
 	}()
-
 	select {
-	case <-continuationDone:
-	case <-time.After(time.Second):
+	case <-done:
+	case <-time.After(5 * time.Second):
 		t.Fatal("runtime decision continuation hung after publication failure")
 	}
-	select {
-	case cause := <-continuationCause:
-		if !errors.Is(cause, context.Canceled) {
-			t.Fatalf("continuation cause = %v, want context canceled", cause)
-		}
-	default:
-		t.Fatal("continuation did not observe cancellation")
-	}
 
-	snapshot, err := manager.Snapshot(context.Background(), botID, sessionID)
-	if err != nil {
-		t.Fatalf("load terminal snapshot: %v", err)
+	cause := <-continuationCause
+	var refused publishRefused
+	if !errors.As(cause, &refused) {
+		t.Fatalf("continuation cause = %v, want the publication refusal", cause)
 	}
-	if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.Status != sessionruntime.RunStatusErrored {
-		t.Fatalf("terminal run = %#v, want errored", snapshot.CurrentRunView)
+	view := runStatus(t, manager)
+	if view == nil || view.Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("terminal run = %#v, want errored", view)
 	}
-	if snapshot.CurrentRunView.ErrorCode != "runtime_run_failed" {
-		t.Fatalf("terminal run error code = %q, want runtime_run_failed", snapshot.CurrentRunView.ErrorCode)
+	if view.ErrorCode != string(apperror.CodeSessionPublishFailed) {
+		t.Fatalf("terminal run error code = %q, want %s", view.ErrorCode, apperror.CodeSessionPublishFailed)
+	}
+}
+
+// runFuncExecutor is an executor written inline by the test that needs one.
+type runFuncExecutor func(ctx context.Context, emit func(native.StreamEvent)) execEnding
+
+func (f runFuncExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+	ending := f(ctx, emit)
+	if ending.Commit == nil {
+		ending.Commit = func(context.Context, *RunFailure, bool) (commitSummary, error) { return commitSummary{}, nil }
+	}
+	return ending
+}
+
+// lifecycleRow is one lifecycle row a run left, whichever write produced it:
+// an unfenced run writes it at once, a fenced run when its terminal state is
+// observed.
+type lifecycleRow struct {
+	Status   string
+	Snapshot []byte
+}
+
+func lifecycleRows(store *recordingContextLifecycleStore) []lifecycleRow {
+	var rows []lifecycleRow
+	for _, row := range store.creates {
+		rows = append(rows, lifecycleRow{Status: row.Status, Snapshot: row.Snapshot})
+	}
+	for _, row := range store.terminalUpserts {
+		rows = append(rows, lifecycleRow{Status: row.Status, Snapshot: row.Snapshot})
+	}
+	return rows
+}
+
+// lifecycleRun is a scripted run whose plan carries the context lifecycle a
+// resolved native run would, so the run's ending is what writes it.
+func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Context, ChatRequest) (runPlan, error) {
+	run := scriptedRun(events, nil)
+	return func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		plan, err := run(ctx, req)
+		plan.Lifecycle = service.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())
+		return plan, err
 	}
 }
 
@@ -371,13 +302,14 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 	}{
 		{
 			name:              "completed",
-			events:            []native.StreamEvent{{Type: native.EventAgentEnd}},
+			events:            []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventAgentEnd}},
 			wantLifecycle:     contextLifecycleStatusCompleted,
 			wantRuntimeStatus: sessionruntime.RunStatusCompleted,
 		},
 		{
 			name: "provider failure",
 			events: []native.StreamEvent{
+				{Type: native.EventAgentStart},
 				{Type: native.EventError, Error: "private provider detail"},
 				{Type: native.EventAgentAbort},
 			},
@@ -389,41 +321,29 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 		t.Run(tt.name, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
 			lifecycles := &recordingContextLifecycleStore{}
-			service := &Service{decisionRuntime: manager, contextLifecycles: lifecycles}
-			snapshot, ok := lifecycleTestRunConfig().ContextLifecycle.Snapshot()
-			if !ok {
-				t.Fatal("test lifecycle snapshot is unavailable")
-			}
+			service := continuationService(manager)
+			service.contextLifecycles = lifecycles
+			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
 
-			service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-				BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-				RunID: lifecycleTestRunID, Generation: handle.Generation,
-			}, func(_ context.Context, result *continuationLifecycleResult, events chan<- WSStreamEvent) error {
-				result.snapshot = &snapshot
-				events <- runtimeDecisionEvent(t, native.StreamEvent{Type: native.EventAgentStart})
-				for _, event := range tt.events {
-					events <- runtimeDecisionEvent(t, event)
-				}
-				return nil
-			})
+			continueDecision(t, service, manager, decisionCommand(handle, "outcome"), lifecycleRun(service, tt.events))
 
-			if len(lifecycles.creates) != 1 || lifecycles.creates[0].Status != tt.wantLifecycle {
-				t.Fatalf("lifecycle creates = %#v, want one %s row", lifecycles.creates, tt.wantLifecycle)
+			rows := lifecycleRows(lifecycles)
+			if len(rows) != 1 || rows[0].Status != tt.wantLifecycle {
+				t.Fatalf("lifecycle rows = %#v, want one %s row", rows, tt.wantLifecycle)
 			}
-			if bytes.Contains(lifecycles.creates[0].Snapshot, []byte("private provider detail")) {
-				t.Fatalf("lifecycle snapshot leaked private provider detail: %s", lifecycles.creates[0].Snapshot)
+			if bytes.Contains(rows[0].Snapshot, []byte("private provider detail")) {
+				t.Fatalf("lifecycle snapshot leaked private provider detail: %s", rows[0].Snapshot)
 			}
-			runtimeSnapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if runtimeSnapshot.CurrentRunView == nil || runtimeSnapshot.CurrentRunView.Status != tt.wantRuntimeStatus {
-				t.Fatalf("runtime terminal = %#v, want %s", runtimeSnapshot.CurrentRunView, tt.wantRuntimeStatus)
+			if view := runStatus(t, manager); view == nil || view.Status != tt.wantRuntimeStatus {
+				t.Fatalf("runtime terminal = %#v, want %s", view, tt.wantRuntimeStatus)
 			}
 		})
 	}
 }
 
+// A continuation that asks a second question parks the same run again: the
+// run waits on the new decision, its lifecycle is not ended, and the run is
+// still there for the next answer to resume.
 func TestContinueRuntimeDecisionDefersSecondPendingDecisionLifecycle(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -438,87 +358,107 @@ func TestContinueRuntimeDecisionDefersSecondPendingDecisionLifecycle(t *testing.
 		{
 			name:     "user input",
 			request:  native.StreamEvent{Type: native.EventUserInputRequest, UserInputID: "input-next", Status: "pending"},
-			terminal: native.StreamEvent{Type: native.EventAgentEnd, UserInputID: "input-next", Status: "pending"},
+			terminal: native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "input-next", UserInputID: "input-next", Status: "pending"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
 			lifecycles := &recordingContextLifecycleStore{}
-			service := &Service{decisionRuntime: manager, contextLifecycles: lifecycles}
-			snapshot, ok := lifecycleTestRunConfig().ContextLifecycle.Snapshot()
-			if !ok {
-				t.Fatal("test lifecycle snapshot is unavailable")
-			}
+			service := continuationService(manager)
+			service.contextLifecycles = lifecycles
+			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
 
-			service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-				BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-				RunID: lifecycleTestRunID, Generation: handle.Generation,
-			}, func(_ context.Context, result *continuationLifecycleResult, events chan<- WSStreamEvent) error {
-				result.snapshot = &snapshot
-				events <- runtimeDecisionEvent(t, native.StreamEvent{Type: native.EventAgentStart})
-				events <- runtimeDecisionEvent(t, tt.request)
-				events <- runtimeDecisionEvent(t, tt.terminal)
-				return nil
-			})
+			continueDecision(t, service, manager, decisionCommand(handle, "second"), lifecycleRun(service, []native.StreamEvent{
+				{Type: native.EventAgentStart}, tt.request, tt.terminal,
+			}))
 
-			if len(lifecycles.creates) != 0 {
-				t.Fatalf("lifecycle creates = %#v, want none while a second decision is pending", lifecycles.creates)
+			if rows := lifecycleRows(lifecycles); len(rows) != 0 {
+				t.Fatalf("lifecycle rows = %#v, want none while a second decision is pending", rows)
 			}
-			runtimeSnapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+			if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusWaitingDecision {
+				t.Fatalf("runtime state = %#v, want waiting_decision", view)
+			}
+			// The run still takes the next answer.
+			_, cancel, _, err := manager.DecisionContinuationContext(decisionCommand(handle, "third"))
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("re-parked run refused the next answer: %v", err)
 			}
-			if runtimeSnapshot.CurrentRunView == nil || runtimeSnapshot.CurrentRunView.Status != sessionruntime.RunStatusWaitingDecision {
-				t.Fatalf("runtime state = %#v, want waiting_decision", runtimeSnapshot.CurrentRunView)
-			}
+			cancel()
 		})
 	}
 }
 
-func TestContinueRuntimeDecisionExplicitAbortAlignsLifecycleAndRuntime(t *testing.T) {
+// A continuation stopped while it runs ends aborted, not errored: the stop is
+// what ended it, even though the model call it interrupted reports a failure.
+func TestContinueRuntimeDecisionStopEndsAborted(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
-	lifecycles := &recordingContextLifecycleStore{}
-	service := &Service{decisionRuntime: manager, contextLifecycles: lifecycles}
-	applied, err := manager.AbortControl(
-		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-		lifecycleTestRunID,
-		"abort-continuation",
-	)
-	if err != nil || !applied {
+	service := continuationService(manager)
+	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+		emit(native.StreamEvent{Type: native.EventAgentStart})
+		<-ctx.Done()
+		// The interrupted model call reports the cancellation as its failure,
+		// wrapped the way a provider client wraps it.
+		emit(native.StreamEvent{Type: native.EventError, Cause: errors.Join(errors.New("stream read"), context.Cause(ctx))})
+		return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentAbort}}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		continueDecision(t, service, manager, decisionCommand(handle, "stop"), func(context.Context, ChatRequest) (runPlan, error) {
+			return runPlan{Exec: exec}, nil
+		})
+	}()
+	waitRunStatus(t, manager, sessionruntime.RunStatusRunning)
+	if applied, err := manager.AbortControl(context.Background(), lifecycleTestBotID, lifecycleTestSessionID, lifecycleTestRunID, "abort-continuation"); err != nil || !applied {
 		t.Fatalf("AbortControl() = (%t, %v), want (true, nil)", applied, err)
 	}
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cancel(context.Canceled)
-	service.finishRuntimeDecision(ctx, handle, context.Canceled)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped continuation did not end")
+	}
 
-	if len(lifecycles.creates) != 1 || lifecycles.creates[0].Status != contextLifecycleStatusAborted {
-		t.Fatalf("lifecycle creates = %#v, want one aborted row", lifecycles.creates)
-	}
-	runtimeSnapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtimeSnapshot.CurrentRunView == nil || runtimeSnapshot.CurrentRunView.Status != sessionruntime.RunStatusAborted {
-		t.Fatalf("runtime terminal = %#v, want aborted", runtimeSnapshot.CurrentRunView)
+	view := runStatus(t, manager)
+	if view == nil || view.Status != sessionruntime.RunStatusAborted || view.ErrorCode != "" {
+		t.Fatalf("runtime terminal = %#v, want aborted with no code", view)
 	}
 }
 
+func waitRunStatus(t *testing.T, manager *sessionruntime.Manager, status string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if view := runStatus(t, manager); view != nil && view.Status == status {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run never reached %s", status)
+}
+
+// A continuation whose command no longer targets the live run lost it: it
+// writes nothing, neither a lifecycle row nor a terminal state, and does not
+// run its model call.
 func TestContinueRuntimeDecisionOwnershipLossDoesNotPersistLifecycle(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
 	lifecycles := &recordingContextLifecycleStore{}
-	service := &Service{decisionRuntime: manager, contextLifecycles: lifecycles}
-	service.continueRuntimeDecision(context.Background(), sessionruntime.Command{
-		BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-		RunID: lifecycleTestRunID, Generation: handle.Generation + "-stale",
-	}, func(context.Context, *continuationLifecycleResult, chan<- WSStreamEvent) error {
+	service := continuationService(manager)
+	service.contextLifecycles = lifecycles
+	stale := decisionCommand(handle, "stale")
+	stale.Generation += "-stale"
+
+	continueDecision(t, service, manager, stale, func(context.Context, ChatRequest) (runPlan, error) {
 		t.Fatal("stale continuation unexpectedly ran")
-		return nil
+		return runPlan{}, nil
 	})
-	if len(lifecycles.creates) != 0 {
-		t.Fatalf("ownership-lost continuation created lifecycle rows: %#v", lifecycles.creates)
+
+	if rows := lifecycleRows(lifecycles); len(rows) != 0 {
+		t.Fatalf("ownership-lost continuation created lifecycle rows: %#v", rows)
+	}
+	if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusWaitingDecision {
+		t.Fatalf("runtime state = %#v, want the run left to its owner", view)
 	}
 }
 
@@ -540,5 +480,84 @@ func TestStopTurnAbortsParkedDecision(t *testing.T) {
 	}
 	if snapshot.CurrentRunView != nil && snapshot.CurrentRunView.Status != sessionruntime.RunStatusAborted {
 		t.Fatalf("run = %#v", snapshot.CurrentRunView)
+	}
+}
+
+// Both decision kinds resume as the turn the decision parked: the request
+// carries that turn's request message, so a failure row the continuation
+// leaves, even one from its setup, is filed under the turn rather than as a
+// turn of its own.
+func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{messageService: &continuationTurnRequestResolverService{requestMessageID: "request-message-id"}}
+	handle := sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, TurnID: "turn-id"}
+	ctx := context.Background()
+	for name, cont := range map[string]decisionContinuation{
+		"tool approval": service.toolApprovalContinuation(ctx, CommittedToolApprovalResponse{
+			request:   toolapproval.Request{ID: "approval", SessionID: lifecycleTestSessionID},
+			input:     ToolApprovalResponseInput{BotID: lifecycleTestBotID},
+			runID:     handle.RunID,
+			runHandle: handle,
+		}, true),
+		"user input": service.userInputContinuation(ctx, CommittedUserInputResponse{
+			request:   userinput.Request{ID: "input", SessionID: lifecycleTestSessionID},
+			input:     UserInputResponseInput{BotID: lifecycleTestBotID},
+			runID:     handle.RunID,
+			runHandle: handle,
+		}, true),
+	} {
+		req := cont.Req
+		if !req.UserMessagePersisted || req.PersistedUserMessageID != "request-message-id" {
+			t.Fatalf("%s: request = persisted:%t message:%q, want the parked turn's request message", name, req.UserMessagePersisted, req.PersistedUserMessageID)
+		}
+		if req.RunHandle != handle || req.RunID != handle.RunID || req.ThreadID != lifecycleTestSessionID {
+			t.Fatalf("%s: request run = %#v (%q), want the parked run", name, req.RunHandle, req.RunID)
+		}
+	}
+}
+
+// A routed continuation whose setup fails, such as storing the answer's
+// result, leaves its failure row as the unrouted one does: the answer was
+// accepted when the command committed it.
+func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
+	manager, handle := newWaitingDecisionRuntime(t)
+	messages := &recordingMessageService{}
+	service := continuationService(manager)
+	service.messageService = messages
+
+	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, ChatRequest) (runPlan, error) {
+		return runPlan{}, errors.New("SECRET tool result store unavailable")
+	})
+
+	if len(messages.persisted) != 1 || messages.persisted[0].Role != "assistant" {
+		t.Fatalf("persisted %#v, want one assistant failure row and no user row", messages.persisted)
+	}
+	if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusErrored || view.ErrorCode != string(apperror.CodeRuntimeRunFailed) {
+		t.Fatalf("terminal run = %#v, want errored %s", view, apperror.CodeRuntimeRunFailed)
+	}
+}
+
+// A run that parks has not ended, so the lifecycle row of the context it
+// assembled is not written yet: the continuation that resumes it writes the
+// row once the run does end.
+func TestParkedRunDoesNotEndItsLifecycle(t *testing.T) {
+	lifecycles := &recordingContextLifecycleStore{}
+	svc := newDriveService(nil, &scriptedAdmitter{started: true})
+	svc.contextLifecycles = lifecycles
+	terminal := native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "next", Status: "pending"}
+	exec := &scriptedExecutor{terminal: &terminal, deferred: true}
+	spec := scheduledSpec(exec, noDelivery{})
+	spec.Setup = func(ctx context.Context, _ ChatRequest) (runPlan, error) {
+		return runPlan{Exec: exec, Lifecycle: svc.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())}, nil
+	}
+
+	result := svc.drive(context.Background(), spec)
+
+	if result.End != endParked {
+		t.Fatalf("end = %s, want parked", result.End)
+	}
+	if rows := lifecycleRows(lifecycles); len(rows) != 0 {
+		t.Fatalf("lifecycle rows = %#v, want none for a parked run", rows)
 	}
 }

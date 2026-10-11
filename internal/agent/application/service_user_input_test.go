@@ -294,12 +294,12 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	var continued *sdk.ToolResultPart
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- WSStreamEvent) error {
+		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
 			if req.ID != "input-1" {
 				t.Errorf("continued request = %#v", req)
 			}
 			continued = &result
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 
@@ -326,8 +326,19 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	if continued.ToolCallID != "call-1" || continued.ToolName != userinput.ToolNameAskUser {
 		t.Fatalf("continued tool result = %#v", continued)
 	}
-	if len(eventCh) != 0 {
-		t.Fatalf("chat continuation must not emit ack events, got %d", len(eventCh))
+	// The caller follows the resumed run, which reports its own ending; an
+	// acknowledgement would open with agent_start instead.
+	close(eventCh)
+	var delivered []native.StreamEvent
+	for raw := range eventCh {
+		var event native.StreamEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			t.Fatalf("decode delivered event %s: %v", raw, err)
+		}
+		delivered = append(delivered, event)
+	}
+	if len(delivered) != 1 || delivered[0].Type != native.EventAgentEnd {
+		t.Fatalf("chat continuation delivered %#v, want the resumed run's terminal and no ack", delivered)
 	}
 }
 
@@ -356,17 +367,17 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	var continuationStartedOnce sync.Once
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(ctx context.Context, _ userinput.Request, _ UserInputResponseInput, _ sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			continuationStartedOnce.Do(func() { close(continuationStarted) })
-			select {
-			case <-releaseContinuation:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			if err := sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAgentStart}); err != nil {
-				return err
-			}
-			return sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAgentEnd})
+			return runPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+				select {
+				case <-releaseContinuation:
+				case <-ctx.Done():
+					return execEnding{Cause: ctx.Err(), Phase: phaseExecution}
+				}
+				emit(native.StreamEvent{Type: native.EventAgentStart})
+				return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
+			})}, nil
 		},
 	}
 	manager := sessiontest.New(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
@@ -502,9 +513,9 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 	resolver := &Service{
 		agent:     native.New(native.Deps{Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}}),
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart, _ chan<- WSStreamEvent) error {
+		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
 			continued = &result
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 
@@ -556,9 +567,9 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -597,9 +608,9 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("already-decided ACP request must not continue the chat session")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -639,9 +650,9 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the session in this response handler")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -688,9 +699,9 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must resume through the active ACP prompt")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -774,9 +785,9 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the chat session")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -823,9 +834,9 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	}
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("orphaned ACP request must not continue the chat session")
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 	attachACPUserInputAuth(resolver)
@@ -864,9 +875,9 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	continueCalls := 0
 	resolver := &Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart, chan<- WSStreamEvent) error {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			continueCalls++
-			return nil
+			return completedContinuation(), nil
 		},
 	}
 
@@ -888,4 +899,9 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	if continueCalls != 1 {
 		t.Fatalf("canceled chat request must still continue the session, calls = %d", continueCalls)
 	}
+}
+
+// completedContinuation is a resumed run that ends cleanly at once.
+func completedContinuation() runPlan {
+	return runPlan{Exec: &scriptedExecutor{terminal: &native.StreamEvent{Type: native.EventAgentEnd}}}
 }

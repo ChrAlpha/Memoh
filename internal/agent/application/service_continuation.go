@@ -31,7 +31,7 @@ func (s *Service) prepareContinuationRunConfig(
 	base native.RunConfig,
 	fallback historyfrag.ScopeFallback,
 	summaryScope contextfrag.Scope,
-	eventCh chan<- WSStreamEvent,
+	live bool,
 ) (native.RunConfig, error) {
 	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, defaultMaxContextMinutes, 0)
 	if err != nil {
@@ -67,7 +67,9 @@ func (s *Service) prepareContinuationRunConfig(
 		base.ContextToolExchangePolicy = defaultToolExchangePolicy()
 	}
 	base.Query = ""
-	base.LiveToolStream = eventCh != nil
-	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
+	// A question asked with nobody receiving the run's events could never be
+	// answered, so asking one is only offered to a run someone follows live.
+	base.LiveToolStream = live
+	base.CanRequestUserInput = live && s.userInput != nil
 	return s.prepareRunConfig(ctx, base), nil
 }

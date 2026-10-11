@@ -147,7 +147,7 @@ type Service struct {
 	externalAgentPromptHubs sync.Map
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
+	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error)
 	sessionCompactionMu               sync.Mutex
 	sessionCompactions                map[string]*sessionCompactionGate
 	timeout                           time.Duration

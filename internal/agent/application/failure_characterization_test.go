@@ -540,16 +540,20 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 //
 // Current behavior: session_runs records the cause's catalogued code in
 // error_code and no message; a cause without one finishes as
-// runtime_run_failed.
+// runtime_run_failed. A continuation stopped while it ran is aborted with no
+// code, even when the call it interrupted wraps the cancellation in a failure
+// of its own.
 func TestCharacterizeDecisionContinuationFailureColumns(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		cause error
-		want  [3]string
+		name    string
+		cause   error
+		stopped bool
+		want    [3]string
 	}{
-		{"coded cause", apperror.Wrap(apperror.CodeSessionHistoryInconsistent, errors.New("SECRET"), nil), [3]string{"failed", "session_runtime.history_inconsistent", ""}},
-		{"plain cause", errors.New("SECRET continuation failed"), [3]string{"failed", "runtime_run_failed", ""}},
+		{"coded cause", apperror.Wrap(apperror.CodeSessionHistoryInconsistent, errors.New("SECRET"), nil), false, [3]string{"failed", "session_runtime.history_inconsistent", ""}},
+		{"plain cause", errors.New("SECRET continuation failed"), false, [3]string{"failed", "runtime_run_failed", ""}},
+		{"wrapped cancellation", fmt.Errorf("SECRET provider stream: %w", context.Canceled), true, [3]string{"aborted", "", ""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -569,8 +573,27 @@ func TestCharacterizeDecisionContinuationFailureColumns(t *testing.T) {
 			if err != nil {
 				t.Fatalf("admit: %v", err)
 			}
-			service := &Service{decisionRuntime: manager, logger: slog.New(slog.DiscardHandler)}
-			service.finishRuntimeDecision(context.Background(), admission.Handle, tc.cause)
+			service := continuationService(manager)
+			command := sessionruntime.Command{
+				BotID: admission.Handle.BotID, SessionID: admission.Handle.SessionID,
+				RunID: admission.Handle.RunID, Generation: admission.Handle.Generation,
+			}
+			runCtx, release, handle, err := manager.DecisionContinuationContext(command)
+			if err != nil {
+				t.Fatalf("decision continuation context: %v", err)
+			}
+			defer release()
+			if tc.stopped {
+				var stop context.CancelFunc
+				runCtx, stop = context.WithCancel(runCtx)
+				stop()
+			}
+			service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
+				Req: ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
+				Setup: func(context.Context, ChatRequest) (runPlan, error) {
+					return runPlan{}, tc.cause
+				},
+			})
 			run, err := runs.Get(context.Background(), admission.RunID)
 			if err != nil {
 				t.Fatalf("load run: %v", err)

@@ -541,9 +541,8 @@ func driveSchedule(t *testing.T) []sdk.Request {
 	return requireDriveRequests(t, recorder)
 }
 
-// runDecisionContinuation runs a decision continuation the way the session
-// runtime routes it: the continuation's output goes to a decision output
-// channel, so the run can still deliver a question.
+// runDecisionContinuation runs a decision continuation with the caller's
+// event channel as its end, so the resumed run can still deliver a question.
 func runDecisionContinuation(t *testing.T, run func(chan<- WSStreamEvent) error) {
 	t.Helper()
 	eventCh := make(chan WSStreamEvent, 64)
@@ -562,49 +561,62 @@ func runDecisionContinuation(t *testing.T, run func(chan<- WSStreamEvent) error)
 }
 
 // driveApprovalContinuation continues a run after its tool call was approved
-// and executed.
+// and executed. The approved call runs before the answer arrives, so the
+// continuation's job is only to store the result it produced as the call's
+// answer and resume the model from it. The run supplies that result rather
+// than executing the call again: the fixture's model is offered no
+// container_exec tool, and replaying the call is what the approval path exists
+// to avoid.
 func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveDecisionHistory(t, "container_exec", sdk.TextOutput("command finished"))
+	approval := toolapproval.Request{
+		ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+		ToolCallID: driveToolCallID, ToolName: "container_exec",
+		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
+	}
+	input := ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}
+	result := sdk.ToolResultPart{
+		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
+		Result: sdk.TextOutput("command finished"),
+	}
+	cont := fixture.service.toolApprovalContinuation(context.Background(), CommittedToolApprovalResponse{
+		request: approval, input: input, runID: lifecycleTestRunID,
+	}, true)
+	cont.Setup = func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
+	}
 	runDecisionContinuation(t, func(eventCh chan<- WSStreamEvent) error {
-		return fixture.service.continueToolApprovalSession(
-			context.Background(),
-			toolapproval.Request{
-				ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-				ToolCallID: driveToolCallID, ToolName: "container_exec",
-				SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
-			},
-			ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-			lifecycleTestRunID,
-			sessionruntime.RunHandle{},
-			&continuationLifecycleResult{},
-			eventCh,
-		)
+		return fixture.service.driveUnroutedContinuation(context.Background(), cont, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }
 
 // driveAskUserContinuation continues a run after the user answered its
-// question.
+// question. The answer comes back on the committed request the user input
+// service resolved, so the continuation stores it as the ask_user call's
+// result and runs the model on from there; storing it as a new user message
+// instead would schedule a memory extraction the answer never asked for.
 func driveAskUserContinuation(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveDecisionHistory(t, "ask_user", sdk.TextOutput(`{"answers":[{"text":"blue"}]}`))
+	answered := userinput.Request{
+		ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+		ToolCallID: driveToolCallID, ToolName: "ask_user",
+		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
+		Result: map[string]any{"answers": []any{map[string]any{"text": "blue"}}},
+	}
+	fixture.service.userInput = &fakeUserInputService{target: answered, resolved: answered}
+	committed, err := fixture.service.CommitUserInputResponse(context.Background(), UserInputResponseInput{
+		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, UserInputID: answered.ID,
+	})
+	if err != nil {
+		t.Fatalf("CommitUserInputResponse() error = %v", err)
+	}
 	runDecisionContinuation(t, func(eventCh chan<- WSStreamEvent) error {
-		return fixture.service.continueUserInputSession(
-			context.Background(),
-			userinput.Request{
-				ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
-				ToolCallID: driveToolCallID, ToolName: "ask_user",
-				SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
-			},
-			UserInputResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
-			lifecycleTestRunID,
-			sessionruntime.RunHandle{},
-			&continuationLifecycleResult{},
-			eventCh,
-		)
+		return fixture.service.ContinueCommittedUserInputResponse(context.Background(), committed, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }
