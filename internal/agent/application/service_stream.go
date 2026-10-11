@@ -60,6 +60,7 @@ func historyFailureCode(code apperror.Code) apperror.Code {
 		apperror.CodeAgentToolTimeout,
 		apperror.CodeScheduleExecutionTimeout,
 		apperror.CodeAgentResponseInterrupted,
+		apperror.CodeAgentLoopDetected,
 		apperror.CodeAgentProviderOverloaded,
 		apperror.CodeAgentProviderRateLimited,
 		apperror.CodeAgentProviderQuotaExhausted,

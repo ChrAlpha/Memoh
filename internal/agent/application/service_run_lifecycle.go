@@ -675,7 +675,7 @@ func classifyContextLifecycleTerminal(
 			return contextLifecycleStatusFailedBudget, string(apperror.CodeContextBudgetUnsatisfied)
 		}
 	}
-	if explicitRunCancellation(ctx, cause) {
+	if explicitRunCancellation(ctx, cause) || drivenRunStopped(cause) {
 		return contextLifecycleStatusAborted, ""
 	}
 	if cause != nil {
@@ -694,6 +694,16 @@ func classifyContextLifecycleTerminal(
 func explicitRunCancellation(ctx context.Context, cause error) bool {
 	return errors.Is(context.Cause(nonNilContext(ctx)), context.Canceled) &&
 		(errors.Is(cause, context.Canceled) || errors.Is(apperror.CauseOf(cause), context.Canceled))
+}
+
+// drivenRunStopped reports a stop the run driver recorded. The driver cancels
+// its execution context with errRunStopped rather than context.Canceled so a
+// cancellation nobody asked for is not misread as a user stop; the lifecycle
+// status still has to read "aborted", which is why the marker is checked here
+// instead of widening explicitRunCancellation (that one also serves the loops
+// the driver replaced).
+func drivenRunStopped(cause error) bool {
+	return errors.Is(cause, errRunStopped)
 }
 
 func contextLifecycleOwnershipLost(ctx context.Context, cause error) bool {

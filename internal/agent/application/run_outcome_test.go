@@ -20,10 +20,10 @@ func TestClassifyRunFailure(t *testing.T) {
 	}{
 		{name: "catalogued code", cause: apperror.New(apperror.CodeAgentProviderOverloaded, nil), want: apperror.CodeAgentProviderOverloaded},
 		{name: "catalogued code under a wrap", cause: fmt.Errorf("stream: %w", apperror.New(apperror.CodeAgentResponseTimeout, nil)), want: apperror.CodeAgentResponseTimeout},
-		{name: "code outside the catalog", cause: apperror.New("not.catalogued", nil), want: apperror.CodeAgentResponseInterrupted},
-		{name: "plain error", cause: errors.New("connection reset"), want: apperror.CodeAgentResponseInterrupted},
-		{name: "cancellation", cause: context.Canceled, want: apperror.CodeAgentResponseInterrupted},
-		{name: "nil", cause: nil, want: apperror.CodeAgentResponseInterrupted},
+		{name: "code outside the catalog", cause: apperror.New("not.catalogued", nil), want: apperror.CodeRuntimeRunFailed},
+		{name: "plain error", cause: errors.New("connection reset"), want: apperror.CodeRuntimeRunFailed},
+		{name: "cancellation", cause: context.Canceled, want: apperror.CodeRuntimeRunFailed},
+		{name: "nil", cause: nil, want: apperror.CodeRuntimeRunFailed},
 		{name: "external agent code", cause: fmt.Errorf("prompt: %w", apperror.New(apperror.CodeACPRuntimeBusy, nil)), want: apperror.CodeACPRuntimeBusy},
 	}
 	for _, tc := range cases {

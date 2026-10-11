@@ -93,6 +93,10 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 	}()
 
 	ending := plan.Exec.execute(idleCtx, func(ev native.StreamEvent) {
+		// The watchdog is fed on the producer's side, before the event is
+		// offered to the consumer: it measures silence between events the
+		// runtime produced, not how fast a slow subscriber drains them.
+		idle.Observe(ev)
 		// The producer is offered events, never blocked on the consumer: a
 		// closed consumer channel is how it learns the consumer is gone, which
 		// is what keeps a runtime whose events nobody publishes from hanging.

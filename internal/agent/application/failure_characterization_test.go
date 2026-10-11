@@ -39,6 +39,7 @@ import (
 const (
 	charOverloadedDetail  = "The model provider is unavailable or overloaded right now. Please try again in a moment."
 	charInterruptedDetail = "The model response was interrupted. Please try again."
+	charRunFailedDetail   = "The response could not be completed. Please try again."
 	charRejectedDetail    = "The model provider rejected the request. Check the model settings, or try another model."
 	charUnreachableDetail = "Memoh could not reach the model provider. Check the provider address and that the service is running."
 )
@@ -221,8 +222,8 @@ func TestCharacterizeNativeStreamErrorClassification(t *testing.T) {
 	}
 }
 
-// Scenario 10: a failure cause without an apperror code gets a public event, but
-// only because agentFailureStreamEvent wraps it as an interruption.
+// Scenario 10: a failure cause without an apperror code gets a public event,
+// named by the run failure default because nothing else named it.
 func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 	t.Parallel()
 	for _, cause := range []error{errors.New("SECRET provider response"), context.Canceled} {
@@ -230,7 +231,7 @@ func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		if want := `{"type":"error","code":"agent.response_interrupted","error":"` + charInterruptedDetail + `"}`; string(data) != want {
+		if want := `{"type":"error","code":"runtime_run_failed","error":"` + charRunFailedDetail + `"}`; string(data) != want {
 			t.Fatalf("failure event for %v = %s, want %s", cause, data, want)
 		}
 	}

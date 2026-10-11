@@ -130,7 +130,7 @@ func TestAgentFailureStreamEventExposesOnlyStablePublicContract(t *testing.T) {
 
 	t.Run("uncatalogued failure", func(t *testing.T) {
 		event := agentFailureStreamEvent(errors.New("SECRET provider response"))
-		if event.Code != string(apperror.CodeAgentResponseInterrupted) {
+		if event.Code != string(apperror.CodeRuntimeRunFailed) {
 			t.Fatalf("fallback code = %q", event.Code)
 		}
 		if strings.Contains(event.Error, "SECRET") {

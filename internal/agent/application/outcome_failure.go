@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -233,6 +234,12 @@ func sentinelFailureCode(cause error) apperror.Code {
 		return apperror.CodeAgentToolTimeout
 	case errors.Is(cause, schedule.ErrExecutionTimeout):
 		return apperror.CodeScheduleExecutionTimeout
+	// The context fence cancels with a bare sentinel and the runtime reports
+	// the same one without a code, so the name has to come from here.
+	case errors.Is(cause, contextfrag.ErrProtectedContextOverflow):
+		return apperror.CodeContextProtectedOverflow
+	case errors.Is(cause, contextfrag.ErrBudgetUnsatisfied):
+		return apperror.CodeContextBudgetUnsatisfied
 	}
 	return ""
 }

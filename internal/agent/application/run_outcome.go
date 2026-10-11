@@ -11,13 +11,14 @@ import (
 )
 
 // classifyRunFailure names the public code a run failure is reported with: the
-// catalogued code the cause carries, or agent.response_interrupted when it
-// carries none the catalog knows.
+// catalogued code the cause carries, or runtime_run_failed when it carries none
+// the catalog knows. The default is this process's own unnamed failure, not a
+// code chosen by the entry that started the run.
 func classifyRunFailure(cause error) apperror.Code {
 	if code := publicFailureCode(cause); code != "" {
 		return code
 	}
-	return apperror.CodeAgentResponseInterrupted
+	return apperror.CodeRuntimeRunFailed
 }
 
 // classifyRuntimeFailure is classifyRunFailure for a turn an External Agent
