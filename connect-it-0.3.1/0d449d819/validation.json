@@ -1,0 +1,28 @@
+{
+  "memoh_head": "0d449d819",
+  "memoh_base": "0c350b3b5",
+  "environment": "scripts/dev-compose.sh devenv/docker-compose.yml + isolation override (project memoh-cit, web http://127.0.0.1:43082)",
+  "flow": "admin -> Supermarket -> Asana App -> Install -> Connect (Asana connector has no OAuth App configured in Connect-It)",
+  "before": {
+    "connect_it_image": "ghcr.io/felinics/connect-it:0.3.0",
+    "connect_it_schema_migration": "1 (dirty=false)",
+    "server_response": "400 connector.request_rejected",
+    "upstream": "validation_failed (HTTP 422)",
+    "ui": "Connect-It rejected the connector request."
+  },
+  "after": {
+    "connect_it_image": "ghcr.io/felinics/connect-it:0.3.1",
+    "connect_it_image_revision": "0dcd4a0c4d7de3a35cc01a9e372d029deb0fbf56",
+    "upgrade": "same PostgreSQL database, connect-it container recreated from the new default pin",
+    "connect_it_schema_migration": "2 (dirty=false)",
+    "server_response": "503 connector.oauth_client_not_configured (fault=dependency)",
+    "upstream": "oauth_client_not_configured (HTTP 422)",
+    "ui": "Connect-It has no OAuth App (Client ID and Client Secret) configured for Asana. ..."
+  },
+  "not_verified": [
+    "Completing a real OAuth authorization on 0.3.1",
+    "MCP tool discovery / execution changes from connect-it #11 and #12",
+    "Production docker-compose.yml deployment (only config resolution checked)",
+    "Memoh Cloud"
+  ]
+}
