@@ -2,6 +2,9 @@ package application
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 
 	"github.com/felinics/memoh/internal/agent/event"
@@ -70,54 +73,126 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 	// around it: the collector is per run and the entry cannot build it.
 	setupReq := spec.Req
 	setupReq.OutboundAssetCollector = assets.collected
-	plan, setupErr := spec.Setup(execCtx, setupReq)
-	if setupErr != nil {
-		if isHookRefusal(setupErr) {
-			obs.declareHook(setupErr, runStopped(execCtx))
-		} else {
-			obs.declare(setupErr, runStopped(execCtx))
+
+	// Everything up to the run's ending runs inside one recover: a run is other
+	// people's code as far as this driver is concerned (an entry's Setup, a
+	// runtime's producer, a delivery end), and one of them panicking must end
+	// this run rather than the process — the caller is blocked on this run's
+	// delivery, and a dead process takes every other session with it. The panic
+	// is recorded as the run's failure and settlement runs as usual, so the
+	// caller is answered instead of abandoned.
+	phase := phaseSetup
+	plan, ending := func() (plan runPlan, ending *execEnding) {
+		defer func() {
+			if r := recover(); r != nil {
+				s.logPanickedRun(execCtx, spec, phase, r)
+				obs.declare(panickedRunCause(r), runStopped(execCtx))
+			}
+		}()
+
+		var setupErr error
+		plan, setupErr = spec.Setup(execCtx, setupReq)
+		if setupErr != nil {
+			if isHookRefusal(setupErr) {
+				obs.declareHook(setupErr, runStopped(execCtx))
+			} else {
+				obs.declare(setupErr, runStopped(execCtx))
+			}
+			return plan, nil
 		}
-		return s.settleRun(execCtx, spec, plan, pub, obs, queue, phaseSetup, nil)
-	}
-	// The plan's request is the run's from here on; the collector rides on it
-	// because Setup was handed the wired request.
-	spec.Req = plan.ReqFor(setupReq)
+		// The plan's request is the run's from here on; the collector rides on
+		// it because Setup was handed the wired request.
+		spec.Req = plan.ReqFor(setupReq)
 
-	// The idle watchdog bounds model and tool silence. It cancels the execution
-	// context with its own sentinel, which the failure policy reads as a
-	// timeout rather than as a stop.
-	idleCtx, idle := s.withStreamIdleTimeout(execCtx, plan.IdleEffort)
-	defer idle.Stop()
-	obs.idle = idle
+		// The idle watchdog bounds model and tool silence. It cancels the
+		// execution context with its own sentinel, which the failure policy
+		// reads as a timeout rather than as a stop.
+		idleCtx, idle := s.withStreamIdleTimeout(execCtx, plan.IdleEffort)
+		defer idle.Stop()
+		obs.idle = idle
 
-	events := make(chan native.StreamEvent, runEventBuffer)
-	consumerDone := make(chan struct{})
-	go func() {
-		defer close(consumerDone)
-		s.consume(execCtx, spec, obs, assets, pub, queue, stopExec, func() bool { return runStopped(execCtx) }, events)
+		events := make(chan native.StreamEvent, runEventBuffer)
+		consumerDone := make(chan struct{})
+		go func() {
+			defer close(consumerDone)
+			// A panic in the consumer must not leave the producer waiting on
+			// consumerDone for a goroutine that is gone.
+			defer func() {
+				if r := recover(); r != nil {
+					s.logPanickedRun(execCtx, spec, phaseExecution, r)
+					stopExec(panickedRunCause(r))
+				}
+			}()
+			s.consume(execCtx, spec, obs, assets, pub, queue, stopExec, func() bool { return runStopped(execCtx) }, events)
+		}()
+		// The producer is offered events and the consumer is collected
+		// afterwards, whether or not the producer returned normally.
+		defer func() {
+			close(events)
+			<-consumerDone
+		}()
+
+		phase = phaseExecution
+		done := plan.Exec.execute(idleCtx, func(ev native.StreamEvent) {
+			// The watchdog is fed on the producer's side, before the event is
+			// offered to the consumer: it measures silence between events the
+			// runtime produced, not how fast a slow subscriber drains them.
+			idle.Observe(ev)
+			// The producer is offered events, never blocked on the consumer: a
+			// closed consumer channel is how it learns the consumer is gone,
+			// which is what keeps a runtime whose events nobody publishes from
+			// hanging.
+			select {
+			case events <- ev:
+			case <-consumerDone:
+			}
+		})
+		if idle.DidFire() && obs.declared == nil {
+			obs.declare(context.Cause(idleCtx), false)
+		}
+		return plan, &done
 	}()
 
-	ending := plan.Exec.execute(idleCtx, func(ev native.StreamEvent) {
-		// The watchdog is fed on the producer's side, before the event is
-		// offered to the consumer: it measures silence between events the
-		// runtime produced, not how fast a slow subscriber drains them.
-		idle.Observe(ev)
-		// The producer is offered events, never blocked on the consumer: a
-		// closed consumer channel is how it learns the consumer is gone, which
-		// is what keeps a runtime whose events nobody publishes from hanging.
-		select {
-		case events <- ev:
-		case <-consumerDone:
-		}
-	})
-	close(events)
-	<-consumerDone
-	stopWatch.stop()
-	if idle.DidFire() && obs.declared == nil {
-		obs.declare(context.Cause(idleCtx), false)
-	}
+	return s.settleRun(execCtx, spec, plan, pub, obs, queue, phase, ending)
+}
 
-	return s.settleRun(execCtx, spec, plan, pub, obs, queue, phaseExecution, &ending)
+// panickedRunCause is how a panic inside a run is reported to its failure
+// policy: the catalog's catch-all, because a panic names nothing a user could
+// act on. The panic value stays behind it as the private cause, for the run's
+// result record and its span.
+func panickedRunCause(r any) error {
+	return apperror.Wrap(apperror.CodeInternal, fmt.Errorf("agent run panicked: %v", r), nil)
+}
+
+// logPanickedRun records a recovered panic with the stack that caused it. A
+// panic is always a bug, and the stack is the only thing that says which.
+func (s *Service) logPanickedRun(ctx context.Context, spec runSpec, phase runPhase, r any) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.ErrorContext(ctx, "agent run panicked",
+		slog.String("phase", phaseName(phase)),
+		slog.String("bot_id", spec.Req.BotID),
+		slog.String("session_id", spec.Req.ThreadID),
+		slog.String("run_id", spec.Run.Handle.RunID),
+		slog.Any("panic", r),
+		slog.String("stack", string(debug.Stack())),
+	)
+}
+
+func phaseName(phase runPhase) string {
+	switch phase {
+	case phaseSetup:
+		return "setup"
+	case phaseExecution:
+		return "execution"
+	case phaseCommit:
+		return "commit"
+	case phasePublish:
+		return "publish"
+	default:
+		return "unknown"
+	}
 }
 
 // settleRun names how a run ended, writes the history that ending owns, and

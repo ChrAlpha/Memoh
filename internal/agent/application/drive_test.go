@@ -1095,3 +1095,62 @@ func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
 		t.Fatalf("a stopped run ended as a publication failure: %#v", result.Failure)
 	}
 }
+
+// panickingExecutor is a runtime whose producer panics.
+type panickingExecutor struct{ panicValue any }
+
+func (e *panickingExecutor) execute(_ context.Context, _ func(native.StreamEvent)) execEnding {
+	panic(e.panicValue)
+}
+
+// A panic inside a run ends that run. This is a hosted service: letting the
+// panic through would take the process down with every other session in it,
+// and a recovered panic that skipped settlement would leave the caller's
+// delivery end blocked forever, plus the consumer goroutine waiting on a
+// producer that will never close its channel.
+func TestDriveContainsAPanicInTheProducer(t *testing.T) {
+	t.Parallel()
+
+	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	delivery := &recordingDelivery{}
+	spec := scheduledSpec(&panickingExecutor{panicValue: "boom"}, delivery)
+
+	result := svc.drive(context.Background(), spec)
+
+	if result.End != endFailed || result.Failure == nil {
+		t.Fatalf("result = %#v, want a named failure for the panicking run", result)
+	}
+	if result.Failure.Code != apperror.CodeInternal {
+		t.Fatalf("failure code = %q, want %q", result.Failure.Code, apperror.CodeInternal)
+	}
+	// Settlement ran: the caller was told how the run ended.
+	_, ended, _ := delivery.snapshot()
+	if len(ended) != 1 {
+		t.Fatalf("Ended = %#v, want the ending reported once", ended)
+	}
+}
+
+// The same containment applies to an entry's Setup, which runs before any
+// executor exists.
+func TestDriveContainsAPanicInSetup(t *testing.T) {
+	t.Parallel()
+
+	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	delivery := &recordingDelivery{}
+	spec := scheduledSpec(nil, delivery)
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+		panic("setup boom")
+	}
+
+	result := svc.drive(context.Background(), spec)
+
+	if result.End != endFailed || result.Failure == nil {
+		t.Fatalf("result = %#v, want a named failure for a panicking setup", result)
+	}
+	if result.Failure.Code != apperror.CodeInternal {
+		t.Fatalf("failure code = %q, want %q", result.Failure.Code, apperror.CodeInternal)
+	}
+	if _, ended, _ := delivery.snapshot(); len(ended) != 1 {
+		t.Fatalf("Ended = %#v, want the ending reported once", ended)
+	}
+}
