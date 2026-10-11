@@ -22,8 +22,9 @@ export function sendFailedMessage() {
   return localizedMessages().chat.sendFailed
 }
 
-export function firstSendTimeoutMessage() {
-  return localizedMessages().chat.sendConfirmTimeout
+// A first send that ended without the server's answer: it may have been taken.
+export function sendOutcomeUnknownMessage() {
+  return localizedMessages().chat.sendOutcomeUnknown
 }
 
 export function workdirMismatchMessage() {

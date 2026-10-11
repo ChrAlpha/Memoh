@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import enMessages from '@/i18n/locales/en.json'
 import { createPinia, disposePinia, setActivePinia, type Pinia } from 'pinia'
 import type { ChatAssistantTurn } from './chat/types'
 import { sendFailedMessage } from './chat/messages'
@@ -597,6 +598,8 @@ beforeEach(() => {
           h.abortedWSRuns.push(runId)
         }),
         close: vi.fn(),
+        forget: vi.fn(),
+        bindSession: vi.fn(),
         onOpen: null,
         onClose: null,
       }
@@ -4075,6 +4078,141 @@ describe('chat-list store', () => {
         restoreAttachments: [attachment],
         restoreRequestedSkills: [requestedSkill],
       })
+    })
+
+  it('keeps a held first send across a dropped socket once the server named its session', async () => {
+      h.manualSessionCreation = true
+      h.sendUpdates = []
+      h.acceptRuns = false
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const socket = api.connectWebSocket.mock.results.at(-1)!.value
+      const sending = store.sendMessage('hello', [], { composerScope: 'bot-1:draft-a' })
+      await flushPromises()
+      const invocationId = wsInvocationId(0)
+      h.streamHandler?.({ type: 'session_created', invocation_id: invocationId, session_id: 'created-session' })
+      await flushPromises()
+      // The resend a reconnect makes goes to the session the server named, so
+      // the server answers with the run this invocation already has.
+      expect(socket.bindSession).toHaveBeenCalledWith(invocationId, 'created-session')
+
+      // The run_accepted frame is lost with the socket. The server may have
+      // taken the run, so the send waits and its session stays.
+      socket.onClose?.()
+      await flushPromises()
+      expect(api.deleteSession).not.toHaveBeenCalled()
+      expect(store.sessionId).toBeNull()
+
+      // The reconnect resends the request, now addressed to that session, and
+      // the server answers with the invocation's run.
+      // As on a real reconnect, the pending request goes out before onOpen.
+      h.lastSessionId = 'created-session'
+      h.acceptRuns = true
+      socket.send({ ...h.sentWSMessages[0], session_id: 'created-session' })
+      socket.onOpen?.()
+      await flushPromises()
+      emitRuntime(runtime.completed)
+
+      await expect(sending).resolves.toMatchObject({ ok: true })
+      expect(store.sessionId).toBe('created-session')
+      expect(api.deleteSession).not.toHaveBeenCalled()
+    })
+
+  // A refusal of the resend says nothing about the first attempt: the server
+  // refuses before admission looks the invocation up (access, workspace
+  // target, a skill activation finding its own run holding the session).
+  it.each([
+    ['an error frame', { type: 'error', code: 'workspace_target.unavailable', message: 'target offline' }],
+    ['a rejected run', { type: 'run_rejected', code: 'session_runtime.ledger_unavailable', message: 'ledger unavailable' }],
+    ['a command error', { type: 'command_error', terminal: true, code: 'slash.unknown', message: 'unknown command' }],
+    ['a busy session', { type: 'command_error', terminal: true, code: 'session_runtime.session_busy', message: 'session busy' }],
+  ] as const)('keeps the session when the resent first send is refused with %s', async (_, refusal) => {
+      h.manualSessionCreation = true
+      h.sendUpdates = []
+      h.acceptRuns = false
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const socket = api.connectWebSocket.mock.results.at(-1)!.value
+      const sending = store.sendMessage('hello', [], { composerScope: 'bot-1:draft-a' })
+      await flushPromises()
+      const invocationId = wsInvocationId(0)
+      h.streamHandler?.({ type: 'session_created', invocation_id: invocationId, session_id: 'created-session' })
+      await flushPromises()
+      socket.onClose?.()
+      await flushPromises()
+
+      h.streamHandler?.({ ...refusal, invocation_id: invocationId, session_id: 'created-session' })
+      const result = await sending
+
+      expect(result).toMatchObject({ ok: false, stage: 'startup', restoreInput: 'hello' })
+      expect(result.error).toBe(enMessages.chat.sendOutcomeUnknown)
+      expect(api.deleteSession).not.toHaveBeenCalled()
+    })
+
+  it('keeps the session of a held first send whose confirmation timed out', async () => {
+      h.manualSessionCreation = true
+      h.sendUpdates = []
+      h.acceptRuns = false
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // flushPromises waits on a timer, which is fake here.
+      const flush = () => vi.advanceTimersByTimeAsync(0)
+      try {
+        const store = useChatStore()
+
+        await store.selectBot('bot-1')
+        const sending = store.sendMessage('hello', [], { composerScope: 'bot-1:draft-a' })
+        await flush()
+        const invocationId = wsInvocationId(0)
+        h.streamHandler?.({ type: 'session_created', invocation_id: invocationId, session_id: 'created-session' })
+        await flush()
+
+        await vi.advanceTimersByTimeAsync(30_000)
+        const result = await sending
+
+        // Unconfirmed is not refused: the session may hold the run, so it is
+        // kept, and the copy does not ask for a blind resend.
+        expect(result).toMatchObject({ ok: false, stage: 'startup', restoreInput: 'hello' })
+        expect(result.error).toBe(enMessages.chat.sendOutcomeUnknown)
+        expect(api.deleteSession).not.toHaveBeenCalled()
+
+        // A confirmation that still arrives stops the run the user was told
+        // did not go through.
+        h.streamHandler?.({
+          type: 'run_accepted',
+          run_id: 'run-late',
+          invocation_id: invocationId,
+          session_id: 'created-session',
+          turn_id: 'turn-run-late',
+          epoch: 'epoch-created-session',
+          seq: 1,
+        })
+        await flush()
+        expect(h.abortedWSRuns).toEqual(['run-late'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+  it('reports an unknown outcome when the socket drops before the server named a session', async () => {
+      h.manualSessionCreation = true
+      h.sendUpdates = []
+      h.acceptRuns = false
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const socket = api.connectWebSocket.mock.results.at(-1)!.value
+      const sending = store.sendMessage('hello', [], { composerScope: 'bot-1:draft-a' })
+      await flushPromises()
+
+      socket.onClose?.()
+      const result = await sending
+
+      expect(result).toMatchObject({ ok: false, stage: 'startup', restoreInput: 'hello' })
+      expect(result.error).toBe(enMessages.chat.sendOutcomeUnknown)
+      expect(socket.bindSession).not.toHaveBeenCalled()
+      expect(api.deleteSession).not.toHaveBeenCalled()
     })
 
   it('keeps the current session when deferred draft failure arrives after a session switch', async () => {

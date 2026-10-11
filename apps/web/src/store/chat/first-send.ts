@@ -28,6 +28,9 @@ export interface FirstSendEntry {
   // Empty until session_created.
   sessionId: string
   workdirId: string
+  // The socket closed after session_created, so the reconnect sends the
+  // request again, addressed to that session.
+  resent: boolean
   // True once the held turns are on screen (run_accepted). From here on the
   // view is an ordinary session and a failure stays in its history.
   revealed: boolean
@@ -72,6 +75,7 @@ export function createFirstSendTracker() {
       requestedWorkdirId: requestedWorkdirId.trim(),
       sessionId: '',
       workdirId: '',
+      resent: false,
       revealed: false,
     })
   }
@@ -89,6 +93,11 @@ export function createFirstSendTracker() {
     if (!entry || entry.sessionId) return
     entry.sessionId = sessionId.trim()
     entry.workdirId = workdirId.trim()
+  }
+
+  function markResent(invocationId: string) {
+    const entry = entryForInvocation(invocationId)
+    if (entry) entry.resent = true
   }
 
   // Puts the held turns on screen. Returns false when there is nothing to
@@ -111,6 +120,12 @@ export function createFirstSendTracker() {
   function isAwaitingConfirmation(invocationId: string): boolean {
     const entry = entryForInvocation(invocationId)
     return !!entry && !entry.revealed
+  }
+
+  // A held send whose request the reconnect sent again (see markResent).
+  function isResent(invocationId: string): boolean {
+    const entry = entryForInvocation(invocationId)
+    return !!entry && entry.resent && !entry.revealed
   }
 
   function awaitingConfirmationIds(): string[] {
@@ -160,9 +175,11 @@ export function createFirstSendTracker() {
     begin,
     accept,
     admit,
+    markResent,
     reveal,
     isRevealed,
     isAwaitingConfirmation,
+    isResent,
     awaitingConfirmationIds,
     isSessionTentative,
     requestedWorkdirFor,

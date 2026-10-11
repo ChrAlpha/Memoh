@@ -161,6 +161,11 @@ export function createChatRealtimeController(
     activeWebSocket?.forget(invocationId)
   }
 
+  function bindWebSocketRequestSession(botId: string, invocationId: string, sessionId: string) {
+    if (activeWebSocketBotId !== botId.trim()) return
+    activeWebSocket?.bindSession(invocationId, sessionId)
+  }
+
   function abortWebSocketRun(
     runId: string,
     botId?: string,
@@ -297,6 +302,7 @@ export function createChatRealtimeController(
     ensureWebSocket,
     sendWebSocketMessage,
     forgetWebSocketRequest,
+    bindWebSocketRequestSession,
     abortWebSocketRun,
     startSessionRuntime,
     stopSessionRuntime,

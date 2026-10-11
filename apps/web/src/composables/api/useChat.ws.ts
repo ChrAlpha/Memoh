@@ -128,6 +128,10 @@ export interface ChatWebSocket {
   abort: (runId: string, sessionId: string, controlId: string) => void
   // Drops a reliable request so a reconnect does not resend it.
   forget: (invocationId: string) => void
+  // Points a pending message at the session the server created for it, so a
+  // reconnect resends it into that session instead of creating another one.
+  // The server answers a resent invocation with the run it already has.
+  bindSession: (invocationId: string, sessionId: string) => void
   close: () => void
   readonly connected: boolean
   onOpen: (() => void) | null
@@ -189,6 +193,15 @@ export function connectWebSocket(
     forget(invocationId: string) {
       const id = invocationId.trim()
       if (id) pendingReliableRequests.delete(`invocation:${id}`)
+    },
+    bindSession(invocationId: string, sessionId: string) {
+      const key = `invocation:${invocationId.trim()}`
+      const sid = sessionId.trim()
+      const payload = pendingReliableRequests.get(key)
+      if (!payload || !sid) return
+      const message = JSON.parse(payload) as WSClientMessage
+      if (message.type !== 'message' || message.session_id?.trim()) return
+      pendingReliableRequests.set(key, JSON.stringify({ ...message, session_id: sid }))
     },
     close() {
       closed = true

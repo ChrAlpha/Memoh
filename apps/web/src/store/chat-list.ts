@@ -26,7 +26,7 @@ import {
   commandErrorMessage,
   forkFailedMessage,
   sendFailedMessage,
-  userInputConnectionLostMessage, workdirMismatchMessage, firstSendTimeoutMessage,
+  userInputConnectionLostMessage, workdirMismatchMessage, sendOutcomeUnknownMessage,
 } from './chat/messages'
 import {
   createBackgroundTaskTracker,
@@ -258,7 +258,7 @@ export const useChatStore = defineStore('chat', () => {
     transcriptForTarget,
     createControlId: createInvocationId,
     connectionLostMessage: userInputConnectionLostMessage,
-    firstSendTimeoutMessage,
+    sendOutcomeUnknownMessage,
     resolveErrorMessage: resolveApiErrorMessage,
     showError: message => toast.error(message),
     onBotSessionsActivityEvent: handleBotSessionsActivityEvent,

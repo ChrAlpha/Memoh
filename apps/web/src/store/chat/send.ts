@@ -46,12 +46,16 @@ export interface StartupSendFailure {
 export class StreamFailureError extends Error {
   stage: SendMessageStage
   feedback?: unknown
+  // The send ended without an answer from the server (the socket dropped, or
+  // no confirmation came in time), so the server may have taken the run.
+  outcomeUnknown: boolean
 
-  constructor(message: string, stage: SendMessageStage, feedback?: unknown) {
+  constructor(message: string, stage: SendMessageStage, feedback?: unknown, options: { outcomeUnknown?: boolean } = {}) {
     super(message)
     this.name = 'StreamFailureError'
     this.stage = stage
     this.feedback = feedback
+    this.outcomeUnknown = options.outcomeUnknown === true
   }
 }
 
@@ -402,9 +406,13 @@ export function createChatSend(deps: ChatSendDeps) {
       const targetSessionId = sendSessionId || createdSessionId
 
       if (held) {
-        // The server created a session but refused the run (or the socket
-        // dropped in between). Nothing shows it yet, so it is deleted quietly.
-        if (targetSessionId) {
+        // The server created a session but refused the run. Nothing shows it
+        // yet, so it is deleted quietly. A send that ended without an answer
+        // (the socket dropped, or no confirmation came) may have had its run
+        // taken: deleting would hide that run, and the input handed back
+        // could start it twice. That session is kept and becomes ordinary.
+        const outcomeUnknown = failure instanceof StreamFailureError && failure.outcomeUnknown
+        if (targetSessionId && !outcomeUnknown) {
           void deps.cleanupFailedDeferredSession(botId, targetSessionId, composerScope)
         }
         deps.firstSend.finish(sendInvocationId)
