@@ -142,12 +142,18 @@ func (s *Service) consume(
 	stopped func() bool,
 	events <-chan native.StreamEvent,
 ) {
+	// Publication outlives the run's execution context. A stopped run still
+	// publishes the events its producer already emitted, and a publication must
+	// not fail merely because the context it runs under was cancelled: the
+	// session runtime's own gate races the cancellation, and losing that race
+	// would report a stopped run as a publication failure.
+	publishCtx := context.WithoutCancel(ctx)
 	for ev := range events {
 		published := obs.observe(ctx, s, spec.Req.BotID, assets, stopped(), ev)
 		for _, out := range published {
 			payload := marshalRunEvent(out)
 			if publisher := pub.current(); publisher != nil {
-				if err := publisher.publish(ctx, out, payload); err != nil {
+				if err := publisher.publish(publishCtx, out, payload); err != nil {
 					s.refusePublication(pub, obs, abort, err)
 				}
 			}

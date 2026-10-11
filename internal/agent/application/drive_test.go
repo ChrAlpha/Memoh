@@ -1028,3 +1028,70 @@ func TestSetupReceivesTheRequestWithTheDriversAssetCollector(t *testing.T) {
 		t.Fatal("Setup received a request with no asset collector")
 	}
 }
+
+// ctxCancelledPublisher models the session runtime's gate: the publication
+// races the run's cancellation, so a cancelled context can refuse an event.
+// The recording double ignores its context, which is why a run that publishes
+// under a cancelled execution context went unnoticed.
+type ctxCancelledPublisher struct {
+	mu     sync.Mutex
+	events []native.StreamEvent
+	errs   []error
+}
+
+func (p *ctxCancelledPublisher) publish(ctx context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		p.errs = append(p.errs, err)
+		return err
+	}
+	p.events = append(p.events, event)
+	return nil
+}
+
+func (p *ctxCancelledPublisher) refusals() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.errs)
+}
+
+// A stop cancels the execution context while the producer's already-emitted
+// events are still being published. Publication must not fail for that alone:
+// the run was stopped, not broken, and reporting it as a publication failure
+// would name the wrong ending and record a failure for a run the user stopped.
+func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
+	t.Parallel()
+
+	pub := &ctxCancelledPublisher{}
+	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc.publishTurnEvent = pub.publish
+
+	release := make(chan struct{})
+	terminal := scheduleTerminalEvent(t, "done")
+	exec := &scriptedExecutor{
+		events: []native.StreamEvent{
+			{Type: native.EventTextDelta, Delta: "a"},
+			{Type: native.EventTextDelta, Delta: "b"},
+		},
+		terminal:   &terminal,
+		blockUntil: release,
+	}
+	spec := scheduledSpec(exec, &recordingDelivery{})
+	stop := make(chan struct{})
+	spec.StopCh = stop
+
+	done := make(chan runResult, 1)
+	go func() { done <- svc.drive(context.Background(), spec) }()
+	close(stop)
+	close(release)
+
+	result := <-done
+
+	if refusals := pub.refusals(); refusals != 0 {
+		t.Fatalf("publication refused %d time(s) because the execution context was cancelled", refusals)
+	}
+	if result.End == endFailed && result.Failure != nil && result.Failure.Code == apperror.CodeSessionPublishFailed {
+		t.Fatalf("a stopped run ended as a publication failure: %#v", result.Failure)
+	}
+}
