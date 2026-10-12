@@ -8,9 +8,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/schedule"
 	"github.com/felinics/memoh/internal/settings"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
 type compactingLifecycleQueries struct {
@@ -122,4 +125,52 @@ func TestScheduledTriggerCompactsAfterTheRunEnds(t *testing.T) {
 		}, "")
 	}()
 	assertPassFollowsRun(t, fixture, runner, cancel, ended)
+}
+
+// Shutdown first closes admission and then interrupts every local run. The
+// pass an interrupted run deferred would claim rows and die with the process,
+// keeping them out of compaction until the claim goes stale, so none starts.
+func TestShutdownInterruptedRunStartsNoCompaction(t *testing.T) {
+	fixture, runner := newRunEndFixture(t)
+	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID: "owner-shutdown", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: abortAlignmentFence{},
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	fixture.service.SetSessionRuntime(manager)
+
+	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "shutdown-team",
+		Mode:                 turn.ModeChat,
+		BotID:                lifecycleTestBotID,
+		ChatID:               lifecycleTestBotID,
+		ThreadID:             lifecycleTestSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		for range handle.Events() {
+		}
+		for range handle.Errs() {
+		}
+	}()
+	select {
+	case <-fixture.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider call did not start")
+	}
+	if err := manager.InterruptForShutdown(context.Background()); err != nil {
+		t.Fatalf("InterruptForShutdown: %v", err)
+	}
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted run did not end")
+	}
+	runner.assertNoPassWithin(t, 300*time.Millisecond)
 }

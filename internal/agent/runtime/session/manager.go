@@ -483,6 +483,12 @@ func (m *Manager) IsDistributed() bool {
 	return m != nil && m.distributed != nil
 }
 
+// AdmissionClosed reports that shutdown has begun: no run is admitted any more
+// and local runs are being interrupted.
+func (m *Manager) AdmissionClosed() bool {
+	return m.isClosed()
+}
+
 func (m *Manager) isClosed() bool {
 	if m == nil || m.closeCh == nil {
 		return false

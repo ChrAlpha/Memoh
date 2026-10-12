@@ -212,6 +212,11 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if s.sessionManager.AdmissionClosed() {
+			// A pass claims its rows before the summarizer call; dying with the
+			// process would keep them out of compaction until the claim is stale.
+			return nil
+		}
 		res, err := s.compactionService.RunCompactionSync(ctx, cfg)
 		if errors.Is(err, compaction.ErrIneffectiveSummary) {
 			continue
