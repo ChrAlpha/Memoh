@@ -298,12 +298,10 @@ func TestOrderStoppedRunStillPublishesItsTail(t *testing.T) {
 	}
 	pub := &recordingTurnEventPublisher{}
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
-	stop := make(chan struct{})
-	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.StopCh = stop
-	close(stop)
+	runCtx, stop := context.WithCancelCause(context.Background())
+	stop(errRunStopped)
 
-	result := svc.drive(context.Background(), spec)
+	result := svc.drive(runCtx, scheduledSpec(exec, &recordingDelivery{}))
 
 	if result.End != endStopped {
 		t.Fatalf("end = %s, want stopped", result.End)

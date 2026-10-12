@@ -53,21 +53,18 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 		spec.Delivery = noDelivery{}
 	}
 	runCtx := ctx
-	// The execution context carries the stop the driver was asked for, and the
-	// run context's own cause when the run ends for a reason outside it — an
-	// ownership revoke, a budget. Without that the two would be told apart by
-	// which context a caller happened to read.
+	// The execution context carries the stop the driver raises itself — a
+	// publication refused, a panic — and every reason the run context ended
+	// with, because it is a child of it. A stop is written on the run context
+	// by whoever raises it (the entry's own signal, the session runtime's
+	// routed abort), so the marker arrives here already named.
 	execCtx, stopExec := context.WithCancelCause(runCtx)
 	defer stopExec(nil)
-	stopInherit := context.AfterFunc(runCtx, func() { stopExec(context.Cause(runCtx)) })
-	defer stopInherit()
 
 	pub := &runPublisherSet{pub: s.publisherFor(spec)}
 	obs := newRunObserver()
 	assets := newOutboundAssets()
 	queue := startDeliveryQueue(runCtx, spec.Delivery)
-	stopWatch := watchRunStop(execCtx, stopExec, spec)
-	defer stopWatch.stop()
 
 	// The driver finishes the request's wiring before Setup builds the run
 	// around it: the collector is per run and the entry cannot build it.
@@ -267,7 +264,6 @@ func (s *Service) settleRun(
 	if summary.Persisted == nil {
 		summary.Persisted = []messagepkg.Message{}
 	}
-
 	// The run's context lifecycle terminal carries the context the run
 	// assembled, and is written before the terminal state so the diagnostic
 	// row and the run's outcome describe the same ending. A run another owner
@@ -301,6 +297,14 @@ func (s *Service) settleRun(
 
 	// Everything published is delivered, or the caller is gone.
 	queue.closeAndWait()
+	// The assets the caller's own outbound path produced are linked here, after
+	// its last event was handed over: before that they may still be on their
+	// way, and the run's own history write has already linked what the run
+	// produced. The two lists overlap, and linking the same asset twice is an
+	// upsert on its message and content hash.
+	if reported := reportedRunAssets(spec.Delivery); len(reported) > 0 {
+		s.LinkOutboundAssets(context.WithoutCancel(runCtx), spec.Req.BotID, spec.Req.ThreadID, outboundAssetRefsToMessageRefs(reported))
+	}
 	spec.Delivery.Settle()
 	terminal := s.finishDrivenRun(runCtx, spec.Run, end, failure)
 	spec.Delivery.Ended(context.WithoutCancel(runCtx), RunEnded{
@@ -435,50 +439,15 @@ func publicRunFailure(f *RunFailure) error {
 	return f.Recorded()
 }
 
-// runStopWatch ends a run when something outside it says to stop. Only the
-// entry's own signal is translated into the driver's marker: an ownership
-// revoke or a budget expiry arrives through the run context instead, and
-// carries its own cause.
-type runStopWatch struct {
-	done chan struct{}
-	once func()
-}
-
-func watchRunStop(execCtx context.Context, stop context.CancelCauseFunc, spec runSpec) *runStopWatch {
-	done := make(chan struct{})
-	var once sync.Once
-	watch := &runStopWatch{
-		done: done,
-		once: func() { once.Do(func() { close(done) }) },
+// reportedRunAssets are the asset references the delivery end collected on the
+// caller's behalf, if it collects any. A delivery end that has none is not
+// asked for them.
+func reportedRunAssets(delivery RunDelivery) []OutboundAssetRef {
+	reporter, ok := delivery.(reportedAssetsSource)
+	if !ok {
+		return nil
 	}
-	if spec.StopCh == nil {
-		return watch
-	}
-	// A signal already delivered when the run starts is a stop before it ran:
-	// waiting for the watcher goroutine to be scheduled would let the run
-	// execute and report a failure instead.
-	select {
-	case <-spec.StopCh:
-		stop(errRunStopped)
-		return watch
-	default:
-	}
-	go func() {
-		select {
-		case <-spec.StopCh:
-			stop(errRunStopped)
-		case <-done:
-		case <-execCtx.Done():
-		}
-	}()
-	return watch
-}
-
-func (w *runStopWatch) stop() {
-	if w == nil {
-		return
-	}
-	w.once()
+	return reporter.reportedAssets()
 }
 
 // endString names a runEnd for a log line.

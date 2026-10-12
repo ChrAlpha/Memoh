@@ -381,7 +381,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		cancel()
 		return nil, err
 	}
-	runCtx, admission, _, _, err := s.admitTriggeredRun(runBase, data.SessionType, row.BotID.String(), row.SessionID.String(), "resume:"+row.RunID.String(), payload, nil, row.RunID.String())
+	runCtx, admission, _, _, err := s.admitTriggeredRun(runBase, data.SessionType, row.BotID.String(), row.SessionID.String(), "resume:"+row.RunID.String(), payload, nil, errRunStopped, row.RunID.String())
 	if err != nil {
 		cancel()
 		if errors.Is(err, ledger.ErrResumeSuperseded) || errors.Is(err, sessionruntime.ErrInvocationConflict) {

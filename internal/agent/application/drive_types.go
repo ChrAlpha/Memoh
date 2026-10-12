@@ -35,9 +35,6 @@ type runSpec struct {
 	// Publisher overrides the session projection publisher; a decision
 	// continuation also writes the answering caller's output.
 	Publisher runPublisher
-	// StopCh, when non-nil, is an external stop signal: a receive from it (or
-	// its close) ends the run as a stop. Web passes the turn's abort channel.
-	StopCh <-chan struct{}
 	// Unattended is set by the schedule entry: nobody can answer a decision for
 	// this run.
 	Unattended bool

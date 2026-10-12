@@ -22,6 +22,15 @@ type RunDelivery interface {
 	Ended(ctx context.Context, end RunEnded)
 }
 
+// reportedAssetsSource is a delivery end that collects asset references for
+// the caller's own outbound path — the attachments a channel ingested, the
+// audio it synthesized — so the run can link them to the reply they belong to.
+// It is separate from the run's own collector because those references exist
+// only once the caller has seen the events.
+type reportedAssetsSource interface {
+	reportedAssets() []OutboundAssetRef
+}
+
 // RunEvent is one event as it leaves the driver: the public form of the event
 // (an error carries its code and args, never its cause) and its JSON, marshalled
 // once so every consumer reads the same bytes.

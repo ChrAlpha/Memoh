@@ -58,7 +58,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 			},
 		}
 	}
-	runCtx, admission, _, release, err := s.admitTriggeredRun(ctx, sessionmode.Schedule, botID, payload.SessionID, scheduleInvocationID(payload), submission, viewFn)
+	runCtx, admission, _, release, err := s.admitTriggeredRun(ctx, sessionmode.Schedule, botID, payload.SessionID, scheduleInvocationID(payload), submission, viewFn, errRunStopped)
 	if errors.Is(err, sessionruntime.ErrSessionBusy) {
 		// A fire that cannot take the thread's slot has no value once the next
 		// one is due, so it is dropped rather than retried here.

@@ -365,12 +365,12 @@ func TestDriveStopEndsWithoutAFailure(t *testing.T) {
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
 	delivery := &recordingDelivery{}
 
-	stop := make(chan struct{})
-	spec := scheduledSpec(exec, delivery)
-	spec.StopCh = stop
-	close(stop)
+	// The entry stops the run by ending its context with the stop marker: the
+	// run names the ending from that, not from a channel of its own.
+	runCtx, stop := context.WithCancelCause(context.Background())
+	stop(errRunStopped)
 
-	result := svc.drive(context.Background(), spec)
+	result := svc.drive(runCtx, scheduledSpec(exec, delivery))
 
 	if result.End != endStopped {
 		t.Fatalf("end = %s, want stopped (failure %#v)", result.End, result.Failure)
@@ -1077,13 +1077,12 @@ func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
 		terminal:   &terminal,
 		blockUntil: release,
 	}
+	runCtx, stop := context.WithCancelCause(context.Background())
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	stop := make(chan struct{})
-	spec.StopCh = stop
 
 	done := make(chan runResult, 1)
-	go func() { done <- svc.drive(context.Background(), spec) }()
-	close(stop)
+	go func() { done <- svc.drive(runCtx, spec) }()
+	stop(errRunStopped)
 	close(release)
 
 	result := <-done
@@ -1152,6 +1151,9 @@ func TestDriveContainsAPanicInSetup(t *testing.T) {
 	}
 	if _, ended, _ := delivery.snapshot(); len(ended) != 1 {
 		t.Fatalf("Ended = %#v, want the ending reported once", ended)
+	}
+}
+
 // L2: IM StartTurn. A chat run's input left its submitter, so a failure in
 // setup leaves the user message and a failure row: the sender whose message was
 // refused sees why, and the row is what the next turn reads. A Web send in the
@@ -1204,4 +1206,92 @@ func TestDriveIMStartTurnSetupFailureLeavesTheUserMessageAndRow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// gap 1 regression: the assets the delivery end reports — the attachments a
+// channel ingested, the audio it synthesized — must be linked to the reply they
+// belong to. Without this they are collected and dropped, and no test notices
+// because the handle still holds them.
+func TestDriveLinksTheAssetsTheDeliveryEndReports(t *testing.T) {
+	t.Parallel()
+
+	terminal := scheduleTerminalEvent(t, "done")
+	exec := &scriptedExecutor{terminal: &terminal}
+	pub := &recordingTurnEventPublisher{}
+	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	messages := &linkingMessageService{
+		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
+	}
+	svc.messageService = messages
+	delivery := &reportedAssetsDelivery{}
+	delivery.assets = []OutboundAssetRef{{ContentHash: "hash:voice", Role: "attachment"}}
+
+	svc.drive(context.Background(), scheduledSpec(exec, delivery))
+
+	if len(messages.linked) == 0 {
+		t.Fatal("the assets the delivery end reported were never linked")
+	}
+	var linked bool
+	for _, ref := range messages.linked[0] {
+		if ref.ContentHash == "hash:voice" {
+			linked = true
+		}
+	}
+	if !linked {
+		t.Fatalf("linked %#v, want the delivery end's asset", messages.linked)
+	}
+}
+
+// A delivery end that reports no assets is not linked, and the run still
+// completes: the pull is optional.
+func TestDriveLinksNothingWithoutReportedAssets(t *testing.T) {
+	t.Parallel()
+
+	terminal := scheduleTerminalEvent(t, "done")
+	exec := &scriptedExecutor{terminal: &terminal}
+	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	messages := &linkingMessageService{
+		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
+	}
+	svc.messageService = messages
+
+	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
+
+	if result.End != endCompleted {
+		t.Fatalf("end = %s, want completed", result.End)
+	}
+	if len(messages.linked) != 0 {
+		t.Fatalf("linked %#v, want nothing", messages.linked)
+	}
+}
+
+// reportedAssetsDelivery is a caller whose outbound path collected assets.
+type reportedAssetsDelivery struct {
+	recordingDelivery
+	assets []OutboundAssetRef
+}
+
+func (d *reportedAssetsDelivery) reportedAssets() []OutboundAssetRef {
+	return append([]OutboundAssetRef(nil), d.assets...)
+}
+
+func (d *reportedAssetsDelivery) Deliver(ctx context.Context, ev RunEvent) bool {
+	return d.recordingDelivery.Deliver(ctx, ev)
+}
+
+// linkingMessageService records what the run linked to the reply, and answers
+// the one lookup LinkOutboundAssets makes with a written assistant row.
+type linkingMessageService struct {
+	recordingMessageService
+	assistant messagepkg.Message
+	linked    [][]messagepkg.AssetRef
+}
+
+func (s *linkingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
+	return []messagepkg.Message{s.assistant}, nil
+}
+
+func (s *linkingMessageService) LinkAssets(_ context.Context, _ string, assets []messagepkg.AssetRef) error {
+	s.linked = append(s.linked, append([]messagepkg.AssetRef(nil), assets...))
+	return nil
 }

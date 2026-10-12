@@ -120,7 +120,7 @@ func TestAdmitTriggeredRunInjectsAdmissionView(t *testing.T) {
 		}
 	}
 
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), viewFn)
+	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), viewFn, errRunStopped)
 	if err != nil {
 		t.Fatalf("admitTriggeredRun() error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAdmitTriggeredRunWithoutViewKeepsEmptyProjection(t *testing.T) {
 	admitter := &fakeTriggeredAdmitter{}
 	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
 
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil)
+	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil, errRunStopped)
 	if err != nil {
 		t.Fatalf("admitTriggeredRun() error = %v", err)
 	}

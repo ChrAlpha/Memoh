@@ -308,7 +308,11 @@ type triggeredAdmissionView func(handle sessionruntime.RunHandle) *sessionruntim
 // The finish function is always returned non-nil when the error is nil, so a
 // caller can defer it unconditionally. It takes the run's outcome; an outcome
 // without a status is resolved from its cause and the run context.
-func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, invocationID string, submission []byte, viewFn triggeredAdmissionView, resumeRunIDs ...string) (context.Context, sessionruntime.Admission, func(RunOutcome), func(), error) {
+//
+// stopCause is what a routed abort ends the run context with. A run this
+// package drives names its ending from the driver's own stop marker; a run
+// another layer executes keeps the plain cancellation it already reads.
+func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, invocationID string, submission []byte, viewFn triggeredAdmissionView, stopCause error, resumeRunIDs ...string) (context.Context, sessionruntime.Admission, func(RunOutcome), func(), error) {
 	if s.sessionRuntime == nil {
 		return nil, sessionruntime.Admission{}, nil, nil, errors.New("session runtime is not configured")
 	}
@@ -333,7 +337,7 @@ func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, 
 				}
 				return sessionruntime.RunAdmissionView{}, nil
 			},
-			Cancel:          func() { cancelCause(context.Canceled) },
+			Cancel:          func() { cancelCause(stopCause) },
 			OwnershipCancel: cancelCause,
 		},
 	})
@@ -414,7 +418,7 @@ func (s *Service) AdmitSubagentRun(
 	if beginErr != nil {
 		return nil, tools.SubagentAdmission{}, nil, beginErr
 	}
-	runCtx, admission, finish, _, err := s.admitTriggeredRun(ctx, sessionmode.Subagent, botID, threadID, invocationID, submission, nil)
+	runCtx, admission, finish, _, err := s.admitTriggeredRun(ctx, sessionmode.Subagent, botID, threadID, invocationID, submission, nil, context.Canceled)
 	if err != nil {
 		endActiveTurn()
 	}

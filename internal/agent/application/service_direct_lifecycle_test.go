@@ -595,3 +595,56 @@ func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T
 		}
 	}
 }
+
+// gap 2 regression: a caller that goes away while its run is streaming named
+// the ending a failure before. The caller's context ending is this run's stop
+// signal, so the run must end stopped — not errored with a code nobody raised.
+func TestAdmittedStreamCallerContextEndingIsAStop(t *testing.T) {
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelBlock)
+
+	caller, stopCaller := context.WithCancel(context.Background())
+	handle, err := fixture.service.StartTurn(caller, turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "direct-lifecycle-team",
+		Mode:                 turn.ModeChat,
+		BotID:                lifecycleTestBotID,
+		ChatID:               lifecycleTestBotID,
+		ThreadID:             lifecycleTestSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	select {
+	case <-fixture.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("streaming provider did not start")
+	}
+
+	// The caller's own context goes away, as it does when an inbound consumer
+	// disconnects. It never touches this run's stop marker directly.
+	stopCaller()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range handle.Events() {
+		}
+		for range handle.Errs() {
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not finish after its caller went away")
+	}
+
+	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.finishes)
+	}
+	if fixture.runtime.finishes[0].message != "" {
+		t.Fatalf("finish message = %q, want none for a stop", fixture.runtime.finishes[0].message)
+	}
+	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted, "")
+}

@@ -43,11 +43,11 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	// The run context is cancellable by cause so a lost owner lease can stop
 	// execution with a reason, instead of a superseded owner racing the fence it
 	// can no longer pass.
-	runCtx, cancelCause := context.WithCancelCause(ctx)
-	cancel := func() { cancelCause(context.Canceled) }
+	runCtx, stopRun := context.WithCancelCause(ctx)
+	cancel := func() { stopRun(context.Canceled) }
 
 	if cmd.Mode == turn.ModeDiscuss {
-		admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, nil)
+		admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, nil)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -56,8 +56,18 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		return s.startDiscussTurn(runCtx, cmd, cancel, admission)
 	}
 
+	// A chat run names its own ending, so its context is derived from the
+	// caller's without inheriting it: a cancelled parent fixes its children's
+	// cause, and what the caller's ending means to this run is a stop, not the
+	// plain cancellation it carries. The caller going away, a transport
+	// closing, the channel being told /stop — for this run they are one thing,
+	// and the driver names the ending from the marker they leave.
+	runCtx, stopRun = context.WithCancelCause(context.WithoutCancel(runCtx))
+	context.AfterFunc(ctx, func() { stopRun(runContextEnding(context.Cause(ctx))) })
+	cancel = func() { stopRun(errRunStopped) }
+
 	injectCh := make(chan turn.InjectMessage, 16)
-	admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, injectCh)
+	admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, injectCh)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -66,7 +76,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 
 	events := make(chan turn.Event, 16)
 	errs := make(chan error, 1)
-	handle := newTurnRun(runCtx, admission.RunID, cmd.TeamID, cmd.ThreadID, events, errs, injectCh, cancelCause)
+	handle := newTurnRun(runCtx, admission.RunID, cmd.TeamID, cmd.ThreadID, events, errs, injectCh, stopRun)
 
 	req := chatRequestFromCommand(cmd)
 	req.RunID = admission.RunID
@@ -86,12 +96,11 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		Req:      req,
 		Delivery: handle,
 		Input:    inputAccepted,
-		// The caller's own context is this run's stop signal: an inbound
-		// consumer that went away, a transport that closed, or the channel's
-		// own /stop. The driver translates it into its stop marker, so the
-		// ending is named a stop rather than a failure nobody declared.
-		StopCh: ctx.Done(),
 	}
+	// The caller's own context is this run's stop signal: an inbound consumer
+	// that went away, a transport that closed, or the channel's own /stop. The
+	// driver names the ending from the run context's own cause, so this one
+	// carries no separate stop channel.
 	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}

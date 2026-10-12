@@ -112,6 +112,17 @@ func runStopped(runCtx context.Context) bool {
 	return errors.Is(context.Cause(runCtx), errRunStopped)
 }
 
+// runContextEnding names the ending a run context inherits from its caller. A
+// plain cancellation is a stop: the caller that started the run went away, or
+// asked for it to stop. Every other cause names its own reason — a revoked
+// ownership, an execution budget, a deadline — and is kept as it is.
+func runContextEnding(cause error) error {
+	if cause == nil || errors.Is(cause, context.Canceled) {
+		return errRunStopped
+	}
+	return cause
+}
+
 // ownershipLost reports whether err says this process no longer owns the run:
 // the session runtime revoked ownership, or a fenced write found the fence
 // stale.
