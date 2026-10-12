@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +23,11 @@ import (
 
 type compactingLifecycleQueries struct {
 	noDecisionQueries
+	settingsReads *atomic.Int32
 }
 
 func (q compactingLifecycleQueries) GetSettingsByBotID(ctx context.Context, botID pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
+	q.settingsReads.Add(1)
 	row, err := q.directLifecycleQueries.GetSettingsByBotID(ctx, botID)
 	row.CompactionEnabled = true
 	row.CompactionThreshold = 1000
@@ -36,7 +39,7 @@ func (q compactingLifecycleQueries) GetSettingsByBotID(ctx context.Context, botI
 func newRunEndFixture(t *testing.T) (directLifecycleFixture, *gatedCompactionRunner) {
 	t.Helper()
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelBlock)
-	queries := compactingLifecycleQueries{noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}}
+	queries := compactingLifecycleQueries{noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}, &atomic.Int32{}}
 	fixture.service.queries = queries
 	fixture.service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), queries, nil, nil)
 	fixture.service.messageService = &memoryQueryMessageService{messages: historyAtTokens(t, 2000)}
@@ -143,7 +146,8 @@ func TestScheduledTriggerCompactsAfterItsTerminalWrite(t *testing.T) {
 
 // Shutdown first closes admission and then interrupts every local run. The
 // pass an interrupted run deferred would claim rows and die with the process,
-// keeping them out of compaction until the claim goes stale, so none starts.
+// keeping them out of compaction until the claim goes stale, so none starts,
+// and it reads nothing from a store that is closing.
 func TestShutdownInterruptedRunStartsNoCompaction(t *testing.T) {
 	fixture, runner := newRunEndFixture(t)
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
@@ -178,6 +182,8 @@ func TestShutdownInterruptedRunStartsNoCompaction(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("provider call did not start")
 	}
+	reads := fixture.service.queries.(compactingLifecycleQueries).settingsReads
+	before := reads.Load()
 	if err := manager.InterruptForShutdown(context.Background()); err != nil {
 		t.Fatalf("InterruptForShutdown: %v", err)
 	}
@@ -187,6 +193,9 @@ func TestShutdownInterruptedRunStartsNoCompaction(t *testing.T) {
 		t.Fatal("interrupted run did not end")
 	}
 	runner.assertNoPassWithin(t, 300*time.Millisecond)
+	if after := reads.Load(); after != before {
+		t.Fatalf("settings reads after shutdown = %d, want none", after-before)
+	}
 }
 
 // heldFinishAdmitter holds every terminal write until released.

@@ -82,6 +82,9 @@ func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, press
 		return
 	}
 	AfterRunEnds(ctx, func() {
+		if s.sessionManager.AdmissionClosed() {
+			return
+		}
 		ctx := context.WithoutCancel(ctx)
 		plan, ok := s.planCompaction(ctx, req, pressure, contextTokenBudget, turnModelID)
 		if !ok {
