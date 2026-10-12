@@ -2,46 +2,10 @@ package compaction
 
 import (
 	"context"
-	"log/slog"
 	"runtime"
 	"testing"
 	"time"
 )
-
-func TestRunCompactionKeepsAutomaticAttemptInsideCallerLifetime(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	svc := NewService(slog.New(slog.DiscardHandler), &fakeQueries{listStarted: started, listRelease: release})
-	returned := make(chan error, 1)
-	go func() {
-		returned <- svc.RunCompaction(context.Background(), TriggerConfig{
-			BotID:     "00000000-0000-0000-0000-00000000b715",
-			SessionID: "00000000-0000-0000-0000-00000000e715",
-		})
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("automatic compaction did not reach history selection")
-	}
-	select {
-	case err := <-returned:
-		t.Fatalf("RunCompaction returned before its query finished: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case err := <-returned:
-		if err != nil {
-			t.Fatalf("RunCompaction() error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("RunCompaction did not return after its query finished")
-	}
-}
 
 func awaitWaiter(t *testing.T, run *inflightRun) {
 	t.Helper()

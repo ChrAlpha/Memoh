@@ -131,75 +131,6 @@ func TestRunCompactionHardPressureRetriesOnBackoff(t *testing.T) {
 	}
 }
 
-func TestRunCompactionManualRequestBypassesFailureCooldown(t *testing.T) {
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
-	svc := newMachineryService(q)
-	now := time.Now()
-	svc.nowFn = func() time.Time { return now }
-
-	autoCfg := machineryConfig(&stubModel{}, 450)
-	autoCfg.HTTPClient = &http.Client{Transport: &failingModel{}}
-	if _, err := svc.RunCompactionSync(context.Background(), autoCfg); err == nil {
-		t.Fatal("first automatic attempt must run and fail, arming the cooldown")
-	}
-
-	// The user fixes the model and presses compact within the cooldown window.
-	// A manual request must actually run (not be skipped and reported as done):
-	// it compacts and reports a real result instead of a false success.
-	manualStub := &stubModel{summary: "recovered by manual run"}
-	manualCfg := autoCfg
-	manualCfg.Manual = true
-	manualCfg.HTTPClient = &http.Client{Transport: manualStub}
-	if _, err := svc.RunCompactionSync(context.Background(), manualCfg); err != nil {
-		t.Fatalf("manual compaction must run despite cooldown: %v", err)
-	}
-	if manualStub.calls != 1 {
-		t.Fatalf("manual request must call the model, not skip on cooldown (calls=%d)", manualStub.calls)
-	}
-	if !q.created || len(q.markedIDs) == 0 || q.completed.Status != "ok" {
-		t.Fatalf("manual run must do real work: created=%v marked=%d status=%q", q.created, len(q.markedIDs), q.completed.Status)
-	}
-
-	// An automatic request in the same window still respects the cooldown: the
-	// manual success above cleared it, so this one runs — proving cooldown is a
-	// shared per-session state that manual participates in, not a bypass leak.
-	autoRetry := &failingModel{}
-	autoRetryCfg := autoCfg
-	autoRetryCfg.HTTPClient = &http.Client{Transport: autoRetry}
-	if _, err := svc.RunCompactionSync(context.Background(), autoRetryCfg); err == nil {
-		t.Fatal("automatic retry after a successful manual run should proceed and fail")
-	}
-	if autoRetry.calls != 1 {
-		t.Fatalf("manual success must clear the shared cooldown for automatic runs too (calls=%d)", autoRetry.calls)
-	}
-}
-
-func TestRunCompactionManualFailureStillSurfacesError(t *testing.T) {
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
-	svc := newMachineryService(q)
-	now := time.Now()
-	svc.nowFn = func() time.Time { return now }
-
-	autoCfg := machineryConfig(&stubModel{}, 450)
-	autoCfg.HTTPClient = &http.Client{Transport: &failingModel{}}
-	if _, err := svc.RunCompactionSync(context.Background(), autoCfg); err == nil {
-		t.Fatal("automatic attempt must fail to arm the cooldown")
-	}
-
-	// A manual request that also fails must surface the real error, never a
-	// silent nil that callers render as "done".
-	manualFail := &failingModel{}
-	manualCfg := autoCfg
-	manualCfg.Manual = true
-	manualCfg.HTTPClient = &http.Client{Transport: manualFail}
-	if _, err := svc.RunCompactionSync(context.Background(), manualCfg); err == nil {
-		t.Fatal("a failing manual compaction must return an error, not a false success")
-	}
-	if manualFail.calls != 1 {
-		t.Fatalf("manual request must attempt the model despite cooldown (calls=%d)", manualFail.calls)
-	}
-}
-
 func TestRunCompactionFailureCooldownClearsOnSuccess(t *testing.T) {
 	q := &fakeQueries{uncompacted: machineryCorpus(t)}
 	svc := newMachineryService(q)
@@ -504,7 +435,7 @@ func TestRunCompactionSyncAttachesToOwnerDuringCooldown(t *testing.T) {
 	svc.recordCompactionFailure(cfg.SessionID)
 	run, ok := svc.beginSessionCompaction(cfg.SessionID)
 	if !ok {
-		t.Fatal("manual owner acquisition must succeed")
+		t.Fatal("owner acquisition must succeed")
 	}
 
 	got := make(chan Result, 1)
@@ -517,10 +448,10 @@ func TestRunCompactionSyncAttachesToOwnerDuringCooldown(t *testing.T) {
 	}()
 	awaitWaiter(t, run) // cooldown must not hide the running owner
 
-	want := Result{Status: StatusOK, Summary: "manual retry summary", MessageCount: 2}
+	want := Result{Status: StatusOK, Summary: "owner summary", MessageCount: 2}
 	svc.endSessionCompaction(cfg.SessionID, run, want, nil)
 	if res := <-got; res != want {
-		t.Fatalf("auto sync must reuse the cooldown-bypassing owner's result, got %#v", res)
+		t.Fatalf("sync caller must reuse the running owner's result, got %#v", res)
 	}
 }
 
@@ -550,134 +481,14 @@ func TestRunCompactionPanicArmsCooldownAndReleasesSlot(t *testing.T) {
 		t.Fatalf("a panicked run must arm the cooldown, got %q", res.Status)
 	}
 
-	manual := cfg
-	manual.Manual = true
-	res, err = svc.RunCompactionSync(context.Background(), manual)
+	now := time.Now().Add(compactionFailureCooldown + time.Second)
+	svc.nowFn = func() time.Time { return now }
+	res, err = svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("manual run after panic: %v", err)
+		t.Fatalf("run after the cooldown: %v", err)
 	}
 	if res.Status != StatusOK {
 		t.Fatalf("the slot must be released after a panic, got %q", res.Status)
-	}
-}
-
-func TestManualRunBypassesACooldownNoopOwner(t *testing.T) {
-	t.Parallel()
-
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
-	stub := &stubModel{summary: "manual summary"}
-	svc := newMachineryService(q)
-	cfg := machineryConfig(stub, 450)
-
-	svc.recordCompactionFailure(cfg.SessionID)
-	run, ok := svc.beginSessionCompaction(cfg.SessionID) // an automatic run holding the slot
-	if !ok {
-		t.Fatal("owner acquisition must succeed")
-	}
-
-	manual := cfg
-	manual.Manual = true
-	got := make(chan Result, 1)
-	go func() {
-		res, err := svc.RunCompactionSync(context.Background(), manual)
-		if err != nil {
-			t.Errorf("manual: %v", err)
-		}
-		got <- res
-	}()
-	awaitWaiter(t, run)
-
-	// The automatic owner publishes its cooldown noop; the manual request must
-	// retry and actually run instead of inheriting the skip.
-	svc.endSessionCompaction(cfg.SessionID, run, Result{Status: StatusNoop}, nil)
-	res := <-got
-	if res.Status != StatusOK {
-		t.Fatalf("manual run inherited the owner's noop, got %#v", res)
-	}
-	if stub.calls != 1 {
-		t.Fatalf("model called %d times, want 1", stub.calls)
-	}
-}
-
-func TestCanceledManualWaiterDoesNotRetryThroughANoopOwner(t *testing.T) {
-	t.Parallel()
-
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
-	stub := &stubModel{summary: "unused"}
-	svc := newMachineryService(q)
-	cfg := machineryConfig(stub, 450)
-
-	run, ok := svc.beginSessionCompaction(cfg.SessionID)
-	if !ok {
-		t.Fatal("owner acquisition must succeed")
-	}
-
-	manual := cfg
-	manual.Manual = true
-	ctx, cancel := context.WithCancel(context.Background())
-	got := make(chan Result, 1)
-	go func() {
-		res, err := svc.RunCompactionSync(ctx, manual)
-		if err != nil {
-			t.Errorf("canceled manual waiter: %v", err)
-		}
-		got <- res
-	}()
-	awaitWaiter(t, run)
-
-	cancel()
-	svc.endSessionCompaction(cfg.SessionID, run, Result{Status: StatusNoop}, nil)
-	if res := <-got; res.Status != StatusNoop {
-		t.Fatalf("canceled manual waiter must degrade to noop, got %#v", res)
-	}
-	if stub.calls != 0 || len(q.markedIDs) != 0 {
-		t.Fatalf("canceled manual waiter ran compaction (calls=%d marked=%d)", stub.calls, len(q.markedIDs))
-	}
-}
-
-// TestWaitForOwnerManualBranches pins the owner-done arm deterministically:
-// the racing integration test above almost always wakes on ctx.Done(), so the
-// post-noop context recheck is driven directly through the seam.
-func TestWaitForOwnerManualBranches(t *testing.T) {
-	t.Parallel()
-
-	closedOwner := func(res Result, err error) *inflightRun {
-		run := &inflightRun{done: make(chan struct{}), res: res, err: err}
-		close(run.done)
-		return run
-	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	manual := TriggerConfig{Manual: true}
-
-	// doneHidden forces the owner-done select arm while Err() still reports
-	// cancellation, pinning the post-noop context recheck deterministically
-	// (with both channels ready the select would pick randomly).
-	doneHidden := doneHiddenContext{canceled}
-	res, retry, err := waitForOwner(doneHidden, manual, closedOwner(Result{Status: StatusNoop}, nil))
-	if retry || err != nil || res.Status != StatusNoop {
-		t.Fatalf("canceled manual caller must not retry through a noop owner: res=%#v err=%v retry=%v", res, err, retry)
-	}
-
-	res, retry, err = waitForOwner(canceled, manual, closedOwner(Result{Status: StatusNoop}, nil))
-	if retry || err != nil || res.Status != StatusNoop {
-		t.Fatalf("either select arm must degrade a canceled manual caller to noop: res=%#v err=%v retry=%v", res, err, retry)
-	}
-
-	_, retry, err = waitForOwner(context.Background(), manual, closedOwner(Result{Status: StatusNoop}, nil))
-	if !retry || err != nil {
-		t.Fatalf("live manual caller must retry through a noop owner: err=%v retry=%v", err, retry)
-	}
-
-	want := Result{Status: StatusOK, Summary: "s", MessageCount: 1}
-	res, retry, err = waitForOwner(doneHiddenContext{canceled}, manual, closedOwner(want, nil))
-	if retry || err != nil || res != want {
-		t.Fatalf("a completed owner's ok result must be reused even after cancel: res=%#v err=%v retry=%v", res, err, retry)
-	}
-
-	res, retry, err = waitForOwner(context.Background(), TriggerConfig{}, closedOwner(Result{Status: StatusNoop}, nil))
-	if retry || err != nil || res.Status != StatusNoop {
-		t.Fatalf("automatic callers never retry: res=%#v err=%v retry=%v", res, err, retry)
 	}
 }
 
@@ -759,10 +570,10 @@ func TestPreHookPanicArmsCooldownAndReleasesSlot(t *testing.T) {
 		t.Fatal("the cooldown noop must not reach the pre-hook provider")
 	}
 
-	manual := cfg
-	manual.Manual = true
-	if _, err := svc.RunCompactionSync(context.Background(), manual); err == nil {
-		t.Fatal("manual bypass must reach the failing pre-hook, proving the slot was released")
+	now := time.Now().Add(compactionFailureCooldown + time.Second)
+	svc.nowFn = func() time.Time { return now }
+	if _, err := svc.RunCompactionSync(context.Background(), cfg); err == nil {
+		t.Fatal("retry after cooldown must reach the failing pre-hook, proving the slot was released")
 	}
 	if stub.calls != 0 {
 		t.Fatalf("model called %d times behind the failing pre-hook, want 0", stub.calls)
@@ -907,10 +718,6 @@ func TestFailureBackoffCapsBelowExpiryAndPersistsAttempts(t *testing.T) {
 		t.Fatal("success must reset the backoff to the first step")
 	}
 }
-
-type doneHiddenContext struct{ context.Context }
-
-func (doneHiddenContext) Done() <-chan struct{} { return nil }
 
 func priorLogFor(t *testing.T, cfg TriggerConfig, summary string) sqlc.BotHistoryMessageCompact {
 	t.Helper()

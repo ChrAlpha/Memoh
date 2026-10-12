@@ -22,7 +22,6 @@ describe('resolveSessionContextView', () => {
     expect(view.contextWindow).toBe(200000)
     expect(view.outputReserve).toBe(32000)
     expect(view.autoCompactTokens).toBe(100000)
-    expect(view.compactionAvailable).toBe(true)
   })
 
   it('drops plan-derived bands when the status omits the plan (next turn targets another model)', () => {
@@ -34,18 +33,16 @@ describe('resolveSessionContextView', () => {
     expect(view.autoCompactTokens).toBeNull()
   })
 
-  it('hides the mark when auto-compaction is disabled but keeps manual compaction available', () => {
+  it('hides the mark when auto-compaction is disabled', () => {
     const view = resolveSessionContextView({ ...usage, compaction: { enabled: false, auto_tokens: 100000 } }, { fallbackWindow: null })
 
     expect(view.autoCompactTokens).toBeNull()
-    expect(view.compactionAvailable).toBe(true)
   })
 
-  it('reports compaction as unavailable when the status carries none (ACP and direct runtimes)', () => {
+  it('hides the mark when the status carries no compaction (ACP and direct runtimes)', () => {
     const { compaction: _omitted, ...withoutCompaction } = usage
     const view = resolveSessionContextView(withoutCompaction, { fallbackWindow: null })
 
-    expect(view.compactionAvailable).toBe(false)
     expect(view.autoCompactTokens).toBeNull()
   })
 

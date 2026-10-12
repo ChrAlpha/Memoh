@@ -33,11 +33,10 @@ var (
 	// ErrIneffectiveSummary marks a raw span that cannot be summarized as selected.
 	// The scan advances past it, so callers may try another bounded pass.
 	ErrIneffectiveSummary = errors.New("compaction: raw span cannot be compacted")
-	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
+	// errSummaryWindowTooSmall marks a summarizer whose declared window cannot
 	// hold the fixed prompt plus the output reserve; running it would overflow
 	// on every attempt, so it fails closed before claiming any source rows.
-	// Exported so manual surfaces can map it to a stable capability error.
-	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
+	errSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
 	// errCompactionInputOverflow marks a selection whose minimal entries (an
 	// unsplittable tool exchange) still exceed the summarizer input budget.
 	// Sending it anyway would overflow the provider window, so it fails closed
@@ -223,14 +222,6 @@ func ShouldCompact(inputTokens, threshold int) bool {
 	return threshold > 0 && inputTokens >= threshold
 }
 
-// RunCompaction runs one automatic attempt without waiting for an existing
-// owner. The caller owns the goroutine lifetime so surrounding coordination
-// remains active until selection and persistence finish.
-func (s *Service) RunCompaction(ctx context.Context, cfg TriggerConfig) error {
-	_, _, err := s.runCompaction(context.WithoutCancel(ctx), cfg)
-	return err
-}
-
 // RunCompactionSync runs compaction synchronously and reports this session's
 // scoped Result, so callers act on their own outcome (a noop keeps their
 // current context) instead of reading an unscoped bot-wide log that may belong
@@ -239,45 +230,29 @@ func (s *Service) RunCompaction(ctx context.Context, cfg TriggerConfig) error {
 // seconds away, and waiting removes a duplicate LLM call over the same span; a
 // canceled wait degrades to a noop.
 func (s *Service) RunCompactionSync(ctx context.Context, cfg TriggerConfig) (Result, error) {
-	for {
-		res, owner, err := s.runCompaction(ctx, cfg)
-		if owner == nil {
-			return res, err
-		}
-		res, retry, err := waitForOwner(ctx, cfg, owner)
-		if !retry {
-			return res, err
-		}
+	res, owner, err := s.runCompaction(ctx, cfg)
+	if owner == nil {
+		return res, err
 	}
+	return waitForOwner(ctx, owner)
 }
 
 // waitForOwner blocks until the in-flight owner publishes its outcome or the
-// caller's context ends, reporting whether the caller should try again. Only
-// a manual request retries, and only through an owner that nooped without an
-// error — typically an automatic run skipped by the failure cooldown that the
-// manual request must still bypass. A canceled caller never retries: that
-// would start new side effects after cancellation.
-func waitForOwner(ctx context.Context, cfg TriggerConfig, owner *inflightRun) (Result, bool, error) {
+// caller's context ends.
+func waitForOwner(ctx context.Context, owner *inflightRun) (Result, error) {
 	owner.waiters.Add(1)
 	select {
 	case <-owner.done:
-		if cfg.Manual && owner.err == nil && owner.res.Status == StatusNoop {
-			if ctx.Err() != nil {
-				return Result{Status: StatusNoop}, false, nil
-			}
-			return Result{}, true, nil
-		}
-		return owner.res, false, owner.err
+		return owner.res, owner.err
 	case <-ctx.Done():
-		return Result{Status: StatusNoop}, false, nil
+		return Result{Status: StatusNoop}, nil
 	}
 }
 
 func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result, *inflightRun, error) {
 	// Attaching to an existing owner wins over the cooldown check: the
 	// cooldown exists to stop new failing runs, not to hide a run already in
-	// flight (a manual retry may be the owner precisely because it bypassed
-	// the cooldown, and sync callers should reuse its result).
+	// flight whose result sync callers should reuse.
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
 		s.logger.InfoContext(ctx, "compaction: already in flight for session",
@@ -296,15 +271,13 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 		}
 	}()
 
-	// Manual (user-initiated) compaction bypasses the cooldown: the user may
-	// have just fixed the failing model, and a silent skip would report success
-	// while nothing runs. Automatic per-request paths still honor the cooldown,
-	// on the hard-pressure backoff schedule when the caller is blocking on it.
+	// A failing session retries after the cooldown, or on the faster
+	// hard-pressure backoff once history reaches that share of the window.
 	cooling := s.inFailureCooldown(cfg.SessionID)
 	if cooling && cfg.HardPressure {
 		cooling = s.inHardPressureCooldown(cfg.SessionID)
 	}
-	if !cfg.Manual && cooling {
+	if cooling {
 		s.logger.InfoContext(ctx, "compaction: session in failure cooldown, skipping",
 			slog.String("bot_id", cfg.BotID),
 			slog.String("session_id", cfg.SessionID),

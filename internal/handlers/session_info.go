@@ -283,8 +283,8 @@ func budgetPlanApplies(snapshot contextfrag.LifecycleSnapshot, resolvedModel str
 }
 
 // autoCompactionArmed mirrors the trigger's preconditions: the setting is on
-// and a summarizer resolves through the same candidate chain the manual
-// trigger uses, otherwise the mark would label a level that never fires.
+// and a summarizer resolves through the same candidate chain the trigger
+// uses, otherwise the mark would label a level that never fires.
 func (h *SessionInfoHandler) autoCompactionArmed(ctx context.Context, botSettings settings.Settings, sessionID string) bool {
 	if !botSettings.CompactionEnabled {
 		return false

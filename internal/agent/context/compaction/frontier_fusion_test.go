@@ -287,25 +287,25 @@ func TestBuildAbsorbedContextFallsBackWhenRawRowsDoNotCoverRollup(t *testing.T) 
 	}
 }
 
-func TestShouldFuseFrontierManualFollowsRetainBudget(t *testing.T) {
+func TestShouldFuseFrontierFollowsRetainBudget(t *testing.T) {
 	belowKnownBudget := []Artifact{artifactWithFrontierTokens(t, "a", 988), artifactWithFrontierTokens(t, "b", 988)}
 	overKnownBudget := []Artifact{artifactWithFrontierTokens(t, "a", 989), artifactWithFrontierTokens(t, "b", 988)}
 	equalFallbackBudget := []Artifact{artifactWithFrontierTokens(t, "a", 50), artifactWithFrontierTokens(t, "b", 50)}
 	overFallbackBudget := []Artifact{artifactWithFrontierTokens(t, "a", 51), artifactWithFrontierTokens(t, "b", 50)}
 
-	known := TriggerConfig{AllowFrontierFusion: true, Manual: true, ContextWindowTokens: 5000}
+	known := TriggerConfig{AllowFrontierFusion: true, ContextWindowTokens: 5000}
 	if shouldFuseFrontier(known, belowKnownBudget, 400) {
-		t.Fatal("manual pass fused below the chat-window retain budget")
+		t.Fatal("pass fused below the chat-window retain budget")
 	}
 	if !shouldFuseFrontier(known, overKnownBudget, 400) {
-		t.Fatal("manual pass did not fuse above the chat-window retain budget")
+		t.Fatal("pass did not fuse above the chat-window retain budget")
 	}
 
-	unknown := TriggerConfig{AllowFrontierFusion: true, Manual: true}
+	unknown := TriggerConfig{AllowFrontierFusion: true}
 	if shouldFuseFrontier(unknown, equalFallbackBudget, 400) {
-		t.Fatal("manual pass fused at the unknown-window fallback boundary")
+		t.Fatal("pass fused at the unknown-window fallback boundary")
 	}
 	if !shouldFuseFrontier(unknown, overFallbackBudget, 400) {
-		t.Fatal("manual pass did not fuse above the unknown-window fallback budget")
+		t.Fatal("pass did not fuse above the unknown-window fallback budget")
 	}
 }

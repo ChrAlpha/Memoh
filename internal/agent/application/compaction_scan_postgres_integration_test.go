@@ -131,7 +131,7 @@ func TestPostgresCompactionResumesBoundedScanAcrossRestart(t *testing.T) {
 	if err := svc.drainCompactionBacklog(f.ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, status := f.claim(later.ID); status != "ok" || model.calls != 1 || passes > maxAsyncCompactionPasses {
+	if _, status := f.claim(later.ID); status != "ok" || model.calls != 1 || passes > maxCompactionPasses {
 		t.Fatalf("automatic drain stranded the suffix: status=%q calls=%d passes=%d", status, model.calls, passes)
 	}
 }
@@ -153,7 +153,7 @@ func TestPostgresCompactionRevisitsAfterBudgetChangeDuringGrowth(t *testing.T) {
 	if err != nil || initial.CompactionScanAfter != f.uuid(a.ID) {
 		t.Fatalf("scan must stop at the rejected group: %+v, %v", initial, err)
 	}
-	cfg.MaxCompactTokens, cfg.Manual = 30000, true
+	cfg.MaxCompactTokens = 30000
 	for pass := 0; pass < 4; pass++ {
 		f.text("user", fmt.Sprintf("new question %d", pass))
 		f.text("assistant", strings.Repeat("new history. ", 100))

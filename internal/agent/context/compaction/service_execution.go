@@ -348,7 +348,7 @@ func boundedCompactionInputTokens(cfg TriggerConfig, maxCompactTokens, maxOutput
 	inputBudget := cfg.SummaryWindowTokens - maxOutputTokens - fixedPromptTokens
 	if inputBudget <= 0 {
 		return 0, fmt.Errorf("%w: window=%d output_reserve=%d fixed_prompt=%d",
-			ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, maxOutputTokens, fixedPromptTokens)
+			errSummaryWindowTooSmall, cfg.SummaryWindowTokens, maxOutputTokens, fixedPromptTokens)
 	}
 	return min(maxCompactTokens, inputBudget), nil
 }

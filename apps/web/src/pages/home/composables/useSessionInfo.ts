@@ -67,7 +67,6 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
   const contextWindow = computed(() => contextView.value.contextWindow)
   const outputReserve = computed(() => contextView.value.outputReserve)
   const autoCompactTokens = computed(() => contextView.value.autoCompactTokens)
-  const compactionAvailable = computed(() => contextView.value.compactionAvailable)
   // Anything that owns context is compactable, whichever basis reported it.
   const contextTokens = computed(() => estimatedTokens.value ?? usedTokens.value)
   const contextPercent = computed(() => {
@@ -112,7 +111,6 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     contextWindow,
     outputReserve,
     autoCompactTokens,
-    compactionAvailable,
     contextTokens,
     contextPercent,
     currentBotId,

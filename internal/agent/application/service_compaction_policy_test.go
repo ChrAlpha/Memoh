@@ -346,7 +346,7 @@ func TestScanContinuationIsBoundedAndDoesNotReportRecovery(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
 			service, runner := newControllerPolicyService(t, nil)
-			for range maxAsyncCompactionPasses {
+			for range maxCompactionPasses {
 				runner.results = append(runner.results, compaction.Result{Status: compaction.StatusNoop, ScanPending: pending})
 			}
 			if err := service.drainCompactionBacklog(t.Context(), compaction.TriggerConfig{}); err != nil {
@@ -354,14 +354,14 @@ func TestScanContinuationIsBoundedAndDoesNotReportRecovery(t *testing.T) {
 			}
 			want := 1
 			if pending {
-				want = maxAsyncCompactionPasses
+				want = maxCompactionPasses
 			}
 			if len(runner.configs) != want {
 				t.Fatalf("async passes=%d, want %d", len(runner.configs), want)
 			}
 			runner.configs = nil
 			req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
-			res := service.runCompactionSync(t.Context(), req, 150000, 200000, "")
+			res := service.runBudgetCompactionSync(t.Context(), req, 150000, 200000, "")
 			if res.Status != compaction.StatusNoop || len(runner.configs) != min(2, want) {
 				t.Fatalf("sync scan reported recovery or exceeded its bound: %+v passes=%d", res, len(runner.configs))
 			}

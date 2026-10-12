@@ -7,7 +7,6 @@ export interface SessionContextView {
   contextWindow: number | null
   outputReserve: number | null
   autoCompactTokens: number | null
-  compactionAvailable: boolean
 }
 
 export interface SessionContextViewOptions {
@@ -32,6 +31,5 @@ export function resolveSessionContextView(
     contextWindow: positive(plan?.window) ?? positive(usage?.context_window) ?? positive(options.fallbackWindow),
     outputReserve: positive(plan?.output_reserve),
     autoCompactTokens: markApplies ? positive(compaction.auto_tokens) : null,
-    compactionAvailable: compaction != null,
   }
 }
