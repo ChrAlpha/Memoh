@@ -67,6 +67,11 @@ func (s *Service) persistFailureRow(ctx context.Context, req ChatRequest, rc res
 		AllowEmptyAssistantText: true,
 		MessageMetadataByIndex:  messageMetadata,
 		ContextLifecycle:        rc.runConfig.ContextLifecycle,
+		// A hook refusal hands the turn back to its submitter, so the user
+		// message and the row explaining the refusal are one turn: writing only
+		// half of it leaves a message with no answer and no explanation. The
+		// atomic write needs the run's fence, which every admitted run carries.
+		RequireCompletePersist: origin != "",
 	})
 	if err != nil {
 		return nil, err
