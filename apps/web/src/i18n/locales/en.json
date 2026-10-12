@@ -1602,7 +1602,6 @@
       "moreTurns": "Older turns exist beyond this page",
       "legacySource": "Recovered from older message data"
     },
-    "compactSuccess": "Context compaction completed",
     "codexUsage": {
       "warning": "{window}: {percent}% used · resets {time}",
       "warningNoReset": "{window}: {percent}% used",
@@ -1610,7 +1609,6 @@
       "exhaustedNoReset": "{window} reached",
       "dismiss": "Dismiss"
     },
-    "compactFailed": "Context compaction failed",
     "sessionStreaming": "Generating",
     "slash": {
       "quickActions": "Quick actions",

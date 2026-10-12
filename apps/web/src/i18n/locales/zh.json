@@ -1614,7 +1614,6 @@
       "moreTurns": "本页之外还有更早的轮次",
       "legacySource": "来自旧版消息数据"
     },
-    "compactSuccess": "上下文压缩完成",
     "codexUsage": {
       "warning": "{window}已用 {percent}%，{time}重置",
       "warningNoReset": "{window}已用 {percent}%",
@@ -1622,7 +1621,6 @@
       "exhaustedNoReset": "{window}已用完",
       "dismiss": "关闭提示"
     },
-    "compactFailed": "上下文压缩失败",
     "sessionStreaming": "生成中",
     "slash": {
       "quickActions": "快捷操作",

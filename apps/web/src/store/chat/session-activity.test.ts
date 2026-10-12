@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
+import type { BotSessionActivityEvent } from '@/composables/api/useChat'
 import { createSessionActivity } from './session-activity'
 
 vi.mock('@/composables/api/useChat', () => ({ fetchSession: vi.fn(), fetchSessions: vi.fn() }))
@@ -9,6 +10,7 @@ function activity(options: {
   sessionId?: string | null
   knownSession?: (sessionId: string) => { id: string, bot_id: string, title: string, type?: string } | null
   refreshSessionMessages?: (botId: string, sessionId: string) => Promise<void>
+  refreshSessionsList?: (botId: string) => Promise<void>
 } = {}) {
   return createSessionActivity({
     currentBotId: ref(options.currentBotId === undefined ? 'bot-1' : options.currentBotId),
@@ -17,47 +19,18 @@ function activity(options: {
     knownSession: options.knownSession ?? (() => null), rememberSession: vi.fn(), sessionsCursor: ref(null),
     hasMoreSessions: ref(false), loadingMoreSessions: ref(false), appendSessions: vi.fn(),
     hasListedSession: () => false, touchKnownSession: () => ({ source: 'listed' }),
-    updateKnownSessionTitle: vi.fn(), refreshSessionsList: vi.fn(async () => {}),
+    updateKnownSessionTitle: vi.fn(), refreshSessionsList: options.refreshSessionsList ?? vi.fn(async () => {}),
     refreshSessionMessages: options.refreshSessionMessages ?? vi.fn(async () => {}),
   })
 }
 
-describe('session compaction activity', () => {
-  it('replaces the snapshot on completion/reconnect and scopes it to its bot and session', () => {
-    const state = activity()
-    state.handleActivity('bot-1', { type: 'session_compaction', session_ids: ['session-1', 'session-2'] })
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(true)
-    expect(state.isSessionCompacting('bot-2', 'session-1')).toBe(false)
-    expect(state.isSessionCompacting('bot-1', 'session-3')).toBe(false)
-    state.handleActivity('bot-1', { type: 'session_compaction', session_ids: ['session-2'] })
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(false)
-    expect(state.isSessionCompacting('bot-1', 'session-2')).toBe(true)
-    state.handleActivity('bot-1', { type: 'session_compaction', session_ids: [] })
-    expect(state.isSessionCompacting('bot-1', 'session-2')).toBe(false)
-  })
-
-  it('shows manual requests immediately, deduplicates them, and waits for both owners to settle', () => {
-    const state = activity()
-    const done = state.beginSessionCompaction('bot-1', 'session-1')!
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(true)
-    expect(state.beginSessionCompaction('bot-1', 'session-1')).toBeNull()
-    state.handleActivity('bot-1', { type: 'session_compaction', session_ids: ['session-1'] })
-    done()
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(true)
-    state.handleActivity('bot-1', { type: 'session_compaction', session_ids: [] })
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(false)
-  })
-
-  it('does not let an old request completion clear a new request after reset', () => {
-    const state = activity()
-    const oldDone = state.beginSessionCompaction('bot-1', 'session-1')!
-    state.reset()
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(false)
-    const done = state.beginSessionCompaction('bot-1', 'session-1')!
-    oldDone()
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(true)
-    done()
-    expect(state.isSessionCompacting('bot-1', 'session-1')).toBe(false)
+describe('retired compaction activity', () => {
+  it('ignores the compaction snapshot an older server still sends', () => {
+    const refreshSessionsList = vi.fn(async () => {})
+    const state = activity({ refreshSessionsList })
+    const legacy = { type: 'session_compaction', session_ids: ['session-1'], session_id: '' } as unknown as BotSessionActivityEvent
+    expect(() => state.handleActivity('bot-1', legacy)).not.toThrow()
+    expect(refreshSessionsList).not.toHaveBeenCalled()
   })
 })
 

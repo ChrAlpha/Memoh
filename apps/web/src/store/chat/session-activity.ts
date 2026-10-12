@@ -33,9 +33,7 @@ export function createSessionActivity(deps: {
   markAllSessionViewsStale?: (botId: string) => void
 }) {
   const visibleSummaryRequests = new Map<string, Promise<SessionSummary | null>>()
-  const compactingSessions = ref<Record<string, string[]>>({})
   const scheduleActivityRevisions = ref<Record<string, number>>({})
-  const manualCompactions = ref(new Map<string, symbol>())
   let loadMoreRequestVersion = 0
   const persistedSessionRefreshes = new Map<string, { pending: boolean }>()
 
@@ -61,25 +59,10 @@ export function createSessionActivity(deps: {
     })
   }
 
-  function isSessionCompacting(botId: string, sessionId: string): boolean {
-    return manualCompactions.value.has(`${botId}\u0000${sessionId}`)
-      || (compactingSessions.value[botId]?.includes(sessionId) ?? false)
-  }
-
   function markScheduleSnapshotStale(botId: string) {
     scheduleActivityRevisions.value = {
       ...scheduleActivityRevisions.value,
       [botId]: (scheduleActivityRevisions.value[botId] ?? 0) + 1,
-    }
-  }
-
-  function beginSessionCompaction(botId: string, sessionId: string): (() => void) | null {
-    if (!botId || !sessionId || isSessionCompacting(botId, sessionId)) return null
-    const key = `${botId}\u0000${sessionId}`
-    const request = Symbol()
-    manualCompactions.value.set(key, request)
-    return () => {
-      if (manualCompactions.value.get(key) === request) manualCompactions.value.delete(key)
     }
   }
 
@@ -184,10 +167,6 @@ export function createSessionActivity(deps: {
       else deps.markAllSessionViewsStale?.(botId)
       return
     }
-    if (event.type === 'session_compaction') {
-      compactingSessions.value[botId] = event.session_ids
-      return
-    }
     if (event.type === 'ping') return
     if (event.type === 'schedule_changed') {
       markScheduleSnapshotStale(botId)
@@ -238,12 +217,8 @@ export function createSessionActivity(deps: {
     loadMoreSessions,
     handleActivity,
     scheduleActivityRevisions,
-    isSessionCompacting,
-    beginSessionCompaction,
     reset: () => {
-      compactingSessions.value = {}
       scheduleActivityRevisions.value = {}
-      manualCompactions.value.clear()
       visibleSummaryRequests.clear()
       persistedSessionRefreshes.clear()
       loadMoreRequestVersion += 1

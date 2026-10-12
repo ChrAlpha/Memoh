@@ -30,8 +30,6 @@ const (
 	EventTypeSessionTitleUpdated EventType = "session_title_updated"
 	// EventTypeBackgroundTask is emitted for live background task updates.
 	EventTypeBackgroundTask EventType = "background_task"
-	// EventTypeCompactionChanged invalidates the bot's live compaction snapshot.
-	EventTypeCompactionChanged EventType = "compaction_changed"
 	// EventTypeSessionInvalidated marks cached transcripts stale when runtime
 	// admission changes them, or after history is cleared without a new message.
 	EventTypeSessionInvalidated EventType = "session_invalidated"

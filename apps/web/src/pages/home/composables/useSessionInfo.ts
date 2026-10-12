@@ -1,11 +1,8 @@
 import { computed, ref, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
-import { toast } from '@felinic/ui'
 import { getBotsByBotIdSessionsBySessionIdStatus } from '@memohai/sdk'
 import type { HandlersSessionInfoResponse } from '@memohai/sdk'
-import { resolveApiErrorMessage } from '@/utils/api-error'
 import { useChatStore } from '@/store/chat-list'
 import { useChatViewTarget } from './useChatViewContext'
 import { resolveSessionContextView } from './session-context-view'
@@ -74,34 +71,7 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     return ((estimatedTokens.value ?? usedTokens.value) / contextWindow.value) * 100
   })
 
-  // Runtime-owned compaction shares the session lock and feedback; callers
-  // supply the transport.
-  const { t } = useI18n()
   const queryCache = useQueryCache()
-  const isCompacting = computed(() => chatStore.isSessionCompacting(
-    currentBotId.value ?? '', sessionId.value ?? '',
-  ))
-
-  async function runCompaction(execute: () => Promise<unknown>) {
-    const botId = currentBotId.value
-    const sid = sessionId.value
-    if (!botId || !sid) return
-    const finish = chatStore.beginSessionCompaction(botId, sid)
-    if (!finish) return
-
-    try {
-      await execute()
-      toast.success(t('chat.compactSuccess'))
-      queryCache.invalidateQueries({ key: ['session-status', botId, sid] })
-    }
-    catch (error) {
-      toast.error(resolveApiErrorMessage(error, t('chat.compactFailed')))
-    }
-    finally {
-      finish()
-    }
-  }
-
   installTurnEndInvalidation(storeRefs.streamingSessionIds, queryCache)
 
   return {
@@ -115,7 +85,5 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     contextPercent,
     currentBotId,
     sessionId,
-    isCompacting,
-    runCompaction,
   }
 }

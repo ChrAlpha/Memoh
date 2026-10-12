@@ -46,7 +46,6 @@ type MessageHandler struct {
 	userInput                     *userinput.Service
 	bgManager                     *background.Manager
 	projectionCache               messageProjectionCache
-	compactionActivity            interface{ ActiveSessions(string) []string }
 	logger                        *slog.Logger
 }
 
@@ -101,10 +100,6 @@ func (h *MessageHandler) SetMediaService(svc *media.Service) {
 
 func (h *MessageHandler) SetProjectionCache(cache messageProjectionCache) {
 	h.projectionCache = cache
-}
-
-func (h *MessageHandler) SetCompactionActivity(activity interface{ ActiveSessions(string) []string }) {
-	h.compactionActivity = activity
 }
 
 func (h *MessageHandler) SetSessionActivityInvalidationSupported(supported bool) {

@@ -284,7 +284,6 @@ export function createChatRealtimeController(
           // Even a short gap can lose an edit notification. Coverage stays
           // false until a new subscription explicitly confirms it is ready.
           callbacks.onActivityStreamCoverageChanged?.(bid, false)
-          callbacks.onBotSessionsActivityEvent(bid, { type: 'session_compaction', session_ids: [] })
         }
       }
     })

@@ -97,8 +97,6 @@ type fakeQueries struct {
 	completeErr      error
 	rollupErr        error
 	listPanic        bool
-	listStarted      chan struct{}
-	listRelease      <-chan struct{}
 	onComplete       func()
 	markedRowCount   *int64
 	createdLogID     pgtype.UUID
@@ -138,12 +136,6 @@ func (f *fakeQueries) ListUncompactedMessagesBySession(_ context.Context, _ pgty
 	if f.listPanic {
 		panic("boom: injected query panic")
 	}
-	if f.listStarted != nil {
-		close(f.listStarted)
-	}
-	if f.listRelease != nil {
-		<-f.listRelease
-	}
 	return f.uncompacted, nil
 }
 
@@ -165,9 +157,6 @@ func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ s
 		bytes += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))
 	}
 	count := int64(len(f.uncompacted))
-	if count == 0 && f.listStarted != nil {
-		count = 1
-	}
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: count, CandidateBytes: bytes}, nil
 }
 

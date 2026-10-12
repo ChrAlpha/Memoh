@@ -15,26 +15,6 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-type compactionActivityStub []string
-
-func (s compactionActivityStub) ActiveSessions(string) []string { return s }
-
-func TestCompactionActivityFiltersUnreadableSessions(t *testing.T) {
-	t.Parallel()
-	cache := newSessionCache(nil, nil)
-	cache.rows["mine"] = session.Thread{ID: "mine", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "me"}
-	cache.rows["private"] = session.Thread{ID: "private", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "other"}
-	cache.rows["internal"] = session.Thread{ID: "internal", BotID: "bot", Type: session.TypeSubagent, Visibility: session.VisibilityInternal, CreatedByUserID: "me"}
-	h := &MessageHandler{compactionActivity: compactionActivityStub{"mine", "private", "internal", "missing"}}
-	ids := h.visibleCompactingSessions(context.Background(), "me", "bot", []string{bots.PermissionChat}, cache)
-	if len(ids) != 1 || ids[0] != "mine" {
-		t.Fatalf("unexpected visible compactions: %v", ids)
-	}
-	if ids := h.visibleCompactingSessions(context.Background(), "me", "bot", nil, cache); len(ids) != 0 {
-		t.Fatalf("no permission must expose no compactions: %v", ids)
-	}
-}
-
 func TestSessionInvalidationActivityFiltersUnreadableSessions(t *testing.T) {
 	t.Parallel()
 	cache := newSessionCache(nil, nil)

@@ -1251,7 +1251,7 @@ import { useElementSize, useIntersectionObserver, useLocalStorage } from '@vueus
 import { useRuntimeControls } from '@/composables/useRuntimeControls'
 import { useCodexUsage } from '@/composables/useCodexUsage'
 import { codexUsageNotice, codexUsageNoticeKey, codexUsageResetTime, codexUsageWindowLabel } from '@/utils/codex-usage'
-import { useQuery } from '@pinia/colada'
+import { useQuery, useQueryCache } from '@pinia/colada'
 import { getAcpProfiles, getBotsByBotIdAgents, getBotsByBotIdSettings, getBotsByBotIdWorkspaceTargets, postTranscriptionModelsByIdTest } from '@memohai/sdk'
 import type { AcpprofilePublicProfile, BotagentsBotAgent, WorkspaceWorkspaceTarget } from '@memohai/sdk'
 import { useI18n } from 'vue-i18n'
@@ -1282,7 +1282,6 @@ import ChatScrollRail, { type ScrollRailSegment } from './chat-scroll-rail.vue'
 import { provideBgTaskBeacons } from '../composables/useBgTaskBeacons'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
 import SessionInfoRing from './session-info-ring.vue'
-import { useSessionInfo } from '../composables/useSessionInfo'
 import ComposerModelMenu from './composer-model-menu.vue'
 import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, displayedEffort, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
 import { useMediaGallery } from '../composables/useMediaGallery'
@@ -2178,7 +2177,7 @@ const goalSubmissionBlocked = computed(() => {
 const goalRequests = reactive(new Map<string, symbol>())
 const goalChanging = computed(() => goalRequests.has(runtimeModeScope.value))
 const goalControlsDisabled = computed(() => activeChatReadOnly.value || !paneTarget.value.sessionId || loadingMessages.value || goalChanging.value)
-const goalResumeDisabled = computed(() => !!goalExecutionBlockedReason.value || !!runtimeModeUnavailableReason.value || streaming.value || creatingSession.value || composerConfigPending.value || composerHasNoModel.value || isCompactingSession.value)
+const goalResumeDisabled = computed(() => !!goalExecutionBlockedReason.value || !!runtimeModeUnavailableReason.value || streaming.value || creatingSession.value || composerConfigPending.value || composerHasNoModel.value)
 
 async function controlGoal(action: 'pause' | 'clear' | 'resume') {
   if (goalControlsDisabled.value || !runtimeControls.goal.value) return
@@ -2238,20 +2237,8 @@ const slashPanelHasResults = computed(() =>
   || visibleSlashSkills.value.length > 0,
 )
 
-// Runtime-owned compaction (an external Agent's own compact command) shares
-// the session's compaction lock and feedback. Shares the query key with
-// SessionInfoRing/panel, so this adds no extra fetch.
 const sessionFallbackContextWindow = computed(() => activeModel.value?.config?.context_window ?? null)
-const {
-  isCompacting: isCompactingSession,
-  runCompaction: runSessionCompaction,
-} = useSessionInfo({
-  botId: computed(() => paneTarget.value.botId),
-  sessionId: computed(() => paneTarget.value.sessionId),
-  visible: isVisible,
-  overrideModelId,
-  fallbackContextWindow: sessionFallbackContextWindow,
-})
+const queryCache = useQueryCache()
 
 // Client-side quick actions run an existing UI affordance directly instead of
 // round-tripping text through send: /model opens the composer's model
@@ -4004,15 +3991,8 @@ async function handleSend() {
       composerError.value = t('errors.session_runtime.session_busy')
       return
     }
-    if (runtimeCommand.kind === 'operation') {
-      clearCurrentCommandEvent()
-      composerError.value = ''
-      inputText.value = ''
-      saveInputDraft(inputDraftKey.value, '')
-      await runSessionCompaction(() => runtimeControls.execute(runtimeCommand.name!))
-      return
-    }
     const draftKey = inputDraftKey.value
+    const statusKey = ['session-status', paneTarget.value.botId ?? '', paneTarget.value.sessionId ?? '']
     const title = `/${runtimeCommand.name}`
     const complete = chatStore.beginCommandEvent({
       type: 'command_result', terminal: false, action_id: runtimeCommand.name,
@@ -4026,6 +4006,7 @@ async function handleSend() {
         type: 'command_result', terminal: true, action_id: runtimeCommand.name,
         result: { kind: 'runtime_command', title, ...(Object.keys(result).length ? result : { text: runtimeCommand.completed_text, text_key: 'common.toast.success' }) },
       })
+      if (runtimeCommand.kind === 'operation') queryCache.invalidateQueries({ key: statusKey })
     } catch (error) {
       complete({ type: 'command_error', terminal: true, code: parseMemohError(error)?.code || 'runtime_control.failed', message: resolveApiErrorMessage(error, t('errors.runtime_control.failed')) })
     }

@@ -1580,7 +1580,6 @@
       "moreTurns": "このページより古いターンがあります",
       "legacySource": "旧メッセージデータから復元"
     },
-    "compactSuccess": "コンテキストの圧縮が完了しました",
     "codexUsage": {
       "warning": "{window}：{percent}% 使用済み・{time}にリセット",
       "warningNoReset": "{window}：{percent}% 使用済み",
@@ -1588,7 +1587,6 @@
       "exhaustedNoReset": "{window}に達しました",
       "dismiss": "閉じる"
     },
-    "compactFailed": "コンテキストの圧縮に失敗しました",
     "sessionStreaming": "生成中",
     "slash": {
       "quickActions": "クイック操作",

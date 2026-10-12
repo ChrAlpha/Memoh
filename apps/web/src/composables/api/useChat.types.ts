@@ -69,12 +69,6 @@ export interface BotSessionActivityPingEvent {
   type: 'ping'
 }
 
-export interface SessionCompactionEvent {
-  type: 'session_compaction'
-  /** Complete, permission-filtered set of sessions currently compacting. */
-  session_ids: string[]
-}
-
 export type BotSessionActivityEvent =
   | { type: 'activity_ready', cache_invalidation: boolean }
   | { type: 'session_invalidated', session_id: string }
@@ -84,7 +78,6 @@ export type BotSessionActivityEvent =
   | ScheduleChangedEvent
   | BotSessionActivityDroppedEvent
   | BotSessionActivityPingEvent
-  | SessionCompactionEvent
 
 export interface FetchMessagesOptions {
   limit?: number
