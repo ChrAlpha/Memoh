@@ -13,11 +13,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/config"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/job"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 // Backend performs the workspace operations for one runtime (containerd,
@@ -331,10 +331,11 @@ func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) 
 	)
 	if w.Desired == DesiredPresent && observed == ObservedAbsent && !insp.Exists {
 		// Drift: the workspace vanished. Make the row due so the loop
-		// re-provisions it; ever_ready stays as it was.
+		// re-provisions it; ever_ready stays as it was. last_error is left
+		// alone: this is an observation, not a failure, and a text written
+		// here would be the one path that still reaches the checks panel.
 		updated, werr = s.writeObserved(ctx, w, ObservedWrite{
 			Observed: ObservedAbsent, ObservedGeneration: w.ObservedGeneration,
-			LastError: "workspace not found on the backend", LastErrorPhase: "",
 			Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 		})
 	} else {
@@ -583,10 +584,9 @@ func (s *Service) fail(ctx context.Context, w Workspace, step *StepError) error 
 		}
 		next = s.slowRetryAt()
 	}
-	message := sanitize(step.Err)
 	final, err := s.writeObserved(ctx, w, ObservedWrite{
 		Observed: ObservedFailed, ObservedGeneration: w.DesiredGeneration,
-		LastError: message, LastErrorPhase: step.Phase,
+		LastErrorCode: string(FailureCode(step)), LastErrorPhase: step.Phase,
 		Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 	})
 	if err != nil {
@@ -594,11 +594,15 @@ func (s *Service) fail(ctx context.Context, w Workspace, step *StepError) error 
 		s.release(ctx, w.BotID)
 	} else {
 		s.deriveBotStatus(ctx, final)
-		s.publish(w.BotID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Message: message, Workspace: &final})
+		// The failure text stays on the unit's result record; the event carries
+		// the phase and the error so a subscriber can classify it without the
+		// row.
+		s.publish(w.BotID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Workspace: &final})
 	}
-	failure := errs.Wrap(step.Err, "provision workspace",
+	// The unit's result names the same code the row records.
+	failure := apperror.Wrap(FailureCode(step), errs.Wrap(step.Err, "provision workspace",
 		slog.String("phase", step.Phase), slog.Bool("retryable", step.Retryable),
-		slog.Int("attempt", int(attempts)), slog.Time("next_attempt_at", next))
+		slog.Int("attempt", int(attempts)), slog.Time("next_attempt_at", next)), nil)
 	if willRetry {
 		return job.WillRetry(failure)
 	}
@@ -659,13 +663,15 @@ func (s *Service) teardown(ctx context.Context, w Workspace) error {
 		}
 		if _, werr := s.writeObserved(ctx, cur, ObservedWrite{
 			Observed: observed, ObservedGeneration: cur.DesiredGeneration,
-			LastError: sanitize(step.Err), LastErrorPhase: PhaseTeardown,
+			LastErrorCode: string(apperror.CodeWorkspaceTeardownFailed), LastErrorPhase: PhaseTeardown,
 			Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 		}); werr != nil {
 			s.event(ctx, "record teardown failure failed", errs.Wrap(werr, "record teardown failure"), slog.String("bot_id", w.BotID))
 			s.release(ctx, w.BotID)
 		}
-		failure := errs.Wrap(err, "tear down workspace", slog.Int("attempt", int(attempts)))
+		// The unit's result names the same code the row records.
+		failure := apperror.Wrap(apperror.CodeWorkspaceTeardownFailed, errs.Wrap(err, "tear down workspace",
+			slog.Int("attempt", int(attempts))), nil)
 		if willRetry {
 			return job.WillRetry(failure)
 		}
@@ -843,26 +849,6 @@ func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 func (s *Service) event(ctx context.Context, msg string, err error, attrs ...slog.Attr) {
 	result := errlog.Event(ctx, "workspace.reconcile", err, errlog.Options{})
 	s.log.LogAttrs(ctx, result.Level, msg, append(attrs, result.Attrs()...)...) //nolint:sloglint // message is a constant string supplied by internal callers
-}
-
-const maxErrorRunes = 4096
-
-func sanitize(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return "workspace operation failed"
-	}
-	// last_error is persisted and shown to the user in the bot's runtime
-	// checks, so the credentials an upstream error quotes (a private registry
-	// reference, a signed URL) are masked before the message is stored.
-	msg = redact.Diagnostic(msg)
-	if r := []rune(msg); len(r) > maxErrorRunes {
-		msg = string(r[:maxErrorRunes])
-	}
-	return msg
 }
 
 // String renders a workspace for logs.

@@ -526,6 +526,29 @@ describe('useBotCreateProgressStore', () => {
     expect(store.lines.at(-1)).toMatchObject({ kind: 'error', message: 'image pull failed: no space left on device' })
   })
 
+  // Failures recorded after the reconciler started storing codes carry no
+  // detail text; the resume path has to render the code and keep it as the
+  // retry's error code.
+  it('renders the setup error code when the failed check has no detail', async () => {
+    getBot.mockResolvedValue({ data: { id: 'bot-1', name: 'cat', display_name: 'Cat', status: 'failed' } })
+    getBotChecks.mockResolvedValue({ data: { items: [
+      {
+        type: 'container.init',
+        status: 'error',
+        summary: 'Workspace initialization failed.',
+        detail: '',
+        metadata: { setup_error_phase: 'image_prepare', setup_error_code: 'workspace.image_not_found' },
+      },
+    ] } })
+    const store = useBotCreateProgressStore()
+    await store.restore({ botId: 'bot-1', botName: 'cat', displayName: '', setupError: null })
+    expect(store.status).toBe('workspace-error')
+    expect(store.setupError).toBe(renderI18nMessage('errors.workspace.image_not_found'))
+    expect(store.setupError).not.toBe('')
+    expect(store.errorCode).toBe('workspace.image_not_found')
+    expect(store.canRetry).toBe(true)
+  })
+
   it('drops a saved Bot that no longer exists and offers the form again', async () => {
     getBot.mockRejectedValue({ status: 404, message: 'bot not found' })
     const store = useBotCreateProgressStore()

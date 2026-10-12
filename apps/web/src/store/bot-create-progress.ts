@@ -18,6 +18,7 @@ import {
 } from '@/composables/api/botCreateTerminal'
 import { markOnboardingCompleted } from '@/composables/useOnboarding'
 import { apiErrorStatus, parseMemohError, renderI18nMessage, resolveApiErrorMessage } from '@/utils/api-error'
+import { botCheckDetail } from '@/utils/bot-check'
 import { botAgentRuntimeForProvider, directBotAgentMetadata } from '@/utils/bot-agent'
 import { externalAgentDisplayName } from '@/utils/external-agent'
 import { writeCreatedBotSession, type CreatedBotSession, type CreatedBotSessionRuntime } from '@/pages/bots/created-bot-session'
@@ -154,16 +155,29 @@ async function awaitBotSettled(botId: string): Promise<BotsBot> {
 }
 
 // The failure reason of a `failed` Bot lives in its runtime checks; the
-// initialization check carries the reconciler's last error.
-async function workspaceFailureDetail(botId: string): Promise<string> {
+// initialization check carries the reconciler's last error. The detail is read
+// the same way the checks panel reads it, so a code recorded by the
+// reconciler renders its catalog copy instead of falling back to the generic
+// subtitle.
+async function workspaceFailure(
+  botId: string,
+): Promise<{ detail: string; code: string | null }> {
   try {
     const { data } = await getBotsByIdChecks({ path: { id: botId }, throwOnError: true })
-    const detail = data.items?.find(check => check.type === CONTAINER_INIT_CHECK && check.status === 'error')?.detail?.trim()
-    if (detail) return detail
+    const check = data.items?.find(item => item.type === CONTAINER_INIT_CHECK && item.status === 'error')
+    if (check) {
+      const meta = check.metadata?.setup_error_code
+      const code = typeof meta === 'string' && meta.trim() ? meta.trim() : null
+      const detail = botCheckDetail(check, key => renderI18nMessage(key)).trim()
+      if (detail) return { detail, code }
+    }
   } catch {
     // The check list is a nicety; the failure itself is already known.
   }
-  return renderI18nMessage('bots.create.failedSubtitle') || 'Workspace setup failed'
+  return {
+    detail: renderI18nMessage('bots.create.failedSubtitle') || 'Workspace setup failed',
+    code: null,
+  }
 }
 
 // Owns the bot-create SSE stream and derived state so it survives navigation
@@ -396,7 +410,8 @@ export const useBotCreateProgressStore = defineStore('bot-create-progress', () =
         display.value = { display_name: current.display_name, avatar_url: current.avatar_url }
       }
       if (current.status === BOT_STATUS_FAILED) {
-        failWorkspace(await workspaceFailureDetail(botId), 'workspace_setup_failed')
+        const failure = await workspaceFailure(botId)
+        failWorkspace(failure.detail, failure.code ?? 'workspace_setup_failed')
         return NOTHING_APPLIED
       }
       if (current.status === BOT_STATUS_CREATING) {
