@@ -1768,12 +1768,14 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 	forwarded := make(chan struct{})
 	go func() {
 		defer streamCancel()
+		runCtx, endRun := application.WithRunEnd(streamCtx)
+		defer endRun()
 		delivered, err := func() (application.RunOutcome, error) {
 			if onFinish != nil {
 				defer onFinish()
 			}
 			defer close(eventCh)
-			return runner(streamCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
+			return runner(runCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
 		}()
 		close(injectCh)
 		// Every event this run produced has to be published before the run is

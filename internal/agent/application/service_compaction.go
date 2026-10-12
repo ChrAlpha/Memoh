@@ -81,7 +81,7 @@ func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, press
 	if s.compactionService == nil || s.settingsService == nil || pressure <= 0 {
 		return
 	}
-	afterRunEnds(ctx, func() {
+	AfterRunEnds(ctx, func() {
 		ctx := context.WithoutCancel(ctx)
 		plan, ok := s.planCompaction(ctx, req, pressure, contextTokenBudget, turnModelID)
 		if !ok {
@@ -106,11 +106,15 @@ type runEnd struct {
 	work  []func()
 }
 
-// withRunEnd marks ctx as one run's and returns what the run calls when it
+// WithRunEnd marks ctx as one run's and returns what the run calls when it
 // ends. Work deferred to the end of the run then starts, so a summarizer call
 // never competes with the run's own model calls and reads settings as they
-// are then.
-func withRunEnd(ctx context.Context) (context.Context, func()) {
+// are then. The outermost mark owns the end: whoever writes the run's terminal
+// state marks ctx first, and a nested mark ends nothing.
+func WithRunEnd(ctx context.Context) (context.Context, func()) {
+	if _, ok := ctx.Value(runEndKey{}).(*runEnd); ok {
+		return ctx, func() {}
+	}
 	end := &runEnd{}
 	return context.WithValue(ctx, runEndKey{}, end), func() {
 		end.mu.Lock()
@@ -123,9 +127,9 @@ func withRunEnd(ctx context.Context) (context.Context, func()) {
 	}
 }
 
-// afterRunEnds starts fn once the run ctx belongs to has ended, or at once
+// AfterRunEnds starts fn once the run ctx belongs to has ended, or at once
 // when ctx belongs to no run.
-func afterRunEnds(ctx context.Context, fn func()) {
+func AfterRunEnds(ctx context.Context, fn func()) {
 	if end, ok := ctx.Value(runEndKey{}).(*runEnd); ok {
 		end.mu.Lock()
 		if !end.ended {

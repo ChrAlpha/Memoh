@@ -287,7 +287,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 	}
 	go func() {
 		defer endActiveTurn()
-		ctx, endRun := withRunEnd(ctx)
+		ctx, endRun := WithRunEnd(ctx)
 		defer endRun()
 		defer close(chunkCh)
 		defer close(errCh)
@@ -620,7 +620,7 @@ func (s *Service) streamChatWSResultWithHooks(
 		return nil, RunOutcome{}, err
 	}
 	defer endActiveTurn()
-	ctx, endRun := withRunEnd(ctx)
+	ctx, endRun := WithRunEnd(ctx)
 	defer endRun()
 	if err := s.recordRunResumeContext(ctx, req); err != nil {
 		return nil, RunOutcome{}, err

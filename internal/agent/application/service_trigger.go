@@ -31,7 +31,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 		return schedule.TriggerResult{}, beginErr
 	}
 	defer endActiveTurn()
-	ctx, endRun := withRunEnd(ctx)
+	ctx, endRun := WithRunEnd(ctx)
 	defer endRun()
 	if strings.TrimSpace(payload.FireID) == "" {
 		return schedule.TriggerResult{}, errors.New("schedule fire id is required")

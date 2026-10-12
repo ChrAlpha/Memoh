@@ -90,6 +90,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		return out
 	}
 
+	runCtx, endRun := WithRunEnd(runCtx)
 	chunkCh, errCh := s.streamTurnChat(runCtx, req)
 
 	h := &runHandle{
@@ -105,6 +106,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 			assets = append(assets, refs...)
 		},
 		finishRun:         s.turnRunFinisher(runCtx, admission, string(cmd.Mode)),
+		endRun:            endRun,
 		publishAgentEvent: s.turnAgentEventPublisher(admission.Handle),
 	}
 	go h.pump(cmd, chunkCh, errCh)
@@ -142,6 +144,7 @@ type runHandle struct {
 	streamErr         error
 	terminalPublished bool
 	finishRun         func(RunOutcome) sessionruntime.TerminalRun
+	endRun            func()
 	publishAgentEvent func(context.Context, native.StreamEvent) error
 	// terminal is the run's terminal record once finish wrote it. The pump
 	// goroutine writes and reads it.
@@ -362,8 +365,8 @@ func (h *runHandle) AddOutboundAssets(refs []turn.OutboundAssetRef) {
 // wrapping each chunk as a turn.Event with a monotonically increasing Seq.
 func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, errCh <-chan error) {
 	// Deferred order (LIFO): detect external cancellation, cancel, stop direct
-	// injects, finish the durable run, close inject, send run_terminal, then
-	// close the channel pair.
+	// injects, finish the durable run, end the run, close inject, send
+	// run_terminal, then close the channel pair.
 	var seq int64
 	clientGone := false
 	defer close(h.events)
@@ -376,6 +379,9 @@ func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, 
 		}
 	}()
 	defer h.closeInject()
+	if h.endRun != nil {
+		defer h.endRun()
+	}
 	defer h.finish()
 	defer h.stopInject()
 	defer func() {

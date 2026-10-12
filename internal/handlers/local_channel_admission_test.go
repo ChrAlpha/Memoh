@@ -670,3 +670,56 @@ func TestStartWSStreamPublishesAdmittedTurnAndReleasesTheSession(t *testing.T) {
 		t.Fatalf("terminal write = %+v, want an unnamed outcome fenced by the admitted token", write)
 	}
 }
+
+type heldFinishWSAdmitter struct {
+	*stubWSTurnAdmitter
+	finishing chan struct{}
+	release   chan struct{}
+}
+
+func (a heldFinishWSAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, errorCode string) (sessionruntime.TerminalRun, error) {
+	a.finishing <- struct{}{}
+	<-a.release
+	return a.stubWSTurnAdmitter.FinishRunWithErrorCode(ctx, handle, status, errorCode)
+}
+
+// A compaction pass reads only the turns of terminal runs, so the work a run
+// defers to its end waits for the run's terminal write.
+func TestStartWSStreamEndsTheRunAfterItsTerminalWrite(t *testing.T) {
+	t.Parallel()
+
+	stub := newStubWSTurnAdmitter()
+	stub.admission = startedWSAdmission()
+	runtime := heldFinishWSAdmitter{stubWSTurnAdmitter: stub, finishing: make(chan struct{}, 1), release: make(chan struct{})}
+	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
+	writer := &wsWriter{ch: make(chan []byte, 16), stop: make(chan struct{}), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deferred := make(chan struct{})
+	if _, started := handler.startWSStream(ctx, ctx, writer, wsAdmissionBotID, wsAdmissionTestRef(), "test", wsAdmissionTestSubmission(), nil, nil,
+		func(ctx context.Context, _ wsTurnRef, _ wsAdmittedTurn, _ chan<- application.WSStreamEvent, _ <-chan struct{}) (application.RunOutcome, error) {
+			application.AfterRunEnds(ctx, func() { close(deferred) })
+			return application.RunOutcome{}, nil
+		}); !started {
+		t.Fatal("stream did not start")
+	}
+	select {
+	case <-runtime.finishing:
+	case <-time.After(2 * time.Second):
+		close(runtime.release)
+		t.Fatal("run did not reach its terminal write")
+	}
+	select {
+	case <-deferred:
+		close(runtime.release)
+		t.Fatal("work deferred to the run's end started before its terminal write")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(runtime.release)
+	select {
+	case <-deferred:
+	case <-time.After(2 * time.Second):
+		t.Fatal("work deferred to the run's end never started")
+	}
+}

@@ -256,7 +256,7 @@ func TestScheduledCompactionStartsWhenTheRunEnds(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newScheduleService(t, historyAtTokens(t, 3200))
-	ctx, endRun := withRunEnd(context.Background())
+	ctx, endRun := WithRunEnd(context.Background())
 	resolveWithinContext(t, ctx, service, ChatRequest{BotID: scheduleBotID, ChatID: scheduleBotID, ThreadID: scheduleSessionID, Query: "next"})
 	runner.assertNoPass(t)
 
