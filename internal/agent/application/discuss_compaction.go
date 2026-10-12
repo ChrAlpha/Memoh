@@ -21,13 +21,14 @@ func discussContextPressure(cmd turn.StartTurnCommand) int {
 // scheduleDiscussCompaction measures the composed discuss context against the
 // resolved budget, or the absolute cap when the runtime carries no model
 // window. What admission later drops is exactly what compaction must cover, so
-// pressure is taken before admission.
+// pressure is taken before admission. The pass keeps the unconsumed batch raw:
+// Channel sends it again when the run fails.
 func (s *Service) scheduleDiscussCompaction(ctx context.Context, cmd turn.StartTurnCommand, resolved ResolveRunConfigResult) {
 	budget := resolved.ContextBudgetMaxTokens
 	if budget <= 0 {
 		budget = s.contextAbsoluteMaxTokens()
 	}
-	req := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID}
+	req := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, discussCurrentSources: cmd.DiscussCurrentSources}
 	s.scheduleCompaction(ctx, req, discussContextPressure(cmd), budget, resolved.ModelID)
 }
 

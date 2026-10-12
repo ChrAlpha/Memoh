@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +264,49 @@ func TestScheduledCompactionStartsWhenTheRunEnds(t *testing.T) {
 	endRun()
 	if cfg := runner.awaitPass(t); cfg.SessionID != scheduleSessionID || !cfg.HardPressure {
 		t.Fatalf("background pass = %+v, want the hard-pressure pass the turn scheduled", cfg)
+	}
+}
+
+type unfinishedAgentStreamer struct{}
+
+func (unfinishedAgentStreamer) Stream(context.Context, native.RunConfig) <-chan native.StreamEvent {
+	ch := make(chan native.StreamEvent)
+	close(ch)
+	return ch
+}
+
+// Channel sends the batch of a failed discuss run again, so the pass that run
+// schedules compacts older history and keeps the unconsumed batch raw.
+func TestDiscussCompactionKeepsTheUnconsumedBatchRaw(t *testing.T) {
+	t.Parallel()
+
+	policy, _ := newControllerPolicyService(t, nil)
+	service := newDiscussTestService(&fakeRunner{}, unfinishedAgentStreamer{}, &fakeDiscussService{
+		resolveResult: ResolveRunConfigResult{ModelID: scheduleModelID, ContextBudgetMaxTokens: 1000},
+	})
+	runner := newGatedCompactionRunner()
+	t.Cleanup(func() { close(runner.release) })
+	service.queries = policy.queries
+	service.modelsService = policy.modelsService
+	service.settingsService = policy.settingsService
+	service.compactionService = runner
+
+	current := []turn.ContextMessageSource{{Kind: "external", ID: "m-1", Current: true}, {Kind: "external", ID: "m-2", Current: true}}
+	cmd := discussCommand()
+	cmd.BotID, cmd.ThreadID = scheduleBotID, scheduleSessionID
+	cmd.DiscussCurrentSources = current
+	cmd.DiscussMessages = []turn.DiscussMessage{
+		{Role: "assistant", Content: strings.Repeat("b", 3000)},
+		{Role: "user", Content: "first", Source: &current[0]},
+		{Role: "user", Content: "second", Source: &current[1]},
+	}
+	h, err := service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainDiscuss(t, h)
+	cfg := runner.awaitPass(t)
+	if !slices.Equal(cfg.ProtectedSources, current) {
+		t.Fatalf("pass protected sources = %+v, want the unconsumed batch %+v", cfg.ProtectedSources, current)
 	}
 }

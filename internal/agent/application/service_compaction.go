@@ -349,7 +349,7 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 }
 
 // compactionProtectedSources is the current input a compaction must keep raw.
-// Discuss callers pass the protected suffix their admission chose, so older
+// Discuss recovery passes the protected suffix its admission chose, so older
 // unconsumed input stays compactable.
 func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 	sources := append([]turn.ContextMessageSource(nil), req.discussCurrentSources...)
