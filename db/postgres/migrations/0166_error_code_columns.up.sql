@@ -1,4 +1,4 @@
--- 0165_error_code_columns
+-- 0166_error_code_columns
 -- schedule_logs.error_message and bot_workspaces.last_error hold English
 -- sentences and error text written by older servers. New failures store the
 -- public catalog code in error_code / last_error_code and leave the text

@@ -1,4 +1,4 @@
--- 0165_error_code_columns (down)
+-- 0166_error_code_columns (down)
 ALTER TABLE public.bot_workspaces
   DROP COLUMN IF EXISTS last_error_code;
 
