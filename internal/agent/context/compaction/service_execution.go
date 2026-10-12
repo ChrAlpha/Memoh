@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -16,63 +17,15 @@ import (
 	"github.com/felinics/memoh/internal/models/modelretry"
 )
 
-func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (Result, error) {
-	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
+func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (res Result, err error) {
+	protectedIDs, externalIDs := protectedSourceIDs(cfg.ProtectedSources)
+	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{SessionID: sessionUUID, ProtectedMessageIds: protectedIDs, ProtectedExternalIds: externalIDs})
 	if err != nil {
 		return Result{}, err
 	}
 	if measure.CandidateCount == 0 && !cfg.AllowFrontierFusion {
 		return Result{Status: StatusNoop}, nil
 	}
-	readMaxBytes := compactionReadMaxBytes(cfg)
-	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
-		SessionID: sessionUUID,
-		MaxBytes:  readMaxBytes,
-	})
-	if err != nil {
-		return Result{}, err
-	}
-	rows := uncompactedRowsFromBounded(boundedRows)
-	if len(rows) == 0 && !cfg.AllowFrontierFusion {
-		s.logger.WarnContext(ctx, "compaction: no candidate fits the database read budget",
-			slog.String("session_id", cfg.SessionID),
-			slog.Int64("candidate_count", measure.CandidateCount),
-			slog.Int64("candidate_bytes", measure.CandidateBytes),
-			slog.Int64("largest_candidate_bytes", measure.LargestCandidateBytes),
-			slog.Int64("read_max_bytes", readMaxBytes))
-		return Result{Status: StatusNoop}, nil
-	}
-	// Use the count captured by the same SQL statement as the payload rows for
-	// the selection decision. The metadata-only measure above is observability
-	// and oversized-head handling; concurrent claims may legitimately change
-	// eligibility between the two statements.
-	truncatedRead := false
-	if len(boundedRows) > 0 {
-		candidateCount := boundedRows[0].CandidateCount
-		candidateBytes := boundedRows[0].CandidateBytes
-		truncatedRead = candidateCount > int64(len(rows))
-		s.logger.InfoContext(ctx, "compaction: bounded candidate read",
-			slog.String("session_id", cfg.SessionID),
-			slog.Int("loaded_messages", len(rows)),
-			slog.Int64("candidate_count", candidateCount),
-			slog.Int64("candidate_bytes", candidateBytes),
-			slog.Int64("loaded_bytes", boundedRows[len(boundedRows)-1].CumulativeBytes),
-			slog.Int64("read_max_bytes", readMaxBytes),
-			slog.Bool("truncated", truncatedRead))
-	}
-
-	messages, barrierCount := itemsFromRows(rows)
-	protectCurrentSources(messages, cfg.ProtectedSources)
-	if barrierCount > 0 {
-		s.logger.WarnContext(ctx, "compaction: kept unparseable history rows as span barriers",
-			slog.Int("barrier_count", barrierCount),
-			slog.String("session_id", cfg.SessionID),
-		)
-	}
-	if len(messages) == 0 && !cfg.AllowFrontierFusion {
-		return Result{Status: StatusNoop}, nil
-	}
-
 	// Cap the compaction input to avoid exceeding the compaction model's
 	// context window. NewTriggerConfig sets MaxCompactTokens to 85% of the
 	// model's window. If not set, use a conservative default of 30K tokens. Prior
@@ -112,75 +65,54 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	for _, issue := range frontier.Issues {
 		s.logger.WarnContext(ctx, "compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
 	}
-	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens)
-	if fusing && !frontierHasPersistedCoverage(frontier.Artifacts) {
-		s.logger.WarnContext(ctx, "compaction: frontier fusion skipped",
-			slog.String("reason", "legacy_parent_missing_coverage"),
-			slog.String("session_id", cfg.SessionID),
-		)
-		fusing = false
+	canFuse := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens) && frontierHasPersistedCoverage(frontier.Artifacts)
+	rawTarget := cfg.TargetTokens
+	if rawTarget > 0 {
+		rawTarget = max(1, rawTarget-frontierSummaryTokens(frontier.Artifacts))
+	}
+	var priorSummaries []string
+	for _, artifact := range frontier.Artifacts {
+		if strings.TrimSpace(artifact.Summary) != "" {
+			priorSummaries = append(priorSummaries, artifact.Summary)
+		}
+	}
+	priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens/4)
+	priorTokens := priorContextTokens(priorSummaries)
+	entriesBudget := max(maxCompactTokens-priorTokens, maxCompactTokens/2)
+
+	selectCfg := cfg
+	selectCfg.TargetTokens = rawTarget
+	scan, err := s.readCompactionSpan(ctx, sessionUUID, selectCfg, measure, entriesBudget)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() {
+		if ctx.Err() == nil {
+			err = errors.Join(err, s.advanceScan(ctx, sessionUUID, scan))
+			res.ScanPending = err == nil && res.Status == StatusNoop && !scan.done && scan.after.Valid &&
+				(scan.state.CompactionScanEpoch != scan.state.CompactionEpoch || scan.after != scan.state.CompactionScanAfter)
+		}
+	}()
+	rows, messages, toCompact := scan.rows, scan.items, scan.span
+	truncatedRead := scan.partial
+	fusing := len(toCompact) == 0 && scan.done && canFuse
+	if len(toCompact) == 0 && !fusing {
+		return Result{Status: StatusNoop}, nil
 	}
 	selectedSystemPrompt := systemPrompt
+	var absorbedSegments []absorbedSegment
+	absorbTokens := 0
 	if fusing {
 		selectedSystemPrompt = fusionSystemPrompt
 		maxCompactTokens, err = boundedCompactionInputTokens(cfg, baseMaxCompactTokens, maxOutputTokens, selectedSystemPrompt)
 		if err != nil {
 			return Result{}, err
 		}
-	}
-
-	rawTarget := cfg.TargetTokens
-	if rawTarget > 0 && !fusing {
-		rawTarget = max(1, rawTarget-frontierSummaryTokens(frontier.Artifacts))
-	}
-	var toCompact []CompactionCandidate
-	switch {
-	case truncatedRead:
-		// Rows are an oldest-first prefix. When more history exists outside the
-		// database admission boundary, compact the admitted prefix and let the
-		// existing prompt trim/closure rules choose the largest safe claim. Using
-		// splitByTarget here could noop forever because the unseen newest tail is
-		// precisely what should be kept.
-		toCompact = messages
-	case cfg.TargetTokens > 0:
-		// Sync compaction: compress enough messages to bring context
-		// down to TargetTokens. Calculate how many tokens to keep
-		// (newest messages) and compact everything older.
-		toCompact = splitByTarget(messages, rawTarget)
-	default:
-		toCompact = splitByRatio(messages, cfg.TotalInputTokens, cfg.Ratio)
-	}
-	if len(toCompact) == 0 && !fusing {
-		return Result{Status: StatusNoop}, nil
-	}
-
-	var priorSummaries []string
-	var absorbedSegments []absorbedSegment
-	var priorTokens, absorbTokens, entriesBudget int
-	if fusing {
 		absorbedSegments, absorbTokens, err = buildAbsorbedContext(ctx, frontier.Artifacts, maxCompactTokens/2, s.loadAbsorbedRows)
 		if err != nil {
 			return Result{}, err
 		}
-		entriesBudget = maxCompactTokens - absorbTokens
-		if entriesBudget < maxCompactTokens/2 {
-			entriesBudget = maxCompactTokens / 2
-		}
-	} else {
-		for _, artifact := range frontier.Artifacts {
-			if strings.TrimSpace(artifact.Summary) != "" {
-				priorSummaries = append(priorSummaries, artifact.Summary)
-			}
-		}
-		priorSummaries = capPriorSummaries(priorSummaries, maxCompactTokens/4)
-		priorTokens = priorContextTokens(priorSummaries)
-		// capPriorSummaries always keeps the newest summary, so a single oversized
-		// one can exceed its allowance; floor the entries budget at half the total
-		// so compaction keeps making progress.
-		entriesBudget = maxCompactTokens - priorTokens
-		if entriesBudget < maxCompactTokens/2 {
-			entriesBudget = maxCompactTokens / 2
-		}
+		priorSummaries, priorTokens = nil, 0
 	}
 
 	s.logger.InfoContext(ctx, "compaction: before trim",
@@ -190,7 +122,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		slog.Int("prior_context_tokens", priorTokens),
 		slog.Int("absorbed_context_tokens", absorbTokens),
 	)
-	toCompact = trimCompactMessages(toCompact, entriesBudget)
 	// The progress guarantee may keep one oversized markable group past the
 	// entries budget; the prior context is reference-only, so shrink it (down
 	// to nothing) before letting the combined prompt exceed MaxCompactTokens.
@@ -205,6 +136,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	)
 
 	entries, compactedMessageIDs := buildEntriesAndIDs(toCompact)
+	if len(compactedMessageIDs) > 0 {
+		scan.after = compactedMessageIDs[len(compactedMessageIDs)-1]
+	}
 	if (len(entries) == 0 || len(compactedMessageIDs) == 0) && !fusing {
 		// No complete group survived: every selected group had a row that rendered
 		// empty (a reasoning-only message, or a tool exchange whose result renders
@@ -220,13 +154,17 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	contextTokens := priorTokens + absorbTokens
 	entries = capEntriesToBudget(entries, maxCompactTokens-contextTokens)
 	if cost := entriesPromptCost(entries); cost+contextTokens > maxCompactTokens {
-		return Result{}, fmt.Errorf("%w: entries=%d entry_tokens=%d max_compact_tokens=%d",
+		err = fmt.Errorf("%w: entries=%d entry_tokens=%d max_compact_tokens=%d",
 			errCompactionInputOverflow, len(entries), cost, maxCompactTokens)
+		if !fusing {
+			err = fmt.Errorf("%w: %w", ErrIneffectiveSummary, err)
+		}
+		return Result{}, err
 	}
 
 	replayBudget, retainedTokens := 0, 0
 	if cfg.HistoryBudgetTokens > 0 {
-		retainedTokens = retainedReplayTokens(messages, compactedMessageIDs, frontier.Artifacts, fusing, cfg.ProtectedSources)
+		retainedTokens = scan.behindTokens + retainedReplayTokens(messages, compactedMessageIDs, frontier.Artifacts, fusing, cfg.ProtectedSources)
 		replayBudget = cfg.TargetTokens
 		if replayBudget <= 0 {
 			replayBudget = cfg.HistoryBudgetTokens
@@ -360,7 +298,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		replacementTokens = summaryReplacementTokens(entries, frontier.Artifacts)
 	}
 	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacementTokens {
-		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", errIneffectiveSummary, summaryTokens, replacementTokens)
+		reason := ErrIneffectiveSummary
+		if fusing {
+			reason = errors.New("compaction: rollup does not reduce replay tokens")
+		}
+		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", reason, summaryTokens, replacementTokens)
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}

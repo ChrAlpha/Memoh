@@ -7,8 +7,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
-	"github.com/felinics/memoh/internal/messageconv"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 func summaryProviderReplayTokens(summary string) int {
@@ -25,7 +26,7 @@ func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUI
 		if selected[message.ID] || isProtectedSource(message, sources) {
 			continue
 		}
-		sdkMessage := messageconv.ModelMessageToSDKMessage(message.Record.ModelMessage)
+		sdkMessage := historyfrag.StoredModelMessageToSDKMessage(message.Record.ModelMessage)
 		if len(sdkMessage.Content) == 0 {
 			tokens += contextfrag.ProviderBudgetTokensFromBytes(len(message.RawContent))
 			continue
@@ -79,4 +80,31 @@ func protectCurrentSources(messages []CompactionCandidate, sources []turn.Contex
 			return
 		}
 	}
+}
+
+func protectFrom(messages []CompactionCandidate, from int) {
+	for j := from; j < len(messages); j++ {
+		messages[j].Policies = appendPolicy(messages[j].Policies, CompactPolicyPreserveRecent)
+		messages[j].Policies = appendPolicy(messages[j].Policies, CompactPolicyMustKeep)
+	}
+	propagateMustKeepAcrossToolExchanges(messages)
+}
+
+func protectedSourceIDs(sources []turn.ContextMessageSource) (history, external []string) {
+	for _, source := range sources {
+		switch {
+		case source.ID == "":
+		case source.Kind == "history":
+			history = append(history, source.ID)
+		case source.Kind == "external":
+			external = append(external, source.ID)
+		}
+	}
+	return history, external
+}
+
+func isProtectedRow(row sqlc.ListUncompactedMessagesBySessionRow, sources []turn.ContextMessageSource) bool {
+	candidate := CompactionCandidate{ID: row.ID}
+	candidate.Record.ExternalMessageID = strings.TrimSpace(row.ExternalMessageID.String)
+	return isProtectedSource(candidate, sources)
 }

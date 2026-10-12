@@ -147,7 +147,19 @@ func (f *fakeQueries) ListUncompactedMessagesBySession(_ context.Context, _ pgty
 	return f.uncompacted, nil
 }
 
-func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ pgtype.UUID) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
+func (f *fakeQueries) GetCompactionScan(context.Context, pgtype.UUID) (sqlc.GetCompactionScanRow, error) {
+	epoch := int64(7)
+	if len(f.uncompacted) > 0 {
+		epoch = f.uncompacted[0].CompactionEpoch
+	}
+	return sqlc.GetCompactionScanRow{CompactionEpoch: epoch}, nil
+}
+
+func (*fakeQueries) AdvanceCompactionScan(context.Context, sqlc.AdvanceCompactionScanParams) (int64, error) {
+	return 1, nil
+}
+
+func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
 	var bytes int64
 	for _, row := range f.uncompacted {
 		bytes += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))
@@ -159,10 +171,18 @@ func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ p
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: count, CandidateBytes: bytes}, nil
 }
 
-func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, _ sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
+func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
 	legacy, err := f.ListUncompactedMessagesBySession(ctx, pgtype.UUID{})
 	if err != nil {
 		return nil, err
+	}
+	if arg.AfterMessageID.Valid {
+		for i, row := range legacy {
+			if row.ID == arg.AfterMessageID {
+				legacy = legacy[i+1:]
+				break
+			}
+		}
 	}
 	return boundedRowsForTest(legacy), nil
 }
@@ -183,6 +203,9 @@ func boundedRowsForTest(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.
 			ConversationType: row.ConversationType, ConversationName: row.ConversationName, ReplyTarget: row.ReplyTarget,
 			CandidateCount: int64(len(rows)), CandidateBytes: cumulative, CumulativeBytes: cumulative,
 		}
+	}
+	for i := range converted {
+		converted[i].CandidateBytes = cumulative
 	}
 	return converted
 }

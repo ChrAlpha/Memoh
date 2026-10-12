@@ -25,21 +25,18 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 	cfg := machineryConfig(stub, 200)
 	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
-	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
-	items, _ := itemsFromRows(rows)
-	entries, _ := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
 	artifacts := fusionArtifacts(t, parents)
-	partialReplacement := summaryReplacementTokens(entries, artifacts[:1])
-	wholeReplacement := summaryReplacementTokens(entries, artifacts)
+	partialReplacement := summaryReplacementTokens(nil, artifacts[:1])
+	wholeReplacement := summaryReplacementTokens(nil, artifacts)
 	stub.summary = strings.Repeat("s", partialReplacement*4)
 	summaryTokens := estimateSummaryReplayTokens(stub.summary)
 	if summaryTokens < partialReplacement || summaryTokens >= wholeReplacement {
 		t.Fatalf("test setup invalid: summary=%d partial=%d whole=%d", summaryTokens, partialReplacement, wholeReplacement)
 	}
 
-	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
+	q := &fakeQueries{priorLogs: parents}
 	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
@@ -55,6 +52,22 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 			t.Fatalf("replaced parent %v successor = %v, want rollup %v", parent.ID, successor, q.createdLogID)
 		}
 	}
+}
+
+func TestDoCompactionRawProgressDoesNotDependOnRollup(t *testing.T) {
+	stub := &stubModel{summary: "new history condensed"}
+	cfg := machineryConfig(stub, 200)
+	cfg.AllowFrontierFusion = true
+	parents := fusionParentLogs(t, cfg, strings.Repeat("old", 2000))
+	q := &fakeQueries{
+		uncompacted: fusionQualityRows(t, cfg), priorLogs: parents,
+		rollupErr: errors.New("summary-only rollup unavailable"),
+	}
+	res, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+	if err != nil || res.Status != StatusOK || stub.calls != 1 || len(q.markedIDs) == 0 || len(q.rollupCalls) != 0 {
+		t.Fatalf("ordinary progress waited for rollup: result=%+v err=%v calls=%d rollups=%d", res, err, stub.calls, len(q.rollupCalls))
+	}
+	assertFusionParentsActive(t, q, parents)
 }
 
 func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.T) {
@@ -81,7 +94,7 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 		t.Fatalf("bounded fusion input fixture: %v", err)
 	}
 
-	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
+	q := &fakeQueries{priorLogs: parents}
 	var logOutput bytes.Buffer
 	svc := NewService(slog.New(slog.NewTextHandler(&logOutput, nil)), q)
 	res, err := svc.RunCompactionSync(context.Background(), cfg)
@@ -138,8 +151,8 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 			t.Fatalf("rollup coverage omitted parent %q", artifact.ID)
 		}
 	}
-	if rollup.AnchorStartMs != parents[0].AnchorStartMs || rollup.AnchorEndMs <= parents[len(parents)-1].AnchorEndMs {
-		t.Fatalf("rollup anchor = %d..%d, want it to span all parents through a newer row", rollup.AnchorStartMs, rollup.AnchorEndMs)
+	if rollup.AnchorStartMs != parents[0].AnchorStartMs || rollup.AnchorEndMs != parents[len(parents)-1].AnchorEndMs {
+		t.Fatalf("rollup anchor = %d..%d, want it to span exactly the parent coverage", rollup.AnchorStartMs, rollup.AnchorEndMs)
 	}
 	for _, parent := range parents {
 		if successor := q.parentSuccessors[parent.ID]; successor != q.createdLogID {
@@ -189,21 +202,22 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 	cfg := machineryConfig(stub, 200)
 	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
-	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
-	items, _ := itemsFromRows(rows)
-	entries, _ := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
-	replacementTokens := summaryReplacementTokens(entries, fusionArtifacts(t, parents))
+	replacementTokens := summaryReplacementTokens(nil, fusionArtifacts(t, parents))
 	stub.summary = strings.Repeat("s", replacementTokens*4)
 	if summaryTokens := estimateSummaryReplayTokens(stub.summary); summaryTokens < replacementTokens {
 		t.Fatalf("test setup invalid: summary=%d replacement=%d", summaryTokens, replacementTokens)
 	}
 
-	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
-	if !errors.Is(err, errIneffectiveSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIneffectiveSummary", err)
+	q := &fakeQueries{priorLogs: parents}
+	svc := newMachineryService(q)
+	_, err := svc.RunCompactionSync(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("accepted a rollup that did not shrink its parents")
+	}
+	if res, err := svc.RunCompactionSync(t.Context(), cfg); err != nil || res.Status != StatusNoop {
+		t.Fatalf("ineffective rollup did not use the existing cooldown: %+v, %v", res, err)
 	}
 	if stub.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", stub.calls)
@@ -211,10 +225,10 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 	if len(q.rollupCalls) != 0 {
 		t.Fatalf("rollup completion calls = %d, want none", len(q.rollupCalls))
 	}
-	assertFusionFailureState(t, q, parents)
+	assertFusionFailureState(t, q, parents, false)
 }
 
-func TestDoCompactionFusionProviderFailureKeepsParentsActiveAndClaimsReclaimable(t *testing.T) {
+func TestDoCompactionRawFailureKeepsParentsActiveAndClaimsReclaimable(t *testing.T) {
 	t.Parallel()
 
 	failing := &failingModel{}
@@ -235,10 +249,10 @@ func TestDoCompactionFusionProviderFailureKeepsParentsActiveAndClaimsReclaimable
 	if len(q.rollupCalls) != 0 {
 		t.Fatalf("rollup completion calls = %d, want none after provider failure", len(q.rollupCalls))
 	}
-	assertFusionFailureState(t, q, parents)
+	assertFusionFailureState(t, q, parents, true)
 }
 
-func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimable(t *testing.T) {
+func TestDoCompactionFusionRollupCASFailureKeepsParentsActive(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubModel{summary: "concise fused replacement"}
@@ -247,9 +261,8 @@ func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimabl
 	cfg.MaxCompactTokens = 4000
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 	q := &fakeQueries{
-		uncompacted: fusionQualityRows(t, cfg),
-		priorLogs:   parents,
-		rollupErr:   pgx.ErrNoRows,
+		priorLogs: parents,
+		rollupErr: pgx.ErrNoRows,
 	}
 
 	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
@@ -262,7 +275,7 @@ func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimabl
 	if len(q.rollupCalls) != 1 {
 		t.Fatalf("rollup completion calls = %d, want 1", len(q.rollupCalls))
 	}
-	assertFusionFailureState(t, q, parents)
+	assertFusionFailureState(t, q, parents, false)
 }
 
 func TestDoCompactionFusionFinalOverflowFailsBeforeClaimsAndProvider(t *testing.T) {
@@ -319,7 +332,7 @@ func TestDoCompactionFusionManyParentHeadersFailBeforeClaimsAndProvider(t *testi
 		strings.Repeat("d", 32),
 		strings.Repeat("e", 32),
 	)
-	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
+	q := &fakeQueries{priorLogs: parents}
 
 	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
@@ -389,10 +402,10 @@ func fusionArtifacts(t *testing.T, rows []sqlc.BotHistoryMessageCompact) []Artif
 	return artifacts
 }
 
-func assertFusionFailureState(t *testing.T, q *fakeQueries, parents []sqlc.BotHistoryMessageCompact) {
+func assertFusionFailureState(t *testing.T, q *fakeQueries, parents []sqlc.BotHistoryMessageCompact, claimsRaw bool) {
 	t.Helper()
-	if !q.created || len(q.markedIDs) == 0 {
-		t.Fatalf("fusion attempt did not claim new rows: created=%t marked=%v", q.created, q.markedIDs)
+	if !q.created || (len(q.markedIDs) > 0) != claimsRaw {
+		t.Fatalf("unexpected attempt scope: created=%t marked=%v wantRaw=%t", q.created, q.markedIDs, claimsRaw)
 	}
 	if len(q.completeCalls) != 1 || q.completeCalls[0].Status != "error" {
 		t.Fatalf("ordinary completions = %#v, want one terminal error", q.completeCalls)

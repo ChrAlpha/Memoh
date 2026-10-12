@@ -30,9 +30,9 @@ var (
 	// other than a natural stop (length cap, content filter): the text is
 	// unusable because it may cut mid-thought.
 	errIncompleteSummary = errors.New("compaction: model returned an incomplete summary")
-	// errIneffectiveSummary marks a summary that would replay at least as many
-	// tokens as the raw entries it replaces.
-	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
+	// ErrIneffectiveSummary marks a raw span that cannot be summarized as selected.
+	// The scan advances past it, so callers may try another bounded pass.
+	ErrIneffectiveSummary = errors.New("compaction: raw span cannot be compacted")
 	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
 	// hold the fixed prompt plus the output reserve; running it would overflow
 	// on every attempt, so it fails closed before claiming any source rows.
@@ -332,6 +332,7 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 		switch {
 		case compactErr == nil:
 			s.clearCompactionFailure(cfg.SessionID)
+		case errors.Is(compactErr, ErrIneffectiveSummary):
 		case !preHookRan:
 			// A pre-hook error or deny is bot policy, not a model failure;
 			// it must not arm the cooldown (panics above still do).

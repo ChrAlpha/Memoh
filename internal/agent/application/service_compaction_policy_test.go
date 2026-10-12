@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -139,10 +140,18 @@ func (q *controllerQueries) GetSettingsByBotID(context.Context, pgtype.UUID) (sq
 
 type recordingCompactionRunner struct {
 	configs []compaction.TriggerConfig
+	errs    []error // scripted per pass; nil means a committed summary
+	results []compaction.Result
 }
 
 func (r *recordingCompactionRunner) RunCompactionSync(_ context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
 	r.configs = append(r.configs, cfg)
+	if pass := len(r.configs) - 1; pass < len(r.errs) && r.errs[pass] != nil {
+		return compaction.Result{}, r.errs[pass]
+	}
+	if pass := len(r.configs) - 1; pass < len(r.results) {
+		return r.results[pass], nil
+	}
 	return compaction.Result{Status: compaction.StatusOK}, nil
 }
 
@@ -340,5 +349,58 @@ func runAutomaticCompaction(t *testing.T, service *Service, req ChatRequest, rc 
 	}
 	if err := service.runCompaction(context.Background(), plan); err != nil {
 		t.Fatalf("runCompaction() error = %v", err)
+	}
+}
+
+func TestAsyncDrainContinuesPastAnIneffectiveSummary(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t, nil)
+	runner.errs = []error{fmt.Errorf("pass: %w", compaction.ErrIneffectiveSummary)}
+	req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
+	resolved := resolvedContext{contextTokenBudget: 8000, compactableTokens: 4000, compactableTokensKnown: true}
+	runAutomaticCompaction(t, service, req, resolved, 4000)
+	if len(runner.configs) != maxAsyncCompactionPasses {
+		t.Fatalf("drain ran %d passes, want %d: the next pass selects past the rows that did not shrink", len(runner.configs), maxAsyncCompactionPasses)
+	}
+}
+
+func TestSyncBackstopRunsPastAnIneffectiveSummary(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t, nil)
+	runner.errs = []error{fmt.Errorf("pass: %w", compaction.ErrIneffectiveSummary)}
+	req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
+	result := service.runCompactionSync(context.Background(), req, 150000, 200000, "")
+	if result.Status != compaction.StatusOK || len(runner.configs) != 2 {
+		t.Fatalf("sync backstop = %q after %d passes, want the next pass to move past the rows that did not shrink", result.Status, len(runner.configs))
+	}
+}
+
+func TestScanContinuationIsBoundedAndDoesNotReportRecovery(t *testing.T) {
+	t.Parallel()
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
+			service, runner := newControllerPolicyService(t, nil)
+			for range maxAsyncCompactionPasses {
+				runner.results = append(runner.results, compaction.Result{Status: compaction.StatusNoop, ScanPending: pending})
+			}
+			if err := service.drainCompactionBacklog(t.Context(), compaction.TriggerConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if pending {
+				want = maxAsyncCompactionPasses
+			}
+			if len(runner.configs) != want {
+				t.Fatalf("async passes=%d, want %d", len(runner.configs), want)
+			}
+			runner.configs = nil
+			req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
+			res := service.runCompactionSync(t.Context(), req, 150000, 200000, "")
+			if res.Status != compaction.StatusNoop || len(runner.configs) != min(2, want) {
+				t.Fatalf("sync scan reported recovery or exceeded its bound: %+v passes=%d", res, len(runner.configs))
+			}
+		})
 	}
 }

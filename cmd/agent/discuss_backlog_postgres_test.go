@@ -151,11 +151,8 @@ func (f *backlogFixture) appendMessage(id, text string) {
 	f.t.Helper()
 	created := f.base.Add(time.Duration(len(f.rc)+1) * time.Second)
 	content, _ := json.Marshal(text)
-	msg, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, Role: "user", Content: content, SessionMode: "discuss"})
+	_, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, Role: "user", Content: content, SessionMode: "discuss"})
 	if err != nil {
-		f.t.Fatal(err)
-	}
-	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET created_at=$2 WHERE id=$1`, msg.ID, created); err != nil {
 		f.t.Fatal(err)
 	}
 	f.rc = append(f.rc, timeline.RenderedSegment{MessageID: id, ReceivedAtMs: created.UnixMilli(), Content: []timeline.RenderedContentPiece{{Type: "text", Text: text}}})

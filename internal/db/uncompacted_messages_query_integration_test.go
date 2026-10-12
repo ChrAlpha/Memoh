@@ -158,7 +158,7 @@ INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summar
 INSERT INTO bot_history_messages
   (id, bot_id, session_id, role, content, metadata, compact_id, turn_visible, turn_id, turn_position, turn_message_seq, created_at)
 VALUES
-  ($1, $2, $3, 'user', '[{"type":"text","text":"m"}]', $4, $5, true, $6, $7, 0, now() + make_interval(secs => $8))
+  ($1, $2, $3, 'user', '[{"type":"text","text":"m"}]', $4, $5, true, $6, $7, 0, now() - INTERVAL '1 minute' + make_interval(secs => $8))
 `, id, botID, sessionID, metadata, compactID, uuid.NewString(), i, i); err != nil {
 			t.Fatalf("insert message %q: %v", f.name, err)
 		}
@@ -194,11 +194,12 @@ VALUES
 		t.Errorf("candidate set size = %d, want %d (an excluded row leaked in)", len(got), len(wantEligible))
 	}
 
-	measure, err := queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
+	measure, err := queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{SessionID: sessionUUID})
 	if err != nil {
 		t.Fatalf("MeasureUncompactedMessagesBySession: %v", err)
 	}
-	if measure.CandidateCount != int64(len(wantEligible)) || measure.CandidateBytes <= 0 {
+	// Pending claims remain raw until a summary commits, so replay still pays for them.
+	if measure.CandidateCount != int64(len(wantEligible)+1) || measure.CandidateBytes <= 0 {
 		t.Fatalf("unexpected measure: %+v", measure)
 	}
 	bounded, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
@@ -218,8 +219,51 @@ VALUES
 	if err != nil {
 		t.Fatalf("ListUncompactedMessagesBySessionWithinBytes tiny budget: %v", err)
 	}
-	if len(oversized) != 0 {
-		t.Fatalf("tiny byte budget admitted %d payload rows", len(oversized))
+	if len(oversized) != 1 || !oversized[0].Oversized || len(oversized[0].Content) != 0 {
+		t.Fatalf("tiny byte budget must return only the oversized row identity: %+v", oversized)
+	}
+
+	if _, err := tx.Exec(ctx, "SAVEPOINT scan_contract"); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := queries.GetCompactionScan(ctx, sessionUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance := sqlc.AdvanceCompactionScanParams{
+		SessionID: sessionUUID, CompactionEpoch: initial.CompactionEpoch,
+		PreviousScanEpoch: initial.CompactionScanEpoch,
+		PreviousAfter:     initial.CompactionScanAfter, PreviousScanAt: initial.CompactionScanAt,
+		AfterMessageID: bounded[0].ID, ScanAt: initial.Cutoff,
+	}
+	if n, err := queries.AdvanceCompactionScan(ctx, advance); err != nil || n != 1 {
+		t.Fatalf("start scan: %d, %v", n, err)
+	}
+	wrap := advance
+	wrap.RoundComplete = true
+	wrap.PreviousAfter, wrap.PreviousScanAt = advance.AfterMessageID, initial.Cutoff
+	wrap.AfterMessageID = pgtype.UUID{}
+	if n, err := queries.AdvanceCompactionScan(ctx, wrap); err != nil || n != 1 {
+		t.Fatalf("wrap scan: %d, %v", n, err)
+	}
+	for _, stale := range []sqlc.AdvanceCompactionScanParams{advance, wrap} {
+		if n, err := queries.AdvanceCompactionScan(ctx, stale); err != nil || n != 0 {
+			t.Fatalf("stale scan overwrote a new round: %d, %v", n, err)
+		}
+	}
+	fresh, err := queries.GetCompactionScan(ctx, sessionUUID)
+	if err != nil || fresh.CompactionScanAfter.Valid || !fresh.CompactionScanAt.Valid || fresh.CompactionScanAt.Time.Equal(initial.Cutoff.Time) {
+		t.Fatalf("wrap must retain a new round identity: %+v, %v", fresh, err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE bot_sessions SET compaction_epoch = compaction_epoch + 1 WHERE id = $1", sessionUUID); err != nil {
+		t.Fatal(err)
+	}
+	advance.PreviousAfter, advance.PreviousScanAt = fresh.CompactionScanAfter, fresh.CompactionScanAt
+	if n, err := queries.AdvanceCompactionScan(ctx, advance); err != nil || n != 0 {
+		t.Fatalf("old epoch overwrote the scan: %d, %v", n, err)
+	}
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT scan_contract"); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := tx.Exec(ctx, `

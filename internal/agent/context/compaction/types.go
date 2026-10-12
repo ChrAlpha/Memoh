@@ -21,6 +21,7 @@ type Result struct {
 	Status       string
 	Summary      string
 	MessageCount int
+	ScanPending  bool // the scan advanced without a summary and can continue within the caller's pass limit
 }
 
 // Log represents a compaction log entry.

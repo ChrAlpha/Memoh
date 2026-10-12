@@ -8,6 +8,7 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 type CompactPolicy string
@@ -30,6 +31,7 @@ type CompactionCandidate struct {
 	Record       historyfrag.HistoryRecord
 	Policies     []CompactPolicy
 	IsToolResult bool
+	GapBefore    bool
 }
 
 func (c CompactionCandidate) HasPolicy(policy CompactPolicy) bool {
@@ -39,6 +41,16 @@ func (c CompactionCandidate) HasPolicy(policy CompactPolicy) bool {
 		}
 	}
 	return false
+}
+
+func withoutPolicy(policies []CompactPolicy, excluded CompactPolicy) []CompactPolicy {
+	var kept []CompactPolicy
+	for _, policy := range policies {
+		if policy != excluded {
+			kept = append(kept, policy)
+		}
+	}
+	return kept
 }
 
 // toolExchangeGroups partitions items into tool-exchange groups: a maximal run
@@ -56,7 +68,7 @@ func toolExchangeGroups(items []CompactionCandidate) [][]int {
 		}
 		group := []int{i}
 		j := i + 1
-		for j < len(items) && isToolResultItem(items[j]) {
+		for j < len(items) && isToolResultItem(items[j]) && !items[j].GapBefore {
 			group = append(group, j)
 			j++
 		}
@@ -120,7 +132,7 @@ func recentProtectedStart(items []CompactionCandidate) int {
 
 func latestUserIndex(items []CompactionCandidate) int {
 	for i := len(items) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(items[i].Record.ModelMessage.Role), "user") {
+		if strings.EqualFold(strings.TrimSpace(items[i].Record.ModelMessage.Role), "user") && items[i].Record.Metadata[messagepkg.MessageSourceMetadataKey] != messagepkg.MessageSourceInternalFeedback {
 			return i
 		}
 	}

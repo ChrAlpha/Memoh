@@ -92,18 +92,16 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 	}
 	var rc timeline.RenderedContext
 	var after timeline.DiscussCursorPosition
-	logger := slog.Default()
+	compactionDone := make(chan struct{}, 1)
+	logger := slog.New(recoveryCompactionHandler{Handler: slog.Default().Handler(), done: compactionDone})
 	cursors := timeline.NewEventStore(logger, queries)
 	messages := messagepkg.NewService(logger, queries)
 	base := time.Now().Add(time.Minute).Truncate(time.Millisecond)
 	appendMessage := func(id, role, text string, self bool) {
 		created := base.Add(time.Duration(len(rc)+1) * time.Second)
 		content, _ := json.Marshal(text)
-		msg, err := messages.Persist(ctx, messagepkg.PersistInput{BotID: botID, SessionID: sessionID, ExternalMessageID: id, Role: role, Content: content, SessionMode: "discuss"})
+		_, err := messages.Persist(ctx, messagepkg.PersistInput{BotID: botID, SessionID: sessionID, ExternalMessageID: id, Role: role, Content: content, SessionMode: "discuss"})
 		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, `UPDATE bot_history_messages SET created_at=$2 WHERE id=$1`, msg.ID, created); err != nil {
 			t.Fatal(err)
 		}
 
@@ -159,6 +157,11 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		if after != timeline.ConsumedDiscussCursor(rc) {
 			t.Fatalf("cursor did not commit the full current batch: %+v", after)
 		}
+		select {
+		case <-compactionDone:
+		case <-ctx.Done():
+			t.Fatalf("round %d background compaction did not finish before restart", round)
+		}
 		if round == 0 && summaries.Load()-before != 3 {
 			t.Fatalf("fixture must require exactly three recoveries, got %d", summaries.Load()-before)
 		}
@@ -198,6 +201,30 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		t.Fatalf("replies=%d pending=%d", replies, pending)
 	}
 	t.Logf("rounds=%d+next summary_calls=%d provider_calls=%d stored_replies=%d pending=0 duplicate_current=0", rounds, summaries.Load(), modelCalls.Load(), replies)
+}
+
+type recoveryCompactionHandler struct {
+	slog.Handler
+	done chan struct{}
+}
+
+func (h recoveryCompactionHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	h.Handler = h.Handler.WithAttrs(attrs)
+	return h
+}
+
+func (h recoveryCompactionHandler) Handle(ctx context.Context, record slog.Record) error {
+	done := record.Message == "compaction: skipped, below threshold"
+	if record.Message == "job" {
+		record.Attrs(func(attr slog.Attr) bool {
+			done = done || (attr.Key == "operation" && attr.Value.String() == "agent.compaction")
+			return true
+		})
+	}
+	if done {
+		h.done <- struct{}{}
+	}
+	return h.Handler.Handle(ctx, record)
 }
 
 type notifyingRecoveryCursor struct {

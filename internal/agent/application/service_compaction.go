@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -175,10 +176,13 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 			return err
 		}
 		res, err := s.runCompactionPass(ctx, cfg)
+		if errors.Is(err, compaction.ErrIneffectiveSummary) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		if res.Status != compaction.StatusOK {
+		if res.Status != compaction.StatusOK && res.Status != compaction.StatusProgress && !res.ScanPending {
 			return nil
 		}
 	}
@@ -249,6 +253,9 @@ func (s *Service) runSyncCompaction(ctx context.Context, req ChatRequest, inputT
 	done := s.enterSessionCompactionForRun(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID))
 	defer done()
 	res, err := s.compactionService.RunCompactionSync(ctx, cfg)
+	if errors.Is(err, compaction.ErrIneffectiveSummary) || (err == nil && res.ScanPending) {
+		res, err = s.compactionService.RunCompactionSync(ctx, cfg)
+	}
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction sync: failed", slog.Any("error", err))
 		return compaction.Result{}

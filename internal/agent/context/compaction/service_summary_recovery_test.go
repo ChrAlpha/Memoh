@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -15,6 +16,28 @@ import (
 
 func (*fakeQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotSession, error) {
 	return sqlc.BotSession{ID: id, CompactionEpoch: 7}, nil
+}
+
+func TestSummaryRecoveryCountsRetainedLegacyToolCalls(t *testing.T) {
+	stub := &stubModel{summary: "short replacement"}
+	cfg := machineryConfig(stub, 600)
+	cfg.HistoryBudgetTokens = 600
+	cfg.AllowFrontierFusion = true
+	message := turn.ModelMessage{Role: "assistant", Content: json.RawMessage(`""`), ToolCalls: []turn.ToolCall{
+		{ID: "ask", Type: "function", Function: turn.ToolCallFunction{Name: "ask_user", Arguments: `{"question":"` + strings.Repeat("x", 4000) + `"}`}},
+	}}
+	content, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &fakeQueries{
+		uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{mkRow(t, "assistant", string(content), 0)},
+		priorLogs:   fusionParentLogs(t, cfg, strings.Repeat("s", 8000)),
+	}
+	res, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+	if err != nil || res.Status != StatusProgress || len(q.markedIDs) != 0 || len(q.rollupCalls) != 1 {
+		t.Fatalf("retained legacy tool call exceeds the history budget: %+v, %v", res, err)
+	}
 }
 
 func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {

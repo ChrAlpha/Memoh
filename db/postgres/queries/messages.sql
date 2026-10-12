@@ -2992,56 +2992,185 @@ WHERE message.team_id = public.memoh_current_team_id()
     )
   );
 
+-- name: GetCompactionScan :one
+SELECT compaction_epoch, compaction_scan_epoch, compaction_scan_after, compaction_scan_at,
+  COALESCE(CASE WHEN compaction_scan_epoch = compaction_epoch THEN compaction_scan_at END, now())::timestamptz AS cutoff
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id() AND id = $1;
+
+-- name: AdvanceCompactionScan :execrows
+UPDATE bot_sessions
+SET compaction_scan_after = sqlc.narg(after_message_id)::uuid,
+    compaction_scan_epoch = sqlc.arg(compaction_epoch),
+    compaction_scan_at = CASE WHEN sqlc.arg(round_complete)::boolean THEN GREATEST(clock_timestamp(), compaction_scan_at + INTERVAL '1 microsecond') ELSE sqlc.narg(scan_at)::timestamptz END
+WHERE team_id = public.memoh_current_team_id()
+  AND id = sqlc.arg(session_id)
+  AND compaction_epoch = sqlc.arg(compaction_epoch)
+  AND compaction_scan_epoch = sqlc.arg(previous_scan_epoch)
+  AND compaction_scan_after IS NOT DISTINCT FROM sqlc.narg(previous_after)::uuid
+  AND compaction_scan_at IS NOT DISTINCT FROM sqlc.narg(previous_scan_at)::timestamptz;
+
 -- name: ListUncompactedMessagesBySessionWithinBytes :many
--- Compaction candidates are admitted oldest-first within a hard serialized
--- payload budget. The cumulative filter is evaluated before the payload join,
--- so an oversized leading row returns no payload instead of crossing the
--- process-memory boundary. CandidateCount reports whether the prefix was
--- truncated and lets the service choose a progress-preserving selection.
-WITH candidate_rows AS MATERIALIZED (
+-- The fixed scan cutoff excludes later arrivals from selection, not from
+-- ordering, tool closure or current-input protection. Skipped rows stay raw.
+WITH scan_anchor AS MATERIALIZED (
+  SELECT anchor.turn_position, anchor.turn_message_seq, anchor.created_at, anchor.id
+  FROM bot_visible_history_messages anchor
+  WHERE anchor.team_id = public.memoh_current_team_id()
+    AND anchor.session_id = sqlc.arg(session_id)
+    AND anchor.id = sqlc.narg(after_message_id)::uuid
+), session_rows AS MATERIALIZED (
   SELECT
     m.id,
     m.turn_position,
     m.turn_message_seq,
     m.created_at,
+    m.role,
+    m.role = 'user' AND m.metadata->>'message_source' IS DISTINCT FROM 'internal_feedback' AS starts_turn,
+    (
+      m.id::text = ANY(sqlc.arg(protected_message_ids)::text[])
+      OR BTRIM(m.source_message_id) = ANY(sqlc.arg(protected_external_ids)::text[])
+    ) AS protected,
+    CASE WHEN m.created_at > COALESCE(sqlc.narg(scan_before)::timestamptz, now()) THEN 'deferred' ELSE held.status END AS held_by
+  FROM bot_visible_history_messages m
+  JOIN bot_sessions candidate_session
+    ON candidate_session.id = m.session_id
+   AND candidate_session.team_id = public.memoh_current_team_id()
+  LEFT JOIN LATERAL (
+    SELECT c.status
+    FROM bot_history_message_compacts c
+    WHERE c.team_id = public.memoh_current_team_id()
+      AND c.id = m.compact_id
+      AND c.bot_id = m.bot_id
+      AND c.session_id = candidate_session.id
+      AND c.compaction_epoch = candidate_session.compaction_epoch
+      AND (
+        (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
+        OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
+
+      )
+  ) held ON true
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = sqlc.arg(session_id)
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND (
+      NOT EXISTS (SELECT 1 FROM scan_anchor)
+      OR (m.turn_position, m.turn_message_seq, m.created_at, m.id) >= (
+        SELECT scan_anchor.turn_position, scan_anchor.turn_message_seq, scan_anchor.created_at, scan_anchor.id FROM scan_anchor
+      )
+    )
+), sequenced_rows AS MATERIALIZED (
+  -- held rows share the sequence number of the candidate in front of them,
+  -- so each gap is one group keyed by that number.
+  SELECT
+    session_rows.*,
+    COUNT(*) FILTER (WHERE held_by IS NULL) OVER (
+      ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
+    ) AS candidate_seq
+  FROM session_rows
+), held_gaps AS MATERIALIZED (
+  SELECT DISTINCT candidate_seq
+  FROM sequenced_rows
+  WHERE held_by IS NOT NULL
+), ordered_rows AS MATERIALIZED (
+  SELECT
+    sequenced_rows.*,
+    (gap.candidate_seq IS NOT NULL)::boolean AS gap_before,
+    COALESCE(bool_or(sequenced_rows.protected AND sequenced_rows.held_by IS DISTINCT FROM 'ok' AND sequenced_rows.held_by IS NOT NULL) OVER (
+      ORDER BY sequenced_rows.turn_position ASC, sequenced_rows.turn_message_seq ASC, sequenced_rows.created_at ASC, sequenced_rows.id ASC
+    ), false)::boolean AS protected_held_before
+  FROM sequenced_rows
+  LEFT JOIN held_gaps gap
+    ON sequenced_rows.held_by IS NULL
+   AND gap.candidate_seq = sequenced_rows.candidate_seq - 1
+), candidate_rows AS MATERIALIZED (
+  SELECT
+    ordered.id,
+    ordered.turn_position,
+    ordered.turn_message_seq,
+    ordered.created_at,
+    ordered.gap_before,
+    ordered.protected_held_before,
+    ordered.protected,
+    COALESCE(ordered.id = (
+      SELECT latest.id
+      FROM bot_visible_history_messages latest
+      WHERE latest.team_id = public.memoh_current_team_id()
+        AND latest.session_id = sqlc.arg(session_id)
+        AND latest.role = 'user'
+        AND latest.metadata->>'message_source' IS DISTINCT FROM 'internal_feedback'
+        AND latest.metadata->>'trigger_mode' IS DISTINCT FROM 'passive_sync'
+      ORDER BY latest.turn_position DESC, latest.turn_message_seq DESC, latest.created_at DESC, latest.id DESC
+      LIMIT 1
+    ), false) AS latest_user,
     (
       octet_length(m.content::text)
       + octet_length(m.metadata::text)
       + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
       + octet_length(COALESCE(m.display_text, ''))
-    )::BIGINT AS payload_bytes
-  FROM bot_visible_history_messages m
-  JOIN bot_sessions candidate_session
-    ON candidate_session.id = m.session_id
-   AND candidate_session.team_id = public.memoh_current_team_id()
-  WHERE m.team_id = public.memoh_current_team_id()
-    AND m.session_id = sqlc.arg(session_id)
-    AND (m.compact_id IS NULL OR NOT EXISTS (
-      SELECT 1 FROM bot_history_message_compacts c
-      WHERE c.team_id = public.memoh_current_team_id()
-        AND c.id = m.compact_id
-        AND c.bot_id = m.bot_id
-        AND c.session_id = candidate_session.id
-        AND c.compaction_epoch = candidate_session.compaction_epoch
-        AND (
-          (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
-          OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
-        )
-    ))
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    )::BIGINT AS payload_bytes,
+    images.parts::BIGINT AS image_parts,
+    images.bytes::BIGINT AS image_bytes
+  FROM ordered_rows ordered
+  JOIN bot_visible_history_messages m
+    ON m.id = ordered.id
+   AND m.team_id = public.memoh_current_team_id()
+  CROSS JOIN LATERAL (
+    SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
+    FROM jsonb_array_elements(CASE
+      WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
+      WHEN jsonb_typeof(m.content) = 'array' THEN m.content
+      ELSE '[]'::jsonb
+    END) part
+    WHERE part->>'type' = 'image'
+  ) images
+  WHERE ordered.held_by IS NULL
+    AND NOT EXISTS (SELECT 1 FROM scan_anchor WHERE scan_anchor.id = ordered.id)
+), protected_behind AS MATERIALIZED (
+  SELECT EXISTS (
+    SELECT 1
+    FROM scan_anchor
+    JOIN bot_visible_history_messages protected
+      ON protected.team_id = public.memoh_current_team_id()
+     AND protected.session_id = sqlc.arg(session_id)
+     AND (protected.turn_position, protected.turn_message_seq, protected.created_at, protected.id)
+      <= (scan_anchor.turn_position, scan_anchor.turn_message_seq, scan_anchor.created_at, scan_anchor.id)
+    JOIN bot_sessions protected_session
+      ON protected_session.id = protected.session_id
+     AND protected_session.team_id = public.memoh_current_team_id()
+    WHERE (
+        protected.id::text = ANY(sqlc.arg(protected_message_ids)::text[])
+        OR BTRIM(protected.source_message_id) = ANY(sqlc.arg(protected_external_ids)::text[])
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM bot_history_message_compacts c
+        WHERE c.team_id = public.memoh_current_team_id()
+          AND c.id = protected.compact_id
+          AND c.bot_id = protected.bot_id
+          AND c.session_id = protected_session.id
+          AND c.compaction_epoch = protected_session.compaction_epoch
+          AND c.status = 'ok'
+          AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+      )
+  ) AS protected_before
 ), ranked_candidates AS MATERIALIZED (
   SELECT
     candidate_rows.*,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
+    COALESCE(SUM(image_parts) OVER (), 0)::BIGINT AS candidate_images,
+    COALESCE(SUM(image_bytes) OVER (), 0)::BIGINT AS candidate_image_bytes,
+    COALESCE(SUM(payload_bytes - image_bytes) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_bytes,
+    COALESCE(SUM(image_parts) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_images,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
     )::BIGINT AS cumulative_bytes
   FROM candidate_rows
 ), admitted_candidates AS MATERIALIZED (
-  SELECT *
+  SELECT ranked_candidates.*, payload_bytes > sqlc.arg(max_bytes)::BIGINT AS oversized
   FROM ranked_candidates
   WHERE cumulative_bytes <= sqlc.arg(max_bytes)::BIGINT
+     OR cumulative_bytes = payload_bytes
 )
 SELECT
   m.id,
@@ -3052,11 +3181,11 @@ SELECT
   m.source_message_id AS external_message_id,
   m.source_reply_to_message_id,
   m.role,
-  m.content,
-  m.metadata,
-  m.usage,
+  payload.content,
+  payload.metadata,
+  payload.usage,
   m.event_id,
-  m.display_text,
+  payload.display_text,
   m.compact_id,
   m.created_at,
   ci.display_name AS sender_display_name,
@@ -3072,9 +3201,24 @@ SELECT
   r.default_reply_target AS reply_target,
   admitted.candidate_count,
   admitted.candidate_bytes,
-  admitted.cumulative_bytes
+  admitted.candidate_images,
+  admitted.candidate_image_bytes,
+  admitted.protected_bytes,
+  admitted.protected_images,
+  admitted.image_parts,
+  admitted.image_bytes,
+  admitted.cumulative_bytes,
+  admitted.gap_before::boolean AS gap_before,
+  (protected_behind.protected_before OR admitted.protected_held_before)::boolean AS protected_before,
+  admitted.latest_user::boolean AS latest_user,
+  admitted.oversized::boolean AS oversized
 FROM bot_visible_history_messages m
 JOIN admitted_candidates admitted ON admitted.id = m.id
+CROSS JOIN protected_behind
+LEFT JOIN bot_history_messages payload
+  ON payload.id = m.id
+ AND payload.team_id = public.memoh_current_team_id()
+ AND NOT admitted.oversized
 LEFT JOIN channel_identities ci
   ON ci.id = m.sender_channel_identity_id
  AND ci.team_id = public.memoh_current_team_id()
@@ -3090,6 +3234,11 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 -- name: MeasureUncompactedMessagesBySession :one
 -- Metadata-only companion for the bounded compaction read. It never returns
 -- message payloads and exposes the oversized-head degradation explicitly.
+-- CandidateImages counts image parts and CandidateImageBytes their payload
+-- bytes: an image replays at a flat estimate rather than by its bytes.
+-- ProtectedBytes and ProtectedImages are the share of the given current
+-- input, which the caller budgets itself: bytes other than images, and
+-- images.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(SUM(
@@ -3103,8 +3252,33 @@ SELECT
     + octet_length(m.metadata::text)
     + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
     + octet_length(COALESCE(m.display_text, ''))
-  ), 0)::BIGINT AS largest_candidate_bytes
+  ), 0)::BIGINT AS largest_candidate_bytes,
+  COALESCE(SUM(images.parts), 0)::BIGINT AS candidate_images,
+  COALESCE(SUM(images.bytes), 0)::BIGINT AS candidate_image_bytes,
+  COALESCE(SUM(
+    octet_length(m.content::text)
+    + octet_length(m.metadata::text)
+    + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+    + octet_length(COALESCE(m.display_text, ''))
+    - images.bytes
+  ) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_bytes,
+  COALESCE(SUM(images.parts) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_images
 FROM bot_visible_history_messages m
+CROSS JOIN LATERAL (
+  SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
+  FROM jsonb_array_elements(CASE
+    WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
+    WHEN jsonb_typeof(m.content) = 'array' THEN m.content
+    ELSE '[]'::jsonb
+  END) part
+  WHERE part->>'type' = 'image'
+) images
+CROSS JOIN LATERAL (
+  SELECT (
+    m.id::text = ANY(sqlc.arg(protected_message_ids)::text[])
+    OR BTRIM(m.source_message_id) = ANY(sqlc.arg(protected_external_ids)::text[])
+  ) AS is_protected
+) protected
 JOIN bot_sessions s
   ON s.id = m.session_id
  AND s.team_id = public.memoh_current_team_id()
@@ -3119,7 +3293,6 @@ WHERE m.team_id = public.memoh_current_team_id()
       AND c.compaction_epoch = s.compaction_epoch
       AND (
         (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
-        OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
