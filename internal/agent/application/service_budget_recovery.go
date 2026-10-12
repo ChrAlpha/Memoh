@@ -38,7 +38,7 @@ func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) nativ
 
 func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) func(context.Context, native.RunConfig) (native.RunConfig, bool, error) {
 	return func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		if s.effectiveSyncCompactionMode() == syncCompactionModeOff || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return cfg, false, nil
 		}
 		budget, pressure := layout.availableHistoryBudget(cfg)
@@ -241,7 +241,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		}
 	}
 	cfg, shed := shedOlderBatchImages(cfg, batch, plan.HistoryBudget)
-	if *compacted || s.effectiveSyncCompactionMode() == syncCompactionModeOff {
+	if *compacted {
 		return cfg, shed, nil
 	}
 	type batchInput struct {

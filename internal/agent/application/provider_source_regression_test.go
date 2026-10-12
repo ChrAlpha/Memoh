@@ -13,7 +13,7 @@ func TestDiscussComposedInputSurvivesEchoThroughProviderAdmission(t *testing.T) 
 	for _, size := range []int{1600, 10000, 80000} {
 		t.Run(strings.Repeat("x", size/10000+1), func(t *testing.T) {
 			service, resolver, _, _, cmd := discussBudgetRecoveryFixture(t)
-			service.SetSyncCompactionMode("off")
+			service.queries.(*controllerQueries).settings.CompactionEnabled = false
 			configureDiscussLifecycle(service)
 			provider := &triggerLifecycleProvider{}
 			resolver.resolveResult.RunConfig.Model.Provider = provider
@@ -77,7 +77,7 @@ func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *
 	service, runner := newControllerPolicyService(t, nil)
 	sources := []turn.ContextMessageSource{{Kind: "external", ID: "a", Current: true}, {Kind: "external", ID: "b", Current: true}}
 	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 100, DiscussCurrentSources: sources}
-	if !service.maybeSyncCompactDiscuss(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery") || len(runner.configs) != 1 {
+	if !service.recoverDiscussContext(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery") || len(runner.configs) != 1 {
 		t.Fatal("recovery did not run")
 	}
 	cfg := runner.configs[0]

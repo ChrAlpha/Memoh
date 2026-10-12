@@ -12,7 +12,6 @@ import (
 type preparedHistoryContext struct {
 	messages          []ModelMessage
 	records           []historyfrag.HistoryRecord
-	estimatedTokens   int
 	compactableTokens int
 	pressureTokens    int
 }
@@ -49,11 +48,10 @@ func (s *Service) prepareHistoryContext(
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	compactableTokens := totalCompactableHistoryTokens(loaded)
-	messages, records, estimatedTokens := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
+	messages, records, _ := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
 	return preparedHistoryContext{
 		messages:          messages,
 		records:           records,
-		estimatedTokens:   estimatedTokens,
 		compactableTokens: compactableTokens,
 		pressureTokens:    estimateMessagesTokens(loaded),
 	}, nil

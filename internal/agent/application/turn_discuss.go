@@ -119,6 +119,8 @@ func (h *discussHandle) emitErr(err error) bool {
 }
 
 func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
+	ctx, endRun := withRunEnd(ctx)
+	defer endRun()
 	// Registered first so it runs last: the span covers the run's terminal
 	// write and reports what the run finished with.
 	runCtx := ctx
@@ -168,12 +170,19 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		}
 		return
 	}
-	if !cmd.DiscussRecoveryExhausted && s.maybeSyncCompactDiscuss(ctx, cmd, resolved, h.id) {
+	if !cmd.DiscussRecoveryExhausted && s.recoverDiscussContext(ctx, cmd, resolved, h.id) {
 		if h.emit(turn.DiscussEventRecompose, nil) {
 			h.contentLightTerminal = true
 		}
 		return
 	}
+	defer func() {
+		// A recompose already compacted and resubmits; an empty context
+		// leaves nothing to compact.
+		if !h.contentLightTerminal {
+			s.scheduleDiscussCompaction(ctx, cmd, resolved)
+		}
+	}()
 	if cmd.DiscussContextOverflow {
 		cause := apperror.New(apperror.CodeContextProtectedOverflow, nil)
 		cfg := resolved.RunConfig
@@ -382,8 +391,6 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	if len(terminalPayload) > 0 && !h.emit(string(terminalEvent.Type), terminalPayload) {
 		return
 	}
-
-	s.scheduleDiscussCompaction(ctx, cmd, resolved.ModelID)
 }
 
 func (s *Service) persistDiscussTerminalSnapshot(
@@ -669,9 +676,6 @@ func (s *Service) pumpDiscussAgent(ctx context.Context, cmd turn.StartTurnComman
 			h.failed.Store(true)
 			return
 		}
-	}
-	if !h.failed.Load() {
-		s.scheduleDiscussCompaction(ctx, cmd, "")
 	}
 }
 

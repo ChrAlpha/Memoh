@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -17,23 +18,21 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-// Automatic compaction derives its soft trigger, hard backstop, and target
+// Automatic compaction derives its trigger, hard-pressure level, and target
 // from the chat model's context window. A configured absolute threshold only
-// overrides the async trigger and is capped at the hard backstop.
+// moves the trigger and is capped at the hard-pressure level.
 const (
 	compactionSoftThresholdPercent = 50
 	compactionHardThresholdPercent = 75
 	defaultCompactionTargetPercent = 40
-	// maxAsyncCompactionPasses bounds how many consecutive summarizer calls
-	// one background trigger may spend draining a backlog.
-	maxAsyncCompactionPasses = 3
+	// maxCompactionPasses bounds how many consecutive summarizer calls one
+	// trigger may spend draining a backlog.
+	maxCompactionPasses = 3
 )
 
-// AutoCompactionThreshold is the async trigger level, exported so read-side
-// surfaces label the same level the turn path acts on. A zero return leaves
-// automatic compaction off when no usable model window is available. The
-// synchronous backstop is deliberately not exposed: it only runs on the history
-// path, which a reader cannot observe.
+// AutoCompactionThreshold is the trigger level, exported so read-side surfaces
+// label the same level the turn path acts on. A zero return leaves automatic
+// compaction off when no usable model window is available.
 func AutoCompactionThreshold(userThreshold, contextTokenBudget int) int {
 	if contextTokenBudget <= 0 {
 		return 0
@@ -62,59 +61,95 @@ func compactionTargetTokens(targetPercent *int, contextTokenBudget int) int {
 	return max(1, contextTokenBudget*percent/100)
 }
 
-// syncBackstopTargetTokens caps the hard-share backstop at the soft share so it
-// always makes progress and lands below the soft trigger, restoring hysteresis.
-func syncBackstopTargetTokens(targetPercent *int, contextTokenBudget int) int {
+// hardPressureTargetTokens caps the target at the soft share so a pass under
+// hard pressure always makes progress and lands below the soft trigger.
+func hardPressureTargetTokens(targetPercent *int, contextTokenBudget int) int {
 	softTarget := max(1, contextTokenBudget*compactionSoftThresholdPercent/100)
 	return min(compactionTargetTokens(targetPercent, contextTokenBudget), softTarget)
 }
 
-func syncCompactionShouldRun(pressure, contextTokenBudget int) bool {
+func compactionUnderHardPressure(pressure, contextTokenBudget int) bool {
 	threshold := hardCompactionThreshold(contextTokenBudget)
 	return threshold > 0 && pressure >= threshold
 }
 
-func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int {
-	if rc.compactableTokensKnown {
-		return max(rc.compactableTokens, rc.historyPressureTokens)
-	}
-	return providerInputTokens
-}
-
-// maybeCompact decides on the caller's goroutine whether this turn's pressure
-// calls for compaction, so a turn below the threshold starts no unit, and runs
-// the compaction as a background unit when it does.
-func (s *Service) maybeCompact(ctx context.Context, req ChatRequest, rc resolvedContext, inputTokens int) {
-	plan, ok := s.planCompaction(ctx, req, rc, inputTokens)
-	if !ok {
+// scheduleCompaction is the only automatic compaction path. It never delays
+// the turn that measured the pressure: the turn keeps the context it already
+// assembled, and the pass starts once the turn's run ends, so a summary that
+// lands serves later turns.
+func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, pressure, contextTokenBudget int, turnModelID string) {
+	if s.compactionService == nil || s.settingsService == nil || pressure <= 0 {
 		return
 	}
-	job.Go(ctx, s.logger, "agent.compaction", job.Options{}, func(ctx context.Context) error {
-		return s.runCompaction(ctx, plan)
-	},
-		slog.String("bot_id", req.BotID),
-		slog.String("session_id", req.ThreadID),
-		slog.Int("input_tokens", plan.inputTokens),
-		slog.Int("threshold", plan.threshold),
-	)
+	afterRunEnds(ctx, func() {
+		ctx := context.WithoutCancel(ctx)
+		plan, ok := s.planCompaction(ctx, req, pressure, contextTokenBudget, turnModelID)
+		if !ok {
+			return
+		}
+		_ = job.Run(ctx, s.logger, "agent.compaction", job.Options{}, func(ctx context.Context) error {
+			return s.runCompaction(ctx, plan)
+		},
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.ThreadID),
+			slog.Int("input_tokens", pressure),
+			slog.Int("threshold", plan.threshold),
+		)
+	})
+}
+
+type runEndKey struct{}
+
+type runEnd struct {
+	mu    sync.Mutex
+	ended bool
+	work  []func()
+}
+
+// withRunEnd marks ctx as one run's and returns what the run calls when it
+// ends. Work deferred to the end of the run then starts, so a summarizer call
+// never competes with the run's own model calls and reads settings as they
+// are then.
+func withRunEnd(ctx context.Context) (context.Context, func()) {
+	end := &runEnd{}
+	return context.WithValue(ctx, runEndKey{}, end), func() {
+		end.mu.Lock()
+		work := end.work
+		end.ended, end.work = true, nil
+		end.mu.Unlock()
+		for _, fn := range work {
+			go fn()
+		}
+	}
+}
+
+// afterRunEnds starts fn once the run ctx belongs to has ended, or at once
+// when ctx belongs to no run.
+func afterRunEnds(ctx context.Context, fn func()) {
+	if end, ok := ctx.Value(runEndKey{}).(*runEnd); ok {
+		end.mu.Lock()
+		if !end.ended {
+			end.work = append(end.work, fn)
+			end.mu.Unlock()
+			return
+		}
+		end.mu.Unlock()
+	}
+	go fn()
 }
 
 // compactionPlan is what an automatic compaction trigger runs with.
 type compactionPlan struct {
-	req         ChatRequest
-	rc          resolvedContext
-	settings    settings.Settings
-	inputTokens int
-	threshold   int
+	req                ChatRequest
+	settings           settings.Settings
+	pressure           int
+	threshold          int
+	contextTokenBudget int
+	turnModelID        string
 }
 
 // planCompaction reports whether the pressure crosses the automatic trigger.
-func (s *Service) planCompaction(ctx context.Context, req ChatRequest, rc resolvedContext, inputTokens int) (compactionPlan, bool) {
-	inputTokens = asyncCompactionInputTokens(rc, inputTokens)
-	if s.compactionService == nil || s.settingsService == nil {
-		s.logger.InfoContext(ctx, "compaction: skipped, service or settings nil")
-		return compactionPlan{}, false
-	}
+func (s *Service) planCompaction(ctx context.Context, req ChatRequest, pressure, contextTokenBudget int, turnModelID string) (compactionPlan, bool) {
 	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
 	if err != nil {
 		result := errlog.Event(ctx, "agent.compaction", errs.Wrap(err, "load compaction settings", slog.String("bot_id", req.BotID)), errlog.Options{})
@@ -125,27 +160,27 @@ func (s *Service) planCompaction(ctx context.Context, req ChatRequest, rc resolv
 		s.logger.InfoContext(ctx, "compaction: skipped, disabled")
 		return compactionPlan{}, false
 	}
-	threshold := AutoCompactionThreshold(botSettings.CompactionThreshold, rc.contextTokenBudget)
+	threshold := AutoCompactionThreshold(botSettings.CompactionThreshold, contextTokenBudget)
 	if threshold <= 0 {
 		s.logger.InfoContext(ctx, "compaction: skipped, no usable threshold",
 			slog.Int("configured_threshold", botSettings.CompactionThreshold),
-			slog.Int("context_token_budget", rc.contextTokenBudget),
+			slog.Int("context_token_budget", contextTokenBudget),
 		)
 		return compactionPlan{}, false
 	}
-	if !compaction.ShouldCompact(inputTokens, threshold) {
+	if !compaction.ShouldCompact(pressure, threshold) {
 		s.logger.InfoContext(ctx, "compaction: skipped, below threshold",
-			slog.Int("input_tokens", inputTokens),
+			slog.Int("input_tokens", pressure),
 			slog.Int("threshold", threshold),
 		)
 		return compactionPlan{}, false
 	}
-	return compactionPlan{req: req, rc: rc, settings: botSettings, inputTokens: inputTokens, threshold: threshold}, true
+	return compactionPlan{req: req, settings: botSettings, pressure: pressure, threshold: threshold, contextTokenBudget: contextTokenBudget, turnModelID: turnModelID}, true
 }
 
 // runCompaction is the body of one automatic compaction unit.
 func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error {
-	cfg, err := s.buildCompactionConfig(ctx, plan.req, plan.settings, plan.inputTokens, plan.rc.model.ID)
+	cfg, err := s.buildCompactionConfig(ctx, plan.req, plan.settings, plan.pressure, plan.turnModelID)
 	if err != nil {
 		return errs.Wrap(err, "build compaction config")
 	}
@@ -156,11 +191,14 @@ func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error 
 		job.Annotate(ctx, slog.String("skipped", "no_compaction_model"))
 		return nil
 	}
-	cfg.TargetTokens = compactionTargetTokens(plan.settings.CompactionTargetPercent, plan.rc.contextTokenBudget)
+	cfg.TargetTokens = compactionTargetTokens(plan.settings.CompactionTargetPercent, plan.contextTokenBudget)
 	cfg.ProtectedSources = compactionProtectedSources(plan.req)
 	cfg.AllowFrontierFusion = true
-	cfg.ContextWindowTokens = plan.rc.contextTokenBudget
-	cfg.HardPressure = syncCompactionShouldRun(plan.inputTokens, plan.rc.contextTokenBudget)
+	cfg.ContextWindowTokens = plan.contextTokenBudget
+	cfg.HardPressure = compactionUnderHardPressure(plan.pressure, plan.contextTokenBudget)
+	if cfg.HardPressure {
+		cfg.TargetTokens = hardPressureTargetTokens(plan.settings.CompactionTargetPercent, plan.contextTokenBudget)
+	}
 	return s.drainCompactionBacklog(ctx, cfg)
 }
 
@@ -171,7 +209,7 @@ func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error 
 // passes runs before the next summarizer call instead of waiting out the
 // whole drain.
 func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig) error {
-	for pass := 0; pass < maxAsyncCompactionPasses; pass++ {
+	for pass := 0; pass < maxCompactionPasses; pass++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -195,21 +233,10 @@ func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerC
 	return s.compactionService.RunCompactionSync(ctx, cfg)
 }
 
-// runCompactionSync runs compaction synchronously when context reaches the
-// blocking share of the model's context window and reports the session-scoped
-// result.
-// A noop (failure cooldown, another compaction in flight, or nothing to
-// compact) leaves this turn's context untouched: the request proceeds as-is,
-// possibly still above the threshold, and the next turn re-evaluates.
-func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string) compaction.Result {
-	return s.runSyncCompaction(ctx, req, inputTokens, contextTokenBudget, turnModelID, syncCompactionShouldRun(inputTokens, contextTokenBudget), 0)
-}
-
-func (s *Service) runBudgetCompactionSync(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, modelID string) compaction.Result {
-	return s.runSyncCompaction(ctx, req, inputTokens, historyBudget, modelID, true, historyBudget)
-}
-
-func (s *Service) runSyncCompaction(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string, hardPressure bool, historyBudget int) compaction.Result {
+// runBudgetCompactionSync compacts while a turn waits, only when the turn's
+// context does not fit its final history allowance: older history becomes
+// summaries instead of being dropped. A noop leaves the turn to selection.
+func (s *Service) runBudgetCompactionSync(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) compaction.Result {
 	if ctx.Err() != nil {
 		return compaction.Result{}
 	}
@@ -232,15 +259,14 @@ func (s *Service) runSyncCompaction(ctx context.Context, req ChatRequest, inputT
 		return compaction.Result{}
 	}
 	if cfg.ModelID == "" {
-		// Same skip path as the async trigger above — no model or model
-		// disabled means there is nothing to compact.
+		// No model or model disabled means there is nothing to compact.
 		return compaction.Result{}
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
 	cfg.AllowFrontierFusion = true
-	cfg.TargetTokens = syncBackstopTargetTokens(botSettings.CompactionTargetPercent, contextTokenBudget)
-	cfg.ContextWindowTokens = contextTokenBudget
-	cfg.HardPressure = hardPressure
+	cfg.TargetTokens = hardPressureTargetTokens(botSettings.CompactionTargetPercent, historyBudget)
+	cfg.ContextWindowTokens = historyBudget
+	cfg.HardPressure = true
 	cfg.HistoryBudgetTokens = historyBudget
 
 	s.logger.InfoContext(ctx, "compaction sync: running synchronously",

@@ -152,7 +152,6 @@ type Service struct {
 	timeout                           time.Duration
 	memorySearchTimeout               time.Duration
 	contextAbsoluteCapTokens          int
-	syncCompactionMode                string
 	clockLocation                     *time.Location
 	logger                            *slog.Logger
 	allowedTeam                       string
@@ -270,32 +269,6 @@ func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int 
 	return min(budget, capTokens)
 }
 
-// Pre-turn synchronous compaction backstop rollout modes (CM-CMP-003). The
-// wire values match config.SyncCompactionMode*; the application keeps its own
-// constants so the domain layer does not import the config package.
-const (
-	syncCompactionModeActive = "active"
-	syncCompactionModeShadow = "shadow"
-	syncCompactionModeOff    = "off"
-)
-
-// SetSyncCompactionMode sets the rollout mode for the pre-turn synchronous
-// compaction backstop on the discuss and pipeline-chat paths.
-func (s *Service) SetSyncCompactionMode(mode string) {
-	s.syncCompactionMode = mode
-}
-
-// effectiveSyncCompactionMode normalizes the configured mode; anything
-// unrecognized (including unset) observes in shadow rather than enforcing.
-func (s *Service) effectiveSyncCompactionMode() string {
-	switch s.syncCompactionMode {
-	case syncCompactionModeActive, syncCompactionModeOff:
-		return s.syncCompactionMode
-	default:
-		return syncCompactionModeShadow
-	}
-}
-
 // SetMemoryRegistry sets the provider registry for memory operations.
 func (s *Service) SetMemoryRegistry(registry *memprovider.Registry) {
 	s.memoryRegistry = registry
@@ -410,11 +383,6 @@ type resolvedContext struct {
 	query                       string // headerified persistable query
 	userMessageAlreadyInContext bool
 	injectedRecords             *[]InjectedMessageRecord
-	estimatedTokens             int // estimated input token count for compaction
-	compactableTokens           int // raw history eligible for compaction
-	compactableTokensKnown      bool
-	historyPressureTokens       int
-	contextTokenBudget          int // token budget used to clamp compaction triggers
 }
 
 func runIDForChatRequest(admittedRunID string) string {
@@ -568,46 +536,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 
 	var messages []ModelMessage
 	var historyRecords []historyfrag.HistoryRecord
-	var estimatedTokens int
 	var compactableTokens int
 	var historyPressureTokens int
-	var compactableTokensKnown bool
 	var currentMessageIndex *int
 	if usePipeline {
 		messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
-		compactableTokensKnown = true
-		// Pre-turn synchronous compaction backstop (CM-CMP-001), gated per
-		// CM-CMP-003. Mirrors the legacy path below: only a pass that
-		// actually produced a summary triggers recomposition; a noop keeps
-		// this turn's (already trimmed) context untouched.
-		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
-			threshold := hardCompactionThreshold(contextTokenBudget)
-			if mode == syncCompactionModeShadow {
-				s.logger.InfoContext(ctx, "sync_compaction_backstop",
-					slog.String("path", "pipeline_chat"),
-					slog.String("mode", "shadow"),
-					slog.Bool("would_fire", true),
-					slog.String("bot_id", req.BotID),
-					slog.String("session_id", req.ThreadID),
-					slog.Int("pressure_tokens", compactableTokens),
-					slog.Int("threshold_tokens", threshold))
-			} else {
-				start := time.Now()
-				res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID)
-				s.logger.InfoContext(ctx, "sync_compaction_backstop",
-					slog.String("path", "pipeline_chat"),
-					slog.String("mode", "active"),
-					slog.String("status", res.Status),
-					slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-					slog.String("bot_id", req.BotID),
-					slog.String("session_id", req.ThreadID),
-					slog.Int("pressure_tokens", compactableTokens),
-					slog.Int("threshold_tokens", threshold))
-				if res.Status == compaction.StatusOK {
-					messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
-				}
-			}
-		}
 		currentMessageIndex = latestModelUserMessageIndex(messages)
 	} else {
 		historyFallback := historyScopeFallbackFromChatRequest(req)
@@ -615,52 +548,16 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		if loadErr != nil {
 			s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
 				slog.String("bot_id", req.BotID),
-				slog.String("stage", "initial"),
 				slog.Any("error", loadErr),
 			)
 			return resolvedContext{}, req, loadErr
 		}
 		messages = prepared.messages
 		historyRecords = prepared.records
-		estimatedTokens = prepared.estimatedTokens
 		compactableTokens = prepared.compactableTokens
 		historyPressureTokens = prepared.pressureTokens
-		compactableTokensKnown = true
-		if syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
-			compactionThreshold := hardCompactionThreshold(contextTokenBudget)
-			s.logger.WarnContext(ctx, "resolve: context reached compaction threshold, running synchronous compaction",
-				slog.String("bot_id", req.BotID),
-				slog.Int("estimated_tokens", estimatedTokens),
-				slog.Int("compactable_tokens", compactableTokens),
-				slog.Int("context_token_budget", contextTokenBudget),
-				slog.Int("compaction_threshold", compactionThreshold),
-			)
-			// Reload and post-process only when this run actually produced a
-			// summary. A noop (cooldown, in-flight, nothing markable) keeps
-			// this turn's context untouched — possibly still above the
-			// threshold — and the next turn re-evaluates.
-			if res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
-				prepared, loadErr = s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
-				if loadErr != nil {
-					s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
-						slog.String("bot_id", req.BotID),
-						slog.String("stage", "post_compaction"),
-						slog.Any("error", loadErr),
-					)
-					return resolvedContext{}, req, loadErr
-				}
-				messages = prepared.messages
-				historyRecords = prepared.records
-				estimatedTokens = prepared.estimatedTokens
-				compactableTokens = prepared.compactableTokens
-				historyPressureTokens = prepared.pressureTokens
-				// Remove tool messages from the recent context — they are large
-				// and unnecessary when we already have a summary. Keep only
-				// user/assistant conversation turns.
-				messages = stripToolMessagesWhenCompactionSummaryIsActive(messages, historyRecords)
-			}
-		}
 	}
+	s.scheduleCompaction(ctx, req, max(compactableTokens, historyPressureTokens), contextTokenBudget, chatModel.ID)
 	forkMessageCount := 0
 	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
 		// The inherited parent snapshot precedes the thread's own transcript,
@@ -791,11 +688,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		query:                       headerifiedQuery,
 		userMessageAlreadyInContext: usePipeline,
 		injectedRecords:             injectedRecords,
-		estimatedTokens:             estimatedTokens,
-		compactableTokens:           compactableTokens,
-		historyPressureTokens:       historyPressureTokens,
-		compactableTokensKnown:      compactableTokensKnown,
-		contextTokenBudget:          contextTokenBudget,
 	}, req, nil
 }
 
@@ -858,7 +750,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	lifecycleCause = err
 	if err != nil {
 		if stepCommitter != nil {
-			_ = stepCommitter.finish(ctx, rc.estimatedTokens)
+			_ = stepCommitter.finish(ctx)
 		}
 		return ChatResponse{}, err
 	}
@@ -866,11 +758,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	outputMessages := sdkMessagesWithOrigins(result.Messages, result.InternalFeedbackIndexes)
 	storeReq := req
 	if stepCommitter != nil {
-		inputTokens := 0
-		if result.Usage != nil {
-			inputTokens = result.Usage.InputTokens
-		}
-		if err := stepCommitter.finish(ctx, inputTokens); err != nil {
+		if err := stepCommitter.finish(ctx); err != nil {
 			lifecycleCause = err
 			return ChatResponse{}, err
 		}
@@ -886,9 +774,6 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		if err := s.persistSessionWorkspaceTarget(ctx, storeReq); err != nil {
 			lifecycleCause = err
 			return ChatResponse{}, err
-		}
-		if result.Usage != nil {
-			s.maybeCompact(context.WithoutCancel(ctx), req, rc, result.Usage.InputTokens)
 		}
 	}
 

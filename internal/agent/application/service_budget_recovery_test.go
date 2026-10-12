@@ -209,12 +209,12 @@ func TestChatBudgetRecoveryPreservesMaterializedCurrentMedia(t *testing.T) {
 }
 
 func TestChatBudgetRecoveryDeclinesIrreducibleContext(t *testing.T) {
-	for _, scenario := range []string{"fixed hook", "off"} {
+	for _, scenario := range []string{"fixed hook", "compaction disabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, history, runner, cfg := chatRecoveryFixture(t)
 			switch scenario {
-			case "off":
-				s.SetSyncCompactionMode(scenario)
+			case "compaction disabled":
+				s.queries.(*recoveryHistoryQueries).settings.CompactionEnabled = false
 			case "fixed hook":
 				cfg.ContextSourceFrags = append(cfg.ContextSourceFrags, contextfrag.TextFrag(contextfrag.TextFragInput{ID: "fixed-hook", Text: strings.Repeat("x", 4000), Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotHistory}))
 			}
@@ -475,9 +475,8 @@ func TestChatBudgetRecoveryAccountsForRenderedPipelineSummary(t *testing.T) {
 	}
 }
 
-func TestChatBudgetRecoveryFusesSummaryOnlyHistoryInShadow(t *testing.T) {
+func TestChatBudgetRecoveryFusesSummaryOnlyHistory(t *testing.T) {
 	s, history, runner, cfg := chatRecoveryFixture(t)
-	s.SetSyncCompactionMode("shadow")
 	var frags []contextfrag.ContextFrag
 	for _, frag := range cfg.ContextSourceFrags {
 		if frag.ID != "message.021" {
@@ -496,7 +495,6 @@ func TestBudgetRecoveryRetainsPressureAfterAllHistoryWasTrimmed(t *testing.T) {
 	for _, mode := range []string{"chat", "discuss"} {
 		t.Run(mode, func(t *testing.T) {
 			s, history, runner, cfg := chatRecoveryFixture(t)
-			s.SetSyncCompactionMode("shadow")
 			cfg.Messages = []sdk.Message{sdk.UserMessage("current request")}
 			cfg.ContextFrags = nil
 			cfg.ContextTrimmableMessages = 0

@@ -209,7 +209,7 @@ func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *t
 }
 
 func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testing.T) {
-	for _, scenario := range []string{"protected hook", "off", "compaction failure", "compaction noop"} {
+	for _, scenario := range []string{"protected hook", "compaction disabled", "compaction failure", "compaction noop"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 			wantCompactions := 0
@@ -220,8 +220,8 @@ func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testi
 					Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotAfterHistoryBeforeCurrent,
 					Budget: contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 				})}
-			case "off":
-				service.SetSyncCompactionMode(scenario)
+			case "compaction disabled":
+				service.queries.(*controllerQueries).settings.CompactionEnabled = false
 			case "compaction failure":
 				compactor.err = errors.New("private summarizer failure")
 				wantCompactions = 1

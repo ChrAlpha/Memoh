@@ -103,56 +103,6 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 	}
 }
 
-func TestAsyncCompactionInputTokensPrefersKnownCompactableHistory(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name          string
-		resolved      resolvedContext
-		providerInput int
-		want          int
-	}{
-		{
-			name:          "includes summary pressure without provider overhead",
-			resolved:      resolvedContext{compactableTokens: 4000, compactableTokensKnown: true, historyPressureTokens: 8000},
-			providerInput: 12000,
-			want:          8000,
-		},
-		{
-			name:          "summary-only history can recover",
-			resolved:      resolvedContext{compactableTokensKnown: true, historyPressureTokens: 8000},
-			providerInput: 12000,
-			want:          8000,
-		},
-		{
-			name:          "legacy raw projection excludes provider overhead",
-			resolved:      resolvedContext{compactableTokens: 4000, compactableTokensKnown: true},
-			providerInput: 9000,
-			want:          4000,
-		},
-		{
-			name:          "known empty history stays zero",
-			resolved:      resolvedContext{compactableTokensKnown: true},
-			providerInput: 9000,
-			want:          0,
-		},
-		{
-			name:          "pipeline without a raw projection falls back to provider usage",
-			resolved:      resolvedContext{},
-			providerInput: 9000,
-			want:          9000,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := asyncCompactionInputTokens(tc.resolved, tc.providerInput); got != tc.want {
-				t.Fatalf("asyncCompactionInputTokens() = %d, want %d", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 	t.Parallel()
 

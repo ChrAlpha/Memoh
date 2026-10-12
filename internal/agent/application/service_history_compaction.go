@@ -109,17 +109,6 @@ func modelMessageSourceKeys(message ModelMessage) []string {
 	return keys
 }
 
-func stripToolMessagesWhenCompactionSummaryIsActive(messages []ModelMessage, records []historyfrag.HistoryRecord) []ModelMessage {
-	for _, record := range records {
-		if record.SourceKind == historyfrag.SourceCompactionLog &&
-			record.Kind == contextfrag.KindConversationSummary &&
-			record.Lifecycle == historyfrag.LifecycleActiveSummary {
-			return stripToolMessages(messages)
-		}
-	}
-	return messages
-}
-
 type compactionArtifactBoundary struct {
 	hasCutoff bool
 	cutoffMs  int64
