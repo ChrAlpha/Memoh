@@ -88,7 +88,12 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	defer func() {
 		if ctx.Err() == nil {
-			err = errors.Join(err, s.advanceScan(ctx, sessionUUID, scan))
+			if scanErr := s.advanceScan(ctx, sessionUUID, scan); scanErr != nil {
+				if err != nil {
+					scanErr = fmt.Errorf("%w; %s", scanErr, err.Error())
+				}
+				err = scanErr
+			}
 			res.ScanPending = err == nil && res.Status == StatusNoop && !scan.done && scan.after.Valid &&
 				(scan.state.CompactionScanEpoch != scan.state.CompactionEpoch || scan.after != scan.state.CompactionScanAfter)
 		}

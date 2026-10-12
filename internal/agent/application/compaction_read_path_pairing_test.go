@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -102,6 +103,25 @@ func (s pairingSummarizer) RoundTrip(*http.Request) (*http.Response, error) {
 	}, nil
 }
 
+type countingTransport struct {
+	http.RoundTripper
+	calls int
+}
+
+func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.calls++
+	return c.RoundTripper.RoundTrip(req)
+}
+
+type scanSaveFailingQueries struct {
+	*pairingQueries
+	err error
+}
+
+func (f scanSaveFailingQueries) AdvanceCompactionScan(context.Context, sqlc.AdvanceCompactionScanParams) (int64, error) {
+	return 0, f.err
+}
+
 func pairingRow(t *testing.T, role, content string) sqlc.ListUncompactedMessagesBySessionRow {
 	t.Helper()
 	return sqlc.ListUncompactedMessagesBySessionRow{
@@ -187,5 +207,43 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {
 		t.Fatalf("selector output broke read-path ordering:\ngot  %#v\nwant %#v", gotMessages, want)
+	}
+}
+
+func TestDrainStopsWhenScanSaveFailsAfterIneffectiveSummary(t *testing.T) {
+	t.Parallel()
+
+	errScanSave := errors.New("scan save failed")
+	q := scanSaveFailingQueries{err: errScanSave, pairingQueries: &pairingQueries{
+		uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{
+			pairingRow(t, "user", `"old q with plenty of extra descriptive words so the raw exchange clearly outweighs its summary"`),
+			pairingRow(t, "assistant", `"old a walking through the answer in enough detail that compaction genuinely shrinks it"`),
+			pairingRow(t, "user", `"current q"`),
+		},
+		logID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
+	}}
+	summarizer := &countingTransport{RoundTripper: pairingSummarizer{summary: strings.Repeat("a summary longer than the span ", 200)}}
+	service := &Service{}
+	service.SetCompactionService(compaction.NewService(slog.New(slog.DiscardHandler), q))
+	cfg := compaction.TriggerConfig{
+		BotID:        uuid.NewString(),
+		SessionID:    uuid.NewString(),
+		ModelID:      "stub-model",
+		ClientType:   "openai-completions",
+		APIKey:       "test",
+		BaseURL:      "http://stub.invalid",
+		HTTPClient:   &http.Client{Transport: summarizer},
+		TargetTokens: 200,
+	}
+
+	err := service.drainCompactionBacklog(t.Context(), cfg)
+	if !errors.Is(err, errScanSave) || errors.Is(err, compaction.ErrIneffectiveSummary) {
+		t.Fatalf("drain error = %v, want the scan save failure, not a skippable ineffective summary", err)
+	}
+	if err := service.drainCompactionBacklog(t.Context(), cfg); err != nil {
+		t.Fatalf("drain during failure cooldown = %v, want a silent skip", err)
+	}
+	if summarizer.calls != 1 {
+		t.Fatalf("summarizer calls = %d, want 1: an unsaved scan must not retry the same span", summarizer.calls)
 	}
 }
