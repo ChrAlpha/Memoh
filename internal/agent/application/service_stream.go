@@ -399,6 +399,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		var failureEventForwarded bool
 		var deferredRuntimeTerminal *native.StreamEvent
 		for event := range eventCh {
+			event = publicRuntimeNotice(event)
 			idleCancel.Observe(event)
 
 			// Track tool calls for adaptive idle timeout and progress events
@@ -750,6 +751,7 @@ func (s *Service) streamChatWSResultWithHooks(
 	var failureRows []messagepkg.Message
 	failureRecorded := false
 	for event := range agentEventCh {
+		event = publicRuntimeNotice(event)
 		idleCancel.Observe(event)
 
 		// Track tool calls for adaptive idle timeout

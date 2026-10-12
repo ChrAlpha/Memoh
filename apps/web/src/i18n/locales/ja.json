@@ -339,6 +339,7 @@
     "oauth": {
       "state_invalid": "この認可は期限切れか無効になっています。もう一度認可を開始してください。"
     },
+    "output_truncated": "応答がモデルの出力上限に達したため、途中で打ち切られました。続きを依頼するか、リクエストを小さく分けてください。",
     "profile": {
       "request_invalid": "プロフィール更新リクエストが無効です。",
       "title_model_invalid": "選択したタイトルModelは利用できないか、チャットModelではありません。",
@@ -1457,7 +1458,6 @@
     "reasoningEffort": "推論",
     "reasoningOn": "オン",
     "reasoningOff": "オフ",
-    "reasoningAdaptive": "アダプティブ",
     "reasoningMinimal": "最小限",
     "reasoningLow": "低い",
     "reasoningMedium": "中くらい",
@@ -1831,6 +1831,9 @@
     "reasoningEfforts": "対応する推論強度",
     "reasoningEffortsPlaceholder": "推論強度を選択",
     "contextWindowMin": "コンテキストウィンドウは 0 より大きい値にしてください",
+    "maxOutputTokens": "最大出力トークン",
+    "maxOutputTokensPlaceholder": "例: 8192",
+    "maxOutputTokensMin": "最大出力トークンは 0 より大きい値にしてください",
     "testModel": "モデルをテスト",
     "enable": "モデルを有効化",
     "toggleFailed": "モデルの更新に失敗しました",

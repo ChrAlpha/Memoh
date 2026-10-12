@@ -342,6 +342,7 @@
     "oauth": {
       "state_invalid": "本次授权已过期或已失效，请重新发起授权。"
     },
+    "output_truncated": "回复达到模型的输出上限，内容被截断。可以让它继续，或把请求拆成更小的部分。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
@@ -1488,7 +1489,6 @@
     "reasoningEffort": "推理",
     "reasoningOn": "开启",
     "reasoningOff": "关闭",
-    "reasoningAdaptive": "自适应",
     "reasoningMinimal": "极简",
     "reasoningLow": "低",
     "reasoningMedium": "中",
@@ -1862,6 +1862,9 @@
     "reasoningEfforts": "支持的推理强度",
     "reasoningEffortsPlaceholder": "选择推理强度",
     "contextWindowMin": "上下文窗口需大于 0",
+    "maxOutputTokens": "最大输出 Token",
+    "maxOutputTokensPlaceholder": "例如 8192",
+    "maxOutputTokensMin": "最大输出 Token 需大于 0",
     "testModel": "测试模型",
     "enable": "启用模型",
     "toggleFailed": "更新模型失败",

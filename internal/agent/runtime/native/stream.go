@@ -39,4 +39,5 @@ const (
 	EventStepEnd                             = event.StepEnd
 	EventProgress                            = event.Progress
 	EventError                               = event.Error
+	EventRuntimeNotice                       = event.RuntimeNotice
 )

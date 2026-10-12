@@ -715,6 +715,7 @@
     "oauth": {
       "state_invalid": "This authorization has expired or is no longer valid. Start the authorization again."
     },
+    "output_truncated": "The reply reached the model's output limit and was cut off. Ask it to continue, or split the request into smaller parts.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
