@@ -4,14 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -39,52 +37,38 @@ import (
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/local"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/command"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/httpx"
 	"github.com/felinics/memoh/internal/media"
-	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/server"
 	skillset "github.com/felinics/memoh/internal/skills"
 	"github.com/felinics/memoh/internal/slash"
 	"github.com/felinics/memoh/internal/telemetry"
 )
 
-// localSpeechSynthesizer synthesizes text to speech audio.
-type localSpeechSynthesizer interface {
-	Synthesize(ctx context.Context, modelID string, text string, overrideCfg map[string]any) ([]byte, string, error)
-}
-
-// localSpeechModelResolver resolves speech model IDs for bots.
-type localSpeechModelResolver interface {
-	ResolveSpeechModelID(ctx context.Context, botID string) (string, error)
-}
-
 // LocalChannelHandler handles local channel routes (WebUI / API) backed by bot history.
 type LocalChannelHandler struct {
-	channelType         channel.ChannelType
-	channelManager      *channel.Manager
-	channelStore        *channel.Store
-	routeHub            *local.RouteHub
-	botService          *bots.Service
-	accountService      *accounts.Service
-	sessionService      *sessionpkg.Service
-	agentService        *application.Service
-	sessionRuntime      wsTurnAdmitter
-	commandHandler      *command.Handler
-	skillResolver       runtimeSkillResolver
-	runtimeControls     runtimeControlReader
-	mediaService        *media.Service
-	speechService       localSpeechSynthesizer
-	speechModelResolver localSpeechModelResolver
-	wsSkillTurnsMu      sync.Mutex
-	wsSkillTurns        *wsRequestedSkillTurnRegistry
-	logger              *slog.Logger
-	jwtSecret           string
-	tokenTTL            time.Duration
+	channelType     channel.ChannelType
+	channelManager  *channel.Manager
+	channelStore    *channel.Store
+	routeHub        *local.RouteHub
+	botService      *bots.Service
+	accountService  *accounts.Service
+	sessionService  *sessionpkg.Service
+	agentService    *application.Service
+	sessionRuntime  runtimeControlRouter
+	commandHandler  *command.Handler
+	skillResolver   runtimeSkillResolver
+	runtimeControls runtimeControlReader
+	mediaService    *media.Service
+	wsSkillTurnsMu  sync.Mutex
+	wsSkillTurns    *wsRequestedSkillTurnRegistry
+	logger          *slog.Logger
+	jwtSecret       string
+	tokenTTL        time.Duration
 	// wsHeartbeat is the chat socket's ping, read and write timing. The
 	// zero value means defaultWSHeartbeat; tests set shorter intervals.
 	wsHeartbeat wsHeartbeat
@@ -98,15 +82,6 @@ type runtimeSkillResolver interface {
 // runtimeControlReader reads the server-owned declarations for this actor/thread.
 type runtimeControlReader interface {
 	RuntimeCommands(context.Context, application.RuntimeControlRequest) ([]external.Command, error)
-}
-
-// wsTurnAdmitter is the durable admission this entry point depends on. It is
-// declared as the one method the handler calls rather than as the manager type
-// so a test can admit without a database, and so the handler cannot reach for
-// snapshot or command routing that belongs to the runtime protocol instead.
-type wsTurnAdmitter interface {
-	Admit(ctx context.Context, in sessionruntime.AdmitInput) (sessionruntime.Admission, error)
-	FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, errorCode string) (sessionruntime.TerminalRun, error)
 }
 
 // NewLocalChannelHandler creates a local channel handler.
@@ -130,10 +105,11 @@ func (h *LocalChannelHandler) SetAgentService(service *application.Service) {
 	h.runtimeControls = service
 }
 
-// SetSessionRuntime installs the durable admission gate for turn-starting
-// WebSocket messages.
-func (h *LocalChannelHandler) SetSessionRuntime(admitter wsTurnAdmitter) {
-	h.sessionRuntime = admitter
+// SetSessionRuntime installs the session runtime this handler routes a
+// client's controls through and observes sessions from. The handler starts no
+// run itself: the application admits and drives every turn.
+func (h *LocalChannelHandler) SetSessionRuntime(runtime runtimeControlRouter) {
+	h.sessionRuntime = runtime
 }
 
 func (h *LocalChannelHandler) SetCommandHandler(handler *command.Handler) {
@@ -153,12 +129,6 @@ func (h *LocalChannelHandler) SetAuthTokenConfig(jwtSecret string, ttl time.Dura
 // SetMediaService sets the media service for WebSocket attachment ingestion.
 func (h *LocalChannelHandler) SetMediaService(svc *media.Service) {
 	h.mediaService = svc
-}
-
-// SetSpeechService configures speech synthesis for handling speech_delta events.
-func (h *LocalChannelHandler) SetSpeechService(synth localSpeechSynthesizer, resolver localSpeechModelResolver) {
-	h.speechService = synth
-	h.speechModelResolver = resolver
 }
 
 // Register registers the local channel routes.
@@ -1433,113 +1403,6 @@ func recordWSRequestFailure(ctx context.Context, logger *slog.Logger, botID stri
 	logger.LogAttrs(ctx, result.Level, "ws request", append(attrs, result.Attrs()...)...)
 }
 
-// sendWSRunFailure sends the error frame for an error the runner of an
-// accepted run returned. When the error is how the run ended, the frame
-// carries runCode, the code the run was recorded with, so the frame and the
-// run's record name the same failure. Any other error, such as one returned
-// after the run's failure was delivered, is answered as a request error.
-func sendWSRunFailure(ctx context.Context, writer *wsWriter, ref wsTurnRef, err error, outcome application.RunOutcome, runCode apperror.Code) {
-	if outcome.Cause == err { //nolint:errorlint // Identity: whether this error is the run's outcome.
-		// The run's record already names the failure, whatever has become of
-		// the stream since, so the frame is rendered without its caller.
-		frame, _ := server.NewStreamError(context.WithoutCancel(ctx), apperror.Wrap(runCode, err, nil), "")
-		writer.SendJSON(wsErrorEvent(ref, frame))
-		return
-	}
-	_ = sendWSErrorFromError(ctx, writer, ref, err)
-}
-
-// forwardWSStreamEvents publishes the run's events to the session runtime,
-// which folds each one into the run's authoritative state so every subscriber
-// of the session sees it — including one attached to a different connection or
-// a different server, and including this client after it reconnects
-// (SR-OBS-003).
-//
-// The initiating socket is not a special case and receives nothing here beyond
-// errors. It reads the run the same way every other subscriber does, through
-// the snapshot and deltas of the session it subscribed to; rendering a second,
-// connection-local copy of the same events would be a projection only this
-// client can see, which is exactly the divergence SR-OBS-003 forbids.
-func (h *LocalChannelHandler) forwardWSStreamEvents(ctx, assetCtx context.Context, writer *wsWriter, botID string, ref wsTurnRef, handle sessionruntime.RunHandle, eventCh <-chan application.WSStreamEvent) {
-	publisher := h.sessionRuntimePublisher()
-	if handle.FencingToken <= 0 {
-		// No admitted ownership, so there is nothing this process is allowed to
-		// write for the run. Only a caller that bypasses admission gets here.
-		publisher = nil
-	}
-	outboundAssetRefs := make([]messagepkg.AssetRef, 0)
-	for event := range eventCh {
-		processed := h.processWSEvent(ctx, botID, event)
-		for _, p := range processed {
-			if refs := extractAssetRefsFromProcessedEvent(p); len(refs) > 0 {
-				outboundAssetRefs = append(outboundAssetRefs, refs...)
-			}
-
-			var streamEvent native.StreamEvent
-			if err := json.Unmarshal(p, &streamEvent); err != nil {
-				continue
-			}
-
-			if publisher != nil {
-				// Published before anything is said on this socket, so the
-				// session's state never lags behind what a client has already
-				// been told: a reconnecting subscriber must not be handed less
-				// than it saw.
-				//
-				// assetCtx, not ctx: an aborted run cancels ctx and its last
-				// events arrive after that, which is exactly when publishing them
-				// matters most.
-				if _, err := publisher.HandleAgentEvent(assetCtx, handle, streamEvent); err != nil {
-					if errors.Is(err, sessionruntime.ErrRunOwnershipLost) {
-						// A superseded owner has nothing left to publish and every
-						// later event would fail identically.
-						publisher = nil
-					}
-					h.logger.WarnContext(assetCtx, "publish runtime run event failed",
-						slog.Any("error", err),
-						slog.String("bot_id", botID),
-						slog.String("run_id", ref.RunID),
-						slog.String("session_id", ref.SessionID))
-				}
-			}
-
-			// An error is the one thing the run's published state cannot carry on
-			// its own: it names the run as failed but not what to tell this
-			// caller, which is still waiting on the send it made.
-			if streamEvent.Type == native.EventError {
-				sendWSAgentError(ctx, writer, ref, streamEvent)
-			}
-		}
-	}
-	if len(outboundAssetRefs) > 0 {
-		h.agentService.LinkOutboundAssets(assetCtx, botID, ref.SessionID, outboundAssetRefs)
-	}
-}
-
-// wsStreamRunner receives the run it is executing as, because the run id is
-// minted at admission and everything downstream — compaction barriers, external-agent
-// sessions, interactive tool headers — has to agree on that one name.
-//
-// turn is the turn admission allocated for this run. It is separate from ref
-// because ref is how the *client* names the turn, while this is how the
-// *database* does: the same value would otherwise have to be threaded through
-// every send site that only cares about the client's name for it.
-//
-// The runner returns the error the caller still has to report, and the outcome
-// of a failure it already delivered in the stream.
-type wsStreamRunner func(ctx context.Context, ref wsTurnRef, turn wsAdmittedTurn, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) (application.RunOutcome, error)
-
-type wsRunAdmissionBuilder func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)
-
-// wsAdmittedTurn is the turn identity a run was admitted with. A zero value
-// means no admission decided the turn, so the history layer allocates one.
-type wsAdmittedTurn struct {
-	TurnID   string
-	Position *int64
-	Handle   sessionruntime.RunHandle
-	InjectCh chan turn.InjectMessage
-}
-
 // wsSubmission is the canonical form of what a client sent. Its bytes decide
 // whether a repeated invocation is the same submit or a conflicting one, so it
 // carries only what the user actually submitted: no timestamps, no tokens, no
@@ -1580,149 +1443,6 @@ func (s wsSubmission) encode() []byte {
 		return []byte(s.Kind + "\x00" + s.SessionID + "\x00" + s.Text + "\x00" + s.TurnID)
 	}
 	return payload
-}
-
-// wsRunAdmission is the outcome of naming one WebSocket turn.
-type wsRunAdmission struct {
-	RunID string
-	// TurnID and TurnPosition are the turn admission allocated. They are carried
-	// to the runner so the persisted user turn lands under the id the client was
-	// given, rather than a second one minted by the history layer.
-	TurnID       string
-	TurnPosition *int64
-	// Accepted is what the client is told once the run is about to execute. It
-	// is carried from admission rather than rebuilt at the send site because the
-	// turn id and the cursor exist only there: the ledger decides the first and
-	// the live reservation decides the second.
-	Accepted wsRunAcceptance
-	// Handle is the durable ownership this process holds, carrying the fencing
-	// token its terminal write must present.
-	Handle sessionruntime.RunHandle
-	// Execute is false when the run already exists under another owner or has
-	// already finished. The client has been told which run its invocation
-	// resolved to, and a second execution of it is the duplication admission
-	// exists to prevent.
-	Execute bool
-}
-
-// admitWSTurn turns a submission into a run this process may execute.
-func (h *LocalChannelHandler) admitWSTurn(ctx context.Context, writer *wsWriter, botID string, ref wsTurnRef, operation string, submission []byte, admissionBuilder wsRunAdmissionBuilder, abortCh chan struct{}, cancel context.CancelFunc, ownershipCancel context.CancelCauseFunc) (wsRunAdmission, bool) {
-	if h.sessionRuntime == nil {
-		failWSRequest(ctx, h.logger, writer, botID, ref, operation, errs.New("session runtime is not configured"))
-		return wsRunAdmission{}, false
-	}
-	if admissionBuilder == nil {
-		admissionBuilder = func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
-			return sessionruntime.RunAdmissionView{}, nil
-		}
-	}
-	admission, err := h.sessionRuntime.Admit(ctx, sessionruntime.AdmitInput{
-		BotID:        botID,
-		SessionID:    ref.SessionID,
-		InvocationID: ref.InvocationID,
-		Payload:      submission,
-		Execution: sessionruntime.Execution{
-			Admission: admissionBuilder,
-			AbortCh:   abortCh,
-			Cancel:    cancel,
-			// Revoking ownership cancels the run with a cause, which is what lets
-			// the execution below tell "this run was stopped" apart from "this run
-			// was taken away". Only the second must leave no durable trace.
-			OwnershipCancel: ownershipCancel,
-		},
-	})
-	if err != nil {
-		// ErrSessionBusy and ErrInvocationConflict arrive here as themselves and
-		// leave as run_rejected with the stable code the client branches on.
-		failWSRequest(ctx, h.logger, writer, botID, ref, operation, err)
-		return wsRunAdmission{}, false
-	}
-	if !admission.Started {
-		// The run exists and its turn is already named, but this call reserved
-		// nothing, so there is no cursor to report: where the session stands now
-		// is what a subscription's snapshot answers.
-		sendWSRunAccepted(writer, ref.withRun(admission.RunID), wsRunAcceptance{TurnID: admission.TurnID, TurnPosition: admission.TurnPosition, Duplicate: true})
-		return wsRunAdmission{RunID: admission.RunID}, true
-	}
-	return wsRunAdmission{
-		RunID:        admission.RunID,
-		TurnID:       admission.TurnID,
-		TurnPosition: &admission.TurnPosition,
-		Accepted:     wsRunAcceptance{TurnID: admission.TurnID, TurnPosition: admission.TurnPosition, Cursor: admission.Cursor},
-		Handle:       admission.Handle,
-		Execute:      true,
-	}, true
-}
-
-// wsRunOutcome is what this process knows about how a run it executed ended.
-//
-// It reports only what it actually knows, which is whether the run failed: it
-// holds the error. It does not know why an execution it was told to stop was
-// stopped. Every abort now arrives as a routed control, which unblocks the
-// runner and cancels its context, so the owner sees either a clean return or a
-// bare cancellation and neither says "aborted".
-//
-// Anything that is not a failure is therefore left unnamed, and the manager
-// resolves it from the intent already recorded against the run. Reporting a
-// clean return as `completed` is what made a routed abort finalize as a
-// successful turn (SR-CTL-001); a cancellation reported as `errored` blames the
-// symptom.
-//
-// A runner may have failed in the stream before it returned: its outcome names
-// that failure, which it has already delivered to the client. That failure is
-// the run's outcome even when the runner returns an error after it, such as a
-// failure to persist the turn; the returned error is only a diagnostic.
-func wsRunOutcome(delivered application.RunOutcome, runErr error) application.RunOutcome {
-	if runErr == nil {
-		return delivered
-	}
-	if errors.Is(runErr, context.Canceled) {
-		return application.RunOutcome{}
-	}
-	if delivered.Status == sessionruntime.RunStatusErrored && delivered.ErrorCode() != "" {
-		return delivered
-	}
-	return application.RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: runErr}
-}
-
-// finishWSRun writes the run's terminal state under the token this process was
-// admitted with. It is the release of the session's single active slot: without
-// it the durable row stays active and the next submission is told the session is
-// busy until the reaper times the lease out.
-//
-// Only the stable error code reaches the run's published state. The underlying
-// error is a private diagnostic and stays in the log. It returns the code the
-// run was recorded with, empty when this write did not record the run.
-func (h *LocalChannelHandler) finishWSRun(ctx context.Context, admission wsRunAdmission, outcome application.RunOutcome) apperror.Code {
-	if h.sessionRuntime == nil || admission.Handle.FencingToken <= 0 {
-		return ""
-	}
-	failed := outcome.Status == sessionruntime.RunStatusErrored
-	ctx = application.WithRunOutcome(ctx, admission.Handle.RunID, outcome)
-	switch terminal, err := h.sessionRuntime.FinishRunWithErrorCode(ctx, admission.Handle, outcome.Status, outcome.ErrorCode()); {
-	case err == nil:
-		if h.agentService != nil && failed {
-			h.agentService.EnsureTerminalContextLifecycle(
-				ctx,
-				admission.RunID,
-				admission.Handle.BotID,
-				admission.Handle.SessionID,
-				outcome.Cause,
-			)
-		}
-		return apperror.Code(terminal.ErrorCode)
-	case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
-		// Expected, not a failure: this process was superseded mid-run, so the
-		// terminal write was refused and the reaper names the outcome instead.
-		h.logger.WarnContext(ctx, "skip finishing runtime run after ownership loss",
-			slog.String("run_id", admission.RunID))
-	default:
-		h.logger.ErrorContext(ctx, "finish runtime run failed",
-			slog.Any("error", err),
-			slog.String("run_id", admission.RunID),
-			slog.String("status", outcome.Status))
-	}
-	return ""
 }
 
 // abortWSRun stops a run the client named.
@@ -1774,103 +1494,63 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 	}
 }
 
-// startWSStream is where a submission becomes a run: admission names the run,
+// admitWSRun is where a submission becomes a run: admission names the run,
 // the server publishes that name, and only then does anything execute. The id
 // comes from the ledger rather than from the client, which is what makes run
 // identity unforgeable and lets a second subscriber address the same run.
 //
-// submission is the canonical bytes that identify what was sent. The ledger
-// arbitrates every new turn: a repeated invocation resolves to its original
-// run, a session that is already running one rejects this, and the winner
-// receives a fencing token its durable writes carry. Decision responses do not
-// enter this path; they route to the existing run's owner.
+// submission is the canonical bytes that identify what was sent. A repeated
+// invocation resolves to its original run and is told so; a session already
+// running one rejects this. Decision responses do not enter this path; they
+// route to the existing run's owner.
 //
-// The returned ref carries the run id so callers describing the same turn — a
-// persisted user message, a late error — name it the way the client will.
-func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, writer *wsWriter, botID string, ref wsTurnRef, logLabel string, submission []byte, admissionBuilder wsRunAdmissionBuilder, onFinish func(), runner wsStreamRunner) (wsTurnRef, bool) {
-	// Cause-carrying so a lost owner lease is distinguishable downstream from an
-	// ordinary stop: both cancel this context, and only one of them means this
-	// process may no longer write for the run.
-	streamCtx, streamCancelCause := context.WithCancelCause(baseCtx)
-	streamCancel := func() { streamCancelCause(context.Canceled) }
-	abortCh := make(chan struct{}, 1)
+// It returns the run this call executes and the ref that names it, or nil when
+// there is nothing to execute. release is called once whatever this call
+// reserved for the session is no longer needed: here when nothing runs, and
+// by the run's delivery end otherwise.
+func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), release func()) (*application.WebAdmission, wsTurnRef) {
+	if release == nil {
+		release = func() {}
+	}
+	admitted, err := h.agentService.AdmitWebRun(ctx, application.WebAdmitInput{
+		BotID:        botID,
+		SessionID:    ref.SessionID,
+		InvocationID: ref.InvocationID,
+		Payload:      submission,
+		Admission:    admission,
+	})
+	if err != nil {
+		// ErrSessionBusy and ErrInvocationConflict arrive here as themselves and
+		// leave as run_rejected with the stable code the client branches on.
+		failWSRequest(ctx, h.logger, writer, botID, ref, operation, err)
+		release()
+		return nil, ref
+	}
+	ref = ref.withRun(admitted.RunID)
+	sendWSRunAccepted(writer, ref, wsRunAcceptance{
+		TurnID:       admitted.TurnID,
+		TurnPosition: admitted.TurnPosition,
+		Cursor:       admitted.Cursor,
+		Duplicate:    admitted.Duplicate,
+	})
+	if admitted.Duplicate {
+		release()
+		return nil, ref
+	}
+	return admitted, ref
+}
 
-	admission, ok := h.admitWSTurn(streamCtx, writer, botID, ref, logLabel, submission, admissionBuilder, abortCh, streamCancel, streamCancelCause)
-	if !ok {
-		streamCancel()
-		if onFinish != nil {
-			onFinish()
-		}
-		return ref, false
-	}
-	ref = ref.withRun(admission.RunID)
-	if !admission.Execute {
-		streamCancel()
-		if onFinish != nil {
-			onFinish()
-		}
-		return ref, false
-	}
-	if admission.Handle.FencingToken > 0 {
-		streamCtx = runtimefence.WithContext(streamCtx, runtimefence.Fence{
-			BotID:     admission.Handle.BotID,
-			SessionID: admission.Handle.SessionID,
-			Token:     admission.Handle.FencingToken,
+// wsModelPreferenceSettled tells the client the run's model preference has
+// been written back, so its picker may write again.
+func wsModelPreferenceSettled(writer *wsWriter, ref wsTurnRef) func() {
+	return func() {
+		writer.SendJSON(wsOutboundEvent{
+			Type:         "model_preference_settled",
+			RunID:        ref.RunID,
+			InvocationID: ref.InvocationID,
+			SessionID:    ref.SessionID,
 		})
 	}
-
-	sendWSRunAccepted(writer, ref, admission.Accepted)
-
-	eventCh := make(chan application.WSStreamEvent, 64)
-	injectCh := make(chan turn.InjectMessage, 16)
-	forwarded := make(chan struct{})
-	releaseCompaction := h.agentService.DeferSessionCompaction(botID, ref.SessionID, ref.RunID)
-	go func() {
-		defer streamCancel()
-		delivered, err := func() (application.RunOutcome, error) {
-			if onFinish != nil {
-				defer onFinish()
-			}
-			defer close(eventCh)
-			return runner(streamCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
-		}()
-		close(injectCh)
-		// Every event this run produced has to be published before the run is
-		// declared finished, or a subscriber is shown the terminal state and then
-		// handed output that supposedly preceded it. The forwarder cannot outlive
-		// its channel — the runner closed it above — and its writes stop when the
-		// writer closes, so this waits on a drain that is already bounded.
-		<-forwarded
-		// The terminal write outlives the connection: a client that disappears
-		// mid-turn must still free the session, and baseCtx is already gone by
-		// the time an aborted run returns.
-		outcome := wsRunOutcome(delivered, err)
-		runCode := h.finishWSRun(context.WithoutCancel(baseCtx), admission, outcome)
-		if err != nil && connCtx.Err() == nil {
-			// The run's result record reports how the run ended. An error
-			// returned after the run's failure was already delivered, such as
-			// a failure to persist the turn, is not that outcome, and this is
-			// its only record.
-			if outcome.Cause != nil && outcome.Cause != err { //nolint:errorlint // Identity: whether the outcome is this error, not whether it wraps it.
-				result := errlog.Event(connCtx, logLabel, err, errlog.Options{})
-				attrs := append([]slog.Attr{
-					slog.String("operation", logLabel),
-					slog.String("bot_id", botID),
-					slog.String("run_id", ref.RunID),
-					slog.String("session_id", ref.SessionID),
-				}, result.Attrs()...)
-				h.logger.LogAttrs(connCtx, result.Level, "ws run failed after its failure was delivered", attrs...)
-			}
-			sendWSRunFailure(streamCtx, writer, ref, err, outcome, runCode)
-		}
-	}()
-
-	go func() {
-		defer close(forwarded)
-		defer releaseCompaction()
-		h.forwardWSStreamEvents(streamCtx, baseCtx, writer, botID, ref, admission.Handle, eventCh)
-	}()
-	return ref, true
 }
 
 // HandleWebSocket godoc
@@ -1934,8 +1614,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	writer := newWSWriter(conn, heartbeat.writeTimeout)
 	defer writer.Close()
 
-	connCtx, connCancel := context.WithCancel(context.Background())
-	defer connCancel()
 	// WithoutCancel keeps the request's values, which is what this needs: the
 	// authenticated identity and the request id. It also keeps the request's
 	// span, and that has to go — every turn on this connection would otherwise
@@ -1962,7 +1640,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 		keepalive.extend()
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
-			connCancel()
 			// Info: a disconnect is how a chat connection ends, and the
 			// reason is what tells a closed tab from a proxy cutting an idle
 			// connection.
@@ -2483,68 +2160,55 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				messageAdmission.attachments = ingestedActivationAttachments
 				messageAdmission.attachmentsPrepared = true
 			}
-			h.startWSStream(streamBaseCtx, connCtx, writer, botID, ref, "ws.message", submission, messageAdmission.build, releaseActiveWSTurn,
-				func(ctx context.Context, runRef wsTurnRef, admittedTurn wsAdmittedTurn, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) (application.RunOutcome, error) {
-					req := application.ChatRequest{
-						OnModelPreferenceSettled: func() {
-							writer.SendJSON(wsOutboundEvent{
-								Type:         "model_preference_settled",
-								RunID:        runRef.RunID,
-								InvocationID: runRef.InvocationID,
-								SessionID:    runRef.SessionID,
-							})
-						},
-						BotID:                   botID,
-						ChatID:                  botID,
-						ThreadID:                sessionID,
-						RunID:                   runRef.RunID,
-						TurnID:                  admittedTurn.TurnID,
-						TurnPosition:            admittedTurn.Position,
-						UserID:                  channelIdentityID,
-						SourceChannelIdentityID: channelIdentityID,
-						ExternalMessageID:       externalMessageID,
-						ConversationType:        channel.ConversationTypePrivate,
-						Query:                   streamText,
-						ModelQuery:              streamModelText,
-						RawQuery:                userVisibleText,
-						UserMessageKind:         userMessageKind,
-						UserVisibleText:         userVisibleText,
-						SkillActivation:         skillActivation,
-						UserMessagePersisted:    userMessagePersisted,
-						PersistedUserMessageID:  persistedUserMessageID,
-						Token:                   streamToken,
-						ChatToken:               bearerToken,
-						CurrentChannel:          h.channelType.String(),
-						ReplyTarget:             botID,
-						Channels:                []string{h.channelType.String()},
-						Attachments:             messageAdmission.preparedAttachments(),
-						RequestedSkills:         requestedSkillContexts,
-						SkipMemoryExtraction:    hasSkillActivation && userVisibleText == "",
-						SkipTitleGeneration:     hasSkillActivation && userVisibleText == "",
-						Model:                   strings.TrimSpace(msg.ModelID),
-						ReasoningEffort:         strings.TrimSpace(msg.ReasoningEffort),
-						WorkspaceTargetID:       workspaceTargetID,
-						ToolHTTPURL:             buildExternalAgentToolsURL(c, botID),
-						AgentCommand:            decision.AgentCommand,
-						RunHandle:               admittedTurn.Handle,
-						InjectCh:                admittedTurn.InjectCh,
-						QueueSteerEnabled:       admittedTurn.InjectCh != nil,
-					}
-					if preparedActivationReq != nil {
-						req.Messages = preparedActivationReq.Messages
-						req.Query = preparedActivationReq.Query
-						req.ModelQuery = preparedActivationReq.ModelQuery
-						req.RawQuery = preparedActivationReq.RawQuery
-						req.UserVisibleText = preparedActivationReq.UserVisibleText
-						req.SkillActivation = preparedActivationReq.SkillActivation
-						req.RequestedSkills = preparedActivationReq.RequestedSkills
-						req.PersistedUserMessageID = preparedActivationReq.PersistedUserMessageID
-						req.WorkspaceTargetID = preparedActivationReq.WorkspaceTargetID
-						req.WorkspaceTarget = preparedActivationReq.WorkspaceTarget
-					}
-					return h.agentService.StreamChatWS(ctx, req, eventCh, abortCh)
-				},
-			)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.message", submission, messageAdmission.build, releaseActiveWSTurn)
+			if admitted == nil {
+				continue
+			}
+			req := application.ChatRequest{
+				OnModelPreferenceSettled: wsModelPreferenceSettled(writer, runRef),
+				BotID:                    botID,
+				ChatID:                   botID,
+				ThreadID:                 sessionID,
+				UserID:                   channelIdentityID,
+				SourceChannelIdentityID:  channelIdentityID,
+				ExternalMessageID:        externalMessageID,
+				ConversationType:         channel.ConversationTypePrivate,
+				Query:                    streamText,
+				ModelQuery:               streamModelText,
+				RawQuery:                 userVisibleText,
+				UserMessageKind:          userMessageKind,
+				UserVisibleText:          userVisibleText,
+				SkillActivation:          skillActivation,
+				UserMessagePersisted:     userMessagePersisted,
+				PersistedUserMessageID:   persistedUserMessageID,
+				Token:                    streamToken,
+				ChatToken:                bearerToken,
+				CurrentChannel:           h.channelType.String(),
+				ReplyTarget:              botID,
+				Channels:                 []string{h.channelType.String()},
+				Attachments:              messageAdmission.preparedAttachments(),
+				RequestedSkills:          requestedSkillContexts,
+				SkipMemoryExtraction:     hasSkillActivation && userVisibleText == "",
+				SkipTitleGeneration:      hasSkillActivation && userVisibleText == "",
+				Model:                    strings.TrimSpace(msg.ModelID),
+				ReasoningEffort:          strings.TrimSpace(msg.ReasoningEffort),
+				WorkspaceTargetID:        workspaceTargetID,
+				ToolHTTPURL:              buildExternalAgentToolsURL(c, botID),
+				AgentCommand:             decision.AgentCommand,
+			}
+			if preparedActivationReq != nil {
+				req.Messages = preparedActivationReq.Messages
+				req.Query = preparedActivationReq.Query
+				req.ModelQuery = preparedActivationReq.ModelQuery
+				req.RawQuery = preparedActivationReq.RawQuery
+				req.UserVisibleText = preparedActivationReq.UserVisibleText
+				req.SkillActivation = preparedActivationReq.SkillActivation
+				req.RequestedSkills = preparedActivationReq.RequestedSkills
+				req.PersistedUserMessageID = preparedActivationReq.PersistedUserMessageID
+				req.WorkspaceTargetID = preparedActivationReq.WorkspaceTargetID
+				req.WorkspaceTarget = preparedActivationReq.WorkspaceTarget
+			}
+			h.agentService.RunWebSend(admitted, req, newWSRunDelivery(writer, runRef, releaseActiveWSTurn))
 
 		case "retry_message":
 			sessionID := strings.TrimSpace(msg.SessionID)
@@ -2602,25 +2266,12 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					return h.agentService.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
 			}
-			h.startWSStream(streamBaseCtx, connCtx, writer, botID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil,
-				func(ctx context.Context, runRef wsTurnRef, admittedTurn wsAdmittedTurn, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) (application.RunOutcome, error) {
-					input := retryInput
-					input.RunID = runRef.RunID
-					input.TurnID = admittedTurn.TurnID
-					input.TurnPosition = admittedTurn.Position
-					input.RunHandle = admittedTurn.Handle
-					input.InjectCh = admittedTurn.InjectCh
-					input.OnModelPreferenceSettled = func() {
-						writer.SendJSON(wsOutboundEvent{
-							Type:         "model_preference_settled",
-							RunID:        runRef.RunID,
-							InvocationID: runRef.InvocationID,
-							SessionID:    runRef.SessionID,
-						})
-					}
-					return h.agentService.RetryLatestMessageWS(ctx, input, eventCh, abortCh)
-				},
-			)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil)
+			if admitted == nil {
+				continue
+			}
+			retryInput.OnModelPreferenceSettled = wsModelPreferenceSettled(writer, runRef)
+			h.agentService.RunWebRetry(admitted, retryInput, newWSRunDelivery(writer, runRef, nil))
 
 		case "edit_message":
 			text := strings.TrimSpace(msg.Text)
@@ -2705,26 +2356,13 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				},
 				attachments: chatAttachments,
 			}
-			h.startWSStream(streamBaseCtx, connCtx, writer, botID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil,
-				func(ctx context.Context, runRef wsTurnRef, admittedTurn wsAdmittedTurn, eventCh chan<- application.WSStreamEvent, abortCh <-chan struct{}) (application.RunOutcome, error) {
-					input := editInput
-					input.RunID = runRef.RunID
-					input.TurnID = admittedTurn.TurnID
-					input.TurnPosition = admittedTurn.Position
-					input.RunHandle = admittedTurn.Handle
-					input.InjectCh = admittedTurn.InjectCh
-					input.Attachments = editAdmission.preparedAttachments()
-					input.OnModelPreferenceSettled = func() {
-						writer.SendJSON(wsOutboundEvent{
-							Type:         "model_preference_settled",
-							RunID:        runRef.RunID,
-							InvocationID: runRef.InvocationID,
-							SessionID:    runRef.SessionID,
-						})
-					}
-					return h.agentService.EditLatestMessageWS(ctx, input, eventCh, abortCh)
-				},
-			)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil)
+			if admitted == nil {
+				continue
+			}
+			editInput.Attachments = editAdmission.preparedAttachments()
+			editInput.OnModelPreferenceSettled = wsModelPreferenceSettled(writer, runRef)
+			h.agentService.RunWebEdit(admitted, editInput, newWSRunDelivery(writer, runRef, nil))
 
 		default:
 			failWSRequest(streamBaseCtx, h.logger, writer, botID, wsTurn(msg.InvocationID, msg.SessionID), "ws.unknown_message", apperror.FieldInvalid("type", nil))
@@ -2900,88 +2538,6 @@ func (h *LocalChannelHandler) resolveCurrentUserPermissions(ctx context.Context,
 	return perms, nil
 }
 
-// ---------------------------------------------------------------------------
-// WebSocket event processing — attachment ingestion + TTS extraction
-// ---------------------------------------------------------------------------
-
-type wsEventEnvelope struct {
-	Type     string          `json:"type"`
-	ToolName string          `json:"toolName,omitempty"`
-	Result   json.RawMessage `json:"result,omitempty"`
-}
-
-// processWSEvent transforms a raw WS event, ingesting attachments and
-// extracting TTS audio so the web frontend receives content_hash references.
-func (h *LocalChannelHandler) processWSEvent(ctx context.Context, botID string, event json.RawMessage) []json.RawMessage {
-	var envelope wsEventEnvelope
-	if err := json.Unmarshal(event, &envelope); err != nil {
-		return []json.RawMessage{event}
-	}
-
-	h.logger.DebugContext(ctx, "ws event", slog.String("type", envelope.Type), slog.String("bot_id", botID))
-
-	switch envelope.Type {
-	case "attachment_delta":
-		h.logger.InfoContext(ctx, "ws processing attachment_delta", slog.String("bot_id", botID))
-		return h.wsIngestAttachments(ctx, botID, event)
-	case "speech_delta":
-		h.logger.InfoContext(ctx, "ws processing speech_delta", slog.String("bot_id", botID))
-		return h.wsSynthesizeSpeech(ctx, botID, event)
-	default:
-		return []json.RawMessage{event}
-	}
-}
-
-// wsIngestAttachments persists attachment data (container paths / data URLs)
-// and rewrites them with content_hash so the web frontend can resolve them.
-func (h *LocalChannelHandler) wsIngestAttachments(ctx context.Context, botID string, original json.RawMessage) []json.RawMessage {
-	if h.mediaService == nil {
-		return []json.RawMessage{original}
-	}
-
-	var event map[string]any
-	if err := json.Unmarshal(original, &event); err != nil {
-		return []json.RawMessage{original}
-	}
-
-	rawItems, _ := event["attachments"].([]any)
-	if len(rawItems) == 0 {
-		return []json.RawMessage{original}
-	}
-
-	changed := false
-	for i, raw := range rawItems {
-		item, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		bundle := attachmentpkg.BundleFromMap(item)
-		if strings.TrimSpace(bundle.ContentHash) != "" {
-			continue
-		}
-		if bundle.Path == "" && bundle.Base64 == "" {
-			continue
-		}
-		if ingested, ok := h.ingestSingleAttachment(ctx, botID, bundle); ok {
-			rawItems[i] = applyBundleToItemMap(maps.Clone(item), ingested)
-			changed = true
-		}
-	}
-
-	if !changed {
-		h.logger.DebugContext(ctx, "ws attachment_delta: no items needed ingestion", slog.String("bot_id", botID))
-		return []json.RawMessage{original}
-	}
-
-	h.logger.InfoContext(ctx, "ws attachment_delta: ingested attachments", slog.String("bot_id", botID), slog.Int("count", len(rawItems)))
-
-	out, err := json.Marshal(event)
-	if err != nil {
-		return []json.RawMessage{original}
-	}
-	return []json.RawMessage{out}
-}
-
 func (h *LocalChannelHandler) ingestSingleAttachment(ctx context.Context, botID string, bundle attachmentpkg.Bundle) (attachmentpkg.Bundle, bool) {
 	bundle = bundle.Normalize()
 	if bundle.Path != "" {
@@ -3017,127 +2573,6 @@ func (h *LocalChannelHandler) ingestSingleAttachment(ctx context.Context, botID 
 	}
 
 	return attachmentpkg.Bundle{}, false
-}
-
-// wsSynthesizeSpeech handles speech_delta events by synthesizing audio and
-// injecting attachment_delta events with the resulting voice attachments.
-func (h *LocalChannelHandler) wsSynthesizeSpeech(ctx context.Context, botID string, original json.RawMessage) []json.RawMessage {
-	if h.speechService == nil || h.speechModelResolver == nil {
-		h.logger.WarnContext(ctx, "speech_delta received but TTS service not configured")
-		return nil
-	}
-
-	modelID, err := h.speechModelResolver.ResolveSpeechModelID(ctx, botID)
-	if err != nil || strings.TrimSpace(modelID) == "" {
-		h.logger.WarnContext(ctx, "speech_delta: bot has no TTS model configured", slog.String("bot_id", botID))
-		return nil
-	}
-
-	var event struct {
-		Speeches []struct {
-			Text string `json:"text"`
-		} `json:"speeches"`
-	}
-	if err := json.Unmarshal(original, &event); err != nil || len(event.Speeches) == 0 {
-		return nil
-	}
-
-	var results []json.RawMessage
-	for _, speech := range event.Speeches {
-		text := strings.TrimSpace(speech.Text)
-		if text == "" {
-			continue
-		}
-
-		audioData, contentType, synthErr := h.speechService.Synthesize(ctx, modelID, text, nil)
-		if synthErr != nil {
-			h.logger.WarnContext(ctx, "speech synthesis failed", slog.String("bot_id", botID), slog.Any("error", synthErr))
-			continue
-		}
-
-		att := h.buildTtsAttachment(ctx, botID, contentType, audioData)
-		attachmentEvent, _ := json.Marshal(map[string]any{
-			"type":        "attachment_delta",
-			"attachments": []any{att},
-		})
-		results = append(results, attachmentEvent)
-	}
-	return results
-}
-
-func (h *LocalChannelHandler) buildTtsAttachment(ctx context.Context, botID, contentType string, audioData []byte) map[string]any {
-	bundle := attachmentpkg.Bundle{
-		Type: "voice",
-		Mime: contentType,
-		Size: int64(len(audioData)),
-	}
-
-	mimeType := attachmentpkg.NormalizeMime(contentType)
-	if h.mediaService != nil {
-		asset, err := h.mediaService.Ingest(ctx, media.IngestInput{
-			BotID:    botID,
-			Mime:     mimeType,
-			Reader:   bytes.NewReader(audioData),
-			MaxBytes: media.MaxAssetBytes,
-		})
-		if err == nil {
-			return bundle.WithAsset(botID, asset).ToMap()
-		}
-		h.logger.WarnContext(ctx, "ws tts ingest failed", slog.Any("error", err))
-	}
-
-	bundle.Base64 = "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(audioData)
-	return bundle.Normalize().ToMap()
-}
-
-// extractAssetRefsFromProcessedEvent parses a processed attachment_delta
-// event to collect asset refs for post-persist linking.
-func extractAssetRefsFromProcessedEvent(event json.RawMessage) []messagepkg.AssetRef {
-	var envelope struct {
-		Type        string           `json:"type"`
-		ToolCallID  string           `json:"toolCallId"`
-		Attachments []map[string]any `json:"attachments"`
-	}
-	if err := json.Unmarshal(event, &envelope); err != nil || envelope.Type != "attachment_delta" {
-		return nil
-	}
-	toolCallID := strings.TrimSpace(envelope.ToolCallID)
-	var refs []messagepkg.AssetRef
-	for i, att := range envelope.Attachments {
-		bundle := attachmentpkg.BundleFromMap(att)
-		ch := strings.TrimSpace(bundle.ContentHash)
-		if ch == "" {
-			continue
-		}
-		name := strings.TrimSpace(bundle.Name)
-		if name == "" && bundle.Metadata != nil {
-			name, _ = bundle.Metadata["name"].(string)
-		}
-		metadata := bundle.Metadata
-		if toolCallID != "" {
-			metadata = maps.Clone(metadata)
-			if metadata == nil {
-				metadata = map[string]any{}
-			}
-			metadata["tool_call_id"] = toolCallID
-		}
-		ref := messagepkg.AssetRef{
-			ContentHash: ch,
-			Role:        "attachment",
-			Ordinal:     i,
-			Name:        name,
-			Mime:        strings.TrimSpace(bundle.Mime),
-			SizeBytes:   bundle.Size,
-			Metadata:    metadata,
-		}
-		ref.StorageKey = attachmentpkg.MetadataString(bundle.Metadata, attachmentpkg.MetadataKeyStorageKey)
-		refs = append(refs, ref)
-	}
-	return refs
-}
-
-func applyBundleToItemMap(item map[string]any, bundle attachmentpkg.Bundle) map[string]any {
-	return bundle.MergeIntoMap(item)
 }
 
 // ingestWSInboundAttachments persists inbound user attachments (data URLs or

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 
+	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/slash"
 )
@@ -223,23 +225,19 @@ func TestResolveRejectsRequestedSkillsBeforeModelResolution(t *testing.T) {
 	}
 }
 
-func TestStreamChatWSRejectsACPRequestedSkillsBeforePool(t *testing.T) {
+func TestWebSendRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 	pool := &recordingACPPrompter{}
 	resolver := &Service{
+		logger:         slog.New(slog.DiscardHandler),
 		acpPool:        pool,
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 	}
 	resolver.SetACPSessionPool(pool)
 
-	_, err := resolver.StreamChatWS(
-		context.Background(),
-		requestedSkillGuardRequest("session-1"),
-		make(chan WSStreamEvent, 1),
-		make(chan struct{}),
-	)
-	var slashErr slash.Error
-	if !errors.As(err, &slashErr) || slashErr.Code != slash.CodeUnsupportedSkillSlashContext {
-		t.Fatalf("StreamChatWS() error = %v, want %s", err, slash.CodeUnsupportedSkillSlashContext)
+	// The refusal is the run's setup failure. Its slash code is not a catalog
+	// code, so the run is recorded under the code for a failure nothing named.
+	if _, err := streamWebSend(context.Background(), t, resolver, requestedSkillGuardRequest("session-1")); apperror.CodeOf(err) != apperror.CodeRuntimeRunFailed {
+		t.Fatalf("Web send failure = %v, want %s", err, apperror.CodeRuntimeRunFailed)
 	}
 	if pool.calls != 0 {
 		t.Fatalf("ACP pool calls = %d, want 0", pool.calls)

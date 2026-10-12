@@ -221,14 +221,8 @@ func drainDriveHandle(t *testing.T, handle turn.RunHandle) {
 func driveWebSend(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	eventCh := make(chan WSStreamEvent)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range eventCh {
-		}
-	}()
-	_, err := fixture.service.StreamChatWS(context.Background(), ChatRequest{
+	withDriveRequestRuntime(t, fixture)
+	if _, err := streamWebSend(context.Background(), t, fixture.service, ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
@@ -236,11 +230,8 @@ func driveWebSend(t *testing.T) []sdk.Request {
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
 		CurrentChannel:  "local",
-	}, eventCh, make(chan struct{}))
-	close(eventCh)
-	<-drained
-	if err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 	return requireDriveRequests(t, recorder)
 }
@@ -350,21 +341,23 @@ func driveDecisionHistory(t *testing.T, toolName string, result sdk.ToolOutput) 
 	}}
 }
 
-// runWebReplacement runs a Web retry or edit and drains what it delivers.
-func runWebReplacement(t *testing.T, run func(chan<- WSStreamEvent) error) {
+// runWebReplacement admits a Web retry or edit and runs it to its end.
+func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*WebAdmission, RunDelivery)) {
 	t.Helper()
-	eventCh := make(chan WSStreamEvent)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range eventCh {
-		}
-	}()
-	err := run(eventCh)
-	close(eventCh)
-	<-drained
+	withDriveRequestRuntime(t, fixture)
+	admission, err := fixture.service.AdmitWebRun(context.Background(), WebAdmitInput{
+		BotID:        lifecycleTestBotID,
+		SessionID:    lifecycleTestSessionID,
+		InvocationID: "web-replacement",
+		Payload:      []byte(`{"kind":"replacement"}`),
+	})
 	if err != nil {
-		t.Fatalf("replacement run error = %v", err)
+		t.Fatalf("AdmitWebRun() error = %v", err)
+	}
+	delivery := newWebTestDelivery()
+	run(admission, delivery)
+	if _, ended := delivery.wait(t); ended.Failure != nil {
+		t.Fatalf("replacement run failed: %v", ended.Failure)
 	}
 }
 
@@ -373,14 +366,12 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
-	runWebReplacement(t, func(eventCh chan<- WSStreamEvent) error {
-		_, err := fixture.service.RetryLatestMessageWS(context.Background(), RetryLatestMessageInput{
+	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
+		fixture.service.RunWebRetry(admission, RetryLatestMessageInput{
 			BotID:        lifecycleTestBotID,
 			SessionID:    lifecycleTestSessionID,
 			TargetTurnID: driveReplacedTurnID,
-			RunID:        lifecycleTestRunID,
-		}, eventCh, make(chan struct{}))
-		return err
+		}, delivery)
 	})
 	return requireDriveRequests(t, recorder)
 }
@@ -390,15 +381,13 @@ func driveWebEdit(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
-	runWebReplacement(t, func(eventCh chan<- WSStreamEvent) error {
-		_, err := fixture.service.EditLatestMessageWS(context.Background(), EditLatestMessageInput{
+	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
+		fixture.service.RunWebEdit(admission, EditLatestMessageInput{
 			BotID:        lifecycleTestBotID,
 			SessionID:    lifecycleTestSessionID,
 			TargetTurnID: driveReplacedTurnID,
-			RunID:        lifecycleTestRunID,
 			Text:         "the edited question",
-		}, eventCh, make(chan struct{}))
-		return err
+		}, delivery)
 	})
 	return requireDriveRequests(t, recorder)
 }
@@ -724,27 +713,16 @@ func marshalDrivePrompts(t *testing.T, inputs []external.PromptInput) []byte {
 func drivePromptWebSend(t *testing.T) []external.PromptInput {
 	t.Helper()
 	service, recorder := newDrivePromptFixture(t)
-	eventCh := make(chan WSStreamEvent)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range eventCh {
-		}
-	}()
-	_, err := service.StreamChatWS(context.Background(), ChatRequest{
+	if _, err := streamWebSend(context.Background(), t, service, ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
-		RunID:           lifecycleTestRunID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
 		CurrentChannel:  "local",
-	}, eventCh, make(chan struct{}))
-	close(eventCh)
-	<-drained
-	if err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 	return recorder.recorded(t)
 }

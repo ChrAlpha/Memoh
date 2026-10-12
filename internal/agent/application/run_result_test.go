@@ -366,31 +366,21 @@ func waitRunResults(t *testing.T, logs *capturedLogs, want int) []slog.Record {
 	return records
 }
 
-// A WebSocket stream that delivers its failure returns no error; the turn span
-// still reports the failure the run's result record reports.
+// A Web run that fails reports the failure on its turn span, the same failure
+// the run's result record reports.
 func TestTurnSpanReportsAFailureTheWebSocketStreamDelivered(t *testing.T) {
 	recorder := recordTurnSpans(t)
 	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
-	eventCh := make(chan WSStreamEvent)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for range eventCh {
-		}
-	}()
 
-	_, outcome, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
+	_, err := streamWebSend(context.Background(), t, fixture.service, ChatRequest{
 		BotID:                lifecycleTestBotID,
 		ChatID:               lifecycleTestBotID,
 		ThreadID:             lifecycleTestSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, nil)
-	close(eventCh)
-	<-drained
-
-	if err != nil || outcome.Status != sessionruntime.RunStatusErrored {
-		t.Fatalf("WS turn = %q, %v; want a delivered failure", outcome.Status, err)
+	})
+	if err == nil {
+		t.Fatal("Web send succeeded, want a failed run")
 	}
 	span := turnSpan(t, recorder)
 	if got := spanAttr(span, "agent.turn.outcome").AsString(); got != "errored" {

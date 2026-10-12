@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 )
 
@@ -124,24 +122,15 @@ func collectRuntimeContractWSEvents(t *testing.T, script []application.WSStreamE
 		defer func() { _ = conn.Close() }()
 
 		writer := newWSWriter(conn, defaultWSHeartbeat.writeTimeout)
-		eventCh := make(chan application.WSStreamEvent, len(script))
-		for _, event := range script {
-			eventCh <- event
+		delivery := newWSRunDelivery(writer, wsTurnRef{RunID: runtimeContractRunID, SessionID: runtimeContractSessionID}, nil)
+		for _, payload := range script {
+			var event native.StreamEvent
+			if err := json.Unmarshal(payload, &event); err != nil {
+				handlerDone <- err
+				return
+			}
+			delivery.Deliver(r.Context(), application.RunEvent{Event: event, Payload: payload})
 		}
-		close(eventCh)
-
-		(&LocalChannelHandler{logger: slog.Default()}).forwardWSStreamEvents(
-			r.Context(),
-			r.Context(),
-			writer,
-			runtimeContractBotID,
-			wsTurnRef{RunID: runtimeContractRunID, SessionID: runtimeContractSessionID},
-			// A zero handle: this asserts the contract the *socket* sees, which
-			// must hold on its own. Publication to the session runtime is a
-			// separate obligation and must not be what makes these frames appear.
-			sessionruntime.RunHandle{},
-			eventCh,
-		)
 
 		<-closeWriter
 		writer.Close()

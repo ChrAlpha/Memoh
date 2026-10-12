@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,42 +15,24 @@ import (
 	"github.com/felinics/memoh/internal/agent/application"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
 const (
-	wsAdmissionBotID     = "11111111-1111-1111-1111-111111111111"
-	wsAdmissionSessionID = "22222222-2222-2222-2222-222222222222"
+	wsAdmissionBotID     = "11111111-1111-4111-8111-111111111111"
+	wsAdmissionSessionID = "22222222-2222-4222-8222-222222222222"
 )
-
-// wsTerminalWrite is one release of the session's active slot.
-type wsTerminalWrite struct {
-	handle    sessionruntime.RunHandle
-	status    string
-	errorCode string
-}
-
-// stubWSTurnAdmitter stands in for the session runtime manager. The handler
-// depends on the two-method admission interface rather than the manager, so the
-// entry point is exercisable without PostgreSQL, Redis, or a live backend.
-type stubWSTurnAdmitter struct {
-	admission sessionruntime.Admission
-	admitErr  error
-
-	mu       sync.Mutex
-	admitted []sessionruntime.AdmitInput
-	// terminal reports each terminal write, so a test can wait for the release
-	// that happens on the run's goroutine instead of sleeping for it.
-	terminal chan wsTerminalWrite
-}
 
 type wsLifecycleQueries struct {
 	dbstore.Queries
-	params []sqlc.CreateContextLifecycleParams
+	params  []sqlc.CreateContextLifecycleParams
+	upserts []sqlc.UpsertTerminalContextLifecycleParams
 }
 
 func (q *wsLifecycleQueries) CreateContextLifecycle(
@@ -75,62 +56,64 @@ func (*wsLifecycleQueries) GetContextLifecycleByRunID(
 	return sqlc.GetContextLifecycleByRunIDRow{}, pgx.ErrNoRows
 }
 
-func newStubWSTurnAdmitter() *stubWSTurnAdmitter {
-	return &stubWSTurnAdmitter{terminal: make(chan wsTerminalWrite, 4)}
+// A run's terminal write asks for the decisions it left open; these runs left
+// none.
+func (*wsLifecycleQueries) ListToolApprovalsByRun(context.Context, pgtype.UUID) ([]sqlc.ToolApprovalRequest, error) {
+	return nil, nil
 }
 
-func (a *stubWSTurnAdmitter) Admit(_ context.Context, in sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
-	a.mu.Lock()
-	a.admitted = append(a.admitted, in)
-	a.mu.Unlock()
-	if a.admitErr != nil {
-		return sessionruntime.Admission{}, a.admitErr
-	}
-	return a.admission, nil
+func (*wsLifecycleQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]sqlc.UserInputRequest, error) {
+	return nil, nil
 }
 
-func (a *stubWSTurnAdmitter) FinishRunWithErrorCode(_ context.Context, handle sessionruntime.RunHandle, status, errorCode string) (sessionruntime.TerminalRun, error) {
-	select {
-	case a.terminal <- wsTerminalWrite{handle: handle, status: status, errorCode: errorCode}:
-	default:
-	}
-	return sessionruntime.TerminalRun{}, nil
+func (*wsLifecycleQueries) GetLatestAssistantContextLifecycleMetadataByRunID(context.Context, pgtype.UUID) ([]byte, error) {
+	return nil, pgx.ErrNoRows
 }
 
-func (a *stubWSTurnAdmitter) submissions() []sessionruntime.AdmitInput {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]sessionruntime.AdmitInput(nil), a.admitted...)
+// The session runtime's terminal observer reconciles the row the run left.
+func (q *wsLifecycleQueries) UpsertTerminalContextLifecycle(
+	_ context.Context,
+	arg sqlc.UpsertTerminalContextLifecycleParams,
+) (sqlc.UpsertTerminalContextLifecycleRow, error) {
+	q.upserts = append(q.upserts, arg)
+	return sqlc.UpsertTerminalContextLifecycleRow{RunID: arg.RunID, Status: arg.Status, ErrorCode: arg.ErrorCode}, nil
 }
 
-func (a *stubWSTurnAdmitter) awaitTerminalWrite(t *testing.T) wsTerminalWrite {
+type wsAdmissionFence struct{}
+
+func (wsAdmissionFence) Activate(context.Context, string, string, int64) error { return nil }
+
+// wsRunHarness is the handler wired the way production wires it: the
+// application admits and drives every Web turn, against a real session
+// runtime over an in-memory ledger. Every run it starts fails in its setup,
+// which is what the tests below rely on to end a run they admitted.
+type wsRunHarness struct {
+	handler *LocalChannelHandler
+	manager *sessionruntime.Manager
+	runs    *sessionledger.Store
+	writer  *wsWriter
+}
+
+func newWSRunHarness(t *testing.T, queries dbstore.Queries) wsRunHarness {
 	t.Helper()
-	select {
-	case write := <-a.terminal:
-		return write
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the run's terminal write")
-		return wsTerminalWrite{}
-	}
-}
-
-// startedWSAdmission is an admission that this process owns and must execute.
-func startedWSAdmission() sessionruntime.Admission {
-	return sessionruntime.Admission{
-		RunID:        "run-1",
-		TurnID:       "turn-1",
-		TurnPosition: 7,
-		State:        "running",
-		Started:      true,
-		Cursor:       sessionruntime.Cursor{Epoch: "epoch-1", Seq: 12},
-		Handle: sessionruntime.RunHandle{
-			BotID:        wsAdmissionBotID,
-			SessionID:    wsAdmissionSessionID,
-			RunID:        "run-1",
-			TurnID:       "turn-1",
-			Generation:   "generation-1",
-			FencingToken: 3,
-		},
+	runs := sessionledger.New()
+	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID:       "owner-ws-admission",
+		OwnerLeaseTTL: time.Minute,
+		Ledger:        runs,
+		Fence:         wsAdmissionFence{},
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, queries, nil, nil, nil, nil, time.UTC, time.Second)
+	agentService.SetSessionRuntime(manager)
+	// The run's setup reads the session first; failing that read ends every
+	// run these tests start in its setup, before anything executes.
+	agentService.SetSessionService(failingSessionService{err: errors.New("resolve: model not found")})
+	return wsRunHarness{
+		handler: &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), agentService: agentService, sessionRuntime: manager},
+		manager: manager,
+		runs:    runs,
+		writer:  &wsWriter{ch: make(chan []byte, 32), stop: make(chan struct{}), done: make(chan struct{})},
 	}
 }
 
@@ -142,79 +125,112 @@ func wsAdmissionTestSubmission() []byte {
 	return wsSubmission{Kind: "message", SessionID: wsAdmissionSessionID, Text: "hi"}.encode()
 }
 
-// admitWSTestTurn runs one admission and returns both halves of its outcome:
-// what the handler decided, and what the client was told. The writer's queue is
-// the wire those send helpers actually reach.
-func admitWSTestTurn(t *testing.T, handler *LocalChannelHandler, ref wsTurnRef, submission []byte, builders ...wsRunAdmissionBuilder) (wsRunAdmission, bool, []map[string]any) {
+func emptyWSAdmissionView(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
+	return sessionruntime.RunAdmissionView{}, nil
+}
+
+// admit runs one admission the way the message case does.
+func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (*application.WebAdmission, wsTurnRef) {
+	return h.handler.admitWSRun(context.Background(), h.writer, wsAdmissionBotID, ref, "ws.message", submission, build, nil)
+}
+
+// send runs an admitted Web send to its end and returns once the session has
+// released it.
+func (h wsRunHarness) send(t *testing.T, admitted *application.WebAdmission, ref wsTurnRef) {
 	t.Helper()
-
-	writer := &wsWriter{ch: make(chan []byte, 4), stop: make(chan struct{}), done: make(chan struct{})}
-	// Cause-carrying like the real stream context, so the admission registers the
-	// same revocation the handler would hand it.
-	ctx, cancelCause := context.WithCancelCause(context.Background())
-	cancel := func() { cancelCause(context.Canceled) }
-	defer cancel()
-
-	var builder wsRunAdmissionBuilder
-	if len(builders) > 0 {
-		builder = builders[0]
+	ended := make(chan struct{})
+	h.handler.agentService.RunWebSend(admitted, application.ChatRequest{
+		BotID: wsAdmissionBotID, ChatID: wsAdmissionBotID, ThreadID: wsAdmissionSessionID, Query: "hi",
+	}, newWSRunDelivery(h.writer, ref, func() { close(ended) }))
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Web run did not end")
 	}
-	admission, ok := handler.admitWSTurn(ctx, writer, wsAdmissionBotID, ref, "ws.message", submission, builder, make(chan struct{}, 1), cancel, cancelCause)
+}
 
-	events := make([]map[string]any, 0, len(writer.ch))
-	for len(writer.ch) > 0 {
-		var event map[string]any
-		if err := json.Unmarshal(<-writer.ch, &event); err != nil {
-			t.Fatalf("unmarshal ws event: %v", err)
+// frames drains what the socket was sent.
+func (h wsRunHarness) frames(t *testing.T) []map[string]any {
+	t.Helper()
+	var frames []map[string]any
+	for {
+		select {
+		case data := <-h.writer.ch:
+			var frame map[string]any
+			if err := json.Unmarshal(data, &frame); err != nil {
+				t.Fatalf("decode frame: %v", err)
+			}
+			frames = append(frames, frame)
+		default:
+			return frames
 		}
-		events = append(events, event)
-	}
-	return admission, ok, events
-}
-
-// The run id, the turn it belongs to, and the position it became observable at
-// all come from admission, and the handler has to carry all three: the ledger
-// decides the first two and the live reservation decides the third, so nothing
-// downstream can reconstruct them.
-func TestAdmitWSTurnCarriesRunTurnAndCursor(t *testing.T) {
-	t.Parallel()
-
-	runtime := newStubWSTurnAdmitter()
-	runtime.admission = startedWSAdmission()
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-
-	admission, ok, events := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission())
-	if !ok || !admission.Execute {
-		t.Fatalf("admission = %+v, ok = %v, want an executable run", admission, ok)
-	}
-	if admission.RunID != "run-1" || admission.Handle.FencingToken != 3 {
-		t.Fatalf("admission = %+v, want the ledger's run and its fencing token", admission)
-	}
-	if admission.Accepted.TurnID != "turn-1" {
-		t.Fatalf("accepted turn = %q, want turn-1", admission.Accepted.TurnID)
-	}
-	if admission.Accepted.Cursor != (sessionruntime.Cursor{Epoch: "epoch-1", Seq: 12}) {
-		t.Fatalf("accepted cursor = %+v, want the activation cursor", admission.Accepted.Cursor)
-	}
-	if admission.Accepted.Duplicate {
-		t.Fatalf("a first admission is not a duplicate: %+v", admission.Accepted)
-	}
-	// Acceptance is published once the run is registered, not here: a run the
-	// connection cannot register must not have been announced already.
-	if len(events) != 0 {
-		t.Fatalf("admission wrote %#v, want nothing on the wire yet", events)
 	}
 }
 
-func TestAdmitWSTurnBuildsNormalMessageRequestUserTurn(t *testing.T) {
+func (h wsRunHarness) snapshotRun(t *testing.T) *sessionruntime.CurrentRunView {
+	t.Helper()
+	snapshot, err := h.manager.Snapshot(context.Background(), wsAdmissionBotID, wsAdmissionSessionID)
+	if err != nil || snapshot.CurrentRunView == nil {
+		t.Fatalf("snapshot = %+v, %v", snapshot, err)
+	}
+	return snapshot.CurrentRunView
+}
+
+// The end-to-end shape of one accepted turn: admission names the run and its
+// turn, the client is told both plus the cursor the run became observable at
+// before anything executes, a failure is reported by code on the initiating
+// socket, and the run's end releases the session so the next turn is admitted.
+func TestWSRunAnnouncesTheAdmittedTurnAndReleasesTheSession(t *testing.T) {
 	t.Parallel()
 
-	runtime := newStubWSTurnAdmitter()
-	runtime.admission = startedWSAdmission()
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
+	h := newWSRunHarness(t, nil)
+	admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+	if admitted == nil || ref.RunID == "" || ref.RunID != admitted.RunID {
+		t.Fatalf("admission = %+v, ref = %+v, want the admitted run", admitted, ref)
+	}
+	frames := h.frames(t)
+	if len(frames) != 1 {
+		t.Fatalf("frames before execution = %#v, want only the acceptance", frames)
+	}
+	accepted := frames[0]
+	if accepted["type"] != "run_accepted" || accepted["run_id"] != admitted.RunID || accepted["turn_id"] != admitted.TurnID {
+		t.Fatalf("run_accepted = %#v, want the admitted run and turn", accepted)
+	}
+	if accepted["epoch"] != admitted.Cursor.Epoch || accepted["epoch"] == "" {
+		t.Fatalf("run_accepted cursor = %#v, want the activation cursor %+v", accepted, admitted.Cursor)
+	}
+	if _, present := accepted["duplicate"]; present {
+		t.Fatalf("a first acceptance marked itself duplicate: %#v", accepted)
+	}
+
+	h.send(t, admitted, ref)
+
+	frames = h.frames(t)
+	if len(frames) != 1 || frames[0]["type"] != "error" || frames[0]["run_id"] != admitted.RunID {
+		t.Fatalf("frames = %#v, want the run's failure on the initiating socket", frames)
+	}
+	if got := frames[0]["code"]; got != string(apperror.CodeRuntimeRunFailed) {
+		t.Fatalf("failure frame code = %#v, want %s", got, apperror.CodeRuntimeRunFailed)
+	}
+	run, err := h.runs.Get(context.Background(), admitted.RunID)
+	if err != nil || run.State != ledger.StateFailed || run.ErrorCode != string(apperror.CodeRuntimeRunFailed) {
+		t.Fatalf("session_runs = %+v, %v; want failed %s", run, err, apperror.CodeRuntimeRunFailed)
+	}
+
+	next, _ := h.admit(wsTurn("invocation-2", wsAdmissionSessionID), wsSubmission{Kind: "message", SessionID: wsAdmissionSessionID, Text: "again"}.encode(), emptyWSAdmissionView)
+	if next == nil || next.RunID == admitted.RunID {
+		t.Fatalf("next admission = %+v, want a new run once the first released the session", next)
+	}
+	h.send(t, next, wsTurn("invocation-2", wsAdmissionSessionID).withRun(next.RunID))
+}
+
+func TestAdmitWSRunBuildsNormalMessageRequestUserTurn(t *testing.T) {
+	t.Parallel()
+
+	h := newWSRunHarness(t, nil)
 	timestamp := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
 	messageAdmission := &wsMessageAdmission{
-		handler: handler,
+		handler: h.handler,
 		botID:   wsAdmissionBotID,
 		request: chatview.UITurn{
 			Role:              "user",
@@ -233,26 +249,19 @@ func TestAdmitWSTurnBuildsNormalMessageRequestUserTurn(t *testing.T) {
 		}},
 	}
 
-	_, ok, _ := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission(),
-		messageAdmission.build)
-	if !ok {
+	admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), messageAdmission.build)
+	if admitted == nil {
 		t.Fatal("admission failed")
 	}
+	defer h.send(t, admitted, ref)
 
-	admitted := runtime.submissions()
-	if len(admitted) != 1 || admitted[0].Execution.Admission == nil {
-		t.Fatalf("admitted = %#v, want one request user turn builder", admitted)
+	view := h.snapshotRun(t)
+	if len(view.UserTurns) != 1 {
+		t.Fatalf("request user turns = %#v, want one", view.UserTurns)
 	}
-	view, err := admitted[0].Execution.Admission(context.Background(), startedWSAdmission().Handle)
-	if err != nil {
-		t.Fatalf("build admission view: %v", err)
-	}
-	if view.RequestUserTurn == nil {
-		t.Fatalf("request user turn = %#v", view.RequestUserTurn)
-	}
-	requestTurn := view.RequestUserTurn
-	if requestTurn.TurnID != "turn-1" || requestTurn.Role != "user" || requestTurn.Text != "hello" || requestTurn.UserMessageKind != "text" ||
-		requestTurn.Timestamp != timestamp || requestTurn.Platform != "local" ||
+	requestTurn := view.UserTurns[0]
+	if requestTurn.TurnID != admitted.TurnID || requestTurn.Role != "user" || requestTurn.Text != "hello" || requestTurn.UserMessageKind != "text" ||
+		!requestTurn.Timestamp.Equal(timestamp) || requestTurn.Platform != "local" ||
 		requestTurn.SenderUserID != "user-1" || requestTurn.ExternalMessageID != "invocation-1" {
 		t.Fatalf("request user turn = %#v", requestTurn)
 	}
@@ -266,7 +275,7 @@ func TestAdmitWSTurnBuildsNormalMessageRequestUserTurn(t *testing.T) {
 	}
 }
 
-func TestAdmitWSTurnPublishesReplacementOperation(t *testing.T) {
+func TestAdmitWSRunPublishesReplacementOperation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -304,40 +313,31 @@ func TestAdmitWSTurnPublishesReplacementOperation(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			runtime := newStubWSTurnAdmitter()
-			runtime.admission = startedWSAdmission()
-			handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-
-			_, ok, _ := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission(), test.admission.build)
-			if !ok {
+			h := newWSRunHarness(t, nil)
+			admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), test.admission.build)
+			if admitted == nil {
 				t.Fatal("admission failed")
 			}
-			admitted := runtime.submissions()
-			if len(admitted) != 1 || admitted[0].Execution.Admission == nil {
-				t.Fatalf("admitted = %#v, want one replacement operation builder", admitted)
-			}
-			view, err := admitted[0].Execution.Admission(context.Background(), startedWSAdmission().Handle)
-			if err != nil {
-				t.Fatalf("build admission view: %v", err)
-			}
-			if view.Operation == nil {
+			defer h.send(t, admitted, ref)
+
+			operation := h.snapshotRun(t).Operation
+			if operation == nil {
 				t.Fatal("replacement operation is nil")
 			}
-			if view.Operation.Kind != test.wantKind || view.Operation.ReplaceFromMessageID != test.wantReplaceFrom {
-				t.Fatalf("replacement operation = %#v", view.Operation)
+			if operation.Kind != test.wantKind || operation.ReplaceFromMessageID != test.wantReplaceFrom {
+				t.Fatalf("replacement operation = %#v", operation)
 			}
 			if test.wantReplacement {
-				if view.Operation.ReplacementUserTurn == nil ||
-					view.Operation.ReplacementUserTurn.TurnID != "turn-1" ||
-					view.Operation.ReplacementUserTurn.Text != "edited" {
-					t.Fatalf("replacement user turn = %#v", view.Operation.ReplacementUserTurn)
+				if operation.ReplacementUserTurn == nil ||
+					operation.ReplacementUserTurn.TurnID != admitted.TurnID ||
+					operation.ReplacementUserTurn.Text != "edited" {
+					t.Fatalf("replacement user turn = %#v", operation.ReplacementUserTurn)
 				}
-			} else if view.Operation.ReplacementUserTurn != nil {
-				t.Fatalf("replacement user turn = %#v, want nil", view.Operation.ReplacementUserTurn)
+			} else if operation.ReplacementUserTurn != nil {
+				t.Fatalf("replacement user turn = %#v, want nil", operation.ReplacementUserTurn)
 			}
 		})
 	}
@@ -350,11 +350,10 @@ func TestAdmitWSTurnPublishesReplacementOperation(t *testing.T) {
 func TestSendWSRunAcceptedCarriesTurnAndCursor(t *testing.T) {
 	t.Parallel()
 
-	admission := startedWSAdmission()
 	accepted := decodeWSTestEvent(t, func(writer *wsWriter) {
-		sendWSRunAccepted(writer, wsAdmissionTestRef().withRun(admission.RunID), wsRunAcceptance{
-			TurnID: admission.TurnID,
-			Cursor: admission.Cursor,
+		sendWSRunAccepted(writer, wsAdmissionTestRef().withRun("run-1"), wsRunAcceptance{
+			TurnID: "turn-1",
+			Cursor: sessionruntime.Cursor{Epoch: "epoch-1", Seq: 12},
 		})
 	})
 	if accepted["type"] != "run_accepted" || accepted["run_id"] != "run-1" || accepted["invocation_id"] != "invocation-1" {
@@ -375,35 +374,31 @@ func TestSendWSRunAcceptedCarriesTurnAndCursor(t *testing.T) {
 // every subscriber of that run is shown the same turn. It reports no cursor: the
 // call reserved nothing, so it produced no position, and where the session
 // stands now is what a subscription's snapshot answers.
-func TestAdmitWSTurnReplayNamesTheTurnWithoutACursor(t *testing.T) {
+func TestAdmitWSRunReplayNamesTheTurnWithoutACursor(t *testing.T) {
 	t.Parallel()
 
-	runtime := newStubWSTurnAdmitter()
-	runtime.admission = sessionruntime.Admission{
-		RunID:   "run-1",
-		TurnID:  "turn-1",
-		State:   "running",
-		Replay:  true,
-		Started: false,
+	h := newWSRunHarness(t, nil)
+	first, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+	if first == nil {
+		t.Fatal("admission failed")
 	}
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
+	h.send(t, first, ref)
+	h.frames(t)
 
-	admission, ok, events := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission())
-	if !ok || admission.Execute {
-		t.Fatalf("admission = %+v, ok = %v, want an answered replay that executes nothing", admission, ok)
+	again, _ := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+	if again != nil {
+		t.Fatalf("replay = %+v, want an answered replay that executes nothing", again)
 	}
-	if admission.Handle.FencingToken != 0 {
-		t.Fatalf("replay claims ownership: %+v", admission.Handle)
+	frames := h.frames(t)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %#v, want one acceptance", frames)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events = %#v, want one acceptance", events)
-	}
-	accepted := events[0]
-	if accepted["type"] != "run_accepted" || accepted["run_id"] != "run-1" || accepted["duplicate"] != true {
+	accepted := frames[0]
+	if accepted["type"] != "run_accepted" || accepted["run_id"] != first.RunID || accepted["duplicate"] != true {
 		t.Fatalf("replay acceptance = %#v", accepted)
 	}
-	if accepted["turn_id"] != "turn-1" {
-		t.Fatalf("replay acceptance turn_id = %#v, want turn-1", accepted["turn_id"])
+	if accepted["turn_id"] != first.TurnID {
+		t.Fatalf("replay acceptance turn_id = %#v, want %s", accepted["turn_id"], first.TurnID)
 	}
 	if _, present := accepted["epoch"]; present {
 		t.Fatalf("replay reported a cursor it did not produce: %#v", accepted)
@@ -413,202 +408,115 @@ func TestAdmitWSTurnReplayNamesTheTurnWithoutACursor(t *testing.T) {
 	}
 }
 
-// What the client submitted is what gets fingerprinted, and the run must be
-// interruptible once it exists: an admission without abort plumbing is a turn
-// nobody can stop.
-func TestAdmitWSTurnSubmitsTheClientsIdentityAndAbortPlumbing(t *testing.T) {
+// What the client submitted is what the ledger keys the run on: the
+// connection's session and the client's invocation.
+func TestAdmitWSRunSubmitsTheClientsIdentity(t *testing.T) {
 	t.Parallel()
 
-	runtime := newStubWSTurnAdmitter()
-	runtime.admission = startedWSAdmission()
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-
-	submission := wsAdmissionTestSubmission()
-	if _, ok, _ := admitWSTestTurn(t, handler, wsAdmissionTestRef(), submission); !ok {
+	h := newWSRunHarness(t, nil)
+	admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+	if admitted == nil {
 		t.Fatal("admission failed")
 	}
+	defer h.send(t, admitted, ref)
 
-	submitted := runtime.submissions()
-	if len(submitted) != 1 {
-		t.Fatalf("admit calls = %d, want 1", len(submitted))
-	}
-	in := submitted[0]
-	if in.BotID != wsAdmissionBotID || in.SessionID != wsAdmissionSessionID || in.InvocationID != "invocation-1" {
-		t.Fatalf("admit input = %+v, want the connection's bot, session and invocation", in)
-	}
-	if string(in.Payload) != string(submission) {
-		t.Fatalf("admit payload = %q, want the canonical submission %q", in.Payload, submission)
-	}
-	if in.Execution.Admission == nil || in.Execution.AbortCh == nil || in.Execution.Cancel == nil {
-		t.Fatalf("execution plumbing = %+v, want a builder, an abort channel and a cancel", in.Execution)
+	run, err := h.runs.GetByInvocation(context.Background(), wsAdmissionSessionID, "invocation-1")
+	if err != nil || run.RunID != admitted.RunID {
+		t.Fatalf("ledger run by invocation = %+v, %v; want run %s", run, err, admitted.RunID)
 	}
 }
 
 // A refusal is not a run. The client is given the stable code it branches on —
 // one of these is worth retrying unchanged, the other never is — and no run id,
 // because none exists.
-func TestAdmitWSTurnRejectionsCarryStableCodes(t *testing.T) {
+func TestAdmitWSRunRejectionsCarryStableCodes(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name string
-		err  error
+		ref  wsTurnRef
 		want apperror.Code
 	}{
-		{name: "busy", err: sessionruntime.ErrSessionBusy, want: apperror.CodeSessionBusy},
-		{name: "conflict", err: sessionruntime.ErrInvocationConflict, want: apperror.CodeSessionInvocationConflict},
+		{name: "busy", ref: wsTurn("invocation-2", wsAdmissionSessionID), want: apperror.CodeSessionBusy},
+		{name: "conflict", ref: wsAdmissionTestRef(), want: apperror.CodeSessionInvocationConflict},
 	} {
-		runtime := newStubWSTurnAdmitter()
-		runtime.admitErr = tc.err
-		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		admission, ok, events := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission())
-		if ok || admission.Execute {
-			t.Fatalf("%s: admission = %+v, ok = %v, want a refusal", tc.name, admission, ok)
-		}
-		if len(events) != 1 {
-			t.Fatalf("%s: events = %#v, want one rejection", tc.name, events)
-		}
-		rejected := events[0]
-		if rejected["type"] != "run_rejected" || rejected["code"] != string(tc.want) {
-			t.Fatalf("%s: rejection = %#v, want run_rejected %s", tc.name, rejected, tc.want)
-		}
-		if _, present := rejected["run_id"]; present {
-			t.Fatalf("%s: rejection named a run: %#v", tc.name, rejected)
-		}
+			h := newWSRunHarness(t, nil)
+			running, runningRef := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+			if running == nil {
+				t.Fatal("first admission failed")
+			}
+			defer h.send(t, running, runningRef)
+			h.frames(t)
+
+			different := wsSubmission{Kind: "message", SessionID: wsAdmissionSessionID, Text: "something else"}.encode()
+			if refused, _ := h.admit(tc.ref, different, emptyWSAdmissionView); refused != nil {
+				t.Fatalf("admission = %+v, want a refusal", refused)
+			}
+			frames := h.frames(t)
+			if len(frames) != 1 {
+				t.Fatalf("frames = %#v, want one rejection", frames)
+			}
+			rejected := frames[0]
+			if rejected["type"] != "run_rejected" || rejected["code"] != string(tc.want) {
+				t.Fatalf("rejection = %#v, want run_rejected %s", rejected, tc.want)
+			}
+			if _, present := rejected["run_id"]; present {
+				t.Fatalf("rejection named a run: %#v", rejected)
+			}
+		})
 	}
 }
 
 // Without durable admission there is no single-active-run guarantee to fall back
 // on, so the turn is refused rather than run unprotected.
-func TestAdmitWSTurnRequiresConfiguredRuntime(t *testing.T) {
+func TestAdmitWSRunRequiresConfiguredRuntime(t *testing.T) {
 	t.Parallel()
 
-	handler := &LocalChannelHandler{logger: slog.Default()}
-	admission, ok, events := admitWSTestTurn(t, handler, wsAdmissionTestRef(), wsAdmissionTestSubmission())
-	if ok || admission.Execute {
-		t.Fatalf("admission = %+v, ok = %v, want a refusal", admission, ok)
-	}
-	if len(events) != 1 || events[0]["type"] != "error" {
-		t.Fatalf("events = %#v, want one error", events)
-	}
-}
-
-// The terminal write is how the session's single active slot is released. Only
-// the stable code reaches the run's published state; the error itself is a
-// private diagnostic that stays in the log.
-//
-// The status it carries is only ever what this process can actually testify to.
-// A run that returns cleanly, or returns a bare cancellation, is reported with
-// no status at all: an abort routed in from another connection or another server
-// unblocks the runner and cancels its context, so both of those are exactly what
-// a stopped run looks like from here. Naming them would overwrite the intent
-// already recorded against the run — which is how a routed abort used to
-// finalize as a successful turn (SR-CTL-001).
-func TestFinishWSRunReleasesTheSlotUnderTheAdmittedToken(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name       string
-		runErr     error
-		wantStatus string
-		wantCode   string
-	}{
-		{name: "clean return leaves the outcome to the manager", wantStatus: ""},
-		{
-			name:       "bare cancellation blames nothing",
-			runErr:     context.Canceled,
-			wantStatus: "",
-		},
-		{
-			name:       "errored",
-			runErr:     apperror.New(apperror.CodeSessionBusy, nil),
-			wantStatus: sessionruntime.RunStatusErrored,
-			wantCode:   string(apperror.CodeSessionBusy),
-		},
-		{
-			name:       "errored without a catalog code",
-			runErr:     errors.New("model exploded"),
-			wantStatus: sessionruntime.RunStatusErrored,
-		},
-	} {
-		runtime := newStubWSTurnAdmitter()
-		handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-		admitted := startedWSAdmission()
-
-		handler.finishWSRun(context.Background(), wsRunAdmission{RunID: admitted.RunID, Handle: admitted.Handle}, wsRunOutcome(application.RunOutcome{}, tc.runErr))
-
-		write := runtime.awaitTerminalWrite(t)
-		if write.status != tc.wantStatus || write.errorCode != tc.wantCode {
-			t.Fatalf("%s: terminal write = %+v, want %s %q", tc.name, write, tc.wantStatus, tc.wantCode)
-		}
-		if write.handle.FencingToken != admitted.Handle.FencingToken || write.handle.RunID != admitted.RunID {
-			t.Fatalf("%s: terminal write handle = %+v, want the admitted one", tc.name, write.handle)
-		}
-	}
-}
-
-// A stream that never owned the run owns no terminal transition either. Writing
-// one would either fail the fence or, worse, end a turn another owner is still
-// executing.
-func TestFinishWSRunSkipsRunsThisProcessDoesNotOwn(t *testing.T) {
-	t.Parallel()
-
-	runtime := newStubWSTurnAdmitter()
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-
-	handler.finishWSRun(context.Background(), wsRunAdmission{RunID: "run-1"}, wsRunOutcome(application.RunOutcome{}, nil))
-
-	select {
-	case write := <-runtime.terminal:
-		t.Fatalf("unowned run wrote a terminal state: %+v", write)
-	default:
-	}
-}
-
-func TestFinishWSRunPersistsPreContextFailureAfterFencedFinish(t *testing.T) {
-	const runID = "33333333-3333-4333-8333-333333333333"
-	queries := &wsLifecycleQueries{}
-	agentService := application.NewService(
-		slog.New(slog.DiscardHandler),
-		nil,
-		queries,
-		nil,
-		nil,
-		nil,
-		nil,
-		time.UTC,
-		time.Second,
-	)
-	runtime := newStubWSTurnAdmitter()
+	writer := &wsWriter{ch: make(chan []byte, 4), stop: make(chan struct{}), done: make(chan struct{})}
 	handler := &LocalChannelHandler{
-		agentService:   agentService,
-		logger:         slog.Default(),
-		sessionRuntime: runtime,
+		logger:       slog.New(slog.DiscardHandler),
+		agentService: application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC, time.Second),
 	}
-	admitted := startedWSAdmission()
-	admitted.RunID = runID
-	admitted.Handle.RunID = runID
-	runErr := errors.New("resolve failed before context assembly")
+	released := false
+	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, func() { released = true })
+	if admitted != nil {
+		t.Fatalf("admission = %+v, want a refusal", admitted)
+	}
+	if !released {
+		t.Fatal("a refused admission kept what the handler reserved for it")
+	}
+	var frame map[string]any
+	if err := json.Unmarshal(<-writer.ch, &frame); err != nil || frame["type"] != "error" {
+		t.Fatalf("frame = %#v, %v; want one error", frame, err)
+	}
+}
 
-	handler.finishWSRun(
-		context.Background(),
-		wsRunAdmission{RunID: admitted.RunID, Handle: admitted.Handle},
-		wsRunOutcome(application.RunOutcome{}, runErr),
-	)
+// A run that fails before its context was assembled still leaves a context
+// lifecycle row once its terminal state is written, and the row keeps the
+// failure's text private.
+func TestWSRunPersistsPreContextFailureLifecycle(t *testing.T) {
+	queries := &wsLifecycleQueries{}
+	h := newWSRunHarness(t, queries)
+	admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
+	if admitted == nil {
+		t.Fatal("admission failed")
+	}
+	h.send(t, admitted, ref)
 
-	write := runtime.awaitTerminalWrite(t)
-	if write.status != sessionruntime.RunStatusErrored {
-		t.Fatalf("terminal status = %q, want %q", write.status, sessionruntime.RunStatusErrored)
+	if run, err := h.runs.Get(context.Background(), admitted.RunID); err != nil || run.State != ledger.StateFailed {
+		t.Fatalf("session_runs = %+v, %v; want failed", run, err)
 	}
-	if len(queries.params) != 1 {
-		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(queries.params))
+	if len(queries.params) != 0 || len(queries.upserts) != 1 {
+		t.Fatalf("lifecycle writes = %d creates, %d terminal upserts; want the one terminal row", len(queries.params), len(queries.upserts))
 	}
-	row := queries.params[0]
+	row := queries.upserts[0]
 	if row.Status != "failed_provider" {
 		t.Fatalf("context lifecycle status = %q, want failed_provider", row.Status)
 	}
-	if bytes.Contains(row.Snapshot, []byte("resolve failed")) {
+	if bytes.Contains(row.Snapshot, []byte("resolve")) {
 		t.Fatalf("content-light snapshot leaked private error: %s", row.Snapshot)
 	}
 	var snapshot struct {
@@ -618,55 +526,6 @@ func TestFinishWSRunPersistsPreContextFailureAfterFencedFinish(t *testing.T) {
 		t.Fatalf("decode lifecycle snapshot: %v", err)
 	}
 	if snapshot.Version != contextfrag.LifecycleSnapshotVersion {
-		t.Fatalf("snapshot version = %d, want 1", snapshot.Version)
-	}
-}
-
-// The end-to-end shape of one accepted turn: admission names the run and its
-// turn, the client is told both plus the cursor the run became observable at,
-// and the run's end releases the session under the token admission handed out.
-func TestStartWSStreamPublishesAdmittedTurnAndReleasesTheSession(t *testing.T) {
-	t.Parallel()
-
-	runtime := newStubWSTurnAdmitter()
-	runtime.admission = startedWSAdmission()
-	handler := &LocalChannelHandler{logger: slog.Default(), sessionRuntime: runtime}
-
-	writer := &wsWriter{ch: make(chan []byte, 16), stop: make(chan struct{}), done: make(chan struct{})}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	ref, started := handler.startWSStream(ctx, ctx, writer, wsAdmissionBotID, wsAdmissionTestRef(), "test", wsAdmissionTestSubmission(), nil,
-		nil,
-		func(context.Context, wsTurnRef, wsAdmittedTurn, chan<- application.WSStreamEvent, <-chan struct{}) (application.RunOutcome, error) {
-			return application.RunOutcome{}, nil
-		})
-	if !started || ref.RunID != "run-1" {
-		t.Fatalf("stream started = %v, ref = %+v, want the admitted run", started, ref)
-	}
-
-	var accepted map[string]any
-	select {
-	case data := <-writer.ch:
-		if err := json.Unmarshal(data, &accepted); err != nil {
-			t.Fatalf("unmarshal acceptance: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for run_accepted")
-	}
-	if accepted["type"] != "run_accepted" || accepted["run_id"] != "run-1" {
-		t.Fatalf("first event = %#v, want run_accepted naming the admitted run", accepted)
-	}
-	if accepted["turn_id"] != "turn-1" || accepted["epoch"] != "epoch-1" || accepted["seq"] != float64(12) {
-		t.Fatalf("run_accepted = %#v, want the admitted turn and cursor", accepted)
-	}
-
-	// The runner returned cleanly, which this process cannot tell apart from a
-	// run something else stopped, so it releases the slot without naming an
-	// outcome. What is asserted here is that the release happened at all and
-	// carried the admitted fence.
-	write := runtime.awaitTerminalWrite(t)
-	if write.status != "" || write.handle.FencingToken != 3 {
-		t.Fatalf("terminal write = %+v, want an unnamed outcome fenced by the admitted token", write)
+		t.Fatalf("snapshot version = %d, want %d", snapshot.Version, contextfrag.LifecycleSnapshotVersion)
 	}
 }

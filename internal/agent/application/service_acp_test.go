@@ -67,12 +67,12 @@ func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	if _, err := resolver.StreamChatWS(context.Background(), ChatRequest{
+	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:    "bot-1",
 		ThreadID: "session-1",
 		Query:    "  inspect the app  ",
-	}, make(chan WSStreamEvent, 8), make(chan struct{})); err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 	if pool.input.Prompt != "inspect the app" {
 		t.Fatalf("Prompt = %q, want trimmed query bytes", pool.input.Prompt)
@@ -284,7 +284,7 @@ func TestStreamACPAgentWSTransformedConfigFailurePersistsStableCode(t *testing.T
 	}
 }
 
-func TestStreamChatWSRoutesACPRuntimeSessionToACPPool(t *testing.T) {
+func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
@@ -320,31 +320,26 @@ func TestStreamChatWSRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	eventCh := make(chan WSStreamEvent, 8)
-	if _, err := resolver.StreamChatWS(
-		context.Background(),
-		ChatRequest{
-			BotID:           "bot-1",
-			ThreadID:        "session-1",
-			Query:           "inspect the app",
-			Model:           "gpt-5.1-codex",
-			ReasoningEffort: "high",
-			Attachments: []ChatAttachment{{
-				Type:   "image",
-				Base64: dataURL("image/png", rasterPNG(t)),
-				Mime:   "image/png",
-				Name:   "screenshot.png",
-			}},
-			ReplyAttachments: []ChatAttachment{{
-				Type: "file",
-				Name: "previous.log",
-				URL:  "https://example.com/previous.log",
-			}},
-		},
-		eventCh,
-		make(chan struct{}),
-	); err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	eventCh, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:           "bot-1",
+		ThreadID:        "session-1",
+		Query:           "inspect the app",
+		Model:           "gpt-5.1-codex",
+		ReasoningEffort: "high",
+		Attachments: []ChatAttachment{{
+			Type:   "image",
+			Base64: dataURL("image/png", rasterPNG(t)),
+			Mime:   "image/png",
+			Name:   "screenshot.png",
+		}},
+		ReplyAttachments: []ChatAttachment{{
+			Type: "file",
+			Name: "previous.log",
+			URL:  "https://example.com/previous.log",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 
 	if pool.calls != 1 {
@@ -409,7 +404,7 @@ func TestStreamChatWSRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 	}
 }
 
-func TestStreamChatWSRejectsACPBotMismatchBeforePersistence(t *testing.T) {
+func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
@@ -439,18 +434,13 @@ func TestStreamChatWSRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	_, err := resolver.StreamChatWS(
-		context.Background(),
-		ChatRequest{
-			BotID:    "bot-1",
-			ThreadID: "session-1",
-			Query:    "inspect the app",
-		},
-		make(chan WSStreamEvent, 8),
-		make(chan struct{}),
-	)
+	_, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:    "bot-1",
+		ThreadID: "session-1",
+		Query:    "inspect the app",
+	})
 	if err == nil {
-		t.Fatal("StreamChatWS() error = nil, want bot mismatch")
+		t.Fatal("Web send succeeded, want bot mismatch")
 	}
 	if pool.calls != 0 {
 		t.Fatalf("ACP pool calls = %d, want 0", pool.calls)
@@ -647,7 +637,7 @@ func TestStreamACPAgentWSRechecksRuntimeOwnerWorkspaceExecBeforePrompt(t *testin
 	}
 }
 
-func TestStreamChatWSPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing.T) {
+func TestWebSendPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing.T) {
 	t.Parallel()
 	turnPosition := int64(7)
 
@@ -788,21 +778,16 @@ func TestStreamChatWSPersistsACPUserInputProjectionOnceBeforePromptReturns(t *te
 	}
 	resolver.SetACPSessionPool(pool)
 
-	if _, err := resolver.StreamChatWS(
-		context.Background(),
-		ChatRequest{
-			BotID:          "bot-1",
-			ThreadID:       "session-1",
-			RunID:          "run-1",
-			TurnID:         "turn-1",
-			TurnPosition:   &turnPosition,
-			Query:          "inspect the app",
-			CurrentChannel: "web",
-		},
-		make(chan WSStreamEvent, 8),
-		make(chan struct{}),
-	); err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:          "bot-1",
+		ThreadID:       "session-1",
+		RunID:          "run-1",
+		TurnID:         "turn-1",
+		TurnPosition:   &turnPosition,
+		Query:          "inspect the app",
+		CurrentChannel: "web",
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 
 	if len(messages.persisted) != 5 {
@@ -841,7 +826,7 @@ func TestStreamChatWSPersistsACPUserInputProjectionOnceBeforePromptReturns(t *te
 	}
 }
 
-func TestStreamChatWSPersistsACPSubmittedUserInputResult(t *testing.T) {
+func TestWebSendPersistsACPSubmittedUserInputResult(t *testing.T) {
 	t.Parallel()
 
 	questionInput := map[string]any{
@@ -941,18 +926,13 @@ func TestStreamChatWSPersistsACPSubmittedUserInputResult(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	if _, err := resolver.StreamChatWS(
-		context.Background(),
-		ChatRequest{
-			BotID:          "bot-1",
-			ThreadID:       "session-1",
-			Query:          "quiz me",
-			CurrentChannel: "web",
-		},
-		make(chan WSStreamEvent, 16),
-		make(chan struct{}),
-	); err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:          "bot-1",
+		ThreadID:       "session-1",
+		Query:          "quiz me",
+		CurrentChannel: "web",
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 
 	if len(messages.persisted) != 5 {
@@ -1021,7 +1001,7 @@ func TestStreamChatWSPersistsACPSubmittedUserInputResult(t *testing.T) {
 	}
 }
 
-func TestStreamChatWSPersistsACPApprovalProjectionOnce(t *testing.T) {
+func TestWebSendPersistsACPApprovalProjectionOnce(t *testing.T) {
 	t.Parallel()
 
 	streamed := []event.StreamEvent{
@@ -1084,18 +1064,13 @@ func TestStreamChatWSPersistsACPApprovalProjectionOnce(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	if _, err := resolver.StreamChatWS(
-		context.Background(),
-		ChatRequest{
-			BotID:          "bot-1",
-			ThreadID:       "session-1",
-			Query:          "write the review",
-			CurrentChannel: "web",
-		},
-		make(chan WSStreamEvent, 8),
-		make(chan struct{}),
-	); err != nil {
-		t.Fatalf("StreamChatWS() error = %v", err)
+	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:          "bot-1",
+		ThreadID:       "session-1",
+		Query:          "write the review",
+		CurrentChannel: "web",
+	}); err != nil {
+		t.Fatalf("Web send failed: %v", err)
 	}
 
 	if len(messages.persisted) != 5 {

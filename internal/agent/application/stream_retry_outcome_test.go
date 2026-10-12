@@ -19,7 +19,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
@@ -232,115 +231,6 @@ func TestStreamChatRetryFailureReportsError(t *testing.T) {
 	}
 }
 
-// A WebSocket stream whose retry does not recover delivers the failure in the
-// stream and returns no error; its outcome still names the failure for the
-// terminal write, with the code of the one error the stream delivered.
-func TestStreamChatWSRetryFailureReportsOutcome(t *testing.T) {
-	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
-	eventCh := make(chan WSStreamEvent)
-	var payloads []json.RawMessage
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for event := range eventCh {
-			payloads = append(payloads, event)
-		}
-	}()
-	_, outcome, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, nil)
-	close(eventCh)
-	<-drained
-
-	if err != nil {
-		t.Fatalf("WS turn error = %v, want the failure delivered in the stream", err)
-	}
-	assertOrdered(t, eventTypes(t, payloads), "retry", "error", "agent_abort")
-	assertCount(t, eventTypes(t, payloads), "error", 1)
-	var first, terminal struct{ Type, Code string }
-	for _, payload := range payloads {
-		var event struct{ Type, Code string }
-		_ = json.Unmarshal(payload, &event)
-		if event.Type == "error" && first.Type == "" {
-			first = event
-		}
-		if event.Type == "agent_abort" {
-			terminal = event
-		}
-	}
-	if first.Code != string(apperror.CodeAgentProviderRequestRejected) {
-		t.Fatalf("error code = %q, want the rejected request's", first.Code)
-	}
-	if outcome.Status != sessionruntime.RunStatusErrored || outcome.ErrorCode() != first.Code {
-		t.Fatalf("outcome = %q / %q, want errored with the error's code %q", outcome.Status, outcome.ErrorCode(), first.Code)
-	}
-	if terminal.Code != first.Code {
-		t.Fatalf("agent_abort code = %q, want %q", terminal.Code, first.Code)
-	}
-}
-
-// X4, WebSocket path: the same retry -> AgentEnd sequence. The socket gets no
-// error frame, the retry frame carries its counters, its wait and the
-// failure's class but none of the provider's text, and the function returns
-// nil.
-func TestStreamChatWSRetrySuccessReportsNoError_X4(t *testing.T) {
-	fixture, transport := newScriptedFailureFixture(t, http.StatusServiceUnavailable)
-	eventCh := make(chan WSStreamEvent)
-	var payloads []json.RawMessage
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for event := range eventCh {
-			payloads = append(payloads, event)
-		}
-	}()
-	_, _, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, nil)
-	close(eventCh)
-	<-drained
-
-	if got := transport.calls.Load(); got < 2 {
-		t.Fatalf("model requests = %d, want the failed attempt and its retry", got)
-	}
-	types := eventTypes(t, payloads)
-	assertOrdered(t, types, "retry", "agent_end")
-	assertCount(t, types, "error", 0)
-	for _, payload := range payloads {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &fields); err != nil {
-			t.Fatalf("decode event %s: %v", payload, err)
-		}
-		if string(fields["type"]) != `"retry"` {
-			continue
-		}
-		for key := range fields {
-			switch key {
-			case "type", "attempt", "maxAttempt", "retryDelayMs", "retryReason":
-			default:
-				t.Fatalf("retry frame = %s, want only its counters, wait and class", payload)
-			}
-		}
-		if string(fields["retryReason"]) != `"server_error"` {
-			t.Fatalf("retry frame = %s, want the 503's class server_error", payload)
-		}
-	}
-	if err != nil {
-		t.Fatalf("WS turn error = %v, want nil after a recovered retry", err)
-	}
-	if len(fixture.messages.persisted) == 0 {
-		t.Fatal("the recovered answer was not stored")
-	}
-}
-
 // assertCount checks that value appears in got exactly want times.
 func assertCount(t *testing.T, got []string, value string, want int) {
 	t.Helper()
@@ -366,81 +256,6 @@ func assertOrdered(t *testing.T, got []string, want ...string) {
 	}
 	if i != len(want) {
 		t.Fatalf("event types = %q, want %q in order", got, want)
-	}
-}
-
-// A WebSocket stream that delivered a failure and then failed to persist the
-// turn returns the persistence error for the caller to report, but its outcome
-// still names the delivered failure: the run's code is named once, when the
-// failure is first declared.
-func TestStreamChatWSPersistFailureAfterDeliveredFailureKeepsItsCode(t *testing.T) {
-	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
-	eventCh := make(chan WSStreamEvent)
-	var payloads []json.RawMessage
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for event := range eventCh {
-			payloads = append(payloads, event)
-		}
-	}()
-	persistErr := errors.New("replace history turn: boom")
-	_, outcome, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, func(context.Context, []messagepkg.Message) error {
-		return persistErr
-	})
-	close(eventCh)
-	<-drained
-
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("WS turn error = %v, want the persistence failure", err)
-	}
-	var first struct{ Type, Code string }
-	for _, payload := range payloads {
-		if err := json.Unmarshal(payload, &first); err == nil && first.Type == "error" {
-			break
-		}
-		first.Type, first.Code = "", ""
-	}
-	if first.Code == "" {
-		t.Fatalf("no coded error event in %q", eventTypes(t, payloads))
-	}
-	if outcome.Status != sessionruntime.RunStatusErrored || outcome.ErrorCode() != first.Code {
-		t.Fatalf("outcome = %q / %q, want errored with the delivered code %q", outcome.Status, outcome.ErrorCode(), first.Code)
-	}
-}
-
-// A WebSocket stream whose persistence fails without an earlier stream failure
-// has no delivered outcome; the persistence error names the run.
-func TestStreamChatWSPersistFailureWithoutDeliveredFailureHasNoOutcome(t *testing.T) {
-	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
-	eventCh := make(chan WSStreamEvent)
-	go func() {
-		for range eventCh {
-		}
-	}()
-	persistErr := errors.New("replace history turn: boom")
-	_, outcome, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, func(context.Context, []messagepkg.Message) error {
-		return persistErr
-	})
-	close(eventCh)
-
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("WS turn error = %v, want the persistence failure", err)
-	}
-	if outcome != (RunOutcome{}) {
-		t.Fatalf("outcome = %+v, want none", outcome)
 	}
 }
 
@@ -482,43 +297,6 @@ func TestTurnFinishAfterDeliveredFailureKeepsItsCode(t *testing.T) {
 	h.finish()
 	if got.Status != sessionruntime.RunStatusErrored || got.ErrorCode() != string(apperror.CodeAgentProviderOverloaded) {
 		t.Fatalf("terminal outcome = %q / %q, want errored with the delivered code", got.Status, got.ErrorCode())
-	}
-}
-
-// A stream error that a retry recovered from is not a delivered failure: when
-// persisting the recovered turn then fails, the persistence error names the
-// run.
-func TestStreamChatWSPersistFailureAfterRecoveredRetryHasNoOutcome(t *testing.T) {
-	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable)
-	eventCh := make(chan WSStreamEvent)
-	var payloads []json.RawMessage
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for event := range eventCh {
-			payloads = append(payloads, event)
-		}
-	}()
-	persistErr := errors.New("replace history turn: boom")
-	_, outcome, err := fixture.service.streamChatWSResultWithHooks(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	}, eventCh, make(chan struct{}), nil, func(context.Context, []messagepkg.Message) error {
-		return persistErr
-	})
-	close(eventCh)
-	<-drained
-
-	assertOrdered(t, eventTypes(t, payloads), "retry")
-	assertCount(t, eventTypes(t, payloads), "error", 0)
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("WS turn error = %v, want the persistence failure", err)
-	}
-	if outcome != (RunOutcome{}) {
-		t.Fatalf("outcome = %+v, want none after a recovered retry", outcome)
 	}
 }
 

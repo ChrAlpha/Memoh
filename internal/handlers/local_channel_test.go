@@ -26,8 +26,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
-	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -1593,123 +1593,6 @@ func testEchoContext(userID string) echo.Context {
 	return testAuthContext(e, req, rec, userID)
 }
 
-func TestWSIngestAttachments_RewritesContainerPathToAssetRef(t *testing.T) {
-	t.Parallel()
-
-	handler, provider := newLocalChannelHandlerWithMedia()
-	provider.SeedContainerFile("bot-1", "/data/images/demo.png", []byte("image-bytes"))
-
-	original, err := json.Marshal(map[string]any{
-		"type": "attachment_delta",
-		"attachments": []any{
-			map[string]any{
-				"type": "image",
-				"path": "/data/images/demo.png",
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal original event: %v", err)
-	}
-
-	processed := handler.wsIngestAttachments(context.Background(), "bot-1", original)
-	if len(processed) != 1 {
-		t.Fatalf("expected 1 processed event, got %d", len(processed))
-	}
-
-	var envelope struct {
-		Type        string           `json:"type"`
-		Attachments []map[string]any `json:"attachments"`
-	}
-	if err := json.Unmarshal(processed[0], &envelope); err != nil {
-		t.Fatalf("unmarshal processed event: %v", err)
-	}
-	if envelope.Type != "attachment_delta" {
-		t.Fatalf("unexpected event type: %q", envelope.Type)
-	}
-	if len(envelope.Attachments) != 1 {
-		t.Fatalf("expected 1 attachment, got %d", len(envelope.Attachments))
-	}
-
-	att := envelope.Attachments[0]
-	if got, _ := att["content_hash"].(string); got == "" {
-		t.Fatalf("expected content_hash after ingestion, got %#v", att["content_hash"])
-	}
-	if got, _ := att["name"].(string); got != "demo.png" {
-		t.Fatalf("expected inferred name demo.png, got %#v", att["name"])
-	}
-	meta, ok := att["metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected metadata map, got %#v", att["metadata"])
-	}
-	if meta["source_path"] != "/data/images/demo.png" {
-		t.Fatalf("expected source_path preserved, got %#v", meta["source_path"])
-	}
-	if meta["storage_key"] == nil || meta["storage_key"] == "" {
-		t.Fatalf("expected storage_key metadata, got %#v", meta["storage_key"])
-	}
-	if got, _ := att["url"].(string); got != "" {
-		t.Fatalf("expected empty url after asset rewrite, got %#v", att["url"])
-	}
-}
-
-func TestBuildTtsAttachment_FallbackKeepsDataURLInBase64Field(t *testing.T) {
-	t.Parallel()
-
-	handler := &LocalChannelHandler{logger: slog.Default()}
-	att := handler.buildTtsAttachment(context.Background(), "bot-1", "audio/mpeg", []byte("audio"))
-
-	if got, _ := att["type"].(string); got != "voice" {
-		t.Fatalf("expected voice attachment type, got %#v", att["type"])
-	}
-	if got, _ := att["base64"].(string); got == "" {
-		t.Fatalf("expected fallback data URL in base64 field, got %#v", att["base64"])
-	}
-	if got, _ := att["url"].(string); got != "" {
-		t.Fatalf("expected empty url field in fallback attachment, got %#v", att["url"])
-	}
-}
-
-func TestExtractAssetRefsFromProcessedEvent_UsesBundleParsing(t *testing.T) {
-	t.Parallel()
-
-	event, err := json.Marshal(map[string]any{
-		"type": "attachment_delta",
-		"attachments": []any{
-			map[string]any{
-				"type":         "image",
-				"content_hash": "asset-1",
-				"mime":         "image/png",
-				"size":         42,
-				"metadata": map[string]any{
-					"name":        "demo.png",
-					"storage_key": "aa/asset-1.png",
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal event: %v", err)
-	}
-
-	refs := extractAssetRefsFromProcessedEvent(event)
-	if len(refs) != 1 {
-		t.Fatalf("expected 1 asset ref, got %d", len(refs))
-	}
-	if refs[0].ContentHash != "asset-1" {
-		t.Fatalf("unexpected content hash: %q", refs[0].ContentHash)
-	}
-	if refs[0].Name != "demo.png" {
-		t.Fatalf("expected metadata name fallback, got %q", refs[0].Name)
-	}
-	if refs[0].StorageKey != "aa/asset-1.png" {
-		t.Fatalf("unexpected storage key: %q", refs[0].StorageKey)
-	}
-	if refs[0].SizeBytes != 42 {
-		t.Fatalf("unexpected size bytes: %d", refs[0].SizeBytes)
-	}
-}
-
 func TestParseWSClientAttachments_NormalizesToolStyleInputs(t *testing.T) {
 	t.Parallel()
 
@@ -1744,32 +1627,6 @@ func TestParseWSClientAttachmentsRejectsReservedMetadata(t *testing.T) {
 	var slashErr slash.Error
 	if !errors.As(err, &slashErr) || slashErr.Code != slash.CodeReservedSkillMetadata {
 		t.Fatalf("err = %#v, want %s", err, slash.CodeReservedSkillMetadata)
-	}
-}
-
-func TestApplyBundleToItemMap_UsesMergedBundleFields(t *testing.T) {
-	t.Parallel()
-
-	item := map[string]any{
-		"legacy": "keep",
-		"url":    "stale",
-	}
-	got := applyBundleToItemMap(item, attachmentpkg.Bundle{
-		Type:        "image",
-		ContentHash: "asset-1",
-		Mime:        "image/png",
-		Metadata: map[string]any{
-			attachmentpkg.MetadataKeyStorageKey: "aa/asset-1.png",
-		},
-	})
-	if got["legacy"] != "keep" {
-		t.Fatalf("expected unknown fields preserved, got %#v", got["legacy"])
-	}
-	if got["content_hash"] != "asset-1" {
-		t.Fatalf("expected content_hash updated, got %#v", got["content_hash"])
-	}
-	if url, ok := got["url"]; ok && url != "" {
-		t.Fatalf("expected url absent or empty after bundle merge, got %#v", url)
 	}
 }
 
@@ -1834,6 +1691,29 @@ var (
 	_ storage.ContainerFileOpener = (*localChannelMemoryProvider)(nil)
 )
 
+// An attachment the user sent from the workspace is stored before the turn
+// runs, so the persisted user message links it by content hash and it is still
+// there after the session reloads.
+func TestIngestWSInboundAttachmentsStoresAWorkspaceFile(t *testing.T) {
+	t.Parallel()
+
+	handler, provider := newLocalChannelHandlerWithMedia()
+	provider.SeedContainerFile("bot-1", "/data/images/demo.png", []byte("image-bytes"))
+
+	ingested := handler.ingestWSInboundAttachments(context.Background(), "bot-1", []turn.Attachment{
+		{Type: "image", Path: "/data/images/demo.png"},
+	})
+	if len(ingested) != 1 {
+		t.Fatalf("ingested = %#v, want one attachment", ingested)
+	}
+	if ingested[0].ContentHash == "" {
+		t.Fatalf("attachment = %#v, want a content hash after ingestion", ingested[0])
+	}
+	if ingested[0].Name != "demo.png" {
+		t.Fatalf("attachment name = %q, want the file's name", ingested[0].Name)
+	}
+}
+
 func newLocalChannelHandlerWithMedia() (*LocalChannelHandler, *localChannelMemoryProvider) {
 	provider := &localChannelMemoryProvider{
 		objects:        make(map[string][]byte),
@@ -1842,29 +1722,6 @@ func newLocalChannelHandlerWithMedia() (*LocalChannelHandler, *localChannelMemor
 	handler := &LocalChannelHandler{logger: slog.Default()}
 	handler.SetMediaService(media.NewService(slog.Default(), provider))
 	return handler, provider
-}
-
-func TestExtractAssetRefsFromProcessedEvent_CarriesToolCallID(t *testing.T) {
-	t.Parallel()
-
-	event, err := json.Marshal(map[string]any{
-		"type":       "attachment_delta",
-		"toolCallId": "call-42",
-		"attachments": []any{
-			map[string]any{"type": "image", "content_hash": "asset-1", "mime": "image/png"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal event: %v", err)
-	}
-
-	refs := extractAssetRefsFromProcessedEvent(event)
-	if len(refs) != 1 {
-		t.Fatalf("expected 1 asset ref, got %d", len(refs))
-	}
-	if got, _ := refs[0].Metadata["tool_call_id"].(string); got != "call-42" {
-		t.Fatalf("tool_call_id metadata = %q, want call-42", got)
-	}
 }
 
 func TestWebQueueSlashClassification(t *testing.T) {

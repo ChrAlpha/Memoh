@@ -16,12 +16,12 @@ import (
 // startTurnSpan opens the span that covers one agent turn and returns the
 // function that closes it.
 //
-// It lives here, on the two functions that actually run a turn, rather than on
-// the turn port's StartTurn. StartTurn is only one of the two ways in: the web
-// UI's WebSocket goes through streamChatWSResultWithHooks and never touches
-// it. A span on StartTurn alone would be missing for the entry point most
-// turns arrive through, and nothing would say so — the traces would simply
-// have no turn in them.
+// It is opened where a turn actually runs rather than on the turn port's
+// StartTurn. StartTurn is only one of the ways in: the web UI's WebSocket
+// starts its runs through startWebRun and never touches it. A span on
+// StartTurn alone would be missing for the entry point most turns arrive
+// through, and nothing would say so — the traces would simply have no turn in
+// them.
 //
 // The turn is the only span that says how long an answer took. Everything
 // below it — the model call, each tool call, the queries they make — is a
@@ -67,21 +67,6 @@ func startTurnSpan(ctx context.Context, req ChatRequest) (context.Context, func(
 		}
 		span.End()
 	}
-}
-
-// turnSpanCause is what a WebSocket turn's span records: the error the turn
-// returned or, for a turn that returned none, the lifecycle cause of its run.
-// A stream failure is delivered as an event rather than returned, and without
-// the lifecycle cause the span would call that run completed. A run parked on a
-// decision has no conclusion yet.
-func turnSpanCause(returned error, lifecycle *outcomeRecorder, outcome RunOutcome) error {
-	if returned != nil {
-		return returned
-	}
-	if lifecycle != nil && !lifecycle.deferred && lifecycle.cause != nil {
-		return lifecycle.cause
-	}
-	return outcome.Cause
 }
 
 // startSelfCanceledTurnSpan is startTurnSpan for a turn that cancels its own

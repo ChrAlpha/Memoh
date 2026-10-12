@@ -81,23 +81,22 @@ func drainChans(t *testing.T, chunks <-chan StreamChunk, errs <-chan error) erro
 // minute — worse than no span, because it looks like an answer.
 //
 // The assertion is made while the turn is provably still running, by holding
-// it inside a preflight hook. Checking "has it ended yet" straight after the
-// call would only be a race with the goroutine's scheduling.
+// it inside its setup. Checking "has it ended yet" straight after the call
+// would only be a race with the goroutine's scheduling.
 func TestTurnSpanCoversTheTurnNotItsSetup(t *testing.T) {
 	recorder := recordTurnSpans(t)
 	service := newTracingTestService()
 
 	inTurn := make(chan struct{})
 	release := make(chan struct{})
-	go func() {
-		_, _, _ = service.streamChatWSResultWithHooks(context.Background(),
-			ChatRequest{BotID: "b", ThreadID: "s"}, nil, nil,
-			func(context.Context) error {
-				close(inTurn)
-				<-release
-				return nil
-			}, nil)
-	}()
+	admission := admitTracingWebRun(t, service)
+	spec := service.webRunSpec(admission, ChatRequest{BotID: "b", ThreadID: "s"}, nil, inputHeld)
+	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+		close(inTurn)
+		<-release
+		return runPlan{}, errors.New("setup ends the turn")
+	}
+	service.startWebRun(admission, spec)
 
 	select {
 	case <-inTurn:
@@ -173,8 +172,7 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 	recorder := recordTurnSpans(t)
 	service := newTracingTestService()
 
-	if _, _, err := service.streamChatWSResultWithHooks(context.Background(),
-		ChatRequest{BotID: "b", ThreadID: "s"}, nil, nil, nil, nil); err == nil {
+	if _, err := streamWebSend(context.Background(), t, service, ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
 		t.Fatal("expected this harness to fail the turn")
 	}
 
@@ -185,6 +183,21 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 	if span.Status().Code != codes.Error {
 		t.Error("a turn that failed was not marked as an error")
 	}
+}
+
+// admitTracingWebRun admits a Web run on bot b, session s.
+func admitTracingWebRun(t *testing.T, service *Service) *WebAdmission {
+	t.Helper()
+	if service.sessionRuntime == nil {
+		service.sessionRuntime = newScriptedAdmitter()
+	}
+	admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
+		BotID: "b", SessionID: "s", InvocationID: "trace-1", Payload: []byte(`{"kind":"message"}`),
+	})
+	if err != nil {
+		t.Fatalf("AdmitWebRun() error = %v", err)
+	}
+	return admission
 }
 
 // newTracingTestService is newTurnTestService plus a logger. The harness

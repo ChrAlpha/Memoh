@@ -292,36 +292,35 @@ func (*recordingMessageService) LinkAssets(context.Context, string, []messagepkg
 	return nil
 }
 
-func TestStreamChatWSResultRejectsTurnReplacementForACP(t *testing.T) {
+// A runtime that owns its conversation context has no rewind, so a retry of
+// one of its turns is refused before the runtime is asked anything.
+func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 	t.Parallel()
 
+	pool := &recordingACPPrompter{}
 	resolver := &Service{
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
+		messageService: driveReplaceableHistory(t),
+		sessionRuntime: newScriptedAdmitter(),
 		logger:         slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(&recordingACPPrompter{})
-	preflightCalled := false
-	postPersistCalled := false
-
-	_, _, err := resolver.streamChatWSResultWithHooks(
-		context.Background(),
-		ChatRequest{BotID: "bot-1", ThreadID: "session-1"},
-		make(chan WSStreamEvent, 1),
-		make(chan struct{}),
-		func(context.Context) error {
-			preflightCalled = true
-			return nil
-		},
-		func(context.Context, []messagepkg.Message) error {
-			postPersistCalled = true
-			return nil
-		},
-	)
-	if got := apperror.CodeOf(err); got != apperror.CodeExternalAgentTurnReplacementUnsupported {
-		t.Fatalf("error code = %q, want %q", got, apperror.CodeExternalAgentTurnReplacementUnsupported)
+	resolver.SetACPSessionPool(pool)
+	admission, err := resolver.AdmitWebRun(context.Background(), WebAdmitInput{
+		BotID: "bot-1", SessionID: "session-1", InvocationID: "retry-1", Payload: []byte(`{"kind":"retry_message"}`),
+	})
+	if err != nil {
+		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if preflightCalled || postPersistCalled {
-		t.Fatalf("replacement hooks ran for ACP: preflight=%v postPersist=%v", preflightCalled, postPersistCalled)
+	delivery := newWebTestDelivery()
+	resolver.RunWebRetry(admission, RetryLatestMessageInput{
+		BotID: "bot-1", SessionID: "session-1", TargetTurnID: driveReplacedTurnID,
+	}, delivery)
+
+	if _, ended := delivery.wait(t); ended.ErrorCode != string(apperror.CodeExternalAgentTurnReplacementUnsupported) {
+		t.Fatalf("ended = %+v, want %q", ended, apperror.CodeExternalAgentTurnReplacementUnsupported)
+	}
+	if pool.calls != 0 {
+		t.Fatalf("ACP pool calls = %d, want none for a refused replacement", pool.calls)
 	}
 }
 
@@ -444,22 +443,24 @@ func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testi
 	}
 }
 
-func TestPersistPreflightFailureTurnUsesAdmittedIdentityAndAtomicRound(t *testing.T) {
+// A Web send the user-message hook refused leaves its two rows under the turn
+// admission named, both marked with the hook origin.
+func TestHookFailureRowUsesAdmittedIdentity(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
 	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 	position := int64(7)
-	err := service.persistPreflightFailureTurn(context.Background(), ChatRequest{
+	_, err := service.persistFailureRow(context.Background(), ChatRequest{
 		BotID:        "bot-1",
 		ThreadID:     "session-1",
 		RunID:        "run-1",
 		TurnID:       "turn-1",
 		TurnPosition: &position,
 		Query:        "hello",
-	}, apperror.CodeHookUserMessageFailed)
+	}, resolvedContext{}, RunFailure{Code: apperror.CodeHookUserMessageFailed}, failureOrigin(true))
 	if err != nil {
-		t.Fatalf("persistPreflightFailureTurn: %v", err)
+		t.Fatalf("persistFailureRow: %v", err)
 	}
 	if len(messages.persisted) != 2 {
 		t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
@@ -474,9 +475,6 @@ func TestPersistPreflightFailureTurnUsesAdmittedIdentityAndAtomicRound(t *testin
 		if i == 1 && input.Metadata[messagepkg.HistoryErrorCodeMetadataKey] != string(apperror.CodeHookUserMessageFailed) {
 			t.Fatalf("assistant metadata = %#v, want Hook failure code", input.Metadata)
 		}
-	}
-	if len(messages.roundOptions) != 1 {
-		t.Fatalf("round options = %d, want one atomic write", len(messages.roundOptions))
 	}
 }
 

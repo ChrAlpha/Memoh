@@ -8,21 +8,20 @@ import (
 	"log/slog"
 	"strings"
 
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
+// RetryLatestMessageInput names the turn a Web retry replaces and who asks.
+// The run that replaces it is the admission's, so the input carries none of
+// the run's identity.
 type RetryLatestMessageInput struct {
-	BotID        string
-	SessionID    string
-	RunID        string
-	TurnID       string
-	TurnPosition *int64
-	// TargetTurnID names the round being replaced. It is distinct from TurnID,
-	// which names the new turn this operation admits.
+	BotID     string
+	SessionID string
+	// TargetTurnID names the round being replaced. It is distinct from the
+	// admission's turn, which names the new turn this operation runs.
 	TargetTurnID           string
 	ActorChannelIdentityID string
 	ActorUserID            string
@@ -31,22 +30,16 @@ type RetryLatestMessageInput struct {
 	ReasoningEffort        string
 	WorkspaceTargetID      string
 	ToolHTTPURL            string
-	// RunHandle and InjectCh are server-owned admission capabilities. They are
-	// populated only by the in-process Web runtime, never by client JSON.
-	RunHandle sessionruntime.RunHandle
-	InjectCh  chan turnpkg.InjectMessage
 	// OnModelPreferenceSettled releases subsequent picker writes once this
 	// turn's preference write-back has finished (issue #879). Same contract
 	// as ChatRequest.OnModelPreferenceSettled.
 	OnModelPreferenceSettled func()
 }
 
+// EditLatestMessageInput names the turn a Web edit replaces and its new text.
 type EditLatestMessageInput struct {
-	BotID        string
-	SessionID    string
-	RunID        string
-	TurnID       string
-	TurnPosition *int64
+	BotID     string
+	SessionID string
 	// TargetTurnID names the round being replaced. See RetryLatestMessageInput.
 	TargetTurnID           string
 	Text                   string
@@ -58,68 +51,68 @@ type EditLatestMessageInput struct {
 	ReasoningEffort        string
 	WorkspaceTargetID      string
 	ToolHTTPURL            string
-	RunHandle              sessionruntime.RunHandle
-	InjectCh               chan turnpkg.InjectMessage
 	// OnModelPreferenceSettled: see RetryLatestMessageInput.
 	OnModelPreferenceSettled func()
 }
 
-func (s *Service) RetryLatestMessageWS(ctx context.Context, input RetryLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) (RunOutcome, error) {
+// retryRunSpec is the run of a Web retry. The turn it replaces is resolved in
+// the run's setup: a target that is no longer the latest turn is the run's own
+// failure, reported to the caller like any other.
+func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessageInput, delivery RunDelivery) runSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
-	turn, cutoffMessageID, err := s.prepareRetryLatestTurnOperation(ctx, sessionID, strings.TrimSpace(input.TargetTurnID))
-	if err != nil {
-		return RunOutcome{}, err
+	targetTurnID := strings.TrimSpace(input.TargetTurnID)
+	replace := &webReplacement{service: s, reason: "retry", oldTurnID: targetTurnID}
+	spec := s.webRunSpec(admission, ChatRequest{
+		BotID:                    strings.TrimSpace(input.BotID),
+		ChatID:                   strings.TrimSpace(input.BotID),
+		ThreadID:                 sessionID,
+		UserID:                   strings.TrimSpace(input.ActorUserID),
+		SourceChannelIdentityID:  strings.TrimSpace(input.ActorChannelIdentityID),
+		ConversationType:         turnpkg.ConversationTypePrivate,
+		Token:                    strings.TrimSpace(input.ChatToken),
+		ChatToken:                strings.TrimSpace(input.ChatToken),
+		CurrentChannel:           "local",
+		ReplyTarget:              strings.TrimSpace(input.BotID),
+		Channels:                 []string{"local"},
+		Model:                    strings.TrimSpace(input.Model),
+		ReasoningEffort:          strings.TrimSpace(input.ReasoningEffort),
+		WorkspaceTargetID:        strings.TrimSpace(input.WorkspaceTargetID),
+		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
+		SkipHistoryTurn:          true,
+		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
+	}, delivery, inputAccepted)
+	spec.Replacement = replace.hooks()
+	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		turn, cutoffMessageID, err := s.prepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
+		if err != nil {
+			return runPlan{}, err
+		}
+		requestMessageID := strings.TrimSpace(turn.RequestMessageID)
+		requestMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, requestMessageID)
+		if err != nil {
+			return runPlan{}, err
+		}
+		if !strings.EqualFold(requestMessage.Role, "user") {
+			return runPlan{}, errors.New("retry target request is not a user message")
+		}
+		assistantMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, strings.TrimSpace(turn.AssistantMessageID))
+		if err != nil {
+			return runPlan{}, err
+		}
+		// A turn the user-message hook refused never reached the model, so its
+		// retry runs the hook again instead of reusing the refused message.
+		retryUserMessageHook := isPreflightUserMessageHookFailure(assistantMessage)
+		req.Query = visibleMessageText(requestMessage)
+		req.RawQuery = visibleMessageText(requestMessage)
+		req.ReusePersistedUserMessage = !retryUserMessageHook
+		if !retryUserMessageHook {
+			req.PersistedUserMessageID = requestMessage.ID
+		}
+		req.HistoryCutoffBeforeMessageID = cutoffMessageID
+		req.RequiredHistoryMessageID = requestMessage.ID
+		return s.chatSetup(ctx, replace.target(ctx, req, requestMessage.ID), spec)
 	}
-	requestMessageID := strings.TrimSpace(turn.RequestMessageID)
-	requestMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, requestMessageID)
-	if err != nil {
-		return RunOutcome{}, err
-	}
-	if !strings.EqualFold(requestMessage.Role, "user") {
-		return RunOutcome{}, errors.New("retry target request is not a user message")
-	}
-	assistantMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, strings.TrimSpace(turn.AssistantMessageID))
-	if err != nil {
-		return RunOutcome{}, err
-	}
-	retryUserMessageHook := isPreflightUserMessageHookFailure(assistantMessage)
-	persistedUserMessageID := requestMessage.ID
-	if retryUserMessageHook {
-		persistedUserMessageID = ""
-	}
-
-	req := ChatRequest{
-		BotID:                        strings.TrimSpace(input.BotID),
-		ChatID:                       strings.TrimSpace(input.BotID),
-		ThreadID:                     sessionID,
-		RunID:                        strings.TrimSpace(input.RunID),
-		RunHandle:                    input.RunHandle,
-		TurnID:                       strings.TrimSpace(input.TurnID),
-		TurnPosition:                 input.TurnPosition,
-		UserID:                       strings.TrimSpace(input.ActorUserID),
-		SourceChannelIdentityID:      strings.TrimSpace(input.ActorChannelIdentityID),
-		ConversationType:             turnpkg.ConversationTypePrivate,
-		Query:                        visibleMessageText(requestMessage),
-		RawQuery:                     visibleMessageText(requestMessage),
-		Token:                        strings.TrimSpace(input.ChatToken),
-		ChatToken:                    strings.TrimSpace(input.ChatToken),
-		CurrentChannel:               "local",
-		ReplyTarget:                  strings.TrimSpace(input.BotID),
-		Channels:                     []string{"local"},
-		Model:                        strings.TrimSpace(input.Model),
-		ReasoningEffort:              strings.TrimSpace(input.ReasoningEffort),
-		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
-		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
-		InjectCh:                     input.InjectCh,
-		QueueSteerEnabled:            input.InjectCh != nil,
-		ReusePersistedUserMessage:    !retryUserMessageHook,
-		PersistedUserMessageID:       persistedUserMessageID,
-		SkipHistoryTurn:              true,
-		HistoryCutoffBeforeMessageID: cutoffMessageID,
-		RequiredHistoryMessageID:     requestMessage.ID,
-		OnModelPreferenceSettled:     input.OnModelPreferenceSettled,
-	}
-	return s.streamReplacementWS(ctx, req, turn.ID, requestMessage.ID, "retry", eventCh, abortCh)
+	return spec
 }
 
 func isPreflightUserMessageHookFailure(message messagepkg.Message) bool {
@@ -127,48 +120,91 @@ func isPreflightUserMessageHookFailure(message messagepkg.Message) bool {
 		message.Metadata[messagepkg.HistoryFailureOriginMetadataKey] == messagepkg.HistoryFailureOriginUserMessageHook
 }
 
-func (s *Service) EditLatestMessageWS(ctx context.Context, input EditLatestMessageInput, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) (RunOutcome, error) {
+// editRunSpec is the run of a Web edit: the latest turn's request replaced by
+// new text, and the turn answered again.
+func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageInput, delivery RunDelivery) runSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
+	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)
-	if text == "" && len(input.Attachments) == 0 {
-		return RunOutcome{}, errors.New("message text or attachments required")
+	replace := &webReplacement{service: s, reason: "edit", oldTurnID: targetTurnID}
+	spec := s.webRunSpec(admission, ChatRequest{
+		BotID:                    strings.TrimSpace(input.BotID),
+		ChatID:                   strings.TrimSpace(input.BotID),
+		ThreadID:                 sessionID,
+		UserID:                   strings.TrimSpace(input.ActorUserID),
+		SourceChannelIdentityID:  strings.TrimSpace(input.ActorChannelIdentityID),
+		ConversationType:         turnpkg.ConversationTypePrivate,
+		Query:                    text,
+		RawQuery:                 text,
+		Token:                    strings.TrimSpace(input.ChatToken),
+		ChatToken:                strings.TrimSpace(input.ChatToken),
+		CurrentChannel:           "local",
+		ReplyTarget:              strings.TrimSpace(input.BotID),
+		Channels:                 []string{"local"},
+		Attachments:              input.Attachments,
+		Model:                    strings.TrimSpace(input.Model),
+		ReasoningEffort:          strings.TrimSpace(input.ReasoningEffort),
+		WorkspaceTargetID:        strings.TrimSpace(input.WorkspaceTargetID),
+		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
+		SkipHistoryTurn:          true,
+		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
+	}, delivery, inputAccepted)
+	spec.Replacement = replace.hooks()
+	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		if text == "" && len(input.Attachments) == 0 {
+			return runPlan{}, errors.New("message text or attachments required")
+		}
+		turn, err := s.prepareEditLatestTurnOperation(ctx, sessionID, targetTurnID)
+		if err != nil {
+			return runPlan{}, err
+		}
+		req.HistoryCutoffBeforeMessageID = strings.TrimSpace(turn.RequestMessageID)
+		return s.chatSetup(ctx, replace.target(ctx, req, ""), spec)
 	}
+	return spec
+}
 
-	turn, err := s.prepareEditLatestTurnOperation(ctx, sessionID, strings.TrimSpace(input.TargetTurnID))
-	if err != nil {
-		return RunOutcome{}, err
-	}
+// webReplacement is the turn a retry or an edit replaces. Its request is
+// resolved in the run's setup, and the replacement hooks read it from there:
+// the preflight checks the turn is still the latest once the workspace is
+// ready, and the history write rewrites it once the new turn is durable.
+type webReplacement struct {
+	service   *Service
+	reason    string
+	oldTurnID string
 
-	req := ChatRequest{
-		BotID:                        strings.TrimSpace(input.BotID),
-		ChatID:                       strings.TrimSpace(input.BotID),
-		ThreadID:                     sessionID,
-		RunID:                        strings.TrimSpace(input.RunID),
-		RunHandle:                    input.RunHandle,
-		TurnID:                       strings.TrimSpace(input.TurnID),
-		TurnPosition:                 input.TurnPosition,
-		UserID:                       strings.TrimSpace(input.ActorUserID),
-		SourceChannelIdentityID:      strings.TrimSpace(input.ActorChannelIdentityID),
-		ConversationType:             turnpkg.ConversationTypePrivate,
-		Query:                        text,
-		RawQuery:                     text,
-		Token:                        strings.TrimSpace(input.ChatToken),
-		ChatToken:                    strings.TrimSpace(input.ChatToken),
-		CurrentChannel:               "local",
-		ReplyTarget:                  strings.TrimSpace(input.BotID),
-		Channels:                     []string{"local"},
-		Attachments:                  input.Attachments,
-		Model:                        strings.TrimSpace(input.Model),
-		ReasoningEffort:              strings.TrimSpace(input.ReasoningEffort),
-		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
-		ToolHTTPURL:                  strings.TrimSpace(input.ToolHTTPURL),
-		InjectCh:                     input.InjectCh,
-		QueueSteerEnabled:            input.InjectCh != nil,
-		SkipHistoryTurn:              true,
-		HistoryCutoffBeforeMessageID: strings.TrimSpace(turn.RequestMessageID),
-		OnModelPreferenceSettled:     input.OnModelPreferenceSettled,
+	req              ChatRequest
+	requestMessageID string
+}
+
+func (r *webReplacement) hooks() *turnReplacement {
+	return &turnReplacement{
+		Preflight: func(ctx context.Context) error {
+			return r.service.ensureLatestVisibleTurn(ctx, r.req.ThreadID, r.oldTurnID)
+		},
+		PostPersist: func(ctx context.Context, persisted []messagepkg.Message) error {
+			return r.service.replacePersistedTurn(ctx, r.req, r.oldTurnID, r.requestMessageID, r.reason, persisted)
+		},
 	}
-	return s.streamReplacementWS(ctx, req, turn.ID, "", "edit", eventCh, abortCh)
+}
+
+// target records the request that replaces the turn and returns it carrying
+// the replacement the history write stores the new turn under.
+func (r *webReplacement) target(ctx context.Context, req ChatRequest, requestMessageID string) ChatRequest {
+	replacement := &messagepkg.TurnReplacement{
+		OldTurnID:               r.oldTurnID,
+		ReplacementTurnID:       strings.TrimSpace(req.TurnID),
+		ReplacementTurnPosition: req.TurnPosition,
+		RequestMessageID:        strings.TrimSpace(requestMessageID),
+		Reason:                  r.reason,
+	}
+	if update := r.service.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID); update != nil {
+		replacement.SessionMetadata = update.metadata
+	}
+	req.TurnReplacement = replacement
+	r.req = req
+	r.requestMessageID = requestMessageID
+	return req
 }
 
 // PrepareRetryLatestTurnOperation validates the replacement target before
@@ -299,41 +335,6 @@ func (s *Service) resolveLatestVisibleTurn(ctx context.Context, sessionID, turnI
 func (s *Service) ensureLatestVisibleTurn(ctx context.Context, sessionID, turnID string) error {
 	_, err := s.resolveLatestVisibleTurn(ctx, sessionID, strings.TrimSpace(turnID), "turn is not latest")
 	return err
-}
-
-func (s *Service) streamReplacementWS(
-	ctx context.Context,
-	req ChatRequest,
-	oldTurnID string,
-	requestMessageID string,
-	reason string,
-	eventCh chan<- WSStreamEvent,
-	abortCh <-chan struct{},
-) (RunOutcome, error) {
-	replacement := &messagepkg.TurnReplacement{
-		OldTurnID:               strings.TrimSpace(oldTurnID),
-		ReplacementTurnID:       strings.TrimSpace(req.TurnID),
-		ReplacementTurnPosition: req.TurnPosition,
-		RequestMessageID:        strings.TrimSpace(requestMessageID),
-		Reason:                  strings.TrimSpace(reason),
-	}
-	if update := s.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID); update != nil {
-		replacement.SessionMetadata = update.metadata
-	}
-	req.TurnReplacement = replacement
-	_, outcome, err := s.streamChatWSResultWithHooks(
-		ctx,
-		req,
-		eventCh,
-		abortCh,
-		func(ctx context.Context) error {
-			return s.ensureLatestVisibleTurn(ctx, req.ThreadID, oldTurnID)
-		},
-		func(ctx context.Context, persisted []messagepkg.Message) error {
-			return s.replacePersistedTurn(ctx, req, oldTurnID, requestMessageID, reason, persisted)
-		},
-	)
-	return outcome, err
 }
 
 func (s *Service) replacePersistedTurn(

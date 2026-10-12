@@ -163,30 +163,6 @@ func TestFailWSRequestMissingServiceRecordsServerFault(t *testing.T) {
 	}
 }
 
-// A runner error that is how the run ended is sent under the code the run was
-// recorded with. An error returned after the run's failure was delivered is
-// not the run's outcome and is answered as a request error.
-func TestSendWSRunFailureNamesTheRecordedCode(t *testing.T) {
-	t.Parallel()
-	ref := wsTurn("invocation-1", "session-1").withRun("run-1")
-	cause := errors.New("SECRET resolve failed")
-
-	frame := decodeWSTestEvent(t, func(writer *wsWriter) {
-		sendWSRunFailure(context.Background(), writer, ref, cause, wsRunOutcome(application.RunOutcome{}, cause), apperror.CodeRuntimeRunFailed)
-	})
-	if frame["code"] != "runtime_run_failed" || frame["message"] != "The response could not be completed. Please try again." {
-		t.Fatalf("frame = %#v, want the recorded code", frame)
-	}
-
-	later := errors.New("SECRET replace history turn")
-	frame = decodeWSTestEvent(t, func(writer *wsWriter) {
-		sendWSRunFailure(context.Background(), writer, ref, later, wsRunOutcome(application.RunOutcome{}, cause), apperror.CodeAgentProviderOverloaded)
-	})
-	if frame["code"] != "internal" {
-		t.Fatalf("frame = %#v, want internal for an error that is not the run's outcome", frame)
-	}
-}
-
 type failingSessionService struct{ err error }
 
 func (f failingSessionService) Get(context.Context, string) (session.Thread, error) {

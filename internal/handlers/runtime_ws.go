@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -15,13 +14,12 @@ import (
 	"github.com/felinics/memoh/internal/errs"
 )
 
-// Each half is reached by asserting the one injected session runtime, and a
-// failed assertion degrades silently — a subscription that never delivers, an
-// abort that never routes. These assertions turn that into a build failure, so
-// renaming or resignaturing a manager method cannot quietly unwire the handler.
+// The observation half is reached by asserting the one injected session
+// runtime, and a failed assertion degrades silently — a subscription that
+// never delivers. These assertions turn that into a build failure, so renaming
+// or resignaturing a manager method cannot quietly unwire the handler.
 var (
 	_ runtimeSubscriptionSource = (*sessionruntime.Manager)(nil)
-	_ runtimeRunEventPublisher  = (*sessionruntime.Manager)(nil)
 	_ runtimeControlRouter      = (*sessionruntime.Manager)(nil)
 )
 
@@ -39,7 +37,7 @@ type runtimeSubscriptionSource interface {
 }
 
 // sessionRuntimeObserver narrows the injected session runtime to its
-// observation half. Admission and observation are the same *Manager — one
+// observation half. Control and observation are the same *Manager — one
 // process-wide singleton — so this reads the existing dependency rather than
 // adding a second injection point that could be wired to a different manager
 // and split the projection in two.
@@ -54,16 +52,6 @@ func (h *LocalChannelHandler) sessionRuntimeObserver() runtimeSubscriptionSource
 	return source
 }
 
-// runtimeRunEventPublisher is the publication half of the session runtime: it
-// folds one agent event into the run's authoritative state so every subscriber
-// of the session sees it, including subscribers on another server. It is
-// declared as the single method this handler calls for the same reason as
-// runtimeSubscriptionSource — publishing must not become a route to admission
-// or ownership.
-type runtimeRunEventPublisher interface {
-	HandleAgentEvent(ctx context.Context, handle sessionruntime.RunHandle, event native.StreamEvent) ([]chatview.UIMessage, error)
-}
-
 // runtimeControlRouter routes a client's control request to whichever process
 // owns the run. The connection that receives an abort is frequently not the one
 // executing the run — a reconnect lands anywhere, and in a cluster that is
@@ -74,31 +62,13 @@ type runtimeControlRouter interface {
 	RouteDecisionResponse(ctx context.Context, response sessionruntime.DecisionResponse) (sessionruntime.DecisionResponseResult, error)
 }
 
-// sessionRuntimePublisher and sessionRuntimeController narrow the one injected
-// session runtime to the half each caller needs, for the reason given on
-// sessionRuntimeObserver: admission, observation, publication, and control are
-// all the same process-wide *Manager, and reading the existing dependency is
-// what keeps them from being wired to different ones.
-func (h *LocalChannelHandler) sessionRuntimePublisher() runtimeRunEventPublisher {
-	if h == nil || h.sessionRuntime == nil {
-		return nil
-	}
-	publisher, ok := h.sessionRuntime.(runtimeRunEventPublisher)
-	if !ok {
-		return nil
-	}
-	return publisher
-}
-
+// sessionRuntimeController is the control half of the injected session
+// runtime, the one this handler holds it as.
 func (h *LocalChannelHandler) sessionRuntimeController() runtimeControlRouter {
-	if h == nil || h.sessionRuntime == nil {
+	if h == nil {
 		return nil
 	}
-	controller, ok := h.sessionRuntime.(runtimeControlRouter)
-	if !ok {
-		return nil
-	}
-	return controller
+	return h.sessionRuntime
 }
 
 // wsMessageAdmission owns the one prepared attachment set shared by the

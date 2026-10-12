@@ -23,7 +23,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
-	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -241,120 +240,85 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 	return wsStepHistoryHarness{pool: pool, botID: botID, sessionID: sessionID, service: service, manager: manager, messages: messages}
 }
 
-// run admits one Web chat turn and runs it to its terminal write. stop, when
-// set, is called once the first text reaches the client and is expected to
-// stop the run.
+// run admits one Web chat turn and runs it to its terminal write, the way
+// the WebSocket does. stop, when set, is called once the first text reaches
+// the client and is expected to stop the run.
 func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, runID string)) wsStepHistoryRun {
 	t.Helper()
 	baseCtx := context.Background()
-	streamCtx, streamCancelCause := context.WithCancelCause(baseCtx)
-	streamCancel := func() { streamCancelCause(context.Canceled) }
-	defer streamCancel()
-	abortCh := make(chan struct{}, 1)
-	admission, err := h.manager.Admit(streamCtx, sessionruntime.AdmitInput{
+	if h.unfenced {
+		h.service.sessionRuntime = unfencedSessionRuntime{h.manager}
+	}
+	admission, err := h.service.AdmitWebRun(baseCtx, WebAdmitInput{
 		BotID:        h.botID,
 		SessionID:    h.sessionID,
 		InvocationID: uuid.NewString(),
 		Payload:      []byte(`{"kind":"message","text":"` + directLifecyclePrompt + `"}`),
-		Execution: sessionruntime.Execution{
-			Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
-				return sessionruntime.RunAdmissionView{}, nil
-			},
-			AbortCh:         abortCh,
-			Cancel:          streamCancel,
-			OwnershipCancel: streamCancelCause,
-		},
 	})
 	if err != nil {
-		t.Fatalf("Admit() error = %v", err)
+		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if !admission.Started {
-		t.Fatal("Admit() did not start the run")
+	if admission.Duplicate {
+		t.Fatal("AdmitWebRun() did not start the run")
 	}
-	handle := admission.Handle
-	if !h.unfenced {
-		streamCtx = runtimefence.WithContext(streamCtx, runtimefence.Fence{
-			BotID: handle.BotID, SessionID: handle.SessionID, Token: handle.FencingToken,
-		})
+	delivery := &wsStepHistoryDelivery{done: make(chan struct{})}
+	if stop != nil {
+		delivery.onText = func() { go stop(baseCtx, admission.RunID) }
 	}
-	position := admission.TurnPosition
-	req := ChatRequest{
-		BotID:             h.botID,
-		ChatID:            h.botID,
-		ThreadID:          h.sessionID,
-		RunID:             admission.RunID,
-		TurnID:            admission.TurnID,
-		TurnPosition:      &position,
-		Query:             directLifecyclePrompt,
-		RawQuery:          directLifecyclePrompt,
-		UserVisibleText:   directLifecyclePrompt,
-		CurrentChannel:    "local",
-		RunHandle:         handle,
-		InjectCh:          make(chan turn.InjectMessage),
-		QueueSteerEnabled: true,
-	}
-
-	eventCh := make(chan WSStreamEvent, 64)
-	forwarded := make(chan struct{})
-	var stopOnce sync.Once
-	var events, failureFrames []string
-	var text strings.Builder
-	go func() {
-		defer close(forwarded)
-		for payload := range eventCh {
-			var event native.StreamEvent
-			if err := json.Unmarshal(payload, &event); err != nil {
-				continue
-			}
-			events = append(events, string(event.Type))
-			if event.Type == native.EventTextDelta {
-				text.WriteString(event.Delta)
-			}
-			if event.Type == native.EventError || event.Type == native.EventAgentAbort {
-				failureFrames = append(failureFrames, string(event.Type)+" "+event.Code)
-			}
-			_, _ = h.manager.HandleAgentEvent(baseCtx, handle, event)
-			if stop != nil && event.Type == native.EventTextDelta {
-				stopOnce.Do(func() { go stop(baseCtx, admission.RunID) })
-			}
-		}
-	}()
-	outcomeCh := make(chan RunOutcome, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		defer close(eventCh)
-		outcome, err := h.service.StreamChatWS(streamCtx, req, eventCh, abortCh)
-		outcomeCh <- outcome
-		errCh <- err
-	}()
-	var outcome RunOutcome
-	var runErr error
+	h.service.RunWebSend(admission, ChatRequest{
+		BotID:           h.botID,
+		ChatID:          h.botID,
+		ThreadID:        h.sessionID,
+		Query:           directLifecyclePrompt,
+		RawQuery:        directLifecyclePrompt,
+		UserVisibleText: directLifecyclePrompt,
+		CurrentChannel:  "local",
+	}, delivery)
 	select {
-	case outcome = <-outcomeCh:
-		runErr = <-errCh
+	case <-delivery.done:
 	case <-time.After(20 * time.Second):
 		t.Fatal("WS turn did not finish")
 	}
-	<-forwarded
-	// The handler's terminal write: a bare cancellation stays unnamed, a
-	// delivered failure names the run, any other error fails it.
-	switch {
-	case runErr == nil:
-	case errors.Is(runErr, context.Canceled):
-		outcome = RunOutcome{}
-	case outcome.Status == sessionruntime.RunStatusErrored && outcome.ErrorCode() != "":
-	default:
-		outcome = RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: runErr}
-	}
-	if _, err := h.manager.FinishRunWithErrorCode(context.WithoutCancel(baseCtx), handle, outcome.Status, outcome.ErrorCode()); err != nil {
-		t.Fatalf("FinishRunWithErrorCode() error = %v", err)
-	}
 	out := h.read(t, admission.RunID)
-	out.events = events
-	out.failureFrames = failureFrames
-	out.text = text.String()
+	out.events = delivery.events
+	out.failureFrames = delivery.failureFrames
+	out.text = delivery.text.String()
 	return out
 }
+
+// unfencedSessionRuntime is the session runtime as a run that carries no
+// persistence fence sees it: steps are not committed as they land, and the
+// turn is written once, when it ends.
+type unfencedSessionRuntime struct{ *sessionruntime.Manager }
+
+// wsStepHistoryDelivery is what the initiating socket is handed.
+type wsStepHistoryDelivery struct {
+	events        []string
+	failureFrames []string
+	text          strings.Builder
+	onText        func()
+	stopOnce      sync.Once
+	done          chan struct{}
+}
+
+func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev RunEvent) bool {
+	event := ev.Event
+	d.events = append(d.events, string(event.Type))
+	if event.Type == native.EventTextDelta {
+		d.text.WriteString(event.Delta)
+		if d.onText != nil {
+			d.stopOnce.Do(d.onText)
+		}
+	}
+	if event.Type == native.EventError || event.Type == native.EventAgentAbort {
+		d.failureFrames = append(d.failureFrames, string(event.Type)+" "+event.Code)
+	}
+	return true
+}
+
+func (*wsStepHistoryDelivery) Settle() {}
+
+func (d *wsStepHistoryDelivery) Ended(context.Context, RunEnded) { close(d.done) }
 
 func (h wsStepHistoryHarness) read(t *testing.T, runID string) wsStepHistoryRun {
 	t.Helper()
@@ -570,18 +534,22 @@ func TestPostgresWSStepHistoryUnfencedStop(t *testing.T) {
 	)
 }
 
-// A run that ends in an abort nobody asked for has failed, even though its
-// cause carries no catalogued code: the run is named
-// agent.response_interrupted when its terminal is declared, and the live
+// A run the loop guard ends has failed with agent.loop_detected: the live
 // frame, session_runs and history all carry that code. With step commits the
-// streamed text is kept as an interrupted step with the code; without them
-// the turn records the user message and a row with the code.
+// streamed text is kept as an interrupted step with the code.
+//
+// Without step commits the guard's abort carries no snapshot of the text it
+// streamed. Current behavior: the ending writes the failure row under the
+// guard's code and then reports the missing snapshot as a failed history
+// write, so session_runs and the frame name session_runtime.history_inconsistent
+// while the row names agent.loop_detected. A Web run is always fenced, so it
+// commits steps and never takes this path.
 func TestPostgresWSStepHistoryUncodedFailure(t *testing.T) {
-	const code = "agent.response_interrupted"
+	const code = "agent.loop_detected"
 	t.Run("steps", func(t *testing.T) {
 		h := newWSStepHistoryHarness(t, wsStepHistoryTextLoop)
 		got := h.run(t, nil)
-		assertStrings(t, "failure frames", got.failureFrames, []string{"agent_abort " + code})
+		assertStrings(t, "failure frames", got.failureFrames, []string{"error " + code, "agent_abort " + code})
 		if !strings.HasPrefix(got.text, wsStepHistoryPartialText+wsStepHistoryLoopText) {
 			t.Fatalf("streamed text = %q, want the partial text and the repeated chunk", got.text)
 		}
@@ -597,13 +565,14 @@ func TestPostgresWSStepHistoryUncodedFailure(t *testing.T) {
 			},
 		)
 	})
-	t.Run("unfenced", func(t *testing.T) {
+	t.Run("unfenced_current_behavior", func(t *testing.T) {
+		const historyCode = "session_runtime.history_inconsistent"
 		h := newWSStepHistoryHarness(t, wsStepHistoryTextLoop)
 		h.unfenced = true
 		got := h.run(t, nil)
-		assertStrings(t, "failure frames", got.failureFrames, []string{"agent_abort " + code})
+		assertStrings(t, "failure frames", got.failureFrames, []string{"error " + historyCode})
 		assertWSStepHistory(t, got,
-			[3]string{"failed", code, ""},
+			[3]string{"failed", historyCode, ""},
 			[]string{
 				`user`,
 				`assistant "" interrupted error_code=` + code,

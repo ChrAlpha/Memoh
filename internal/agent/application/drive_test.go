@@ -1508,3 +1508,113 @@ func (s *linkingMessageService) LinkAssets(_ context.Context, _ string, assets [
 	s.linked = append(s.linked, append([]messagepkg.AssetRef(nil), assets...))
 	return nil
 }
+
+// L4: Web
+//
+// The Web entries decide two things the driver reads: who holds the run's
+// input, and whether the run replaces a turn history already has. A send's
+// draft is still the submitter's, so a failure before execution writes nothing
+// and the composer can hand it back; a retry or an edit replaces a turn, so it
+// writes nothing either — the turn it replaces is already there, and only a
+// failure after execution started leaves it its own row, under a code the
+// history whitelist names.
+
+// webEntrySpecs builds one spec per Web entry through the constructor the
+// entry itself uses, so the input ownership and the replacement under test are
+// the entry's own.
+func webEntrySpecs(svc *Service, admission *WebAdmission, delivery RunDelivery) map[string]runSpec {
+	return map[string]runSpec{
+		"send": svc.webRunSpec(admission, ChatRequest{
+			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
+			Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
+		}, delivery, inputHeld),
+		"retry": svc.retryRunSpec(admission, RetryLatestMessageInput{
+			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn",
+		}, delivery),
+		"edit": svc.editRunSpec(admission, EditLatestMessageInput{
+			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn", Text: "edited",
+		}, delivery),
+	}
+}
+
+func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		entry   string
+		phase   runPhase
+		code    apperror.Code
+		hook    bool
+		wantRow bool
+	}{
+		{entry: "send", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "send", phase: phaseSetup, code: apperror.CodeHookUserMessageFailed, hook: true, wantRow: true},
+		{entry: "send", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "send", phase: phasePublish, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "retry", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "edit", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "retry", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "edit", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "retry", phase: phaseExecution, code: apperror.CodeInternal},
+		{entry: "edit", phase: phaseExecution, code: apperror.CodeInternal},
+		{entry: "retry", phase: phaseCommit, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "edit", phase: phaseCommit, code: apperror.CodeAgentProviderAuthFailed},
+	} {
+		name := tc.entry + " " + phaseName(tc.phase) + " " + string(tc.code)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			messages := &recordingMessageService{}
+			svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+			svc.messageService = messages
+			admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+				BotID: "bot-1", SessionID: "session-1", InvocationID: name,
+				Payload: []byte(`{"kind":"` + tc.entry + `"}`),
+			})
+			if err != nil || admission.Duplicate {
+				t.Fatalf("AdmitWebRun() = %+v, %v; want a started run", admission, err)
+			}
+			// The setup is replaced by the phase's failure, so what the ending
+			// writes is decided by the entry's own input ownership and
+			// replacement alone.
+			var commits []bool
+			spec := webEntrySpecs(svc, admission, &recordingDelivery{})[tc.entry]
+			req := spec.Req
+			spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+				if tc.hook {
+					return runPlan{}, apperror.New(apperror.CodeHookUserMessageFailed, nil)
+				}
+				exec := &scriptedExecutor{
+					terminal:   ptrTo(scheduleTerminalEvent(t, "an answer")),
+					cause:      apperror.Wrap(tc.code, errors.New("SECRET cause"), nil),
+					phase:      tc.phase,
+					commitRows: &commits,
+				}
+				return runPlan{Exec: exec, Req: req}, nil
+			}
+
+			result := svc.drive(admission.ctx, spec)
+			admission.stop(errRunStopped)
+			admission.endActive()
+
+			if result.End != endFailed || result.Failure == nil || result.Failure.Code != tc.code {
+				t.Fatalf("result = %#v, want failed %s", result, tc.code)
+			}
+			if tc.hook {
+				// The hook's refusal is a setup failure the driver writes
+				// itself: the user has to be shown why the send was refused.
+				if len(messages.persisted) != 2 || messages.persisted[1].Metadata[messagepkg.HistoryFailureOriginMetadataKey] != messagepkg.HistoryFailureOriginUserMessageHook {
+					t.Fatalf("persisted %#v, want the hook-refused pair", messages.persisted)
+				}
+				return
+			}
+			if len(commits) != 1 {
+				t.Fatalf("history writes = %v, want one", commits)
+			}
+			if commits[0] != tc.wantRow {
+				t.Fatalf("failure row written = %v, want %v (input %d, replacing %v, phase %s)",
+					commits[0], tc.wantRow, spec.Input, spec.Replacement != nil, phaseName(tc.phase))
+			}
+		})
+	}
+}

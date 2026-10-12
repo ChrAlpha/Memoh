@@ -21,7 +21,6 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agentcredential"
-	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/boot"
 	"github.com/felinics/memoh/internal/botagents"
 	"github.com/felinics/memoh/internal/bots"
@@ -147,7 +146,7 @@ func provideProviderOAuthHandler(providersService *providers.Service) *handlers.
 	return handlers.NewProviderOAuthHandler(providersService)
 }
 
-func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, sessionService *sessionpkg.Service, resolver *application.Service, sessionRuntime *sessionruntime.Manager, mediaService *media.Service, audioService *audiopkg.Service, settingsService *settings.Service, rc *boot.RuntimeConfig, commandHandler *command.Handler, containerdHandler *handlers.ContainerdHandler) *handlers.LocalChannelHandler {
+func provideWebHandler(channelManager *channel.Manager, channelStore *channel.Store, hub *local.RouteHub, botService *bots.Service, accountService *accounts.Service, sessionService *sessionpkg.Service, resolver *application.Service, sessionRuntime *sessionruntime.Manager, mediaService *media.Service, rc *boot.RuntimeConfig, commandHandler *command.Handler, containerdHandler *handlers.ContainerdHandler) *handlers.LocalChannelHandler {
 	h := handlers.NewLocalChannelHandler(local.WebType, channelManager, channelStore, hub, botService, accountService, sessionService)
 	h.SetAgentService(resolver)
 	h.SetSessionRuntime(sessionRuntime)
@@ -155,7 +154,6 @@ func provideWebHandler(channelManager *channel.Manager, channelStore *channel.St
 	h.SetRuntimeSkillResolver(containerdHandler)
 	h.SetAuthTokenConfig(rc.JwtSecret, rc.JwtExpiresIn)
 	h.SetMediaService(mediaService)
-	h.SetSpeechService(audioService, &webSpeechModelResolver{settings: settingsService})
 	return h
 }
 
@@ -223,18 +221,4 @@ func startServer(lc fx.Lifecycle, logger *slog.Logger, srv *server.Server, agent
 			return errors.Join(stopErr, agentService.DrainActiveTurns(ctx))
 		},
 	})
-}
-
-// webSpeechModelResolver adapts bot settings to the web chat speech model
-// lookup (same shape as the shared Channel module's inbound resolver glue).
-type webSpeechModelResolver struct {
-	settings *settings.Service
-}
-
-func (r *webSpeechModelResolver) ResolveSpeechModelID(ctx context.Context, botID string) (string, error) {
-	s, err := r.settings.GetBot(ctx, botID)
-	if err != nil {
-		return "", err
-	}
-	return s.TtsModelID, nil
 }
