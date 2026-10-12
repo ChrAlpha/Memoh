@@ -138,6 +138,10 @@ type externalExecutor struct {
 	// instant the run was stopped, so a rollback still has to repair the
 	// driver's head.
 	finishedInFlight bool
+	// projectionsCleaned records that this turn's decision rows were already
+	// removed, so the reconciliation of an unknown round does not delete them
+	// again.
+	projectionsCleaned bool
 	// leadingUserKept records that this ending wrote history anchored to the
 	// leading user message — a round, or a failure row. Cleanup then leaves the
 	// message alone; a turn the runtime refused outright wrote none, and the
@@ -315,17 +319,14 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 			// The round landed after all; the failure was in the bookkeeping
 			// that followed it, and the run's own outcome stands.
 			e.leadingUserKept = true
-			e.cleanupProjections(ctx)
 			return summary, nil
 		case runtimeRoundRolledBack:
-			e.cleanupProjections(ctx)
 			e.rollback(ctx)
 		}
 		return summary, runtimeHistoryError(err)
 	}
 	// The round is written, so its leading user message is part of history.
 	e.leadingUserKept = true
-	e.cleanupProjections(ctx)
 	if e.result.Usage != nil {
 		summary.Usage, _ = json.Marshal(e.result.Usage)
 	}
@@ -363,6 +364,14 @@ func (e *externalExecutor) cleanup(ctx context.Context) {
 // turn that lost ownership still cleans up after itself, because a stranded
 // decision row would stay visible and answerable.
 func (e *externalExecutor) cleanupProjections(ctx context.Context) {
+	// The driver cleans once from its endings, and a round whose outcome was
+	// unknown is cleaned again by the reconciliation that resolves it. The rows
+	// are temporary either way, so the second pass is a no-op rather than a
+	// second delete of the same row.
+	if e.projectionsCleaned {
+		return
+	}
+	e.projectionsCleaned = true
 	e.service.cleanupReplacementMessages(ctx, e.projections.snapshot())
 	e.service.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
 }
