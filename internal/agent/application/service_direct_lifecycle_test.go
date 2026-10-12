@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +72,41 @@ type directLifecycleFixture struct {
 	messages   *recordingMessageService
 	runtime    *lifecycleTurnAdmitter
 	started    chan struct{}
+	// cancelled and release belong to directLifecycleModelHoldOnCancel: the
+	// model call signals cancelled when its request context ends, then holds
+	// the handler open until release, so a test can observe the run while its
+	// runtime is still cleaning up.
+	cancelled chan struct{}
+	release   chan struct{}
+	// releaseOnce makes releasing the held model call idempotent: a test
+	// releases it when it is done, and the fixture's own cleanup releases it
+	// again so an assertion that failed first cannot leave the handler blocked
+	// and hang the suite behind it.
+	releaseOnce *sync.Once
+	// requests is the model endpoint's record of the request bodies it
+	// received. Chat entries resolve through the whole application path, so
+	// what the model was asked for is how a test reads the run's routing,
+	// identity, and query.
+	requests *modelRequestRecorder
+}
+
+// modelRequestRecorder keeps the request bodies a model endpoint received.
+type modelRequestRecorder struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (r *modelRequestRecorder) add(body string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = append(r.bodies, body)
+}
+
+// bodies returns the request bodies the endpoint received.
+func (r *modelRequestRecorder) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.bodies...)
 }
 
 type synchronizedLifecycleStore struct {
@@ -171,20 +207,53 @@ const (
 	directLifecycleModelFailure      directLifecycleModelMode = "failure"
 	directLifecycleModelBlock        directLifecycleModelMode = "block"
 	directLifecycleModelStallHeaders directLifecycleModelMode = "stall_headers"
+	// directLifecycleModelHoldOnCancel streams a reply and then keeps the
+	// handler open past the caller's cancellation, the way a provider that has
+	// to finish writing its own state does. A test uses it to hold a run in its
+	// cleanup window.
+	directLifecycleModelHoldOnCancel directLifecycleModelMode = "hold_on_cancel"
 )
 
 func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) directLifecycleFixture {
 	t.Helper()
 
 	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := &sync.Once{}
+	requests := &modelRequestRecorder{}
 	var startedOnce sync.Once
+	var cancelledOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Stream bool `json:"stream"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		body, _ := io.ReadAll(r.Body)
+		recordRequest := func() { requests.add(string(body)) }
+		if err := json.Unmarshal(body, &request); err != nil {
 			t.Errorf("decode model request: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		recordRequest()
+		if mode == directLifecycleModelHoldOnCancel && request.Stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-hold\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", directLifecycleResponse)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			startedOnce.Do(func() { close(started) })
+			// The reply is on the wire; the handler outlives the caller's
+			// cancellation until the test lets it go. The wait is bounded so a
+			// test that fails before releasing cannot wedge the run's suite
+			// behind a handler that never returns.
+			<-r.Context().Done()
+			cancelledOnce.Do(func() { close(cancelled) })
+			select {
+			case <-release:
+			case <-time.After(30 * time.Second):
+			}
 			return
 		}
 		if mode == directLifecycleModelStallHeaders && !request.Stream {
@@ -232,7 +301,13 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 			}},
 		})
 	}))
-	t.Cleanup(server.Close)
+	// The held handler is released before the server is closed, so a test that
+	// failed mid-run cannot leave Close waiting on a handler that never
+	// returns.
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		server.Close()
+	})
 
 	provider := modelSelectionProviderRow(
 		t,
@@ -283,11 +358,15 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		logger:                 logger,
 	}
 	return directLifecycleFixture{
-		service:    service,
-		lifecycles: lifecycles,
-		messages:   messages,
-		runtime:    runtime,
-		started:    started,
+		service:     service,
+		lifecycles:  lifecycles,
+		messages:    messages,
+		runtime:     runtime,
+		started:     started,
+		cancelled:   cancelled,
+		release:     release,
+		releaseOnce: releaseOnce,
+		requests:    requests,
 	}
 }
 

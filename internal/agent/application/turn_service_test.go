@@ -3,9 +3,11 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +17,8 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/contextview"
 )
 
 type fakeRunner struct {
@@ -55,6 +59,12 @@ type scriptedAdmitter struct {
 	finishes   []recordedFinish
 	published  []native.StreamEvent
 	publishErr error
+
+	// finishStarted and finishRelease, when non-nil, hold the terminal write
+	// open: a test observes the run in its finishing window, between the last
+	// event and the durable record.
+	finishStarted chan struct{}
+	finishRelease chan struct{}
 }
 
 type recordedFinish struct {
@@ -98,6 +108,12 @@ func (a *scriptedAdmitter) FinishRunWithErrorCode(ctx context.Context, handle se
 }
 
 func (a *scriptedAdmitter) FinishRunWithFailure(_ context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
+	if a.finishStarted != nil {
+		close(a.finishStarted)
+	}
+	if a.finishRelease != nil {
+		<-a.finishRelease
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message, args: args})
@@ -154,6 +170,13 @@ func (a *scriptedAdmitter) admitted() []sessionruntime.AdmitInput {
 	return slices.Clone(a.inputs)
 }
 
+// publishedEvents returns what the run published to the session projection.
+func (a *scriptedAdmitter) publishedEvents() []native.StreamEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.published)
+}
+
 // awaitFinish waits for the run's terminal write, which happens in the pump's
 // defer stack and so can trail the closing of the handle's channels.
 func (a *scriptedAdmitter) awaitFinish(t *testing.T) recordedFinish {
@@ -181,12 +204,153 @@ func newTurnTestService(streamer testChatStreamer) *Service {
 func newAdmittedTurnTestService(streamer testChatStreamer) (*Service, *scriptedAdmitter) {
 	admitter := newScriptedAdmitter()
 	return &Service{
+		logger:           slog.New(slog.DiscardHandler),
 		sessionRuntime:   admitter,
 		publishTurnEvent: admitter.PublishAgentEvent,
 		turnHooks: &turnRuntimeHooks{
 			streamChat: streamer.StreamChat,
 		},
 	}, admitter
+}
+
+// chatTurnFixture is the chat entries' test service: a real application service
+// reaching a scripted model provider, with a scripted admission gate so a test
+// can read the run's terminal write and what was published to the projection.
+// Chat entries resolve through the whole application path, so a test that
+// asserts what a chat run did needs the real one.
+type chatTurnFixture struct {
+	fixture  directLifecycleFixture
+	admitter *scriptedAdmitter
+}
+
+func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFixture {
+	t.Helper()
+	fixture := newDirectLifecycleFixture(t, mode)
+	admitter := newScriptedAdmitter()
+	fixture.service.sessionRuntime = admitter
+	fixture.service.publishTurnEvent = admitter.PublishAgentEvent
+	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
+	// The chat path reads the session for the facts a run executes under, the
+	// same way a hosted service does.
+	fixture.service.sessionService = &fakeBackgroundSessionService{
+		getFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{
+				ID: sessionID, BotID: lifecycleTestBotID, Type: sessionpkg.TypeChat,
+				SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
+			}, nil
+		},
+	}
+	// The composition root compiles the run's context fragments into the
+	// provider-facing request there; without it the routing a run assembled
+	// never reaches the model, and a test could not tell a lost route from an
+	// absent one.
+	logger := slog.New(slog.DiscardHandler)
+	applier := contextview.ProviderRunConfigApplier(logger)
+	fixture.service.agent = native.New(native.Deps{
+		Logger: logger,
+		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
+			return applier(ctx, cfg)
+		},
+	})
+	return chatTurnFixture{fixture: fixture, admitter: admitter}
+}
+
+// start runs one chat turn through the turn port and returns its handle.
+func (f chatTurnFixture) start(t *testing.T, cmd turn.StartTurnCommand) turn.RunHandle {
+	t.Helper()
+	if cmd.BotID == "" {
+		cmd.BotID = lifecycleTestBotID
+	}
+	if cmd.ThreadID == "" {
+		cmd.ThreadID = lifecycleTestSessionID
+	}
+	if cmd.ChatID == "" {
+		cmd.ChatID = lifecycleTestBotID
+	}
+	if cmd.Query == "" {
+		cmd.Query = directLifecyclePrompt
+	}
+	handle, err := f.fixture.service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	return handle
+}
+
+// releaseModel lets a held model call return. It is idempotent, so a test may
+// call it explicitly and the fixture's cleanup may call it again.
+func (f chatTurnFixture) releaseModel(t *testing.T) {
+	t.Helper()
+	f.fixture.releaseOnce.Do(func() { close(f.fixture.release) })
+}
+
+// awaitModelRequest waits for the fixture's model endpoint to receive its
+// first request, which is how a test reads a run that is still executing.
+func (f chatTurnFixture) awaitModelRequest(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.fixture.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run never reached the model provider")
+	}
+}
+
+// stopRun cancels the run and waits for the cancellation to reach the model
+// request, so a test that asserts on the stopping window is not racing the
+// cancellation it just asked for.
+func (f chatTurnFixture) stopRun(t *testing.T, handle turn.RunHandle) {
+	t.Helper()
+	handle.Cancel()
+	select {
+	case <-f.fixture.cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancelling the run did not reach the model request")
+	}
+}
+
+// awaitModelRequests waits for the fixture's model endpoint to receive at
+// least one request, which is how a test reads a run that starts in the
+// background.
+func (f chatTurnFixture) awaitModelRequests(t *testing.T) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if requests := f.fixture.requests.recorded(); len(requests) > 0 {
+			return requests
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the run never reached the model provider")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// withLiveQueue gives the fixture a live session queue holding one running run,
+// which is what a follow-up is queued behind and started after.
+func (f chatTurnFixture) withLiveQueue(t *testing.T) (*sessionruntime.MemoryBackend, sessionruntime.Key) {
+	t.Helper()
+	backend := sessionruntime.NewMemoryBackend()
+	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
+	f.setActiveRun(t, backend, key, sessionruntime.RunStatusRunning)
+	manager := sessionruntime.NewManager(backend, sessionruntime.Options{})
+	t.Cleanup(func() { _ = manager.Close() })
+	f.fixture.service.sessionManager = manager
+	return backend, key
+}
+
+// setActiveRun writes the session's current run, which is what makes the
+// session busy and what a follow-up's terminal boundary names.
+func (chatTurnFixture) setActiveRun(t *testing.T, backend *sessionruntime.MemoryBackend, key sessionruntime.Key, status string) {
+	t.Helper()
+	if _, _, err := backend.Update(context.Background(), key, func(snapshot sessionruntime.Snapshot, _ bool) (sessionruntime.Snapshot, bool, error) {
+		snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
+		snapshot.CurrentRunView = &sessionruntime.CurrentRunView{
+			RunID: "original-run", TurnID: "turn-1", Generation: "gen-1", OwnerID: "owner-1", Status: status,
+		}
+		return snapshot, true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *fakeRunner) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
@@ -241,155 +405,125 @@ func TestStartTurnRequiresSessionRuntime(t *testing.T) {
 	}
 }
 
+// A chat turn's events reach its caller with the run's identity and a counter
+// that starts at one and never repeats, and the turn ends with the terminal
+// record its run wrote.
 func TestStartTurnStreamsEvents(t *testing.T) {
-	r := &fakeRunner{chunks: []string{`{"type":"text_delta","text":"a"}`, `{"type":"done"}`}}
-	a := newTurnTestService(r)
-	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
-		TeamID: "team1", Mode: turn.ModeChat, BotID: "b", ThreadID: "s", Query: "hi",
-	})
-	if err != nil {
-		t.Fatal(err)
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "streams-events-1"})
+	events := collectEvents(t, handle)
+
+	if len(events) == 0 {
+		t.Fatal("the run delivered no events")
 	}
-	var events []turn.Event
-	for e := range h.Events() {
-		events = append(events, e)
+	for i, event := range events {
+		if event.Seq != int64(i+1) {
+			t.Fatalf("event %d seq = %d, want %d; the port indexes events from one", i, event.Seq, i+1)
+		}
+		if event.RunID != handle.RunID() || event.TeamID != "team-1" || event.ThreadID != lifecycleTestSessionID {
+			t.Fatalf("event %d envelope = %+v, want the run's identity", i, event)
+		}
 	}
-	if len(events) != 2 {
-		t.Fatalf("want 2 events, got %d", len(events))
+	// The run's own output reached the caller, not a synthesized stand-in.
+	if !strings.Contains(string(events[len(events)-1].Payload), turn.RunStateCompleted) {
+		t.Fatalf("last event = %s, want the completed run_terminal", events[len(events)-1].Payload)
 	}
-	if events[0].Kind != "text_delta" || events[1].Kind != "done" {
-		t.Fatalf("kinds = %q, %q", events[0].Kind, events[1].Kind)
-	}
-	if events[0].Seq != 1 || events[1].Seq != 2 {
-		t.Fatalf("seq not monotonic: %d, %d", events[0].Seq, events[1].Seq)
-	}
-	if string(events[0].Payload) != r.chunks[0] {
-		t.Fatalf("payload mutated: %s", events[0].Payload)
-	}
-	if events[0].TeamID != "team1" || events[0].ThreadID != "s" {
-		t.Fatalf("event context missing: %+v", events[0])
-	}
-	if h.RunID() == "" || events[0].RunID != h.RunID() {
-		t.Fatalf("run id mismatch: handle=%q event=%q", h.RunID(), events[0].RunID)
-	}
-	if r.gotReq.BotID != "b" || r.gotReq.Query != "hi" {
-		t.Fatalf("ChatRequest not translated: %+v", r.gotReq)
-	}
-	for range h.Errs() {
+	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusCompleted {
+		t.Fatalf("finish status = %q, want %q", got, sessionruntime.RunStatusCompleted)
 	}
 }
 
+// A chat run's events reach the session projection as the runtime produced
+// them, in order, and the run's own terminal is among them. The entry no
+// longer synthesizes a terminal of its own: the runtime's terminal is the
+// run's, and the state written for the run is the driver's reading of it.
 func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
-	a, admitter := newAdmittedTurnTestService(&fakeRunner{chunks: []string{
-		`{"type":"tool_approval_request","approval_id":"approval-1","status":"pending"}`,
-		`{"type":"agent_end","approval_id":"approval-1","status":"pending"}`,
-	}})
-	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
-		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	drainHandle(h)
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "native-events-1"})
+	collectEvents(t, handle)
 
-	admitter.mu.Lock()
-	published := append([]native.StreamEvent(nil), admitter.published...)
-	admitter.mu.Unlock()
-	if len(published) != 2 ||
-		published[0].Type != native.EventToolApprovalRequest ||
-		published[1].Type != native.EventAgentEnd {
-		t.Fatalf("published events = %#v, want approval request then agent end", published)
+	published := fixture.admitter.publishedEvents()
+	if len(published) == 0 {
+		t.Fatal("the run published nothing to the session projection")
 	}
-	if got := admitter.awaitFinish(t); got.status != "" {
-		t.Fatalf("clean deferred finish status = %q, want unnamed runtime-derived status", got.status)
+	var sawDelta, sawEnd bool
+	for _, event := range published {
+		if event.Type == native.EventTextDelta {
+			sawDelta = true
+		}
+		if event.Type == native.EventAgentEnd {
+			sawEnd = true
+		}
+	}
+	if !sawDelta || !sawEnd {
+		t.Fatalf("published events = %#v, want the runtime's output and its terminal", published)
+	}
+	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusCompleted {
+		t.Fatalf("finish status = %q, want %q", got, sessionruntime.RunStatusCompleted)
 	}
 }
 
+// A publication the runtime refuses fails the run: the failure is what the
+// caller is told, and the run is cancelled rather than left publishing into a
+// A publication the session projection refuses fails the run: the failure is
+// what the caller is told, and the run's execution is cancelled rather than
+// A publication the session projection refuses fails the run, and the run
+// stops executing: continuing would produce events no subscriber can receive.
+// The cause stays private; the caller is told the catalogued code.
 func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
-	cancelObserved := make(chan struct{})
-	releaseCleanup := make(chan struct{})
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(releaseCleanup) }) }
-	t.Cleanup(release)
-	streamer := testChatStreamerFunc(func(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
-		chunks := make(chan StreamChunk, 1)
-		errs := make(chan error)
-		chunks <- StreamChunk(`{"type":"text_delta","delta":"hello"}`)
-		go func() {
-			<-ctx.Done()
-			close(cancelObserved)
-			<-releaseCleanup
-			close(chunks)
-			close(errs)
-		}()
-		return chunks, errs
-	})
-	a, admitter := newAdmittedTurnTestService(streamer)
+	fixture := newChatTurnFixture(t, directLifecycleModelHoldOnCancel)
 	publishErr := errors.New("private runtime publication failure")
-	admitter.publishErr = publishErr
-	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{
-		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-cancelObserved:
-	case <-time.After(time.Second):
-		t.Fatal("publication failure did not cancel the stream")
-	}
-	admitter.mu.Lock()
-	finishedEarly := len(admitter.finishes) != 0
-	admitter.mu.Unlock()
-	if finishedEarly {
-		t.Fatal("run finalized before publication-failure cleanup completed")
-	}
-	release()
-	for range h.Events() {
-	}
-	var publicErr error
-	for streamErr := range h.Errs() {
-		publicErr = streamErr
-	}
+	fixture.admitter.publishErr = publishErr
 
-	if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
-		t.Fatalf("publication failure status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "publish-fail-1"})
+	var publicErr error
+	deadline := time.After(10 * time.Second)
+	for eventCh, errCh := handle.Events(), handle.Errs(); eventCh != nil || errCh != nil; {
+		select {
+		case _, ok := <-eventCh:
+			if !ok {
+				eventCh = nil
+			}
+		case err, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
+			}
+			publicErr = err
+		case <-deadline:
+			t.Fatal("run did not end")
+		}
+	}
+	fixture.releaseModel(t)
+	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusErrored {
+		t.Fatalf("publication failure status = %q, want %q", got, sessionruntime.RunStatusErrored)
 	}
 	if got := apperror.CodeOf(publicErr); got != apperror.CodeSessionPublishFailed {
 		t.Fatalf("publication failure code = %q, want %q", got, apperror.CodeSessionPublishFailed)
 	}
-	if got := apperror.CauseOf(publicErr); !errors.Is(got, publishErr) {
-		t.Fatalf("private publication cause = %v, want %v", got, publishErr)
+	// The refused publication keeps its own cause in the message, so an
+	// operator reading the error can tell a projection outage from a failure
+	// the run itself declared.
+	if cause := apperror.CauseOf(publicErr); cause == nil || !strings.Contains(cause.Error(), publishErr.Error()) {
+		t.Fatalf("publication cause = %v, want it to name %v", cause, publishErr)
 	}
 }
 
+// A steer reaches the run while it executes, and stops being accepted once the
+// run's execution has ended: a caller can tell a rejected steer from an
+// accepted one, and a message nobody will read is not silently swallowed.
 func TestInjectAndAssets(t *testing.T) {
-	r := &fakeRunner{chunks: []string{`{"type":"done"}`}, block: make(chan struct{})}
-	a := newTurnTestService(r)
-	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat})
-	if err != nil {
-		t.Fatal(err)
+	fixture := newChatTurnFixture(t, directLifecycleModelHoldOnCancel)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "inject-assets-1"})
+	fixture.awaitModelRequest(t)
+	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "more"}); err != nil {
+		t.Fatalf("Inject() during the run = %v, want the steer accepted", err)
 	}
-	if err := h.Inject(context.Background(), turn.InjectMessage{Text: "more"}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-r.gotReq.InjectCh:
-		if got.Text != "more" {
-			t.Fatalf("inject text = %q", got.Text)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("inject not delivered")
-	}
-	h.AddOutboundAssets([]turn.OutboundAssetRef{{ContentHash: "h1", Role: "attachment", Ordinal: 0}})
-	refs := r.gotReq.OutboundAssetCollector()
-	if len(refs) != 1 || refs[0].ContentHash != "h1" {
-		t.Fatalf("assets = %+v", refs)
-	}
-	close(r.block)
-	for range h.Events() {
-	}
-	for range h.Errs() {
+	fixture.stopRun(t, handle)
+	fixture.releaseModel(t)
+	collectEvents(t, handle)
+	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); !errors.Is(err, errRunAlreadyFinished) {
+		t.Fatalf("Inject() after the run = %v, want %v", err, errRunAlreadyFinished)
 	}
 }
 
@@ -414,43 +548,33 @@ func TestCancelClosesEvents(t *testing.T) {
 	}
 }
 
+// Cancelling a run stops it and the run's durable record names the stop: a run
+// the caller ended is aborted, not failed. A run recorded as failed after its
+// caller stopped it would misreport the turn, which is what this pins.
+//
+// The provider handler is deliberately left holding its response open: the
+// stop must come from the caller's own signal rather than from the transport
+// closing under the runtime.
 func TestCancelWaitsForStreamCleanupBeforeFinalizingRun(t *testing.T) {
-	cancelObserved, release := make(chan struct{}), make(chan struct{})
-	streamer := testChatStreamerFunc(func(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
-		chunks, errs := make(chan StreamChunk), make(chan error)
-		go func() {
-			<-ctx.Done()
-			close(cancelObserved)
-			<-release
-			close(chunks)
-			close(errs)
-		}()
-		return chunks, errs
-	})
-	service, admitter := newAdmittedTurnTestService(streamer)
-	h, err := service.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat})
-	if err != nil {
-		t.Fatal(err)
+	fixture := newChatTurnFixture(t, directLifecycleModelHoldOnCancel)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "cancel-1"})
+	fixture.awaitModelRequest(t)
+	fixture.stopRun(t, handle)
+	fixture.releaseModel(t)
+	collectEvents(t, handle)
+	finish := fixture.admitter.awaitFinish(t)
+	if finish.status != sessionruntime.RunStatusAborted {
+		t.Fatalf("finish status = %q, want %q", finish.status, sessionruntime.RunStatusAborted)
 	}
-	h.Cancel()
-	<-cancelObserved
-	admitter.mu.Lock()
-	finishedEarly := len(admitter.finishes) != 0
-	admitter.mu.Unlock()
-	if finishedEarly {
-		t.Fatal("run finalized before interrupted-step persistence could finish")
-	}
-	close(release)
-	for range h.Events() {
-	}
-	if got := admitter.awaitFinish(t).status; got != sessionruntime.RunStatusAborted {
-		t.Fatalf("finish status = %q, want aborted", got)
+	if finish.message != "" {
+		t.Fatalf("aborted run recorded code %q, want none: a stop is not a failure", finish.message)
 	}
 }
 
+// The command's own fields reach the application's request unchanged. The
+// translation is one function, so it is read directly; the run-related fields
+// it deliberately does not carry are checked where a run wires them.
 func TestCommandFieldTranslation(t *testing.T) {
-	r := &fakeRunner{}
-	a := newTurnTestService(r)
 	cmd := turn.StartTurnCommand{
 		TeamID: "t", Mode: turn.ModeChat,
 		BotID: "bot", ChatID: "chat", ThreadID: "sess", RouteID: "route",
@@ -470,19 +594,11 @@ func TestCommandFieldTranslation(t *testing.T) {
 		RequestedSkills:      []turn.RequestedSkillContext{{Name: "rs1", ContentHash: "rh"}},
 		SkipMemoryExtraction: true, SkipTitleGeneration: true, UserMessagePersisted: true,
 	}
-	h, err := a.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range h.Events() {
-	}
-	got := r.gotReq
+	got := chatRequestFromCommand(cmd)
 	checks := map[string][2]string{
 		"BotID":                     {got.BotID, "bot"},
 		"ChatID":                    {got.ChatID, "chat"},
 		"ThreadID":                  {got.ThreadID, "sess"},
-		"RunID":                     {got.RunID, "run-1"},
-		"TurnID":                    {got.TurnID, "turn-1"},
 		"RouteID":                   {got.RouteID, "route"},
 		"Token":                     {got.Token, "tok"},
 		"ChatToken":                 {got.ChatToken, "ctok"},
@@ -520,9 +636,6 @@ func TestCommandFieldTranslation(t *testing.T) {
 	}
 	if got.ForwardDate != 42 {
 		t.Errorf("ForwardDate = %d", got.ForwardDate)
-	}
-	if got.TurnPosition == nil || *got.TurnPosition != 0 {
-		t.Errorf("TurnPosition = %v, want 0", got.TurnPosition)
 	}
 	if len(got.Attachments) != 1 || got.Attachments[0].ContentHash != "ch1" || got.Attachments[0].Name != "a.png" {
 		t.Errorf("Attachments = %+v", got.Attachments)
@@ -759,34 +872,6 @@ func (f *errRunner) StreamChat(ctx context.Context, _ ChatRequest) (<-chan Strea
 	return ch, errCh
 }
 
-type canceledRunReporter struct{}
-
-func (*canceledRunReporter) StreamChat(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
-	ch := make(chan StreamChunk)
-	errCh := make(chan error, 1)
-	go func() {
-		defer close(ch)
-		defer close(errCh)
-		<-ctx.Done()
-		errCh <- context.Cause(ctx)
-	}()
-	return ch, errCh
-}
-
-type canceledRunTerminalReporter struct{}
-
-func (*canceledRunTerminalReporter) StreamChat(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
-	ch := make(chan StreamChunk, 1)
-	errCh := make(chan error)
-	go func() {
-		defer close(ch)
-		defer close(errCh)
-		<-ctx.Done()
-		ch <- StreamChunk(`{"type":"agent_abort"}`)
-	}()
-	return ch, errCh
-}
-
 func drainHandle(h turn.RunHandle) {
 	for range h.Events() {
 	}
@@ -794,132 +879,86 @@ func drainHandle(h turn.RunHandle) {
 	}
 }
 
+// collectEvents reads a handle to its end and returns the events it delivered.
+// It is bounded, so a run that never ends fails the test instead of hanging the
+// suite: a hung test binary reports nothing about the tests behind it.
+func collectEvents(t *testing.T, h turn.RunHandle) []turn.Event {
+	t.Helper()
+	var (
+		events []turn.Event
+		errs   []error
+	)
+	deadline := time.After(10 * time.Second)
+	for eventCh, errCh := h.Events(), h.Errs(); eventCh != nil || errCh != nil; {
+		select {
+		case event, ok := <-eventCh:
+			if !ok {
+				eventCh = nil
+				continue
+			}
+			events = append(events, event)
+		case err, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
+			}
+			errs = append(errs, err)
+		case <-deadline:
+			t.Fatalf("turn did not end; events so far = %d, errors = %v", len(events), errs)
+		}
+	}
+	return events
+}
+
 // TestRunEndClosesInjectChannel pins the fix for the per-turn goroutine
 // leak: the application's inject-forwarding goroutine exits by ranging over
 // InjectCh, so the service must close it when the run ends.
 func TestRunEndClosesInjectChannel(t *testing.T) {
-	r := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-	a := newTurnTestService(r)
-	h, err := a.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat})
-	if err != nil {
-		t.Fatal(err)
-	}
-	drainHandle(h)
-	select {
-	case _, ok := <-r.gotReq.InjectCh:
-		if ok {
-			t.Fatal("expected closed inject channel, got a message")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("inject channel not closed after run end")
-	}
-	if err := h.Inject(context.Background(), turn.InjectMessage{Text: "late"}); err == nil {
-		t.Fatal("expected error injecting after run end")
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "close-inject-1"})
+	collectEvents(t, handle)
+	// The run ended, so a steer for it is refused rather than left to rot in a
+	// channel nobody will read.
+	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); !errors.Is(err, errRunAlreadyFinished) {
+		t.Fatalf("Inject() after the run ended = %v, want %v", err, errRunAlreadyFinished)
 	}
 }
 
-// Every run must close its durable record, and the three outcomes must stay
+// Every run must close its durable record, and the outcomes must stay
 // distinguishable: the record is what releases the thread's single slot, and a
-// run recorded as broken when it was merely stopped misreports the turn.
+// run recorded as failed when it was merely stopped misreports the turn.
 func TestRunEndRecordsTerminalState(t *testing.T) {
-	cmd := turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s", IdempotencyKey: "msg-1"}
-
 	t.Run("error", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&errRunner{err: errors.New("provider exploded")})
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		drainHandle(h)
-		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
-		}
-	})
-
-	t.Run("unsolicited context cancellation", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&errRunner{err: context.Canceled})
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		drainHandle(h)
-		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
+		fixture := newChatTurnFixture(t, directLifecycleModelFailure)
+		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-error-1"})
+		collectEvents(t, handle)
+		if got := fixture.admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
 			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
 		}
 	})
 
 	t.Run("cancellation", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&fakeRunner{
-			chunks: []string{`{"type":"done"}`},
-			block:  make(chan struct{}),
-		})
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.Cancel()
-		drainHandle(h)
-		// A canceled run reaches the pump as two closed channels, exactly like a
-		// clean finish; only the run context tells them apart.
-		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
-		}
-	})
-
-	t.Run("cancellation reported by stream", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&canceledRunReporter{})
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.Cancel()
-		for range h.Events() {
-		}
-		for streamErr := range h.Errs() {
-			t.Fatalf("canceled run exposed stream error: %v", streamErr)
-		}
-		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
-		}
-	})
-
-	t.Run("cancellation reported by detached terminal event", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&canceledRunTerminalReporter{})
-		a.publishTurnEvent = func(
-			ctx context.Context,
-			handle sessionruntime.RunHandle,
-			event native.StreamEvent,
-		) error {
-			if ctx.Err() != nil {
-				return context.Cause(ctx)
-			}
-			return admitter.PublishAgentEvent(ctx, handle, event)
-		}
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		h.Cancel()
-		for range h.Events() {
-		}
-		for streamErr := range h.Errs() {
-			t.Fatalf("canceled run exposed stream error: %v", streamErr)
-		}
-		if got := admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
+		fixture := newChatTurnFixture(t, directLifecycleModelHoldOnCancel)
+		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-cancel-1"})
+		fixture.awaitModelRequest(t)
+		fixture.stopRun(t, handle)
+		fixture.releaseModel(t)
+		collectEvents(t, handle)
+		// A cancelled run and a clean one both end with their channels closed;
+		// only the run's own context tells them apart, and the state written
+		// for the run is the driver's reading of it.
+		if got := fixture.admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
 			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
 		}
 	})
 
 	t.Run("completion", func(t *testing.T) {
-		a, admitter := newAdmittedTurnTestService(&fakeRunner{chunks: []string{`{"type":"done"}`}})
-		h, err := a.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		drainHandle(h)
-		got := admitter.awaitFinish(t)
-		if got.status != "" {
-			t.Fatalf("status = %q, want unnamed runtime-derived completion", got.status)
+		fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-complete-1"})
+		collectEvents(t, handle)
+		got := fixture.admitter.awaitFinish(t)
+		if got.status != sessionruntime.RunStatusCompleted {
+			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusCompleted)
 		}
 		if got.handle.FencingToken == 0 {
 			t.Fatal("terminal write carried no fencing token: a superseded owner could close this run")

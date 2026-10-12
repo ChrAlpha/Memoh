@@ -23,9 +23,10 @@ const (
 // RunTerminal is the payload of EventRunTerminal. ErrorCode is the catalog code
 // the run's record carries; it is empty for a completed or aborted run.
 type RunTerminal struct {
-	Type      string `json:"type"`
-	State     string `json:"state"`
-	ErrorCode string `json:"error_code,omitempty"`
+	Type      string            `json:"type"`
+	State     string            `json:"state"`
+	ErrorCode string            `json:"error_code,omitempty"`
+	ErrorArgs map[string]string `json:"error_args,omitempty"`
 }
 
 // NewRunTerminalEvent builds the EventRunTerminal payload.

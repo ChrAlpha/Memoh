@@ -1152,5 +1152,56 @@ func TestDriveContainsAPanicInSetup(t *testing.T) {
 	}
 	if _, ended, _ := delivery.snapshot(); len(ended) != 1 {
 		t.Fatalf("Ended = %#v, want the ending reported once", ended)
+// L2: IM StartTurn. A chat run's input left its submitter, so a failure in
+// setup leaves the user message and a failure row: the sender whose message was
+// refused sees why, and the row is what the next turn reads. A Web send in the
+// same position writes nothing, because its draft can still go back to the
+// composer.
+func TestDriveIMStartTurnSetupFailureLeavesTheUserMessageAndRow(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		input    inputOwnership
+		wantRows int
+	}{
+		{name: "IM", input: inputAccepted, wantRows: 2},
+		{name: "Web send", input: inputHeld, wantRows: 0},
+		{name: "schedule", input: inputSynthetic, wantRows: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			messages := &recordingMessageService{}
+			svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+			svc.messageService = messages
+			spec := scheduledSpec(nil, &recordingDelivery{})
+			spec.Req = ChatRequest{
+				BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
+				Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
+			}
+			spec.Input = tc.input
+			spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+				return runPlan{}, apperror.Wrap(apperror.CodeAgentProviderAuthFailed, errors.New("401"), nil)
+			}
+
+			result := svc.drive(context.Background(), spec)
+
+			if result.Failure == nil || result.Failure.Code != apperror.CodeAgentProviderAuthFailed {
+				t.Fatalf("failure = %#v, want the provider's code", result.Failure)
+			}
+			if len(messages.persisted) != tc.wantRows {
+				t.Fatalf("persisted %d rows, want %d", len(messages.persisted), tc.wantRows)
+			}
+			if tc.wantRows == 0 {
+				return
+			}
+			if messages.persisted[0].Role != "user" {
+				t.Fatalf("first row = %#v, want the user's own message", messages.persisted[0])
+			}
+			if got, _ := messages.persisted[1].Metadata[messagepkg.HistoryErrorCodeMetadataKey].(string); got != string(apperror.CodeAgentProviderAuthFailed) {
+				t.Fatalf("failure row metadata = %#v, want the provider's code", messages.persisted[1].Metadata)
+			}
+		})
 	}
 }

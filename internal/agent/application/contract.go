@@ -95,10 +95,6 @@ type ChatRequest struct {
 	// QueueSteerEnabled enables the fenced native queue consumer.
 	QueueSteerEnabled bool `json:"-"`
 	StepIndexOffset   int  `json:"-"`
-	// PublishRuntimeEvents is set for server-owned continuations, which do not
-	// have a client runHandle pump to publish native events into the session
-	// runtime projection.
-	PublishRuntimeEvents bool `json:"-"`
 
 	Query             string                       `json:"query"`
 	Model             string                       `json:"model,omitempty"`

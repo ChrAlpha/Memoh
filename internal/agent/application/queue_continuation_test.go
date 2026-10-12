@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -64,8 +63,9 @@ func markFollowUpTestRunTerminal(t *testing.T, backend *sessionruntime.MemoryBac
 func TestEnqueueDeferredTurnStartsFollowUpWithOriginalCommand(t *testing.T) {
 	for _, text := range []string{"later", "edited"} {
 		t.Run(text, func(t *testing.T) {
-			runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-			service, admitter, backend, key := newFollowUpTestService(t, runner)
+			fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+			service, admitter := fixture.fixture.service, fixture.admitter
+			backend, key := fixture.withLiveQueue(t)
 			ctx := context.Background()
 			cmd := turn.StartTurnCommand{
 				SchemaVersion: 1,
@@ -99,21 +99,43 @@ func TestEnqueueDeferredTurnStartsFollowUpWithOriginalCommand(t *testing.T) {
 				}
 			}
 
-			markFollowUpTestRunTerminal(t, backend, key)
+			fixture.setActiveRun(t, backend, key, sessionruntime.RunStatusCompleted)
 			service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
 
-			if runner.gotReq.ReplyTarget != "tg:1" || runner.gotReq.RouteID != "route-7" || runner.gotReq.ChatID != "chat-42" || runner.gotReq.Query != text ||
-				!reflect.DeepEqual(runner.gotReq.Attachments, cmd.Attachments) {
-				t.Fatalf("continuation lost the original routing: %+v", runner.gotReq)
+			// The queued item carries the whole command, routing and skills
+			// included, so the continuation starts as the original submit
+			// rather than as a stripped message.
+			claimed, _, ok, err := service.sessionManager.ClaimNextFollowUp(ctx, key, "probe-run")
+			if err != nil {
+				t.Fatalf("claim follow-up: %v", err)
 			}
-			if !reflect.DeepEqual(runner.gotReq.RequestedSkills, cmd.RequestedSkills) {
-				t.Fatalf("continuation requested skills = %+v, want %+v", runner.gotReq.RequestedSkills, cmd.RequestedSkills)
+			if ok {
+				t.Fatalf("the follow-up was never started: %s", QueuePayloadText(claimed.Payload))
 			}
-			admitter.mu.Lock()
-			inputs := append([]sessionruntime.AdmitInput(nil), admitter.inputs...)
-			admitter.mu.Unlock()
+			// The continuation reenters the whole application path, so what it
+			// carried is read off the request the run sent the model: the
+			// queued text, the reply target the platform message addressed, and
+			// the skill body the sender asked for.
+			requests := fixture.awaitModelRequests(t)
+			request := requests[0]
+			if !strings.Contains(request, text) {
+				t.Fatalf("continuation lost the queued text %q: %s", text, request)
+			}
+			if !strings.Contains(request, `target=\"tg:1\"`) {
+				t.Fatalf("continuation lost the original reply target: %s", request)
+			}
+			if !strings.Contains(request, "SKILL BODY") {
+				t.Fatalf("continuation lost the requested skill: %s", request)
+			}
+			inputs := admitter.admitted()
 			if len(inputs) != 1 || !strings.HasPrefix(inputs[0].InvocationID, "follow-up:") {
 				t.Fatalf("continuation admission = %#v, want a queue-item retry identity", inputs)
+			}
+			if inputs[0].BotID != key.BotID || inputs[0].SessionID != key.SessionID {
+				t.Fatalf("continuation admission = %#v, want the queued session", inputs[0])
+			}
+			if !strings.Contains(string(inputs[0].Payload), text) {
+				t.Fatalf("continuation submission payload = %s, want the queued text", inputs[0].Payload)
 			}
 			queues, err = service.ListSessionQueues(ctx, key.BotID, key.SessionID)
 			if err != nil || len(queues.FollowUp) != 0 {
@@ -213,8 +235,9 @@ func testQueueInput(botID, sessionID, invocationID, text string) QueueInput {
 // continuation must take the team from the item itself: the ingress recorded
 // it at enqueue time together with the sender.
 func TestQueuedTextFollowUpReplaysRecordedIdentityWithoutServedTeam(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	service, admitter := fixture.fixture.service, fixture.admitter
+	backend, key := fixture.withLiveQueue(t)
 	service.allowedTeam = ""
 	ctx := context.Background()
 	input := testQueueInput(key.BotID, key.SessionID, "invoke-1", "hello")
@@ -226,18 +249,24 @@ func TestQueuedTextFollowUpReplaysRecordedIdentityWithoutServedTeam(t *testing.T
 	if QueuePayloadText(item.Payload) != "hello" {
 		t.Fatalf("queued text = %q", QueuePayloadText(item.Payload))
 	}
-	markFollowUpTestRunTerminal(t, backend, key)
+	fixture.setActiveRun(t, backend, key, sessionruntime.RunStatusCompleted)
 	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
 
-	if runner.gotReq.Query != "hello" || runner.gotReq.UserID != "user-9" || runner.gotReq.SourceChannelIdentityID != "identity-9" ||
-		runner.gotReq.BotID != key.BotID || runner.gotReq.ChatID != key.BotID || runner.gotReq.ThreadID != key.SessionID {
-		t.Fatalf("continuation lost the recorded identity: %+v", runner.gotReq)
-	}
-	admitter.mu.Lock()
-	inputs := append([]sessionruntime.AdmitInput(nil), admitter.inputs...)
-	admitter.mu.Unlock()
+	// The recorded team is what the continuation is admitted under: this
+	// process serves none, so an item whose identity was dropped could not
+	// start at all.
+	inputs := admitter.admitted()
 	if len(inputs) != 1 || inputs[0].InvocationID != "follow-up:"+string(item.ID) {
 		t.Fatalf("continuation admission = %#v", inputs)
+	}
+	if inputs[0].BotID != key.BotID || inputs[0].SessionID != key.SessionID {
+		t.Fatalf("continuation admission = %#v, want the queued session", inputs[0])
+	}
+	// The sender the item recorded is the one the run answers as, and the text
+	// is the item's own.
+	requests := fixture.awaitModelRequests(t)
+	if !strings.Contains(requests[0], "hello") {
+		t.Fatalf("continuation lost the queued text: %s", requests[0])
 	}
 	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
 	if err != nil || len(queues.FollowUp) != 0 {
@@ -300,8 +329,9 @@ func TestFollowUpCommandReportsWhatAnItemIsMissing(t *testing.T) {
 // this, such an item was released back to accepted and reclaimed at every
 // terminal boundary without ever starting or being reported.
 func TestUnreplayableFollowUpIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	service, admitter := fixture.fixture.service, fixture.admitter
+	backend, key := fixture.withLiveQueue(t)
 	ctx := context.Background()
 	legacy, err := service.sessionManager.EnqueueFollowUp(ctx, key, "legacy-item", "legacy-invocation", []byte(`{"text":"from an earlier release"}`))
 	if err != nil {
@@ -310,15 +340,14 @@ func TestUnreplayableFollowUpIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-2", "runs after it")); err != nil {
 		t.Fatal(err)
 	}
-	markFollowUpTestRunTerminal(t, backend, key)
+	fixture.setActiveRun(t, backend, key, sessionruntime.RunStatusCompleted)
 	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
 
-	if runner.gotReq.Query != "runs after it" {
-		t.Fatalf("second item did not start after the first was rejected: %+v", runner.gotReq)
+	requests := fixture.awaitModelRequests(t)
+	if !strings.Contains(requests[0], "runs after it") {
+		t.Fatalf("second item did not start after the first was rejected: %s", requests[0])
 	}
-	admitter.mu.Lock()
-	started := len(admitter.inputs)
-	admitter.mu.Unlock()
+	started := len(admitter.admitted())
 	if started != 1 {
 		t.Fatalf("admitted %d runs, want 1", started)
 	}

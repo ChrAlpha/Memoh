@@ -14,6 +14,7 @@ import (
 
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -154,57 +155,72 @@ func (s *failNthPersistMessageService) PersistRound(
 	return s.recordingMessageService.PersistRound(ctx, inputs, options)
 }
 
+// failingPromptDriver is an External Agent runtime that cannot run the turn.
+type failingPromptDriver struct{ err error }
+
+func (*failingPromptDriver) RuntimeType() string { return sessionpkg.RuntimeACPAgent }
+
+func (d *failingPromptDriver) Prompt(context.Context, external.PromptInput) (external.PromptResult, error) {
+	return external.PromptResult{}, d.err
+}
+
+// A prompt the External Agent runtime cannot complete fails the run under the
+// runtime's own code, and the provider's text stays out of everything the run
+// delivers: the failure is named by its catalog code, never by the sentence the
+// runtime returned.
+//
+// This covers the chat entry, which now reaches the runtime through the driver.
+// The discuss entry arranges the same driver differently and is covered by the
+// discuss tests.
 func TestACPGenericPromptFailurePublishesSanitizedErroredTerminalToChatAndDiscuss(t *testing.T) {
 	const privateDetail = "PRIVATE_ACP_PROVIDER_FAILURE"
-	pool := &recordingACPPrompter{err: errors.New(privateDetail)}
-	lifecycles := &recordingContextLifecycleStore{}
-	service := newACPLifecycleService(t, pool, &recordingMessageService{}, lifecycles)
-	eventCh := make(chan WSStreamEvent, 16)
 
-	if _, err := service.streamACPAgentWS(context.Background(), ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-		RunID: lifecycleTestRunID, Query: "inspect",
-	}, eventCh, make(chan struct{})); err != nil {
-		t.Fatalf("streamACPAgentWS() error = %v", err)
+	service, _ := newDrivePromptFixture(t)
+	service.SetExternalRuntimes(&failingPromptDriver{err: errors.New(privateDetail)})
+
+	cmd := lifecycleDiscussCommand()
+	cmd.Mode = turn.ModeChat
+	handle, err := service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
 	}
-	events := drainAgentEvents(t, eventCh)
-	assertACPFailedTerminal(t, events, "runtime_prompt_failed", privateDetail)
-	requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider)
-
-	chunks := make([]string, 0, len(events))
-	for _, event := range events {
-		raw, err := json.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
+	var delivered []string
+	deadline := time.After(10 * time.Second)
+	for eventCh, errCh := handle.Events(), handle.Errs(); eventCh != nil || errCh != nil; {
+		select {
+		case event, ok := <-eventCh:
+			if !ok {
+				eventCh = nil
+				continue
+			}
+			delivered = append(delivered, string(event.Payload))
+		case _, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
+			}
+		case <-deadline:
+			t.Fatal("run did not end")
 		}
-		chunks = append(chunks, string(raw))
 	}
-	for _, mode := range []turn.Mode{turn.ModeChat, turn.ModeDiscuss} {
-		t.Run(string(mode), func(t *testing.T) {
-			runner := &fakeRunner{chunks: chunks}
-			var turnService *Service
-			cmd := lifecycleDiscussCommand()
-			cmd.Mode = mode
-			if mode == turn.ModeDiscuss {
-				resolver := &fakeDiscussService{resolveResult: ResolveRunConfigResult{RuntimeType: sessionpkg.RuntimeACPAgent}}
-				turnService = newDiscussTestService(runner, &fakeAgentStreamer{}, resolver)
-			} else {
-				turnService = newTurnTestService(runner)
-			}
-			admitter := turnService.sessionRuntime.(*scriptedAdmitter)
-			handle, err := turnService.StartTurn(context.Background(), cmd)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for range handle.Events() {
-			}
-			for range handle.Errs() {
-			}
-			assertPublishedErroredTerminal(t, admitter.published)
-			if finish := admitter.awaitFinish(t); finish.status != "" {
-				t.Fatalf("runtime-derived finish status = %q, want unnamed", finish.status)
-			}
-		})
+	for _, payload := range delivered {
+		if strings.Contains(payload, privateDetail) {
+			t.Fatalf("delivered an event carrying the provider's text: %s", payload)
+		}
+	}
+	// The failure reaches the caller as the runtime's own abort, carrying the
+	// catalog code and no provider text.
+	var abort string
+	for _, payload := range delivered {
+		if parseKind(json.RawMessage(payload)) == string(native.EventAgentAbort) {
+			abort = payload
+		}
+	}
+	if abort == "" {
+		t.Fatalf("delivered events = %v, want the runtime's failed abort", delivered)
+	}
+	if !strings.Contains(abort, string(apperror.CodeRuntimePromptFailed)) {
+		t.Fatalf("abort = %s, want code %s", abort, apperror.CodeRuntimePromptFailed)
 	}
 }
 
@@ -307,23 +323,6 @@ func assertACPFailedTerminal(t *testing.T, events []native.StreamEvent, wantErro
 	if strings.Contains(string(raw), privateDetail) {
 		t.Fatalf("runtime events leaked private diagnostic: %s", raw)
 	}
-}
-
-func assertPublishedErroredTerminal(t *testing.T, events []native.StreamEvent) {
-	t.Helper()
-	errorSeen := false
-	for _, event := range events {
-		if event.Type == native.EventError {
-			errorSeen = true
-		}
-		if event.Type == native.EventAbort {
-			if !errorSeen {
-				t.Fatalf("published events = %#v, abort preceded error", events)
-			}
-			return
-		}
-	}
-	t.Fatalf("published events = %#v, want error and abort", events)
 }
 
 // reconcileOutcomeQueries fakes the commit-unknown reconciliation store: it

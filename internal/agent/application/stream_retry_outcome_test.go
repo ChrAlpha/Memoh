@@ -117,8 +117,9 @@ func eventTypes(t *testing.T, payloads []json.RawMessage) []string {
 	return types
 }
 
-// turnRun is what one native turn through the turn port produced.
-type turnRun struct {
+// nativeTurnRun is what one native turn through the turn port produced. It is
+// named apart from the turn contract's own delivery end, which the driver owns.
+type nativeTurnRun struct {
 	types     []string
 	errCodes  []string
 	errs      []error
@@ -128,12 +129,12 @@ type turnRun struct {
 
 // runNativeTurn drives StartTurn -> StreamChat against a real session runtime
 // manager and an in-memory ledger that records every finish proposal.
-func runNativeTurn(t *testing.T, fixture directLifecycleFixture) turnRun {
+func runNativeTurn(t *testing.T, fixture directLifecycleFixture) nativeTurnRun {
 	t.Helper()
 	return runNativeTurnWith(t, fixture, &proposalRecordingLedger{Store: sessionledger.New()})
 }
 
-func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *proposalRecordingLedger) turnRun {
+func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *proposalRecordingLedger) nativeTurnRun {
 	t.Helper()
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID: "owner-retry-turn", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
@@ -157,7 +158,7 @@ func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *propo
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	var payloads []json.RawMessage
-	var out turnRun
+	var out nativeTurnRun
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,9 @@ type tenantResumeQueries struct {
 	dbstore.Queries
 	q    *sqlc.Queries
 	seen []string
+
+	mu           sync.Mutex
+	sessionReads []string
 }
 
 func (q *tenantResumeQueries) ListInterruptedSessionRuns(ctx context.Context, after pgtype.UUID) ([]sqlc.SessionRun, error) {
@@ -85,6 +89,27 @@ func (q *tenantResumeQueries) RetireInterruptedSessionRun(ctx context.Context, r
 		return 0, errors.New("unbound tenant retirement")
 	}
 	return q.q.RetireInterruptedSessionRun(ctx, runID)
+}
+
+// GetSessionByID answers the session model-preference read a resumed turn
+// makes. The session stores no preference, which is the ordinary case and what
+// falls the resolution through to the bot's configured model.
+func (q *tenantResumeQueries) GetSessionByID(ctx context.Context, id pgtype.UUID) (sqlc.BotSession, error) {
+	scope, _ := ctx.Value(resumeScopeKey{}).(string)
+	if scope == "" {
+		return sqlc.BotSession{}, errors.New("unbound tenant session read")
+	}
+	q.mu.Lock()
+	q.sessionReads = append(q.sessionReads, scope)
+	q.mu.Unlock()
+	return q.q.GetSessionByID(ctx, id)
+}
+
+// sessionReadScopes is the tenant each session read ran under.
+func (q *tenantResumeQueries) sessionReadScopes() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]string(nil), q.sessionReads...)
 }
 
 func TestResumeScopeBindingFailsClosed(t *testing.T) {
@@ -195,18 +220,17 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 		t.Fatalf("RLS visible=%d err=%v", visible, err)
 	}
 	q := &tenantResumeQueries{q: sqlc.New(pool)}
-	execution := make(chan string, 2)
-	streamer := testChatStreamerFunc(func(runCtx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
-		scope := scopes.CurrentScope(runCtx)
-		execution <- scope + ":" + req.ThreadID
-		chunks := make(chan StreamChunk, 1)
-		chunks <- []byte(`{"type":"agent_end"}`)
+	// The resumed turn resolves through the whole application path, and every
+	// read it makes goes through the tenant-bound store. Recording the scopes
+	// those reads ran under is how the binding is observed: a turn that ran
+	// under another tenant's scope would be reading another team's rows.
+	s, admitter := newAdmittedTurnTestService(testChatStreamerFunc(func(context.Context, ChatRequest) (<-chan StreamChunk, <-chan error) {
+		chunks := make(chan StreamChunk)
 		close(chunks)
 		errs := make(chan error)
 		close(errs)
 		return chunks, errs
-	})
-	s, admitter := newAdmittedTurnTestService(streamer)
+	}))
 	s.logger = slog.Default()
 	s.queries = q
 	s.SetSessionResumeScopeProvider(scopes)
@@ -217,22 +241,27 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 			t.Fatal(err)
 		}
 	}
-	for range 2 {
-		select {
-		case got := <-execution:
-			found := false
-			for teamID, sessionID := range sessions {
-				if got == teamID+":"+sessionID {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("execution lost tenant binding: %s", got)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("tenant did not resume")
+	// Each resumed turn reads its session under the team that owns it, so both
+	// teams are served and no read ran unbound. The runs continue in their own
+	// goroutines, so this waits for them rather than reading a partial set.
+	served := map[string]bool{}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(served) < len(teams) {
+		served = map[string]bool{}
+		for _, scope := range q.sessionReadScopes() {
+			served[scope] = true
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("resumed turns read under %v, want both teams", served)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for _, teamID := range teams {
+		if !served[teamID] {
+			t.Fatalf("team %s never resumed its session", teamID)
 		}
 	}
+	_ = sessions
 	if fmt.Sprint(q.seen) != fmt.Sprint(teams) {
 		t.Fatalf("scan scopes=%v", q.seen)
 	}

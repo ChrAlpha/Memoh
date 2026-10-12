@@ -26,6 +26,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/grpctransport"
 	"github.com/felinics/memoh/internal/agent/turn/turnpb"
+	"github.com/felinics/memoh/internal/apperror"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -78,16 +79,26 @@ func newRPCRuntime(t *testing.T, owner string) *sessionruntime.Manager {
 
 // recordingModelServer is an OpenAI-compatible endpoint that answers every
 // streaming call with one text reply and keeps the request bodies it got.
+// When failWith is set it rejects the request instead, which is how a test
+// makes a run fail with a provider code and args.
 type recordingModelServer struct {
-	mu     sync.Mutex
-	bodies []string
+	mu       sync.Mutex
+	bodies   []string
+	failWith string
 }
 
 func (m *recordingModelServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	m.mu.Lock()
 	m.bodies = append(m.bodies, string(body))
+	failWith := m.failWith
 	m.mu.Unlock()
+	if failWith != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"error":{"message":%q}}`, failWith)
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-rpc\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"done\"},\"finish_reason\":null}]}\n\n")
 	_, _ = fmt.Fprint(w, "data: {\"id\":\"chatcmpl-rpc\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
@@ -336,5 +347,68 @@ func TestDiscussTurnOverRPCKeepsComposedContextAndRouting(t *testing.T) {
 	}
 	if !strings.Contains(string(rendered), "PRIVATE_DISCUSS_CONTEXT") || !strings.Contains(string(rendered), "data:image/png;base64,AA==") {
 		t.Fatalf("runtime messages lack the composed discuss context: %s", rendered)
+	}
+}
+
+// A failed run crosses the RPC with its outcome intact: the channel process
+// reads the state, error code, and args the server process recorded, so the
+// failure reply it renders names the failure the run had. The provider's own
+// text is not part of any of it.
+func TestChatTurnFailureOverRPCCarriesStateCodeAndArgs(t *testing.T) {
+	const privateDetail = "PRIVATE_RPC_PROVIDER_FAILURE"
+	service, model := newRPCChatService(t)
+	model.failWith = privateDetail
+	client := serveTurnOverRPC(t, service)
+
+	handle, err := client.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:   1,
+		TeamID:          "team-1",
+		Mode:            turn.ModeChat,
+		BotID:           lifecycleTestBotID,
+		ChatID:          lifecycleTestBotID,
+		ThreadID:        lifecycleTestSessionID,
+		IdempotencyKey:  "msg-rpc-failure",
+		Query:           "inspect the report",
+		UserVisibleText: "inspect the report",
+	})
+	if err != nil {
+		t.Fatalf("start turn over rpc: %v", err)
+	}
+	events, _ := drainOverRPC(t, handle)
+	if !turn.ReportsRunTerminal(handle) {
+		t.Fatal("remote handle does not report run_terminal")
+	}
+	last := events[len(events)-1]
+	if last.Kind != turn.EventRunTerminal {
+		t.Fatalf("last event over rpc = %s %s, want run_terminal", last.Kind, last.Payload)
+	}
+	terminal, ok := turn.RunTerminalFrom(last)
+	if !ok {
+		t.Fatalf("run_terminal payload = %s", last.Payload)
+	}
+	if terminal.State != turn.RunStateFailed {
+		t.Fatalf("run_terminal state = %q, want %q", terminal.State, turn.RunStateFailed)
+	}
+	if terminal.ErrorCode == "" {
+		t.Fatalf("run_terminal = %+v, want the failure's own code", terminal)
+	}
+	if strings.Contains(string(last.Payload), privateDetail) {
+		t.Fatalf("run_terminal leaks the provider's text: %s", last.Payload)
+	}
+	// The args a failure carries cross the same way its code does: the
+	// terminal's payload is the record's, so a channel process that renders a
+	// failure reply from it reads what the server process wrote.
+	carried, err := json.Marshal(turn.RunTerminal{
+		Type:      turn.EventRunTerminal,
+		State:     turn.RunStateFailed,
+		ErrorCode: string(apperror.CodeAgentDependencyMissing),
+		ErrorArgs: map[string]string{"dep_id": "codex"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTripped, ok := turn.RunTerminalFrom(turn.Event{Kind: turn.EventRunTerminal, Payload: carried})
+	if !ok || roundTripped.ErrorArgs["dep_id"] != "codex" {
+		t.Fatalf("run_terminal args did not survive encoding: %+v (%v)", roundTripped, ok)
 	}
 }

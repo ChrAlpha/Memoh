@@ -52,10 +52,10 @@ func (r *runFailureReply) release() []channel.StreamEvent {
 }
 
 // reply is the failure reply the run_terminal event calls for, rendered from
-// the run's code. The args come from the turn error when it carries the same
-// code. A run that did not fail but still reported an error is answered by that
-// error's code. It reports false without a run_terminal event, or for a run
-// that ended without failing.
+// the run's code. The args come from the terminal event when it carries them,
+// else from the turn error when it carries the same code. A run that did not
+// fail but still reported an error is answered by that error's code. It reports
+// false without a run_terminal event, or for a run that ended without failing.
 func (r *runFailureReply) reply(t *i18n.Localizer, turnErr error) (channel.StreamEvent, bool) {
 	if r.terminal == nil {
 		return channel.StreamEvent{}, false
@@ -68,7 +68,9 @@ func (r *runFailureReply) reply(t *i18n.Localizer, turnErr error) (channel.Strea
 		code = apperror.CodeOf(turnErr)
 	}
 	var args map[string]string
-	if turnErr != nil && apperror.CodeOf(turnErr) == code {
+	if len(r.terminal.ErrorArgs) > 0 {
+		args = r.terminal.ErrorArgs
+	} else if turnErr != nil && apperror.CodeOf(turnErr) == code {
 		args = apperror.ArgsOf(turnErr)
 	}
 	return channel.CodeEvent(t, code, args), true

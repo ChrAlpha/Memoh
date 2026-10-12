@@ -402,7 +402,6 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		var toolCallCount int
 		var hasVisibleOutput bool
 		var failureEventForwarded bool
-		var deferredRuntimeTerminal *native.StreamEvent
 		for event := range eventCh {
 			idleCancel.Observe(event)
 
@@ -440,14 +439,6 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 			// publish the claimed steer or create the follow-up continuation: the
 			// manager quite correctly rejects a queue mutation against a terminal
 			// run. Non-terminal events retain their low-latency publication path.
-			if streamReq.PublishRuntimeEvents && s.publishTurnEvent != nil {
-				if event.IsTerminal() && stepCommitter != nil {
-					terminal := published
-					deferredRuntimeTerminal = &terminal
-				} else if publishErr := s.publishTurnEvent(streamCtx, streamReq.RunHandle, published); publishErr != nil {
-					s.logger.WarnContext(ctx, "continuation runtime event publish failed", slog.String("run_id", streamReq.RunID), slog.Any("error", publishErr))
-				}
-			}
 			if event.IsTerminal() && len(event.Messages) > 0 {
 				if snap, ok := extractTerminalSnapshot(data); ok {
 					if stepCommitter == nil {
@@ -501,7 +492,6 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				if terminalPersistErr != nil {
 					outcome.recordReported(terminalPersistErr)
 				}
-				deferredRuntimeTerminal = nil
 				continue
 			}
 
@@ -548,11 +538,6 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 						slog.String("chat_id", streamReq.ChatID),
 					)
 				}
-			}
-		}
-		if deferredRuntimeTerminal != nil && streamReq.PublishRuntimeEvents && s.publishTurnEvent != nil {
-			if publishErr := s.publishTurnEvent(context.WithoutCancel(streamCtx), streamReq.RunHandle, *deferredRuntimeTerminal); publishErr != nil {
-				s.logger.WarnContext(ctx, "continuation terminal runtime event publish failed", slog.String("run_id", streamReq.RunID), slog.Any("error", publishErr))
 			}
 		}
 		if commitErr := stepCommitter.err(); commitErr != nil && streamCtx.Err() == nil {

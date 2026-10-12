@@ -2,7 +2,9 @@ package grpctransport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -58,11 +60,54 @@ func TestRunTerminalCrossesTransport(t *testing.T) {
 		}
 	}
 	want := turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateFailed, ErrorCode: "agent.provider_overloaded"}
-	if len(terminals) != 1 || terminals[0] != want {
+	if len(terminals) != 1 || !reflect.DeepEqual(terminals[0], want) {
 		t.Fatalf("terminals = %+v, want %+v", terminals, want)
 	}
 	if runErr == nil {
 		t.Fatal("run error was not delivered")
+	}
+}
+
+// The args a failure carries cross the transport with its code: the channel
+// process renders the failure reply from them, so a run whose args were
+// dropped in flight would answer with the wrong copy.
+func TestRunTerminalErrorArgsCrossTransport(t *testing.T) {
+	payload, err := json.Marshal(turn.RunTerminal{
+		Type:      turn.EventRunTerminal,
+		State:     turn.RunStateFailed,
+		ErrorCode: string(apperror.CodeAgentDependencyMissing),
+		ErrorArgs: map[string]string{"dep_id": "codex", "install_task_id": "task-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan turn.Event, 1)
+	errs := make(chan error, 1)
+	events <- turn.Event{RunID: "run-scripted", Seq: 1, Kind: turn.EventRunTerminal, Payload: payload}
+	close(events)
+	close(errs)
+	client, cleanup := newTestClient(t, &scriptedService{handle: &terminalHandle{scriptedHandle{events: events, errs: errs}}}, "secret")
+	defer cleanup()
+
+	handle, err := client.StartTurn(context.Background(), turn.StartTurnCommand{SchemaVersion: 1, TeamID: "team-1"})
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	var terminal turn.RunTerminal
+	for events := handle.Events(); events != nil; {
+		event, ok := <-events
+		if !ok {
+			break
+		}
+		if parsed, ok := turn.RunTerminalFrom(event); ok {
+			terminal = parsed
+		}
+	}
+	if terminal.ErrorCode != string(apperror.CodeAgentDependencyMissing) {
+		t.Fatalf("run_terminal code = %q, want %q", terminal.ErrorCode, apperror.CodeAgentDependencyMissing)
+	}
+	if terminal.ErrorArgs["dep_id"] != "codex" || terminal.ErrorArgs["install_task_id"] != "task-1" {
+		t.Fatalf("run_terminal args = %v, want them carried across the transport", terminal.ErrorArgs)
 	}
 }
 

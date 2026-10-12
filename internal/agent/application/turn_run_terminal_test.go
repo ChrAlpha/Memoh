@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
-	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
@@ -53,31 +53,29 @@ func collectTurn(t *testing.T, handle turn.RunHandle) ([]string, []turn.RunTermi
 
 // A chat turn against a real runtime manager ends with run_terminal naming
 // the state and code the run's record carries.
+//
+// The run executes against the real native runtime, so the state and code are
+// the driver's reading of an ending the runtime produced, not a value the
+// entry supplied.
 func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 	tests := []struct {
-		name     string
-		streamer testChatStreamer
-		cancel   bool
-		want     turn.RunTerminal
-		ledger   [2]string
+		name string
+		mode directLifecycleModelMode
+		want turn.RunTerminal
+		// ledger is the run's durable record: state and error code.
+		ledger [2]string
 	}{
 		{
-			name:     "failed with a coded error",
-			streamer: &errRunner{chunks: []string{`{"type":"text_delta","delta":"partial"}`}, err: apperror.Wrap(apperror.CodeAgentProviderOverloaded, errors.New("SECRET"), nil)},
-			want:     turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateFailed, ErrorCode: "agent.provider_overloaded"},
-			ledger:   [2]string{"failed", "agent.provider_overloaded"},
+			name:   "failed with a coded error",
+			mode:   directLifecycleModelFailure,
+			want:   turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateFailed, ErrorCode: "agent.provider_request_rejected"},
+			ledger: [2]string{"failed", "agent.provider_request_rejected"},
 		},
 		{
-			name:     "failed with an uncoded error",
-			streamer: &errRunner{err: errors.New("SECRET provider exploded")},
-			want:     turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateFailed, ErrorCode: "runtime_run_failed"},
-			ledger:   [2]string{"failed", "runtime_run_failed"},
-		},
-		{
-			name:     "completed",
-			streamer: &fakeRunner{chunks: []string{`{"type":"agent_start"}`, `{"type":"agent_end","messages":[]}`}},
-			want:     turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateCompleted},
-			ledger:   [2]string{"completed", ""},
+			name:   "completed",
+			mode:   directLifecycleModelSuccess,
+			want:   turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateCompleted},
+			ledger: [2]string{"completed", ""},
 		},
 	}
 	for _, tt := range tests {
@@ -87,10 +85,15 @@ func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 				OwnerID: "owner-run-terminal", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
 			})
 			t.Cleanup(func() { _ = manager.Close() })
-			service := newTurnTestService(tt.streamer)
+			fixture := newChatTurnFixture(t, tt.mode)
+			service := fixture.fixture.service
+			// The run is admitted against the real manager, so its ledger is
+			// what the run_terminal is read against.
 			service.SetSessionRuntime(manager)
-
-			cmd := turn.StartTurnCommand{TeamID: "team-1", Mode: turn.ModeChat, BotID: "bot-1", ThreadID: "thread-1", IdempotencyKey: "msg-1"}
+			cmd := turn.StartTurnCommand{
+				TeamID: "team-1", Mode: turn.ModeChat, BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+				ChatID: lifecycleTestBotID, Query: directLifecyclePrompt, IdempotencyKey: "msg-1",
+			}
 			handle, err := service.StartTurn(context.Background(), cmd)
 			if err != nil {
 				t.Fatalf("start turn: %v", err)
@@ -99,7 +102,7 @@ func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 				t.Fatal("handle does not report run_terminal")
 			}
 			payloads, terminals, _ := collectTurn(t, handle)
-			if len(terminals) != 1 || terminals[0] != tt.want {
+			if len(terminals) != 1 || !reflect.DeepEqual(terminals[0], tt.want) {
 				t.Fatalf("run_terminal = %+v, want %+v (events %q)", terminals, tt.want, payloads)
 			}
 			if last := payloads[len(payloads)-1]; !json.Valid([]byte(last)) || turn.EventRunTerminal != parseKind(json.RawMessage(last)) {
@@ -151,7 +154,7 @@ func TestChatTurnRunTerminalCarriesFinishRecord(t *testing.T) {
 	}
 	_, terminals, _ := collectTurn(t, handle)
 	want := turn.RunTerminal{Type: turn.EventRunTerminal, State: "lost", ErrorCode: "runtime_owner_lease_expired"}
-	if len(terminals) != 1 || terminals[0] != want {
+	if len(terminals) != 1 || !reflect.DeepEqual(terminals[0], want) {
 		t.Fatalf("run_terminal = %+v, want %+v", terminals, want)
 	}
 }

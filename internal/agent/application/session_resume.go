@@ -17,7 +17,6 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	tools "github.com/felinics/memoh/internal/agent/tool"
-	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -404,15 +403,29 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 	if decisionContext != "" {
 		req.Query += "\n\n" + decisionContext
 	}
-	chunks, errs := s.streamTurnChat(runCtx, req)
-	h := &runHandle{
-		id: admission.RunID, ctx: runCtx, cancel: cancel, events: make(chan turn.Event, 16), errs: make(chan error, 1), inject: make(chan turn.InjectMessage),
-		finishRun:         s.turnRunFinisher(runCtx, admission, data.SessionType),
-		publishAgentEvent: s.turnAgentEventPublisher(admission.Handle),
+
+	spec := runSpec{
+		Run: admittedRun{
+			Handle:       admission.Handle,
+			TurnID:       admission.TurnID,
+			TurnPosition: &admission.TurnPosition,
+			Mode:         data.SessionType,
+		},
+		Req:      req,
+		Delivery: noDelivery{},
+		Input:    inputSynthetic,
 	}
+	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		return s.chatSetup(ctx, req, spec)
+	}
+
 	done := make(chan struct{})
-	go h.pump(turn.StartTurnCommand{TeamID: row.TeamID.String(), BotID: req.BotID, ThreadID: req.ThreadID}, chunks, errs)
-	go func() { defer close(done); drainDeferredTurn(h) }()
+	go func() {
+		defer close(done)
+		defer cancel()
+		s.drive(runCtx, spec)
+	}()
+
 	s.logger.InfoContext(runCtx, "interrupted session resumed", slog.String("previous_run_id", row.RunID.String()), slog.String("run_id", admission.RunID), slog.String("session_id", req.ThreadID))
 	return done, nil
 }

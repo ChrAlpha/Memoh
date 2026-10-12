@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -100,50 +99,70 @@ func TestResumeRejectsInvalidCredentialAndForeignBotScope(t *testing.T) {
 	}
 }
 
+// A resume re-enters the session it saved, on the request the intent recorded,
+// and keeps the deadline the interrupted run was given. The turn resolves
+// through the whole application path, so the assertion is on what the model was
+// asked for rather than on an intermediate request value.
 func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"text_delta","delta":"continued"}`, `{"type":"agent_end"}`}}
-	s, admitter := newAdmittedTurnTestService(runner)
-	s.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
-	s.logger = slog.Default()
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	service := fixture.fixture.service
+	service.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
 	deadline := time.Now().Add(time.Minute)
-	data := resumeContext{Version: 1, ChatID: "chat", UserID: "sender", Query: "original task", DeadlineAt: &deadline}
+	data := resumeContext{Version: 1, ChatID: lifecycleTestBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
 	raw, err := json.Marshal(map[string]any{"resume": data})
 	if err != nil {
 		t.Fatal(err)
 	}
-	row := sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(uuid.NewString()), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
-	done, err := s.resumeInterruptedSession(t.Context(), row)
+	row := sqlc.SessionRun{
+		TeamID:    db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"),
+		RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
+		BotID:     db.ParseUUIDOrEmpty(lifecycleTestBotID),
+		SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID),
+		InputJson: raw,
+	}
+	done, err := service.resumeInterruptedSession(t.Context(), row)
 	if err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("resume did not finish")
 	}
-	if !runner.gotReq.UserMessagePersisted || !runner.gotReq.ShutdownResume || runner.gotReq.ThreadID != row.SessionID.String() {
-		t.Fatalf("request=%+v", runner.gotReq)
+	// The resumed run asks the model the original task, with the instruction
+	// that tells it why it is seeing it again.
+	requests := fixture.fixture.requests.recorded()
+	if len(requests) == 0 {
+		t.Fatal("the resumed run never reached the model provider")
 	}
-	if !strings.Contains(runner.gotReq.Query, "Original task: original task") {
-		t.Fatal("lost task")
+	if !strings.Contains(requests[0], "original task") || !strings.Contains(requests[0], resumeInstruction) {
+		t.Fatalf("model request lacks the resumed task: %s", requests[0])
 	}
-	inputs := admitter.admitted()
+	// A resume writes no new user message: the input is synthetic, and the
+	// turn it continues is already in history.
+	for _, input := range fixture.fixture.messages.persisted {
+		if input.Role == "user" {
+			t.Fatalf("resume persisted a user message: %+v", input)
+		}
+	}
+
+	inputs := fixture.admitter.admitted()
 	if len(inputs) != 1 || inputs[0].InvocationID != "resume:"+row.RunID.String() {
 		t.Fatalf("admission=%+v", inputs)
 	}
-	admitter.mu.Lock()
-	admitter.started = false
-	admitter.mu.Unlock()
-	if _, err := s.resumeInterruptedSession(t.Context(), row); !errors.Is(err, errResumeUnrecoverable) {
+	fixture.admitter.mu.Lock()
+	fixture.admitter.started = false
+	fixture.admitter.mu.Unlock()
+	if _, err := service.resumeInterruptedSession(t.Context(), row); !errors.Is(err, errResumeUnrecoverable) {
 		t.Fatalf("duplicate admission = %v, want an unrecoverable intent", err)
 	}
 	expired := time.Now().Add(-time.Second)
 	data.DeadlineAt = &expired
 	row.InputJson, _ = json.Marshal(map[string]any{"resume": data})
-	if done, err := s.resumeInterruptedSession(t.Context(), row); !errors.Is(err, errResumeUnrecoverable) || done != nil {
+	if done, err := service.resumeInterruptedSession(t.Context(), row); !errors.Is(err, errResumeUnrecoverable) || done != nil {
 		t.Fatalf("expired budget: done=%v err=%v, want an unrecoverable intent", done, err)
 	}
-	if len(admitter.admitted()) != 2 {
+	if len(fixture.admitter.admitted()) != 2 {
 		t.Fatal("expired task reached admission")
 	}
 }
@@ -190,10 +209,9 @@ func (q *retireResumeQueries) RetireInterruptedSessionRun(_ context.Context, run
 // its intent, and a resumable one is admitted.
 func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 	const teamID = "00000000-0000-0000-0000-000000000001"
-	runner := &fakeRunner{chunks: []string{`{"type":"agent_end"}`}}
-	s, admitter := newAdmittedTurnTestService(runner)
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	s, admitter := fixture.fixture.service, fixture.admitter
 	s.SetAllowedTeam(teamID)
-	s.logger = slog.Default()
 	unreadyBot := uuid.NewString()
 	s.resumeReady = func(_ context.Context, botID, _ string) error {
 		if botID == unreadyBot {
@@ -209,11 +227,13 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 		}
 		return sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(teamID), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(botID), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
 	}
-	expired := row(uuid.NewString(), resumeContext{Version: 1, ChatID: "chat", Query: "late", DeadlineAt: &past})
-	unsupported := row(uuid.NewString(), resumeContext{Version: 2, ChatID: "chat", Query: "future format"})
-	unready := row(unreadyBot, resumeContext{Version: 1, ChatID: "chat", Query: "wait", DeadlineAt: &future})
-	resumable := row(uuid.NewString(), resumeContext{Version: 1, ChatID: "chat", Query: "go on", DeadlineAt: &future})
-	q := &retireResumeQueries{rows: []sqlc.SessionRun{expired, unsupported, unready, resumable}}
+	expired := row(uuid.NewString(), resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "late", DeadlineAt: &past})
+	unsupported := row(uuid.NewString(), resumeContext{Version: 2, ChatID: lifecycleTestBotID, Query: "future format"})
+	unready := row(unreadyBot, resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "wait", DeadlineAt: &future})
+	resumable := row(uuid.NewString(), resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "go on", DeadlineAt: &future})
+	// The resumable row runs the whole turn, so the store the fixture serves
+	// stays underneath the resume-specific reads this test added.
+	q := &retireResumeQueries{Queries: s.queries, rows: []sqlc.SessionRun{expired, unsupported, unready, resumable}}
 	s.queries = q
 
 	scan := sessionResumeScan{}

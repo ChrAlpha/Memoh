@@ -13,7 +13,6 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
-	"github.com/felinics/memoh/internal/errs"
 )
 
 var _ turn.Service = (*Service)(nil)
@@ -58,11 +57,6 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 
 	injectCh := make(chan turn.InjectMessage, 16)
-	// A busy thread is reported as ErrSessionBusy. Whether to park the command
-	// in the follow-up queue is the ingress's decision (EnqueueDeferredTurn):
-	// only a caller whose user sees the run through the session runtime
-	// subscription can drop its handle, because a run started from the queue
-	// has no other consumer for its output.
 	admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, injectCh)
 	if err != nil {
 		cancel()
@@ -70,10 +64,9 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
 
-	var (
-		assetMu sync.Mutex
-		assets  []turn.OutboundAssetRef
-	)
+	events := make(chan turn.Event, 16)
+	errs := make(chan error, 1)
+	handle := newTurnRun(runCtx, admission.RunID, cmd.TeamID, cmd.ThreadID, events, errs, injectCh, cancelCause)
 
 	req := chatRequestFromCommand(cmd)
 	req.RunID = admission.RunID
@@ -82,33 +75,33 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	req.TurnPosition = &admission.TurnPosition
 	req.InjectCh = injectCh
 	req.QueueSteerEnabled = injectCh != nil
-	req.OutboundAssetCollector = func() []turn.OutboundAssetRef {
-		assetMu.Lock()
-		defer assetMu.Unlock()
-		out := make([]turn.OutboundAssetRef, len(assets))
-		copy(out, assets)
-		return out
-	}
 
-	chunkCh, errCh := s.streamTurnChat(runCtx, req)
-
-	h := &runHandle{
-		id:     admission.RunID,
-		events: make(chan turn.Event, 16),
-		errs:   make(chan error, 1),
-		ctx:    runCtx,
-		cancel: cancel,
-		inject: injectCh,
-		addAssets: func(refs []turn.OutboundAssetRef) {
-			assetMu.Lock()
-			defer assetMu.Unlock()
-			assets = append(assets, refs...)
+	spec := runSpec{
+		Run: admittedRun{
+			Handle:       admission.Handle,
+			TurnID:       admission.TurnID,
+			TurnPosition: &admission.TurnPosition,
+			Mode:         string(cmd.Mode),
 		},
-		finishRun:         s.turnRunFinisher(runCtx, admission, string(cmd.Mode)),
-		publishAgentEvent: s.turnAgentEventPublisher(admission.Handle),
+		Req:      req,
+		Delivery: handle,
+		Input:    inputAccepted,
+		// The caller's own context is this run's stop signal: an inbound
+		// consumer that went away, a transport that closed, or the channel's
+		// own /stop. The driver translates it into its stop marker, so the
+		// ending is named a stop rather than a failure nobody declared.
+		StopCh: ctx.Done(),
 	}
-	go h.pump(cmd, chunkCh, errCh)
-	return h, nil
+	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		return s.chatSetup(ctx, req, spec)
+	}
+
+	go func() {
+		defer cancel()
+		s.drive(runCtx, spec)
+	}()
+
+	return handle, nil
 }
 
 func (s *Service) streamTurnChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
@@ -127,11 +120,11 @@ type runHandle struct {
 	inject    chan turn.InjectMessage
 	addAssets func([]turn.OutboundAssetRef)
 
-	// injectMu lets teardown stop direct injections before the durable finisher
-	// stops the session sender and the channel can be closed safely.
+	// injectMu lets teardown mark direct injection stopped before the durable
+	// finisher runs, so a steer that arrives while the run is finishing is
+	// refused rather than left in a channel nobody reads.
 	injectMu      sync.Mutex
 	injectStopped bool
-	injectClosed  bool
 
 	// failed records that the run ended in an error or cancellation, and
 	// streamErr keeps the error itself when there was one. Both are needed
@@ -157,16 +150,6 @@ func (h *runHandle) Cancel()                   { h.cancel() }
 // stream with turn.EventRunTerminal.
 func (h *runHandle) ReportsRunTerminal() bool { return h.finishRun != nil }
 
-// consumerErr is the run failure as it is handed to the consumer of Errs. A
-// run with a durable record writes its own result record, so the consumer's
-// unit (the inbound message, the RPC) does not record the failure again.
-func (h *runHandle) consumerErr(err error) error {
-	if h.finishRun == nil {
-		return err
-	}
-	return errs.Recorded(err)
-}
-
 func (h *runHandle) Inject(ctx context.Context, msg turn.InjectMessage) error {
 	h.injectMu.Lock()
 	defer h.injectMu.Unlock()
@@ -184,25 +167,6 @@ func (h *runHandle) Inject(ctx context.Context, msg turn.InjectMessage) error {
 	case <-h.ctx.Done():
 		return h.ctx.Err()
 	}
-}
-
-func (h *runHandle) stopInject() {
-	h.injectMu.Lock()
-	defer h.injectMu.Unlock()
-	h.injectStopped = true
-}
-
-// closeInject closes the inject channel exactly once after direct and session
-// senders have stopped.
-func (h *runHandle) closeInject() {
-	h.injectMu.Lock()
-	defer h.injectMu.Unlock()
-	if h.injectClosed {
-		return
-	}
-	h.injectStopped = true
-	h.injectClosed = true
-	close(h.inject)
 }
 
 // finish records the run's terminal state and releases the thread's slot after
@@ -356,110 +320,6 @@ func (s *Service) RespondUserInput(ctx context.Context, input turn.UserInputResp
 
 func (h *runHandle) AddOutboundAssets(refs []turn.OutboundAssetRef) {
 	h.addAssets(refs)
-}
-
-// pump forwards the application's chunk/error pair into the handle's channels,
-// wrapping each chunk as a turn.Event with a monotonically increasing Seq.
-func (h *runHandle) pump(cmd turn.StartTurnCommand, chunkCh <-chan StreamChunk, errCh <-chan error) {
-	// Deferred order (LIFO): detect external cancellation, cancel, stop direct
-	// injects, finish the durable run, close inject, send run_terminal, then
-	// close the channel pair.
-	var seq int64
-	clientGone := false
-	defer close(h.events)
-	defer close(h.errs)
-	defer func() {
-		// A consumer that went away, or canceled the run, does not read tail
-		// events.
-		if !clientGone {
-			h.sendTerminal(cmd.TeamID, cmd.ThreadID, seq+1)
-		}
-	}()
-	defer h.closeInject()
-	defer h.finish()
-	defer h.stopInject()
-	defer func() {
-		// A canceled run may look like a clean completion here: the
-		// application reacts to ctx cancellation by closing both channels.
-		// Check before cancel() masks the distinction.
-		if h.ctx.Err() != nil {
-			h.failed.Store(true)
-			clientGone = true
-		}
-		h.cancel()
-	}()
-
-	ctxDone := h.ctx.Done()
-	for chunkCh != nil || errCh != nil {
-		select {
-		case <-ctxDone:
-			h.failed.Store(true)
-			clientGone = true
-			ctxDone = nil
-		case chunk, ok := <-chunkCh:
-			if !ok {
-				chunkCh = nil
-				continue
-			}
-			if h.ctx.Err() != nil {
-				h.failed.Store(true)
-				clientGone = true
-				ctxDone = nil
-			}
-			if !clientGone {
-				if err := h.publishChunk(chunk); err != nil {
-					if h.recordStreamFailure(err) {
-						select {
-						case h.errs <- h.consumerErr(err):
-						case <-h.ctx.Done():
-						}
-					}
-					h.cancel()
-					clientGone = true
-					ctxDone = nil
-					continue
-				}
-			}
-			seq++
-			if clientGone {
-				continue
-			}
-			select {
-			case h.events <- turn.Event{
-				RunID:    h.id,
-				TeamID:   cmd.TeamID,
-				ThreadID: cmd.ThreadID,
-				Seq:      seq,
-				Kind:     parseKind(chunk),
-				Payload:  chunk,
-			}:
-			case <-h.ctx.Done():
-				h.failed.Store(true)
-				clientGone = true
-				ctxDone = nil
-			}
-		case err, ok := <-errCh:
-			if !ok {
-				errCh = nil
-				continue
-			}
-			if err != nil {
-				if !h.recordStreamFailure(err) {
-					clientGone = true
-					ctxDone = nil
-					continue
-				}
-				if !clientGone {
-					select {
-					case h.errs <- h.consumerErr(err):
-					case <-h.ctx.Done():
-						clientGone = true
-						ctxDone = nil
-					}
-				}
-			}
-		}
-	}
 }
 
 // parseKind extracts the "type" field from a raw chunk, best effort.
