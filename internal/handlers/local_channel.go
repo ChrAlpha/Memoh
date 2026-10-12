@@ -1466,8 +1466,8 @@ func (h *LocalChannelHandler) forwardWSStreamEvents(ctx, assetCtx context.Contex
 }
 
 // wsStreamRunner receives the run it is executing as, because the run id is
-// minted at admission and everything downstream — compaction barriers, external-agent
-// sessions, interactive tool headers — has to agree on that one name.
+// minted at admission and everything downstream — external-agent sessions,
+// interactive tool headers — has to agree on that one name.
 //
 // turn is the turn admission allocated for this run. It is separate from ref
 // because ref is how the *client* names the turn, while this is how the
@@ -1766,7 +1766,6 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 	eventCh := make(chan application.WSStreamEvent, 64)
 	injectCh := make(chan turn.InjectMessage, 16)
 	forwarded := make(chan struct{})
-	releaseCompaction := h.agentService.DeferSessionCompaction(botID, ref.SessionID, ref.RunID)
 	go func() {
 		defer streamCancel()
 		delivered, err := func() (application.RunOutcome, error) {
@@ -1809,7 +1808,6 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 
 	go func() {
 		defer close(forwarded)
-		defer releaseCompaction()
 		h.forwardWSStreamEvents(streamCtx, baseCtx, writer, botID, ref, admission.Handle, eventCh)
 	}()
 	return ref, true

@@ -3053,6 +3053,15 @@ WITH scan_anchor AS MATERIALIZED (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    -- The active run still writes its turns: its own, then any a steered or
+    -- injected message opened after it; steps first, then outbound assets.
+    AND NOT EXISTS (
+      SELECT 1 FROM session_runs active_run
+      WHERE active_run.team_id = public.memoh_current_team_id()
+        AND active_run.session_id = m.session_id
+        AND active_run.state IN ('accepted', 'running', 'waiting_decision', 'finishing')
+        AND (active_run.turn_id = m.turn_id OR m.turn_position >= active_run.turn_position)
+    )
     AND (
       NOT EXISTS (SELECT 1 FROM scan_anchor)
       OR (m.turn_position, m.turn_message_seq, m.created_at, m.id) >= (
@@ -3295,7 +3304,16 @@ WHERE m.team_id = public.memoh_current_team_id()
         (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  -- The active run still writes its turns: its own, then any a steered or
+  -- injected message opened after it; steps first, then outbound assets.
+  AND NOT EXISTS (
+    SELECT 1 FROM session_runs active_run
+    WHERE active_run.team_id = public.memoh_current_team_id()
+      AND active_run.session_id = m.session_id
+      AND active_run.state IN ('accepted', 'running', 'waiting_decision', 'finishing')
+      AND (active_run.turn_id = m.turn_id OR m.turn_position >= active_run.turn_position)
+  );
 
 -- name: ListUncompactedMessagesBySession :many
 -- Compatibility query retained for diagnostics and integration tests. Runtime
@@ -3352,6 +3370,15 @@ WHERE m.team_id = public.memoh_current_team_id()
       )
   ))
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  -- The active run still writes its turns: its own, then any a steered or
+  -- injected message opened after it; steps first, then outbound assets.
+  AND NOT EXISTS (
+    SELECT 1 FROM session_runs active_run
+    WHERE active_run.team_id = public.memoh_current_team_id()
+      AND active_run.session_id = m.session_id
+      AND active_run.state IN ('accepted', 'running', 'waiting_decision', 'finishing')
+      AND (active_run.turn_id = m.turn_id OR m.turn_position >= active_run.turn_position)
+  )
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: ListMessagesByCompactID :many

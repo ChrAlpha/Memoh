@@ -204,16 +204,15 @@ func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error 
 
 // drainCompactionBacklog runs bounded consecutive passes until the backlog is
 // drained (noop), a pass fails, or the pass cap is reached, so a small
-// summarizer window cannot strand a large backlog for future turns. The
-// session barrier is re-acquired per pass: a turn that arrives between
-// passes runs before the next summarizer call instead of waiting out the
-// whole drain.
+// summarizer window cannot strand a large backlog for future turns. A pass
+// never selects the turns of the session's active run, so it needs no
+// coordination with runs that start or finish around it.
 func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.TriggerConfig) error {
 	for pass := 0; pass < maxCompactionPasses; pass++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		res, err := s.runCompactionPass(ctx, cfg)
+		res, err := s.compactionService.RunCompactionSync(ctx, cfg)
 		if errors.Is(err, compaction.ErrIneffectiveSummary) {
 			continue
 		}
@@ -225,12 +224,6 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 		}
 	}
 	return nil
-}
-
-func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
-	done := s.enterSessionCompaction(cfg.BotID, cfg.SessionID)
-	defer done()
-	return s.compactionService.RunCompactionSync(ctx, cfg)
 }
 
 // runBudgetCompactionSync compacts while a turn waits, only when the turn's
@@ -276,8 +269,6 @@ func (s *Service) runBudgetCompactionSync(ctx context.Context, req ChatRequest, 
 		slog.String("model_id", cfg.ModelID),
 	)
 
-	done := s.enterSessionCompactionForRun(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID))
-	defer done()
 	res, err := s.compactionService.RunCompactionSync(ctx, cfg)
 	if errors.Is(err, compaction.ErrIneffectiveSummary) || (err == nil && res.ScanPending) {
 		res, err = s.compactionService.RunCompactionSync(ctx, cfg)
