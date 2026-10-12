@@ -109,12 +109,9 @@ type runEnd struct {
 // WithRunEnd marks ctx as one run's and returns what the run calls when it
 // ends. Work deferred to the end of the run then starts, so a summarizer call
 // never competes with the run's own model calls and reads settings as they
-// are then. The outermost mark owns the end: whoever writes the run's terminal
-// state marks ctx first, and a nested mark ends nothing.
+// are then. Whoever writes the run's terminal state marks the run, so the end
+// follows that write; a mark ctx carries from an earlier run is replaced.
 func WithRunEnd(ctx context.Context) (context.Context, func()) {
-	if _, ok := ctx.Value(runEndKey{}).(*runEnd); ok {
-		return ctx, func() {}
-	}
 	end := &runEnd{}
 	return context.WithValue(ctx, runEndKey{}, end), func() {
 		end.mu.Lock()
@@ -125,6 +122,15 @@ func WithRunEnd(ctx context.Context) (context.Context, func()) {
 			go fn()
 		}
 	}
+}
+
+// joinRunEnd marks ctx as a run's unless it already belongs to one, so a
+// stream ends with the run of whoever writes the terminal state.
+func joinRunEnd(ctx context.Context) (context.Context, func()) {
+	if _, ok := ctx.Value(runEndKey{}).(*runEnd); ok {
+		return ctx, func() {}
+	}
+	return WithRunEnd(ctx)
 }
 
 // AfterRunEnds starts fn once the run ctx belongs to has ended, or at once

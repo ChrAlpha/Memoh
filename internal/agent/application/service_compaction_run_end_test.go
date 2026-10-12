@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db"
@@ -113,13 +114,12 @@ func TestWebSocketStreamCompactsAfterTheRunEnds(t *testing.T) {
 	assertPassFollowsRun(t, fixture, runner, cancel, ended)
 }
 
-func TestScheduledTriggerCompactsAfterTheRunEnds(t *testing.T) {
+func TestScheduledTriggerCompactsAfterItsTerminalWrite(t *testing.T) {
 	fixture, runner := newRunEndFixture(t)
+	held := holdTerminalWrites(t, fixture.service)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ended := make(chan struct{})
 	go func() {
-		defer close(ended)
 		_, _ = fixture.service.TriggerSchedule(ctx, lifecycleTestBotID, schedule.TriggerPayload{
 			FireID:      "run-end-fire",
 			SessionID:   lifecycleTestSessionID,
@@ -127,7 +127,18 @@ func TestScheduledTriggerCompactsAfterTheRunEnds(t *testing.T) {
 			OwnerUserID: "user-1",
 		}, "")
 	}()
-	assertPassFollowsRun(t, fixture, runner, cancel, ended)
+	select {
+	case <-fixture.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider call did not start")
+	}
+	cancel()
+	held.awaitFinishing(t)
+	runner.assertNoPassWithin(t, 100*time.Millisecond)
+	held.releaseOnce()
+	if cfg := runner.awaitPass(t); cfg.SessionID != lifecycleTestSessionID {
+		t.Fatalf("background pass = %+v, want the run's session", cfg)
+	}
 }
 
 // Shutdown first closes admission and then interrupts every local run. The
@@ -180,29 +191,93 @@ func TestShutdownInterruptedRunStartsNoCompaction(t *testing.T) {
 
 // heldFinishAdmitter holds every terminal write until released.
 type heldFinishAdmitter struct {
-	*scriptedAdmitter
+	turnAdmitter
 	finishing chan struct{}
 	release   chan struct{}
+}
+
+func holdTerminalWrites(t *testing.T, s *Service) heldFinishAdmitter {
+	t.Helper()
+	held := heldFinishAdmitter{turnAdmitter: s.sessionRuntime, finishing: make(chan struct{}, 1), release: make(chan struct{})}
+	s.sessionRuntime = held
+	t.Cleanup(held.releaseOnce)
+	return held
 }
 
 func (a heldFinishAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, message string) (sessionruntime.TerminalRun, error) {
 	a.finishing <- struct{}{}
 	<-a.release
-	return a.scriptedAdmitter.FinishRunWithErrorCode(ctx, handle, status, message)
+	return a.turnAdmitter.FinishRunWithErrorCode(ctx, handle, status, message)
+}
+
+func (a heldFinishAdmitter) releaseOnce() {
+	select {
+	case <-a.release:
+	default:
+		close(a.release)
+	}
+}
+
+func (a heldFinishAdmitter) awaitFinishing(t *testing.T) {
+	t.Helper()
+	select {
+	case <-a.finishing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not reach its terminal write")
+	}
+}
+
+type agentStreamerFunc func(context.Context, native.RunConfig) <-chan native.StreamEvent
+
+func (f agentStreamerFunc) Stream(ctx context.Context, cfg native.RunConfig) <-chan native.StreamEvent {
+	return f(ctx, cfg)
 }
 
 // A pass reads only the turns of terminal runs, so the work a run defers to its
 // end starts after the run's terminal write rather than when its stream closes.
+// A follow-up starts from the terminal observer of the run before it, while
+// that run has yet to end, and still ends on its own terminal write.
 func TestRunEndFollowsTheTerminalWrite(t *testing.T) {
-	starts := map[string]func(*testing.T, *Service){
-		"start turn": func(t *testing.T, s *Service) {
-			h, err := s.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s"})
+	chat := func(deferred chan struct{}) *Service {
+		return newTurnTestService(testChatStreamerFunc(func(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
+			AfterRunEnds(ctx, func() { close(deferred) })
+			chunks, errs := make(chan StreamChunk), make(chan error)
+			close(chunks)
+			close(errs)
+			return chunks, errs
+		}))
+	}
+	discuss := func(deferred chan struct{}) *Service {
+		return newDiscussTestService(&fakeRunner{}, agentStreamerFunc(func(ctx context.Context, _ native.RunConfig) <-chan native.StreamEvent {
+			AfterRunEnds(ctx, func() { close(deferred) })
+			events := make(chan native.StreamEvent, 1)
+			events <- native.StreamEvent{Type: native.EventAgentEnd, Messages: json.RawMessage(`[{"role":"assistant","content":"done"}]`)}
+			close(events)
+			return events
+		}), &fakeDiscussService{})
+	}
+	startTurn := func(ctx context.Context, mode turn.Mode) func(*testing.T, *Service) {
+		return func(t *testing.T, s *Service) {
+			cmd := turn.StartTurnCommand{TeamID: "t", Mode: mode, BotID: "b", ThreadID: "s"}
+			if mode == turn.ModeDiscuss {
+				cmd = discussCommand()
+			}
+			h, err := s.StartTurn(ctx, cmd)
 			if err != nil {
 				t.Fatal(err)
 			}
 			go drainHandle(h)
-		},
-		"session resume": func(t *testing.T, s *Service) {
+		}
+	}
+	previousRun, _ := WithRunEnd(context.Background())
+	cases := map[string]struct {
+		service func(chan struct{}) *Service
+		start   func(*testing.T, *Service)
+	}{
+		"start turn": {chat, startTurn(context.Background(), turn.ModeChat)},
+		"follow-up":  {chat, startTurn(previousRun, turn.ModeChat)},
+		"discuss":    {discuss, startTurn(context.Background(), turn.ModeDiscuss)},
+		"session resume": {chat, func(t *testing.T, s *Service) {
 			s.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
 			s.logger = slog.New(slog.DiscardHandler)
 			raw, _ := json.Marshal(map[string]any{"resume": resumeContext{Version: 1, ChatID: "chat", UserID: "sender", Query: "task"}})
@@ -210,38 +285,21 @@ func TestRunEndFollowsTheTerminalWrite(t *testing.T) {
 			if _, err := s.resumeInterruptedSession(t.Context(), row); err != nil {
 				t.Fatal(err)
 			}
-		},
+		}},
 	}
-	for name, start := range starts {
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			deferred := make(chan struct{})
-			s, scripted := newAdmittedTurnTestService(testChatStreamerFunc(func(ctx context.Context, _ ChatRequest) (<-chan StreamChunk, <-chan error) {
-				ctx, endRun := WithRunEnd(ctx)
-				AfterRunEnds(ctx, func() { close(deferred) })
-				chunks, errs := make(chan StreamChunk), make(chan error)
-				go func() {
-					defer endRun()
-					close(chunks)
-					close(errs)
-				}()
-				return chunks, errs
-			}))
-			admitter := heldFinishAdmitter{scriptedAdmitter: scripted, finishing: make(chan struct{}, 1), release: make(chan struct{})}
-			s.sessionRuntime = admitter
-			start(t, s)
-			select {
-			case <-admitter.finishing:
-			case <-time.After(3 * time.Second):
-				close(admitter.release)
-				t.Fatal("run did not reach its terminal write")
-			}
+			s := c.service(deferred)
+			held := holdTerminalWrites(t, s)
+			c.start(t, s)
+			held.awaitFinishing(t)
 			select {
 			case <-deferred:
-				close(admitter.release)
 				t.Fatal("work deferred to the run's end started before its terminal write")
 			case <-time.After(100 * time.Millisecond):
 			}
-			close(admitter.release)
+			held.releaseOnce()
 			select {
 			case <-deferred:
 			case <-time.After(3 * time.Second):
