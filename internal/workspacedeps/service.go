@@ -49,6 +49,12 @@ const (
 	// shutdown window still leaves a terminal record behind instead of an
 	// installing/updating/removing row nobody owns.
 	finalizeTimeout = 10 * time.Second
+	// UpdateCheckBudget bounds a manual update check so it answers well within
+	// the 30-second response timeout common to reverse proxies.
+	UpdateCheckBudget = 20 * time.Second
+	// updateCheckConcurrency bounds the check_update scripts one manual check
+	// runs at once in a workspace. Each holds its own dependency's lock.
+	updateCheckConcurrency = 4
 	// staleOperationAge is how long an in-progress record must have gone
 	// untouched before List may treat it as interrupted. An operation that
 	// is running has taken its workspace lock well within that time.
@@ -88,6 +94,8 @@ type Service struct {
 	logger    *slog.Logger
 	now       func() time.Time
 	scriptEnv func(ctx context.Context) []string
+	// updateCheckBudget is UpdateCheckBudget; tests shorten it.
+	updateCheckBudget time.Duration
 
 	// Package functions behind fields so tests can replace them.
 	probe    func(ctx context.Context, client *bridge.Client) (Platform, error)
@@ -142,9 +150,11 @@ func NewService(opts Options) *Service {
 		now:       opts.Now,
 		scriptEnv: opts.ScriptEnv,
 		probe:     ProbePlatform,
-		discover:  Discover,
-		run:       Run,
-		locks:     operationLocks{held: make(map[InstallationKey]struct{})},
+
+		updateCheckBudget: UpdateCheckBudget,
+		discover:          Discover,
+		run:               Run,
+		locks:             operationLocks{held: make(map[InstallationKey]struct{})},
 
 		background:                opts.Background,
 		operationSessionValidator: opts.OperationSessionValidator,
@@ -205,6 +215,10 @@ type Entry struct {
 type ListResult struct {
 	CatalogStale     bool
 	CatalogFetchedAt time.Time
+	// ChecksIncomplete is set by CheckUpdates when its budget ran out before
+	// every update check finished; the unfinished records keep their last
+	// check.
+	ChecksIncomplete bool
 	// Platform is zero when the workspace is not running and was never
 	// probed.
 	Platform Platform
@@ -951,16 +965,34 @@ func (s *Service) Rollback(ctx context.Context, botID, depID string) (OperationR
 	return s.record(finalCtx, op, ActionRollback, state)
 }
 
-// CheckUpdates is the manual refresh: it re-discovers the
-// workspace, then runs check_update for every present, unpinned dependency with
-// a check_update script and writes the result to its record.
+// CheckUpdates is the manual refresh: it re-discovers the workspace, then runs
+// check_update for every present, unpinned dependency with a check_update
+// script and writes the result to its record.
+//
+// It answers within UpdateCheckBudget so a reverse proxy's response timeout
+// does not cut the request off. The checks run concurrently on a context
+// detached from the request: a dropped connection does not abandon them
+// halfway. A check the budget cuts short leaves its record as it was and
+// marks the result ChecksIncomplete. It reads the catalog the background
+// refresher keeps; Supermarket availability is not part of the check.
 func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, error) {
-	ctx, _, err := s.prepareCatalog(ctx, true, false)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.updateCheckBudget)
+	defer cancel()
+	defer s.cancelOnShutdown(cancel)()
+	ctx, _, err := s.prepareCatalog(ctx, false, false)
 	if err != nil {
 		return ListResult{}, err
 	}
 
 	result, err := s.list(ctx, botID, true)
+	if err != nil && ctx.Err() != nil {
+		// Discovery alone spent the budget: answer with what is recorded.
+		listCtx, cancel := finalizeContext(ctx)
+		defer cancel()
+		result, err = s.list(listCtx, botID, false)
+		result.ChecksIncomplete = err == nil
+		return result, err
+	}
 	if err != nil || result.Workspace != WorkspaceRunning || result.DiscoveryFailed {
 		// Without discovery facts there is nothing to check against.
 		return result, err
@@ -969,7 +1001,14 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 	if err != nil {
 		return ListResult{}, err
 	}
-	checked := false
+	var (
+		wg         sync.WaitGroup
+		mu         sync.Mutex
+		checked    bool
+		incomplete bool
+		recordErr  error
+	)
+	slots := make(chan struct{}, updateCheckConcurrency)
 	for _, entry := range result.Entries {
 		if !upstreamCheckable(entry.Dependency) || !entry.Observed.Present || entry.Installation == nil {
 			continue
@@ -978,18 +1017,53 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 		if !s.locks.tryLock(key) {
 			continue
 		}
-		check, checkErr := s.checkUpdate(ctx, client, dataRoot, result.Platform, entry.Dependency, entry.InstalledVersion)
-		recordErr := s.recordCheck(ctx, key, check, checkErr)
-		s.locks.unlock(key)
-		if err := recordErr; err != nil {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			s.locks.unlock(key)
+			mu.Lock()
+			incomplete = true
+			mu.Unlock()
+			continue
+		}
+		wg.Add(1)
+		go func(entry Entry) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			defer s.locks.unlock(key)
+			check, checkErr := s.checkUpdate(ctx, client, dataRoot, result.Platform, entry.Dependency, entry.InstalledVersion)
+			if checkErr != nil && ctx.Err() != nil {
+				// Cut short by the budget: no verdict to record.
+				mu.Lock()
+				incomplete = true
+				mu.Unlock()
+				return
+			}
+			err := s.recordCheck(ctx, key, check, checkErr)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				recordErr = errors.Join(recordErr, err)
+				return
+			}
+			checked = true
+		}(entry)
+	}
+	wg.Wait()
+	if recordErr != nil {
+		return ListResult{}, recordErr
+	}
+	if checked {
+		// The budget may be spent; listing the recorded results reuses the
+		// discovery above and gets its own short deadline.
+		listCtx, cancel := finalizeContext(ctx)
+		defer cancel()
+		if result, err = s.list(listCtx, botID, false); err != nil {
 			return ListResult{}, err
 		}
-		checked = true
 	}
-	if !checked {
-		return result, nil
-	}
-	return s.list(ctx, botID, false)
+	result.ChecksIncomplete = incomplete
+	return result, nil
 }
 
 // ScriptPreview returns the exact stdin text the runner would feed to `sh -s`

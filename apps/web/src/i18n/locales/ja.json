@@ -4150,6 +4150,8 @@
     "checkUpdates": "更新を確認",
     "checkUpdatesDone": "更新の確認が完了しました",
     "checkUpdatesFailed": "更新を確認できませんでした",
+    "checkUpdatesIncomplete": "一部の確認が時間内に完了しなかったため、前回の結果を表示しています。しばらくしてから再試行してください。",
+    "checkUpdatesTimedOut": "確認がタイムアウトしました。結果が不完全な可能性があります。しばらくしてから再試行してください。",
     "browse": "マーケットプレイスを見る",
     "emptyTitle": "アプリはまだインストールされていません",
     "emptyDescription": "スキル、依存関係、コネクターはマーケットプレイスからアプリとしてインストールします。",

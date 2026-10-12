@@ -454,7 +454,7 @@ export const postBotsByBotIdApps = <ThrowOnError extends boolean = false>(option
 /**
  * Check installed Apps for newer releases
  *
- * Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.
+ * Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
  */
 export const postBotsByBotIdAppsCheckUpdates = <ThrowOnError extends boolean = false>(options: Options<PostBotsByBotIdAppsCheckUpdatesData, ThrowOnError>): RequestResult<PostBotsByBotIdAppsCheckUpdatesResponses, PostBotsByBotIdAppsCheckUpdatesErrors, ThrowOnError> => (options.client ?? client).post<PostBotsByBotIdAppsCheckUpdatesResponses, PostBotsByBotIdAppsCheckUpdatesErrors, ThrowOnError>({ url: '/bots/{bot_id}/apps/check-updates', ...options });
 
@@ -963,7 +963,7 @@ export const getBotsByBotIdDependencies = <ThrowOnError extends boolean = false>
 /**
  * Check workspace dependencies for updates
  *
- * Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.
+ * Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
  */
 export const postBotsByBotIdDependenciesCheckUpdates = <ThrowOnError extends boolean = false>(options: Options<PostBotsByBotIdDependenciesCheckUpdatesData, ThrowOnError>): RequestResult<PostBotsByBotIdDependenciesCheckUpdatesResponses, PostBotsByBotIdDependenciesCheckUpdatesErrors, ThrowOnError> => (options.client ?? client).post<PostBotsByBotIdDependenciesCheckUpdatesResponses, PostBotsByBotIdDependenciesCheckUpdatesErrors, ThrowOnError>({ url: '/bots/{bot_id}/dependencies/check-updates', ...options });
 

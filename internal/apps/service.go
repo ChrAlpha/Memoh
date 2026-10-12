@@ -102,6 +102,8 @@ type Service struct {
 	connectors   ConnectorManager
 	logger       *slog.Logger
 	now          func() time.Time
+	// updateCheckBudget is workspacedeps.UpdateCheckBudget; tests shorten it.
+	updateCheckBudget time.Duration
 }
 
 // NewService wires a Service. It panics when a required option is nil, which
@@ -119,6 +121,7 @@ func NewService(opts Options) *Service {
 		store: opts.Store, registry: opts.Registry, skills: opts.Skills,
 		dependencies: opts.Dependencies, connectors: opts.Connectors,
 		logger: opts.Logger, now: opts.Now,
+		updateCheckBudget: workspacedeps.UpdateCheckBudget,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()

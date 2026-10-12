@@ -3136,6 +3136,8 @@ definitions:
         items:
           $ref: '#/definitions/handlers.AppItem'
         type: array
+      update_checks_incomplete:
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -4989,6 +4991,11 @@ definitions:
         type: array
       platform:
         $ref: '#/definitions/handlers.WorkspaceDependencyPlatform'
+      update_checks_incomplete:
+        description: |-
+          UpdateChecksIncomplete is set by check-updates when some checks did not
+          finish in time; those keep their last result.
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -9213,7 +9220,9 @@ paths:
   /bots/{bot_id}/apps/check-updates:
     post:
       description: Compares every installed App with the registry's current release,
-        runs the dependency update checks, and returns the refreshed list.
+        runs the dependency update checks, and returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path
@@ -11268,7 +11277,9 @@ paths:
   /bots/{bot_id}/dependencies/check-updates:
     post:
       description: Re-discovers the workspace and runs the upstream update check of
-        every installed tool dependency, then returns the refreshed list.
+        every installed tool dependency, then returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path

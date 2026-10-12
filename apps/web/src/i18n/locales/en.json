@@ -4156,6 +4156,8 @@
     "checkUpdates": "Check for updates",
     "checkUpdatesDone": "Update check finished",
     "checkUpdatesFailed": "Couldn't check for updates",
+    "checkUpdatesIncomplete": "Some checks didn't finish in time and keep their last result. Try again later.",
+    "checkUpdatesTimedOut": "The check took too long and the results may be incomplete. Try again later.",
     "browse": "Browse Supermarket",
     "emptyTitle": "No Apps installed yet",
     "emptyDescription": "Install Skills, dependencies and connectors as Apps from the Supermarket.",

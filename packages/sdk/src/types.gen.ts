@@ -1748,6 +1748,7 @@ export type HandlersAppItem = {
 export type HandlersAppListResponse = {
     dependency_catalog_stale?: boolean;
     items?: Array<HandlersAppItem>;
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
@@ -2817,6 +2818,11 @@ export type HandlersWorkspaceDependencyListResponse = {
     discovery_error?: string;
     items?: Array<HandlersWorkspaceDependencyItem>;
     platform?: HandlersWorkspaceDependencyPlatform;
+    /**
+     * UpdateChecksIncomplete is set by check-updates when some checks did not
+     * finish in time; those keep their last result.
+     */
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 

@@ -195,6 +195,9 @@ type WorkspaceDependencyListResponse struct {
 	// reflect the installation records alone, without workspace facts or
 	// actions; a refresh retries discovery.
 	DiscoveryError string `json:"discovery_error,omitempty"`
+	// UpdateChecksIncomplete is set by check-updates when some checks did not
+	// finish in time; those keep their last result.
+	UpdateChecksIncomplete bool `json:"update_checks_incomplete,omitempty"`
 }
 
 // WorkspaceDependencyPreflightRequest names the dependencies an agent needs.
@@ -347,7 +350,7 @@ func (h *ContainerdHandler) ListWorkspaceDependencies(c echo.Context) error {
 
 // CheckWorkspaceDependencyUpdates godoc
 // @Summary Check workspace dependencies for updates
-// @Description Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.
+// @Description Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
 // @Tags containerd
 // @Produce json
 // @Param bot_id path string true "Bot ID"
@@ -868,6 +871,8 @@ func workspaceDependencyListResponse(result workspacedeps.ListResult) WorkspaceD
 		Items:          make([]WorkspaceDependencyItem, 0, len(result.Entries)),
 		DiscoveryError: "",
 		CatalogStale:   result.CatalogStale,
+
+		UpdateChecksIncomplete: result.ChecksIncomplete,
 	}
 	if result.DiscoveryFailed {
 		resp.DiscoveryError = string(apperror.CodeWorkspaceDependencyDiscoveryFailed)

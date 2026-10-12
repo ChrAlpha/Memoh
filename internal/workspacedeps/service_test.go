@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -1804,6 +1805,167 @@ func TestCheckUpdates(t *testing.T) {
 	result, err = f.svc.CheckUpdates(f.ctx(), testBot)
 	if err != nil || result.Workspace != WorkspaceNotRunning || len(f.runSpecs()) != 3 {
 		t.Errorf("CheckUpdates on stopped workspace = %+v, %v (runs = %d)", result.Workspace, err, len(f.runSpecs()))
+	}
+}
+
+// checkableCatalog is a catalog of n tools that each have a check_update
+// script, for exercising checks that run side by side.
+func checkableCatalog(t *testing.T, n int) (*catalog.Catalog, []string) {
+	t.Helper()
+	fsys := fstest.MapFS{}
+	ids := make([]string, 0, n)
+	for i := range n {
+		id := fmt.Sprintf("tool-%d", i)
+		ids = append(ids, id)
+		fsys[id+"/dependency.yaml"] = &fstest.MapFile{Data: []byte(strings.ReplaceAll(strings.ReplaceAll(svcToolYAML, "tool-y", id), "Tool Y", "Tool "+strconv.Itoa(i)))}
+		fsys[id+"/install.sh"] = &fstest.MapFile{Data: []byte(svcToolInstallScript)}
+		fsys[id+"/remove.sh"] = &fstest.MapFile{Data: []byte(svcToolRemoveScript)}
+		fsys[id+"/check-update.sh"] = &fstest.MapFile{Data: []byte(svcToolCheckScript)}
+	}
+	cat, err := catalog.LoadFS(fsys)
+	if err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	return cat, ids
+}
+
+func TestCheckUpdatesRunsChecksConcurrently(t *testing.T) {
+	f := newServiceFixture(t)
+	cat, ids := checkableCatalog(t, 3*updateCheckConcurrency)
+	f.svc.catalog = cat
+	for _, id := range ids {
+		f.seed(id, StatusInstalled, "1.0.0")
+		f.present(id, SourceManaged, "1.0.0", &State{Version: "1.0.0"})
+	}
+	var running, peak atomic.Int32
+	release := make(chan struct{})
+	go func() {
+		// Hold every check until the pool is full, then let them all finish.
+		deadline := time.Now().Add(5 * time.Second)
+		for running.Load() < updateCheckConcurrency && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		close(release)
+	}()
+	f.setRun(func(RunSpec) (Result, error) {
+		n := running.Add(1)
+		defer running.Add(-1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		<-release
+		return Result{Raw: json.RawMessage(checkPayload)}, nil
+	})
+
+	result, err := f.svc.CheckUpdates(f.ctx(), testBot)
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if got := peak.Load(); got != updateCheckConcurrency {
+		t.Errorf("peak concurrent checks = %d, want %d", got, updateCheckConcurrency)
+	}
+	if result.ChecksIncomplete {
+		t.Error("ChecksIncomplete set although every check finished")
+	}
+	for _, id := range ids {
+		if entry := f.entry(t, result, id); entry.LatestVersion != "1.2.0" {
+			t.Errorf("%s entry = %+v, want the recorded check", id, entry)
+		}
+	}
+}
+
+func TestCheckUpdatesBudgetLeavesUnfinishedRecordsUntouched(t *testing.T) {
+	f := newServiceFixture(t)
+	cat, ids := checkableCatalog(t, 2)
+	f.svc.catalog = cat
+	f.svc.updateCheckBudget = 50 * time.Millisecond
+	fast, slow := ids[0], ids[1]
+	for _, id := range ids {
+		f.seed(id, StatusInstalled, "1.0.0")
+		f.present(id, SourceManaged, "1.0.0", &State{Version: "1.0.0"})
+	}
+	run := f.svc.run
+	f.svc.run = func(ctx context.Context, client *bridge.Client, spec RunSpec, sink LogSink) (Result, error) {
+		if spec.DepID == slow {
+			<-ctx.Done()
+			return Result{}, ctx.Err()
+		}
+		return run(ctx, client, spec, sink)
+	}
+	f.setRun(func(RunSpec) (Result, error) { return Result{Raw: json.RawMessage(checkPayload)}, nil })
+
+	result, err := f.svc.CheckUpdates(f.ctx(), testBot)
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if !result.ChecksIncomplete {
+		t.Error("ChecksIncomplete not set after the budget ran out")
+	}
+	if entry := f.entry(t, result, fast); entry.LatestVersion != "1.2.0" {
+		t.Errorf("%s entry = %+v, want its finished check recorded", fast, entry)
+	}
+	rec, _ := f.store.get(f.key(slow))
+	if rec.LastCheckedAt != nil || rec.LastError != "" || rec.LatestVersion != "" {
+		t.Errorf("%s record = %+v, want it untouched by a check the budget cut short", slow, rec)
+	}
+}
+
+func TestCheckUpdatesOutlivesTheRequest(t *testing.T) {
+	f := newServiceFixture(t)
+	f.seed("tool-y", StatusInstalled, "1.0.0")
+	f.present("tool-y", SourceManaged, "1.0.0", &State{Version: "1.0.0"})
+	ctx, cancel := context.WithCancel(f.ctx())
+	f.setRun(func(RunSpec) (Result, error) {
+		// The proxy gives up while the check runs.
+		cancel()
+		return Result{Raw: json.RawMessage(checkPayload)}, nil
+	})
+
+	result, err := f.svc.CheckUpdates(ctx, testBot)
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if tool := f.entry(t, result, "tool-y"); tool.LatestVersion != "1.2.0" || result.ChecksIncomplete {
+		t.Errorf("tool-y entry = %+v (incomplete %v), want the check recorded", tool, result.ChecksIncomplete)
+	}
+}
+
+// refreshRecordingCatalog serves a fixed catalog and remembers whether any
+// caller asked for a registry refresh.
+type refreshRecordingCatalog struct {
+	snapshotCatalog
+	refreshed atomic.Bool
+}
+
+func (p *refreshRecordingCatalog) Snapshot(ctx context.Context, refresh bool) (CatalogResult, error) {
+	if refresh {
+		p.refreshed.Store(true)
+	}
+	return p.snapshotCatalog.Snapshot(ctx, refresh)
+}
+
+// The background refresher keeps the catalog current; a manual check must not
+// wait on, or report the availability of, the registry.
+func TestCheckUpdatesReadsTheCachedCatalog(t *testing.T) {
+	f := newServiceFixture(t)
+	provider := &refreshRecordingCatalog{snapshotCatalog: snapshotCatalog{cat: f.cat}}
+	f.svc.provider, f.svc.catalog = provider, catalog.Empty()
+	f.seed("tool-y", StatusInstalled, "1.0.0")
+	f.present("tool-y", SourceManaged, "1.0.0", &State{Version: "1.0.0"})
+	f.setRun(func(RunSpec) (Result, error) { return Result{Raw: json.RawMessage(checkPayload)}, nil })
+
+	result, err := f.svc.CheckUpdates(f.ctx(), testBot)
+	if err != nil {
+		t.Fatalf("CheckUpdates: %v", err)
+	}
+	if provider.refreshed.Load() {
+		t.Error("CheckUpdates forced a catalog refresh")
+	}
+	if tool := f.entry(t, result, "tool-y"); tool.LatestVersion != "1.2.0" {
+		t.Errorf("tool-y entry = %+v", tool)
 	}
 }
 

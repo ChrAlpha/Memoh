@@ -787,7 +787,7 @@ export const getBotsByBotIdAppsQuery = defineQueryOptions<Options<GetBotsByBotId
 /**
  * Check installed Apps for newer releases
  *
- * Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.
+ * Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
  */
 export const postBotsByBotIdAppsCheckUpdatesMutation = (options?: Partial<Options<PostBotsByBotIdAppsCheckUpdatesData>>): UseMutationOptions<PostBotsByBotIdAppsCheckUpdatesResponse, Options<PostBotsByBotIdAppsCheckUpdatesData>, PostBotsByBotIdAppsCheckUpdatesError> => ({
     mutation: async (vars) => {
@@ -1659,7 +1659,7 @@ export const getBotsByBotIdDependenciesQuery = defineQueryOptions<Options<GetBot
 /**
  * Check workspace dependencies for updates
  *
- * Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.
+ * Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
  */
 export const postBotsByBotIdDependenciesCheckUpdatesMutation = (options?: Partial<Options<PostBotsByBotIdDependenciesCheckUpdatesData>>): UseMutationOptions<PostBotsByBotIdDependenciesCheckUpdatesResponse, Options<PostBotsByBotIdDependenciesCheckUpdatesData>, PostBotsByBotIdDependenciesCheckUpdatesError> => ({
     mutation: async (vars) => {

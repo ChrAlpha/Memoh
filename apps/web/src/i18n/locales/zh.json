@@ -4156,6 +4156,8 @@
     "checkUpdates": "检查更新",
     "checkUpdatesDone": "更新检查完成",
     "checkUpdatesFailed": "无法检查更新",
+    "checkUpdatesIncomplete": "部分项目未能及时完成检查，仍显示上次的结果，请稍后重试。",
+    "checkUpdatesTimedOut": "检查超时，结果可能不完整，请稍后重试。",
     "browse": "浏览市场",
     "emptyTitle": "尚未安装应用",
     "emptyDescription": "为 Bot 安装应用，增加新的能力。",

@@ -806,7 +806,8 @@ async function checkUpdates() {
       onSuccess: async (refreshed) => {
         queryCache.setQueryData(['bot-apps', props.botId], refreshed)
         await Promise.all([invalidateBotApps(queryCache, props.botId), invalidateBotDependencies(queryCache, props.botId)])
-        toast.success(t('apps.checkUpdatesDone'))
+        if (refreshed.update_checks_incomplete) toast.warning(t('apps.checkUpdatesIncomplete'))
+        else toast.success(t('apps.checkUpdatesDone'))
       },
     })
   } finally {
