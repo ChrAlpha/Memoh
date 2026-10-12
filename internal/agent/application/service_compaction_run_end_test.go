@@ -117,6 +117,39 @@ func TestWebSocketStreamCompactsAfterTheRunEnds(t *testing.T) {
 	assertPassFollowsRun(t, fixture, runner, cancel, ended)
 }
 
+// StreamChat runs inside the run StartTurn owns, so the pass it schedules
+// waits for that run's terminal write rather than for the stream to close.
+func TestStartedTurnCompactsAfterItsTerminalWrite(t *testing.T) {
+	fixture, runner := newRunEndFixture(t)
+	held := holdTerminalWrites(t, fixture.service)
+	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "run-end-team",
+		Mode:                 turn.ModeChat,
+		BotID:                lifecycleTestBotID,
+		ChatID:               lifecycleTestBotID,
+		ThreadID:             lifecycleTestSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	go drainHandle(handle)
+	select {
+	case <-fixture.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider call did not start")
+	}
+	handle.Cancel()
+	held.awaitFinishing(t)
+	runner.assertNoPassWithin(t, 200*time.Millisecond)
+	held.releaseOnce()
+	if cfg := runner.awaitPass(t); cfg.SessionID != lifecycleTestSessionID {
+		t.Fatalf("background pass = %+v, want the run's session", cfg)
+	}
+}
+
 func TestScheduledTriggerCompactsAfterItsTerminalWrite(t *testing.T) {
 	fixture, runner := newRunEndFixture(t)
 	held := holdTerminalWrites(t, fixture.service)
