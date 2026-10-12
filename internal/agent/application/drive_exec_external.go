@@ -37,6 +37,10 @@ type externalPlan struct {
 	contextURI            string
 	contextManifest       *contextfrag.Manifest
 	memoryTrace           *contextfrag.MemoryRecallTrace
+	// leadingUser is the user message this turn wrote before prompting. It is
+	// handed back only when the runtime never accepted the turn, where no round
+	// exists to carry it.
+	leadingUser *messagepkg.Message
 }
 
 // prepareExternal resolves the shared setup of an External Agent run: the
@@ -86,6 +90,16 @@ func (s *Service) prepareExternal(ctx context.Context, req ChatRequest, driver e
 	sections, memoryTrace := s.buildRuntimeContextSections(ctx, contextReq, runtimeContextAgentID(plan.runtimeType, plan.runtimeMeta), plan.projectPath)
 	plan.memoryTrace = memoryTrace
 	plan.contextMarkdown, plan.contextURI, plan.contextManifest = runtimeContextViaContextView(ctx, s.logger, sections, req.Query)
+
+	// The user's message is written before the runtime is prompted, and the
+	// round it belongs to is written at the end. A subscriber sees what was
+	// sent while the turn runs, the runtime a decision projects against is
+	// anchored to a real request row, and a turn the runtime never accepted
+	// hands the message back instead of leaving it behind.
+	req, plan.leadingUser, err = s.persistRuntimeLeadingUserMessage(context.WithoutCancel(ctx), req)
+	if err != nil {
+		return externalPlan{}, req, apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+	}
 	return plan, req, nil
 }
 
@@ -124,6 +138,11 @@ type externalExecutor struct {
 	// instant the run was stopped, so a rollback still has to repair the
 	// driver's head.
 	finishedInFlight bool
+	// leadingUserKept records that this ending wrote history anchored to the
+	// leading user message — a round, or a failure row. Cleanup then leaves the
+	// message alone; a turn the runtime refused outright wrote none, and the
+	// message goes back to its submitter instead of staying as an orphan.
+	leadingUserKept bool
 }
 
 // execute prompts the driver once and reports how its turn ended. Every event
@@ -270,6 +289,8 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 				return summary, runtimeHistoryError(err)
 			}
 			summary.Persisted = persisted
+			// The failure row is anchored to the leading user message; it stays.
+			e.leadingUserKept = true
 		}
 		return summary, nil
 	}
@@ -293,6 +314,7 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 		case runtimeRoundCommitted:
 			// The round landed after all; the failure was in the bookkeeping
 			// that followed it, and the run's own outcome stands.
+			e.leadingUserKept = true
 			e.cleanupProjections(ctx)
 			return summary, nil
 		case runtimeRoundRolledBack:
@@ -301,6 +323,8 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 		}
 		return summary, runtimeHistoryError(err)
 	}
+	// The round is written, so its leading user message is part of history.
+	e.leadingUserKept = true
 	e.cleanupProjections(ctx)
 	if e.result.Usage != nil {
 		summary.Usage, _ = json.Marshal(e.result.Usage)
@@ -321,10 +345,17 @@ func (e *externalExecutor) rollback(ctx context.Context) {
 }
 
 // cleanup removes what this turn left behind that no history write owns: the
-// decision rows it projected and the approvals nobody answered.
+// decision rows it projected, the approvals nobody answered, and the leading
+// user message a refused turn left behind. Once history is written the message
+// stays — the user watched it send, and a round or a failure row is anchored to
+// it. A run another owner took is not cleaned up at all: nothing here speaks for
+// it.
 func (e *externalExecutor) cleanup(ctx context.Context) {
 	e.service.cancelPendingRuntimeApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
+	if e.roundUnwritable && !e.leadingUserKept && e.plan.leadingUser != nil {
+		e.service.cleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
+	}
 }
 
 // cleanupProjections deletes the decision rows this turn projected and the
