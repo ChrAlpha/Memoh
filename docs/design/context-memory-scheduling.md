@@ -219,6 +219,20 @@ MUST NOT disagree about the size of the same content. Divergent callers
 
 ### CM-CMP-001: Synchronous pre-turn compaction backstop
 
+> **Superseded (MEMOH-83).** Threshold-driven compaction no longer blocks a
+> turn. A turn measures history pressure when it resolves its context and, once
+> its run ends, a background pass compacts the backlog (at most three passes;
+> at the hard threshold the target is capped at the soft share and failures
+> retry on the faster backoff). Candidate reads exclude the turns of runs that
+> are still active. The pre-turn backstops on pipeline chat and Discuss, the
+> `[agent] sync_compaction` gate, and the manual entry points CM-CMP-002 relied
+> on (`/compact`, the session compact endpoint, the Web button) were removed.
+> The only compaction a turn still waits for is context budget recovery: when
+> admission (CM-ADM-002) would reject the turn, it compacts and recomposes
+> (`ErrContextRecompose`, `DiscussEventRecompose`) before its first model call.
+> Rows held after an unusable summary are retried when their hold lapses.
+> CM-CMP-001/002/003 below are kept as the historical record.
+
 On every provider-bound path, when compactable pressure meets the hard threshold, the
 system MUST run compaction synchronously **before** the model call: compact → reload
 artifacts → recompose → re-run CM-ADM-001/002 → then call the provider. The existing
