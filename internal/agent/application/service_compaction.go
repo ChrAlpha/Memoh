@@ -76,9 +76,14 @@ func compactionUnderHardPressure(pressure, contextTokenBudget int) bool {
 // scheduleCompaction is the only automatic compaction path. It never delays
 // the turn that measured the pressure: the turn keeps the context it already
 // assembled, and the pass starts once the turn's run ends, so a summary that
-// lands serves later turns.
+// lands serves later turns. A run that reports pressure against more than one
+// budget starts one pass, for the demand furthest over its budget.
 func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, pressure, contextTokenBudget int, turnModelID string) {
 	if s.compactionService == nil || s.settingsService == nil || pressure <= 0 {
+		return
+	}
+	demand := &compactionDemand{req: req, pressure: pressure, contextTokenBudget: contextTokenBudget, turnModelID: turnModelID}
+	if end, ok := ctx.Value(runEndKey{}).(*runEnd); ok && !end.recordCompaction(demand) {
 		return
 	}
 	AfterRunEnds(ctx, func() {
@@ -86,28 +91,44 @@ func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, press
 			return
 		}
 		ctx := context.WithoutCancel(ctx)
-		plan, ok := s.planCompaction(ctx, req, pressure, contextTokenBudget, turnModelID)
+		plan, ok := s.planCompaction(ctx, demand.req, demand.pressure, demand.contextTokenBudget, demand.turnModelID)
 		if !ok {
 			return
 		}
 		_ = job.Run(ctx, s.logger, "agent.compaction", job.Options{}, func(ctx context.Context) error {
 			return s.runCompaction(ctx, plan)
 		},
-			slog.String("bot_id", req.BotID),
-			slog.String("session_id", req.ThreadID),
-			slog.Int("input_tokens", pressure),
+			slog.String("bot_id", demand.req.BotID),
+			slog.String("session_id", demand.req.ThreadID),
+			slog.Int("input_tokens", demand.pressure),
 			slog.Int("threshold", plan.threshold),
 		)
 	})
 }
 
+// compactionDemand is pressure a run measured against one budget.
+type compactionDemand struct {
+	req                ChatRequest
+	pressure           int
+	contextTokenBudget int
+	turnModelID        string
+}
+
+func (d compactionDemand) exceeds(other compactionDemand) bool {
+	if other.contextTokenBudget <= 0 || d.contextTokenBudget <= 0 {
+		return other.contextTokenBudget <= 0 && d.contextTokenBudget > 0
+	}
+	return d.pressure*other.contextTokenBudget > other.pressure*d.contextTokenBudget
+}
+
 type runEndKey struct{}
 
 type runEnd struct {
-	mu    sync.Mutex
-	ended bool
-	bound bool
-	work  []func()
+	mu         sync.Mutex
+	ended      bool
+	bound      bool
+	work       []func()
+	compaction *compactionDemand
 }
 
 // WithRunEnd marks ctx as one run's and returns what the run calls when it
@@ -146,6 +167,22 @@ func (end *runEnd) finish(terminal bool) {
 	for _, fn := range work {
 		go fn()
 	}
+}
+
+// recordCompaction keeps the most urgent compaction demand of a run that has
+// not ended and reports whether demand is its first, which the caller then
+// schedules.
+func (end *runEnd) recordCompaction(demand *compactionDemand) bool {
+	end.mu.Lock()
+	defer end.mu.Unlock()
+	if end.ended || end.compaction == nil {
+		end.compaction = demand
+		return true
+	}
+	if demand.exceeds(*end.compaction) {
+		*end.compaction = *demand
+	}
+	return false
 }
 
 // joinRunEnd marks ctx as a run's unless it already belongs to one, so a

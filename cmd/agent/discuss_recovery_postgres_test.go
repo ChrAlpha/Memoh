@@ -115,8 +115,8 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		t.Fatal(err)
 	}
 	const rounds = 32
-	// The last round only adds one small message: the round after the
-	// recoveries must be answered with the summaries they persisted.
+	// The last round only adds one small message: it must be answered with the
+	// summaries the background passes persisted.
 	for round := 0; round <= rounds; round++ {
 		nextRound := round == rounds
 		// Grow consumed history again so each round must make durable progress.
@@ -163,11 +163,11 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 			t.Fatalf("round %d background compaction did not finish before restart", round)
 		}
 		if round == 0 && summaries.Load()-before != 3 {
-			t.Fatalf("fixture must require exactly three recoveries, got %d", summaries.Load()-before)
+			t.Fatalf("fixture must require exactly three background passes, got %d", summaries.Load()-before)
 		}
 		request, _ := lastRequest.Load().(string)
 		if nextRound && summaries.Load()-before > 3 {
-			t.Fatalf("next round exceeded the recovery bound: summaries=%d", summaries.Load()-before)
+			t.Fatalf("next round exceeded the pass bound: summaries=%d", summaries.Load()-before)
 		}
 		if modelCalls.Load()-callsBefore != 1 || strings.Count(request, textA) != 1 || strings.Count(request, textB) != 1 {
 			t.Fatalf("round %d: provider calls=%d, current input multiplicity=%d/%d", round, modelCalls.Load()-callsBefore, strings.Count(request, textA), strings.Count(request, textB))
@@ -191,9 +191,8 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND source_message_id LIKE 'growth-%' AND compact_id IS NULL`, sessionID).Scan(&rawGrowth); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("raw_growth=%d summaries=%d", rawGrowth, summaries.Load())
-	if summaries.Load() < rounds || summaries.Load() > (rounds+1)*3 {
-		t.Fatalf("unexpected bounded recovery count=%d", summaries.Load())
+	if rawGrowth > 1 || summaries.Load() < rounds || summaries.Load() > (rounds+1)*3 {
+		t.Fatalf("background compaction must keep pace with growth within its pass bound: raw_growth=%d summaries=%d", rawGrowth, summaries.Load())
 	}
 	var replies, pending int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='assistant' AND content::text LIKE '%DRIVER_RECOVERY_OK%'`, sessionID).Scan(&replies); err != nil {

@@ -340,3 +340,29 @@ func TestDiscussCompactionKeepsTheUnconsumedBatchRaw(t *testing.T) {
 		t.Fatalf("pass protected sources = %+v, want the unconsumed batch %+v", cfg.ProtectedSources, current)
 	}
 }
+
+// A run may report pressure against more than one budget: the raw history
+// against the model window, and the final request against what its fixed
+// parts leave for history. Its end starts one pass, for the demand furthest
+// over its budget, whichever was reported first.
+func TestRunStartsOneCompactionForItsMostUrgentDemand(t *testing.T) {
+	for _, allowanceFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("allowance_first=%t", allowanceFirst), func(t *testing.T) {
+			service, runner := newScheduleService(t, nil)
+			req := ChatRequest{BotID: scheduleBotID, ChatID: scheduleBotID, ThreadID: scheduleSessionID}
+			ctx, endRun := WithRunEnd(t.Context())
+			demands := [][2]int{{9000, 16000}, {3125, 998}}
+			if allowanceFirst {
+				slices.Reverse(demands)
+			}
+			for _, demand := range demands {
+				service.scheduleCompaction(ctx, req, demand[0], demand[1], "")
+			}
+			endRun()
+			if pass := runner.awaitPass(t); pass.TotalInputTokens != 3125 || pass.ContextWindowTokens != 998 {
+				t.Fatalf("pass = pressure %d over %d, want the final-allowance demand", pass.TotalInputTokens, pass.ContextWindowTokens)
+			}
+			runner.assertNoPassWithin(t, 100*time.Millisecond)
+		})
+	}
+}
