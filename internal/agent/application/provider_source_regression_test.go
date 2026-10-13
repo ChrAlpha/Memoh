@@ -73,15 +73,19 @@ func TestDiscussAdmissionKeepsNewestFittingSuffixOfCurrentBatch(t *testing.T) {
 	}
 }
 
-func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+func TestDiscussBackgroundCompactionProtectsEveryPendingSource(t *testing.T) {
+	service, _ := newControllerPolicyService(t, nil)
+	runner := newGatedCompactionRunner()
+	defer close(runner.release)
+	service.compactionService = runner
 	sources := []turn.ContextMessageSource{{Kind: "external", ID: "a", Current: true}, {Kind: "external", ID: "b", Current: true}}
 	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 100, DiscussCurrentSources: sources}
-	if !service.recoverDiscussContext(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery") || len(runner.configs) != 1 {
-		t.Fatal("recovery did not run")
-	}
-	cfg := runner.configs[0]
-	if len(cfg.ProtectedSources) != 1 || cfg.ProtectedSources[0].ID != "b" || cfg.HistoryBudgetTokens != 900 {
-		t.Fatalf("Channel overflow must protect only the newest input and compact older input: %+v", cfg)
+	ctx, endRun := WithRunEnd(t.Context())
+	service.scheduleDiscussCompaction(ctx, cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000})
+	runner.assertNoPass(t)
+	endRun()
+	cfg := runner.awaitPass(t)
+	if len(cfg.ProtectedSources) != 2 || cfg.ProtectedSources[0].ID != "a" || cfg.ProtectedSources[1].ID != "b" {
+		t.Fatalf("background compaction lost pending input protection: %+v", cfg.ProtectedSources)
 	}
 }

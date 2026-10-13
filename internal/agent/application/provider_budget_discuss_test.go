@@ -2,12 +2,10 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -15,7 +13,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/chat/timeline"
@@ -43,62 +40,6 @@ func (c *discussBudgetCompactor) RunCompactionSync(ctx context.Context, cfg comp
 		}
 	}
 	return compaction.Result{Status: c.status}, c.err
-}
-
-func TestDiscussProviderBudgetRecoveryDoesNotConsumeModelIdleTimeout(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-		configureDiscussLifecycle(service)
-		service.streamIdleTimeout = 10 * time.Millisecond
-		compactor.delay = 50 * time.Millisecond
-		handle, err := service.StartTurn(context.Background(), cmd)
-		if err != nil {
-			t.Fatal(err)
-		}
-		recomposed := false
-		for event := range handle.Events() {
-			recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-		}
-		for err := range handle.Errs() {
-			t.Errorf("active compaction timed out as model silence: %v", err)
-		}
-		if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 {
-			t.Fatalf("recompose=%t compactor/provider=%d/%d, want recompose after one compaction and no provider call", recomposed, len(compactor.configs), provider.callCount())
-		}
-	})
-}
-
-func TestDiscussProviderBudgetRecoveryStillHonorsCancellation(t *testing.T) {
-	service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-	runtime, _ := configureDiscussLifecycle(service)
-	compactor.delay = time.Hour
-	compactor.started = make(chan struct{})
-	handle, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-compactor.started:
-	case <-time.After(time.Second):
-		t.Fatal("compaction did not start")
-	}
-	handle.Cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for range handle.Events() {
-		}
-		for range handle.Errs() {
-		}
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("cancel did not interrupt budget recovery")
-	}
-	if provider.callCount() != 0 || len(runtime.finishes) != 1 || runtime.finishes[0].status != sessionruntime.RunStatusAborted {
-		t.Fatalf("provider=%d finishes=%#v, want canceled compaction without provider dispatch", provider.callCount(), runtime.finishes)
-	}
 }
 
 func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, *countingDiscussLifecycleProvider, *discussBudgetCompactor, turn.StartTurnCommand) {
@@ -135,149 +76,7 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 	return service, resolver, provider, compactor, cmd
 }
 
-func TestDiscussProviderBudgetRecoveryRecomposesBeforeProviderDispatch(t *testing.T) {
-	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-	runtime, lifecycles := configureDiscussLifecycle(service)
-	var published []native.StreamEventType
-	service.publishTurnEvent = func(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
-		published = append(published, event.Type)
-		return nil
-	}
-	if pressure := discussContextPressure(cmd); pressure >= hardCompactionThreshold(16000) {
-		t.Fatalf("fixture pressure %d must stay below the old window-share backstop", pressure)
-	}
-	handle, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var kinds []string
-	for event := range handle.Events() {
-		kinds = append(kinds, event.Kind)
-	}
-	for err := range handle.Errs() {
-		t.Errorf("successful compaction emitted a turn error: %v", err)
-	}
-	if len(compactor.configs) != 1 {
-		t.Fatalf("compaction calls = %d, want 1 after actual provider-budget rejection; events=%v", len(compactor.configs), kinds)
-	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 3740 || cfg.TargetTokens != 399 || !cfg.HardPressure || cfg.SessionID != cmd.ThreadID {
-		t.Fatalf("compaction config = %#v, want total pressure=3740, target=399 from history allowance=998 and hard pressure in the same session", cfg)
-	}
-	if len(kinds) != 2 || kinds[0] != turn.DiscussEventRunResolved || kinds[1] != turn.DiscussEventRecompose {
-		t.Fatalf("transport events = %v, want resolved then recompose", kinds)
-	}
-	if len(published) != 0 || provider.callCount() != 0 || resolver.storeCalls != 0 {
-		t.Fatalf("recompose leaked public events=%v provider=%d history=%d", published, provider.callCount(), resolver.storeCalls)
-	}
-	if len(runtime.finishes) != 1 || runtime.finishes[0].status != "" || runtime.finishes[0].message != "" {
-		t.Fatalf("runtime finishes = %#v, want a clean recompose finish", runtime.finishes)
-	}
-	snapshot := assertDeferredLifecycleRow(t, lifecycles.creates, handle.RunID(), contextLifecycleStatusCompleted, "")
-	if snapshot.BudgetPlan != nil || snapshot.Counts.Fragments != 0 {
-		t.Fatalf("recompose recorded the rejected preflight as its context: plan=%+v counts=%+v", snapshot.BudgetPlan, snapshot.Counts)
-	}
-}
-
-func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *testing.T) {
-	service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-	configureDiscussLifecycle(service)
-	cmd.DiscussMessages = cmd.DiscussMessages[:len(cmd.DiscussMessages)-1]
-	for _, id := range []string{"m1", "m2", "m3", "m4"} {
-		cmd.DiscussMessages = append(cmd.DiscussMessages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("u", 800), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
-	}
-	handle, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recomposed := false
-	for event := range handle.Events() {
-		recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-	}
-	for range handle.Errs() {
-	}
-	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 {
-		t.Fatalf("recompose=%v compactions=%d provider=%d, want recovery before dispatch", recomposed, len(compactor.configs), provider.callCount())
-	}
-	cfg := compactor.configs[0]
-	protected := map[string]bool{}
-	for _, source := range cfg.ProtectedSources {
-		protected[source.ID] = true
-	}
-	if !protected["m4"] || !protected["m3"] || protected["m1"] || cfg.HistoryBudgetTokens <= 0 || cfg.HistoryBudgetTokens >= 998 {
-		t.Fatalf("protected=%v history_budget=%d; the newest input and its fitting suffix stay raw, older input is compacted, protected cost is counted once", protected, cfg.HistoryBudgetTokens)
-	}
-}
-
-func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testing.T) {
-	for _, scenario := range []string{"protected hook", "compaction disabled", "compaction failure", "compaction noop"} {
-		t.Run(scenario, func(t *testing.T) {
-			service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-			wantCompactions := 0
-			switch scenario {
-			case "protected hook":
-				resolver.resolveResult.RunConfig.ContextSourceFrags = []contextfrag.ContextFrag{contextfrag.MessageFrag(contextfrag.MessageFragInput{
-					ID: "hook", Message: sdk.UserMessage(strings.Repeat("hook", 800)),
-					Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotAfterHistoryBeforeCurrent,
-					Budget: contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
-				})}
-			case "compaction disabled":
-				service.queries.(*controllerQueries).settings.CompactionEnabled = false
-			case "compaction failure":
-				compactor.err = errors.New("private summarizer failure")
-				wantCompactions = 1
-			case "compaction noop":
-				compactor.status = compaction.StatusNoop
-				wantCompactions = 1
-			}
-			_, lifecycles := configureDiscussLifecycle(service)
-			handle, err := service.StartTurn(context.Background(), cmd)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for event := range handle.Events() {
-				if event.Kind == turn.DiscussEventRecompose || event.Kind == string(native.EventContextRecompose) {
-					t.Fatalf("unresolved overflow emitted %s", event.Kind)
-				}
-			}
-			var failures []error
-			for err := range handle.Errs() {
-				failures = append(failures, err)
-			}
-			if len(failures) != 1 || apperror.CodeOf(failures[0]) != apperror.CodeContextProtectedOverflow {
-				t.Fatalf("errors = %v, want original protected overflow", failures)
-			}
-			if len(compactor.configs) != wantCompactions || provider.callCount() != 0 || resolver.storeCalls != 0 {
-				t.Fatalf("compaction/provider/history calls = %d/%d/%d, want %d/0/0", len(compactor.configs), provider.callCount(), resolver.storeCalls, wantCompactions)
-			}
-			assertDeferredLifecycleRow(t, lifecycles.creates, handle.RunID(), contextLifecycleStatusFailedBudget, string(apperror.CodeContextProtectedOverflow))
-		})
-	}
-}
-
-func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *testing.T) {
-	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-	configureDiscussLifecycle(service)
-	cmd.DiscussMessages = cmd.DiscussMessages[20:]
-	handle, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recomposed := false
-	for event := range handle.Events() {
-		recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-	}
-	for err := range handle.Errs() {
-		t.Errorf("ordinary history recovery failed: %v", err)
-	}
-	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 || resolver.storeCalls != 0 {
-		t.Fatalf("recompose=%t compaction/provider/history=%d/%d/%d, want recovery before trimmed provider dispatch", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
-	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.TargetTokens != 399 || !cfg.HardPressure {
-		t.Fatalf("ordinary history recovery config = %#v, want raw=2500 target=399 hard pressure", cfg)
-	}
-}
-
-func TestDiscussProviderBudgetRecoveryLeavesFittingHistoryUnchanged(t *testing.T) {
+func TestDiscussProviderAdmissionLeavesFittingHistoryUnchanged(t *testing.T) {
 	service, resolver, _, compactor, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
 	provider := &triggerLifecycleProvider{}
@@ -305,23 +104,53 @@ func TestDiscussProviderBudgetRecoveryLeavesFittingHistoryUnchanged(t *testing.T
 	assertSDKMessagesEqual(t, provider.params.Messages, []sdk.Message{sdk.AssistantMessage(history), sdk.UserMessage(current)})
 }
 
-func TestDiscussProviderBudgetRecoveryFusesSummaryOnlyHistory(t *testing.T) {
-	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-	configureDiscussLifecycle(service)
-	cmd.DiscussMessages = append(cmd.DiscussMessages[:20], cmd.DiscussMessages[len(cmd.DiscussMessages)-1])
-	handle, err := service.StartTurn(t.Context(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	recomposed := false
-	for event := range handle.Events() {
-		recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-	}
-	for err := range handle.Errs() {
-		t.Error(err)
-	}
-	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 || resolver.storeCalls != 0 {
-		t.Fatalf("summary-only recovery: recompose=%v compactions=%d provider=%d stored=%d", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
+func TestDiscussProviderAdmissionNeverWaitsForCompaction(t *testing.T) {
+	for _, overflow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("overflow=%t", overflow), func(t *testing.T) {
+			service, resolver, provider, _, cmd := discussBudgetRecoveryFixture(t)
+			configureDiscussLifecycle(service)
+			cmd.DiscussMessages = cmd.DiscussMessages[20:]
+			if overflow {
+				resolver.resolveResult.RunConfig.ContextSourceFrags = []contextfrag.ContextFrag{contextfrag.MessageFrag(contextfrag.MessageFragInput{
+					ID: "hook", Message: sdk.UserMessage(strings.Repeat("hook", 800)),
+					Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotAfterHistoryBeforeCurrent,
+					Budget: contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
+				})}
+			}
+			runner := newGatedCompactionRunner()
+			defer close(runner.release)
+			service.compactionService = runner
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			handle, err := service.StartTurn(ctx, cmd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event := range handle.Events() {
+				if event.Kind == turn.DiscussEventRecompose {
+					t.Fatal("admission requested a synchronous retry")
+				}
+			}
+			var failure error
+			for err := range handle.Errs() {
+				failure = err
+			}
+			if ctx.Err() != nil {
+				t.Fatal("provider admission waited for compaction")
+			}
+			if overflow {
+				if apperror.CodeOf(failure) != apperror.CodeContextProtectedOverflow || provider.callCount() != 0 {
+					t.Fatalf("protected overflow: err=%v calls=%d", failure, provider.callCount())
+				}
+			} else if failure != nil || provider.callCount() != 1 {
+				t.Fatalf("fitting current input did not proceed: err=%v calls=%d", failure, provider.callCount())
+			}
+			if overflow {
+				runner.assertNoPass(t)
+			} else {
+				runner.awaitPass(t)
+			}
+		})
 	}
 }
 
@@ -333,71 +162,10 @@ func echoDiscussImages(_ context.Context, _ string, refs []timeline.ImageAttachm
 	return out
 }
 
-// The last attempt a recompose budget allows compacts nothing, yet it still
-// sheds older images before letting the selector drop their text.
-func TestDiscussExhaustedRecoveryStillShedsOlderImages(t *testing.T) {
-	for _, exhausted := range []bool{false, true} {
-		t.Run(fmt.Sprintf("exhausted=%v", exhausted), func(t *testing.T) {
-			service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
-			configureDiscussLifecycle(service)
-			compactor.status = compaction.StatusNoop
-			resolver.resolveResult.RunConfig.SupportsImageInput = true
-			service.turnHooks.inlineImages = echoDiscussImages
-			cmd.DiscussMessages = []turn.DiscussMessage{
-				{Role: "user", Content: "older-a " + strings.Repeat("a", 200), Source: &turn.ContextMessageSource{Kind: "external", ID: "older-a", Current: true}},
-				{Role: "user", Content: "newest continue", Source: &turn.ContextMessageSource{Kind: "external", ID: "newest", Current: true}},
-			}
-			cmd.DiscussImageRefs = []turn.DiscussImageRef{{ContentHash: "aGFzaA==", Mime: "image/png", MessageID: "older-a"}}
-			cmd.DiscussRecoveryExhausted = exhausted
-			h, err := service.StartTurn(context.Background(), cmd)
-			if err != nil {
-				t.Fatal(err)
-			}
-			drainDiscuss(t, h)
-			provider.mu.Lock()
-			params := provider.params
-			provider.mu.Unlock()
-			kept := false
-			for _, message := range params.Messages {
-				for _, part := range message.Content {
-					if text, ok := part.(sdk.TextPart); ok && strings.HasPrefix(text.Text, "older-a ") {
-						kept = true
-					}
-				}
-			}
-			if provider.callCount() != 1 || !kept || (exhausted && len(compactor.configs) != 0) {
-				t.Fatalf("provider_calls=%d older text kept=%v compactions=%d, want the text kept by shedding its image", provider.callCount(), kept, len(compactor.configs))
-			}
-		})
-	}
-}
-
-// Shedding is progress the applier retries on; it must not buy a failing
-// compaction a second attempt in the same run.
-func TestDiscussFailedCompactionRunsOnceAfterShedding(t *testing.T) {
-	service, resolver, _, compactor, cmd := discussBudgetRecoveryFixture(t)
-	configureDiscussLifecycle(service)
-	compactor.status = compaction.StatusNoop
-	resolver.resolveResult.RunConfig.SupportsImageInput = true
-	service.turnHooks.inlineImages = echoDiscussImages
-	last := len(cmd.DiscussMessages) - 1
-	cmd.DiscussMessages[last].Source = &turn.ContextMessageSource{Kind: "external", ID: "newest", Current: true}
-	older := turn.DiscussMessage{Role: "user", Content: "older-a", Source: &turn.ContextMessageSource{Kind: "external", ID: "older-a", Current: true}}
-	cmd.DiscussMessages = append(cmd.DiscussMessages[:last], older, cmd.DiscussMessages[last])
-	cmd.DiscussImageRefs = []turn.DiscussImageRef{{ContentHash: "aGFzaA==", Mime: "image/png", MessageID: "older-a"}}
-	h, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	drainDiscuss(t, h)
-	if len(compactor.configs) != 1 {
-		t.Fatalf("compactions=%d, want one attempt per run", len(compactor.configs))
-	}
-}
-
 func TestDiscussImageAdmissionDoesNotRequireRecovery(t *testing.T) {
 	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
+	service.queries.(*controllerQueries).settings.CompactionEnabled = false
 	resolver.resolveResult.RunConfig.SupportsImageInput = true
 	service.turnHooks.inlineImages = echoDiscussImages
 	apply := contextview.ProviderRunConfigApplier(nil)

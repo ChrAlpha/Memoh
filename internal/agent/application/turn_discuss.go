@@ -170,12 +170,6 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		}
 		return
 	}
-	if !cmd.DiscussRecoveryExhausted && s.recoverDiscussContext(ctx, cmd, resolved, h.id) {
-		if h.emit(turn.DiscussEventRecompose, nil) {
-			h.contentLightTerminal = true
-		}
-		return
-	}
 	defer func() {
 		// A recompose already compacted and resubmits; an empty context
 		// leaves nothing to compact.
@@ -289,13 +283,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(runConfig))
 	defer idleCancel.Stop()
 	outcome.watchIdle(idleCtx, idleCancel)
-	// Budget recovery compacts at most once per run; the last attempt a
-	// recompose budget allows only sheds images.
-	compacted := cmd.DiscussRecoveryExhausted
-	runConfig.RecoverContextBudget = func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		return s.recoverDiscussContextBudget(ctx, cmd, admitted, resolved.ModelID, cfg, &compacted)
-	}
-	runConfig = pauseIdleDuringBudgetRecovery(runConfig, idleCancel)
+	runConfig.ObserveContextBudget = s.discussBudgetObserver(cmd, resolved.ModelID)
 	eventCh := s.streamDiscussAgent(idleCtx, runConfig)
 
 	var finalMessages json.RawMessage

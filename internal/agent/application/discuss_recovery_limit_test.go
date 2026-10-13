@@ -1,20 +1,26 @@
 package application
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
-func TestDiscussExhaustedRecoveryOnlyAttemptsAdmission(t *testing.T) {
+func TestDiscussIrreducibleContextDoesNotWaitForCompaction(t *testing.T) {
 	for _, overflow := range []bool{false, true} {
 		t.Run(map[bool]string{false: "provider", true: "channel"}[overflow], func(t *testing.T) {
-			service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
+			service, _, provider, _, cmd := discussBudgetRecoveryFixture(t)
 			configureDiscussLifecycle(service)
-			cmd.DiscussRecoveryExhausted = true
+			runner := newGatedCompactionRunner()
+			defer close(runner.release)
+			service.compactionService = runner
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
 			cmd.DiscussContextOverflow = overflow
-			handle, err := service.StartTurn(t.Context(), cmd)
+			handle, err := service.StartTurn(ctx, cmd)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -27,8 +33,8 @@ func TestDiscussExhaustedRecoveryOnlyAttemptsAdmission(t *testing.T) {
 			for err := range handle.Errs() {
 				failed = failed || err != nil
 			}
-			if !failed || len(compactor.configs) != 0 || provider.callCount() != 0 {
-				t.Fatalf("failed=%v compactions=%d provider=%d", failed, len(compactor.configs), provider.callCount())
+			if !failed || ctx.Err() != nil || provider.callCount() != 0 {
+				t.Fatalf("failed=%v timeout=%v provider=%d", failed, ctx.Err(), provider.callCount())
 			}
 		})
 	}
