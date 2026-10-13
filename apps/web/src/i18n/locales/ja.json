@@ -2869,9 +2869,7 @@
         "removed": "{name} を削除しました",
         "failed": "{name} の操作に失敗しました"
       },
-      "busy": "この Workspace では別の依存関係の操作がまだ実行中です。",
-      "catalogStaleTitle": "キャッシュされた依存関係を表示中",
-      "catalogStaleDescription": "Supermarket に接続できません。再試行して最新のカタログを取得できます。"
+      "busy": "この Workspace では別の依存関係の操作がまだ実行中です。"
     },
     "folders": {
       "create": "新しいフォルダ",

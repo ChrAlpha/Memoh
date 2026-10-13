@@ -43,15 +43,12 @@ export function botAppsQueryKey(botId: string): string[] {
   return [BOT_APPS_QUERY_KEY, botId]
 }
 
-export function useBotAppsQuery(botId: Ref<string>, forceRefresh?: Ref<boolean>) {
+export function useBotAppsQuery(botId: Ref<string>) {
   return useQuery({
     key: () => botAppsQueryKey(botId.value),
     query: async () => {
-      const refresh = forceRefresh?.value ?? false
-      if (forceRefresh) forceRefresh.value = false
       const { data } = await getBotsByBotIdApps({
         path: { bot_id: botId.value },
-        query: { refresh: refresh || undefined },
         throwOnError: true,
       })
       return data

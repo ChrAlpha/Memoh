@@ -2871,9 +2871,7 @@
         "removed": "已卸载 {name}",
         "failed": "{name} 操作失败"
       },
-      "busy": "此工作区还有其他依赖操作在进行中。",
-      "catalogStaleTitle": "正在显示缓存的依赖",
-      "catalogStaleDescription": "暂时无法连接 Supermarket，可重试获取最新目录。"
+      "busy": "此工作区还有其他依赖操作在进行中。"
     },
     "folders": {
       "create": "新建文件夹",

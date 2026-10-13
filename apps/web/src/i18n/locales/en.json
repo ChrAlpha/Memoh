@@ -2871,9 +2871,7 @@
         "removed": "{name} removed",
         "failed": "{name}: operation failed"
       },
-      "busy": "Another dependency operation is still running in this workspace.",
-      "catalogStaleTitle": "Showing cached dependencies",
-      "catalogStaleDescription": "Supermarket is unavailable. You can retry to get the latest catalog."
+      "busy": "Another dependency operation is still running in this workspace."
     },
     "folders": {
       "create": "New folder",

@@ -23,21 +23,6 @@
 
       <div class="space-y-8">
         <CalloutBanner
-          v-if="data?.dependency_catalog_stale"
-          :title="t('bots.dependencies.catalogStaleTitle')"
-          :description="t('bots.dependencies.catalogStaleDescription')"
-        >
-          <Button
-            variant="outline"
-            size="sm"
-            :loading="retrying"
-            @click="retryDiscovery"
-          >
-            {{ t('common.retry') }}
-          </Button>
-        </CalloutBanner>
-
-        <CalloutBanner
           v-if="banner"
           tone="warning"
           :title="banner.title"
@@ -354,8 +339,7 @@ onMounted(() => {
 
 // ---- App list -----------------------------------------------------------
 
-const forceRefresh = ref(false)
-const { data, error, isLoading, refetch } = useBotAppsQuery(botIdRef, forceRefresh)
+const { data, error, isLoading, refetch } = useBotAppsQuery(botIdRef)
 
 // Pinia Colada's refetch ignores `enabled`, so manual refreshes must skip the
 // window before the bot id is known; otherwise they hit `/bots//apps`.
@@ -388,18 +372,6 @@ function openDetail(item: AppItem) {
 function closeDetail() {
   const { app: _drop, ...rest } = route.query
   void router.replace({ query: rest }).catch(() => {})
-}
-
-const retrying = ref(false)
-async function retryDiscovery() {
-  if (retrying.value) return
-  retrying.value = true
-  try {
-    forceRefresh.value = true
-    await refetchApps()
-  } finally {
-    retrying.value = false
-  }
 }
 
 const banner = computed(() => {
@@ -843,12 +815,15 @@ function goToSupermarket() {
 }
 
 // ---- Polling for operations this client does not own ------------------------
+// Also while the server refreshes the dependency catalog in the background,
+// so a newer catalog shows up without the user asking for it.
 
 const POLL_MS = 5_000
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let tabActive = true
 
 const hasForeignProgress = computed(() => items.value.some(item => appInProgress(item) && !ownsAppStream(item.registry_id, item.app_id)))
+const catalogRefreshing = computed(() => data.value?.dependency_catalog_refreshing === true)
 
 function stopPolling() {
   if (pollTimer) {
@@ -858,7 +833,7 @@ function stopPolling() {
 }
 
 function syncPolling() {
-  const shouldPoll = tabActive && hasForeignProgress.value
+  const shouldPoll = tabActive && (hasForeignProgress.value || catalogRefreshing.value)
   if (shouldPoll && !pollTimer) {
     pollTimer = setInterval(() => {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') void refetchApps()
@@ -868,7 +843,7 @@ function syncPolling() {
   }
 }
 
-watch(hasForeignProgress, syncPolling, { immediate: true })
+watch([hasForeignProgress, catalogRefreshing], syncPolling, { immediate: true })
 
 onActivated(() => {
   tabActive = true

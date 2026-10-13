@@ -59,6 +59,9 @@ type ListResult struct {
 	Workspace              workspacedeps.WorkspaceState
 	DataRoot               string
 	DependencyCatalogStale bool
+	// DependencyCatalogRefreshing is set while the dependency catalog is
+	// refreshed in the background; listing again shortly may show more.
+	DependencyCatalogRefreshing bool
 	// UpdateChecksIncomplete is set by CheckUpdates when its budget ran out
 	// before every App and dependency check finished; the unfinished ones
 	// keep their last check.
@@ -124,10 +127,11 @@ func (s *Service) assemble(ctx context.Context, botID string, installations []In
 	}
 	connectionsByID := s.connectionsByID(ctx, botID)
 	result := ListResult{
-		Workspace:              deps.Workspace,
-		DataRoot:               deps.DataRoot,
-		DependencyCatalogStale: deps.CatalogStale,
-		Items:                  make([]Item, 0, len(installations)),
+		Workspace:                   deps.Workspace,
+		DataRoot:                    deps.DataRoot,
+		DependencyCatalogStale:      deps.CatalogStale,
+		DependencyCatalogRefreshing: deps.CatalogRefreshing,
+		Items:                       make([]Item, 0, len(installations)),
 	}
 	for _, inst := range installations {
 		item, err := s.item(ctx, inst, entries, refCounts, connectionsByID)

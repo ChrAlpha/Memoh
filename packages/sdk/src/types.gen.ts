@@ -1746,6 +1746,7 @@ export type HandlersAppItem = {
 };
 
 export type HandlersAppListResponse = {
+    dependency_catalog_refreshing?: boolean;
     dependency_catalog_stale?: boolean;
     items?: Array<HandlersAppItem>;
     update_checks_incomplete?: boolean;
@@ -2808,6 +2809,11 @@ export type HandlersWorkspaceDependencyItem = {
 
 export type HandlersWorkspaceDependencyListResponse = {
     catalog_fetched_at?: string;
+    /**
+     * CatalogRefreshing is set while the catalog is refreshed in the
+     * background; listing again shortly may show a newer catalog.
+     */
+    catalog_refreshing?: boolean;
     catalog_stale?: boolean;
     /**
      * DiscoveryError is set when the workspace is running but could not be

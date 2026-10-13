@@ -195,6 +195,9 @@ type WorkspaceDependencyListResponse struct {
 	// reflect the installation records alone, without workspace facts or
 	// actions; a refresh retries discovery.
 	DiscoveryError string `json:"discovery_error,omitempty"`
+	// CatalogRefreshing is set while the catalog is refreshed in the
+	// background; listing again shortly may show a newer catalog.
+	CatalogRefreshing bool `json:"catalog_refreshing,omitempty"`
 	// UpdateChecksIncomplete is set by check-updates when some checks did not
 	// finish in time; those keep their last result.
 	UpdateChecksIncomplete bool `json:"update_checks_incomplete,omitempty"`
@@ -867,10 +870,11 @@ func workspaceDependencyError(err error) error {
 
 func workspaceDependencyListResponse(result workspacedeps.ListResult) WorkspaceDependencyListResponse {
 	resp := WorkspaceDependencyListResponse{
-		WorkspaceState: string(result.Workspace),
-		Items:          make([]WorkspaceDependencyItem, 0, len(result.Entries)),
-		DiscoveryError: "",
-		CatalogStale:   result.CatalogStale,
+		WorkspaceState:    string(result.Workspace),
+		Items:             make([]WorkspaceDependencyItem, 0, len(result.Entries)),
+		DiscoveryError:    "",
+		CatalogStale:      result.CatalogStale,
+		CatalogRefreshing: result.CatalogRefreshing,
 
 		UpdateChecksIncomplete: result.ChecksIncomplete,
 	}
