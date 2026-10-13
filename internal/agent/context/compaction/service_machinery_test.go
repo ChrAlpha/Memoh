@@ -151,7 +151,7 @@ func (*fakeQueries) AdvanceCompactionScan(context.Context, sqlc.AdvanceCompactio
 	return 1, nil
 }
 
-func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
+func (f *fakeQueries) MeasureUncompactedMessagesBySession(context.Context, pgtype.UUID) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
 	var bytes int64
 	for _, row := range f.uncompacted {
 		bytes += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))

@@ -433,7 +433,7 @@ type Queries interface {
 	GetCompactionScan(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.GetCompactionScanRow, error)
 	AdvanceCompactionScan(ctx context.Context, arg dbsqlc.AdvanceCompactionScanParams) (int64, error)
 	ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg dbsqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]dbsqlc.ListUncompactedMessagesBySessionWithinBytesRow, error)
-	MeasureUncompactedMessagesBySession(ctx context.Context, arg dbsqlc.MeasureUncompactedMessagesBySessionParams) (dbsqlc.MeasureUncompactedMessagesBySessionRow, error)
+	MeasureUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.MeasureUncompactedMessagesBySessionRow, error)
 	ListVideoModels(ctx context.Context) ([]dbsqlc.ListVideoModelsRow, error)
 	ListVideoModelsByProviderID(ctx context.Context, providerID pgtype.UUID) ([]dbsqlc.Model, error)
 	ListVideoProviders(ctx context.Context) ([]dbsqlc.Provider, error)

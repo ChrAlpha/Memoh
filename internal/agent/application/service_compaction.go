@@ -295,7 +295,7 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 		if err != nil {
 			return err
 		}
-		if res.Status != compaction.StatusOK && res.Status != compaction.StatusProgress && !res.ScanPending {
+		if res.Status != compaction.StatusOK && !res.ScanPending {
 			return nil
 		}
 	}

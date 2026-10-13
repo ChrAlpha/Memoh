@@ -39,7 +39,7 @@ func (*pairingQueries) AdvanceCompactionScan(context.Context, sqlc.AdvanceCompac
 	return 1, nil
 }
 
-func (f *pairingQueries) MeasureUncompactedMessagesBySession(context.Context, sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
+func (f *pairingQueries) MeasureUncompactedMessagesBySession(context.Context, pgtype.UUID) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: int64(len(f.uncompacted)), CandidateBytes: 1}, nil
 }
 

@@ -2,7 +2,6 @@ package compaction
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -16,28 +15,6 @@ import (
 
 func (*fakeQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotSession, error) {
 	return sqlc.BotSession{ID: id, CompactionEpoch: 7}, nil
-}
-
-func TestSummaryRecoveryCountsRetainedLegacyToolCalls(t *testing.T) {
-	stub := &stubModel{summary: "short replacement"}
-	cfg := machineryConfig(stub, 600)
-	cfg.HistoryBudgetTokens = 600
-	cfg.AllowFrontierFusion = true
-	message := turn.ModelMessage{Role: "assistant", Content: json.RawMessage(`""`), ToolCalls: []turn.ToolCall{
-		{ID: "ask", Type: "function", Function: turn.ToolCallFunction{Name: "ask_user", Arguments: `{"question":"` + strings.Repeat("x", 4000) + `"}`}},
-	}}
-	content, err := json.Marshal(message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := &fakeQueries{
-		uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{mkRow(t, "assistant", string(content), 0)},
-		priorLogs:   fusionParentLogs(t, cfg, strings.Repeat("s", 8000)),
-	}
-	res, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-	if err != nil || res.Status != StatusProgress || len(q.markedIDs) != 0 || len(q.rollupCalls) != 1 {
-		t.Fatalf("retained legacy tool call exceeds the history budget: %+v, %v", res, err)
-	}
 }
 
 func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {
@@ -132,58 +109,9 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 	}
 }
 
-func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
-	for _, summary := range []string{"short replacement", strings.Repeat("s", 2400)} {
-		stub := &stubModel{summary: summary}
-		cfg := machineryConfig(stub, 200)
-		cfg.HistoryBudgetTokens = 500
-		cfg.SummaryWindowTokens = 128000
-		cfg.AllowFrontierFusion = true
-		parents := fusionParentLogs(t, cfg, strings.Repeat("p", 8000))
-		q := &fakeQueries{priorLogs: parents}
-		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-		if stub.maxTokens > 200 {
-			t.Fatalf("output cap=%d exceeds target=200", stub.maxTokens)
-		}
-		if len(summary) > 200 {
-			if err == nil || result.Status == StatusOK || len(q.rollupCalls) > 0 {
-				t.Fatalf("oversized replay accepted: result=%+v err=%v", result, err)
-			}
-			assertFusionParentsActive(t, q, parents)
-		} else if err != nil || result.Status != StatusOK {
-			t.Fatalf("fitting summary rejected: result=%+v err=%v", result, err)
-		}
-	}
-}
-
-func TestSummaryRecoveryReservesRetainedRawReplay(t *testing.T) {
-	for _, tailBytes := range []int{1200, 2400} {
-		stub := &stubModel{summary: "short summary"}
-		cfg := machineryConfig(stub, 200)
-		cfg.HistoryBudgetTokens = 500
-		rows := qualityRows(t)
-		rows[2] = mkRow(t, "user", jsonStr(strings.Repeat("u", tailBytes)), 100)
-		q := &fakeQueries{uncompacted: rows}
-		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tailBytes == 2400 {
-			if result.Status != StatusProgress {
-				t.Fatalf("reported admission success despite retained overflow: %+v", result)
-			}
-		} else {
-			if result.Status != StatusOK || stub.maxTokens >= 100 {
-				t.Fatalf("failed to reserve retained raw: result=%+v cap=%d", result, stub.maxTokens)
-			}
-		}
-	}
-}
-
 func TestSummaryRecoveryProtectsCurrentSourcesAndCountsThemOnce(t *testing.T) {
 	stub := &stubModel{summary: "short summary"}
 	cfg := machineryConfig(stub, 200)
-	cfg.HistoryBudgetTokens = 500
 	rows := qualityRows(t)
 	rows[2] = mkRow(t, "user", jsonStr(strings.Repeat("a", 2400)), 600)
 	rows[3] = mkRow(t, "user", jsonStr(strings.Repeat("b", 2400)), 600)
@@ -221,7 +149,6 @@ func TestProtectedSourcesSurviveTruncatedRead(t *testing.T) {
 		stub := &stubModel{summary: "short summary"}
 		cfg := machineryConfig(stub, 200)
 		cfg.AllowFrontierFusion = true
-		cfg.HistoryBudgetTokens = 500
 		cfg.ProtectedSources = []turn.ContextMessageSource{{Kind: "history", ID: first.ID.String(), Current: true}, {Kind: "history", ID: second.ID.String(), Current: true}}
 		svc := newMachineryService(q)
 		if truncated {

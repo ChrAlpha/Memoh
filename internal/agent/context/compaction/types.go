@@ -9,9 +9,8 @@ import (
 
 // Compaction result statuses reported by RunCompactionSync.
 const (
-	StatusProgress = "progress" // compacted history still exceeds the requested replay budget
-	StatusOK       = "ok"       // messages were compacted into a summary
-	StatusNoop     = "noop"     // nothing to compact (already compact, cooled down, or in flight)
+	StatusOK   = "ok"   // messages were compacted into a summary
+	StatusNoop = "noop" // nothing to compact (already compact, cooled down, or in flight)
 )
 
 // Result is the scoped outcome of a synchronous compaction. Callers use it to
@@ -60,7 +59,7 @@ type TriggerConfig struct {
 	Ratio                 int
 	TotalInputTokens      int
 	MaxCompactTokens      int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
-	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
+	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens
 	// SummaryWindowTokens is the summarizer model's full context window when
 	// declared; it bounds the summary output reserve. Zero means unknown and
 	// keeps the engine's conservative defaults.
@@ -68,7 +67,6 @@ type TriggerConfig struct {
 	// ContextWindowTokens is the chat model's context window. It is separate
 	// from SummaryWindowTokens, which belongs to the summarizer model.
 	ProtectedSources    []turn.ContextMessageSource
-	HistoryBudgetTokens int
 	ContextWindowTokens int
 	PromptCacheTTL      string
 	AllowFrontierFusion bool

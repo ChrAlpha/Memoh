@@ -84,7 +84,7 @@ func TestUncompactedMessagesExcludeTheActiveRunTurn(t *testing.T) {
 		if bounded[0].CandidateCount != int64(len(want)) {
 			t.Fatalf("%s: candidate count = %d, want %d", state, bounded[0].CandidateCount, len(want))
 		}
-		measure, err := queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{SessionID: session})
+		measure, err := queries.MeasureUncompactedMessagesBySession(ctx, session)
 		if err != nil || measure.CandidateCount != int64(len(want)) {
 			t.Fatalf("%s: measured candidates = %d, %v; want %d", state, measure.CandidateCount, err, len(want))
 		}

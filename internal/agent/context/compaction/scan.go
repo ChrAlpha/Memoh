@@ -8,7 +8,6 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -19,15 +18,13 @@ const (
 )
 
 type compactionScan struct {
-	state        sqlc.GetCompactionScanRow
-	after        pgtype.UUID
-	done         bool
-	partial      bool
-	rows         []sqlc.ListUncompactedMessagesBySessionRow
-	items, span  []CompactionCandidate
-	behindTokens int
-	windows      int
-	bytes        int64
+	state       sqlc.GetCompactionScanRow
+	after       pgtype.UUID
+	done        bool
+	rows        []sqlc.ListUncompactedMessagesBySessionRow
+	items, span []CompactionCandidate
+	windows     int
+	bytes       int64
 }
 
 func closedToolGroup(items []CompactionCandidate, group []int) bool {
@@ -88,11 +85,7 @@ func selectCompactionSpan(items []CompactionCandidate, budget int) ([]Compaction
 	return trimCompactMessages(items[start:end], budget), resume
 }
 
-func unreadReplayTokens(bytes, images int64) int {
-	return contextfrag.ProviderBudgetTokensFromBytes(int(max(0, bytes))) + int(max(0, images))*contextfrag.EstimateImageTokens
-}
-
-func (s *Service) readCompactionSpan(ctx context.Context, sessionID pgtype.UUID, cfg TriggerConfig, measure sqlc.MeasureUncompactedMessagesBySessionRow, budget int) (*compactionScan, error) {
+func (s *Service) readCompactionSpan(ctx context.Context, sessionID pgtype.UUID, cfg TriggerConfig, budget int) (*compactionScan, error) {
 	state, err := s.queries.GetCompactionScan(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -113,23 +106,14 @@ func (s *Service) readCompactionSpan(ctx context.Context, sessionID pgtype.UUID,
 			return nil, err
 		}
 		if len(window) == 0 {
-			scan.done, scan.partial = true, measure.CandidateCount > 0
-			if scan.windows == 0 {
-				scan.behindTokens = unreadReplayTokens(measure.CandidateBytes-measure.CandidateImageBytes-measure.ProtectedBytes, measure.CandidateImages-measure.ProtectedImages)
-			}
+			scan.done = true
 			break
 		}
 		if window[0].CompactionEpoch != state.CompactionEpoch {
 			return nil, errors.New("compaction: source epoch changed during scan")
 		}
-		if scan.windows == 0 {
-			scan.behindTokens = unreadReplayTokens(
-				measure.CandidateBytes-measure.CandidateImageBytes-measure.ProtectedBytes-(window[0].CandidateBytes-window[0].CandidateImageBytes-window[0].ProtectedBytes),
-				measure.CandidateImages-measure.ProtectedImages-(window[0].CandidateImages-window[0].ProtectedImages))
-		}
 		scan.windows++
 		truncated := window[0].CandidateCount > int64(len(window))
-		scan.partial = scan.partial || truncated || scan.windows > 1 || window[0].CandidateCount < measure.CandidateCount
 		if window[0].Oversized {
 			if remaining < readBytes {
 				break
@@ -137,9 +121,6 @@ func (s *Service) readCompactionSpan(ctx context.Context, sessionID pgtype.UUID,
 			if readBytes < maxCompactionReadBytes {
 				readBytes = min(2*readBytes, maxCompactionReadBytes)
 				continue
-			}
-			if !isProtectedRow(uncompactedRowsFromBounded(window)[0], cfg.ProtectedSources) {
-				scan.behindTokens += unreadReplayTokens(window[0].CumulativeBytes-window[0].ImageBytes, window[0].ImageParts)
 			}
 			scan.after = window[0].ID
 			if !truncated {
@@ -204,7 +185,6 @@ func (s *Service) readCompactionSpan(ctx context.Context, sessionID pgtype.UUID,
 		if resume == 0 {
 			resume = len(scan.items)
 		}
-		scan.behindTokens += retainedReplayTokens(scan.items[:resume], nil, nil, true, cfg.ProtectedSources)
 		scan.after = scan.rows[resume-1].ID
 		scan.rows, scan.items = nil, nil
 		readBytes = compactionReadMaxBytes(cfg)

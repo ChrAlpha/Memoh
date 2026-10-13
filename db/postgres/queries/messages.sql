@@ -3100,7 +3100,6 @@ WITH scan_anchor AS MATERIALIZED (
     ordered.created_at,
     ordered.gap_before,
     ordered.protected_held_before,
-    ordered.protected,
     COALESCE(ordered.id = (
       SELECT latest.id
       FROM bot_visible_history_messages latest
@@ -3117,22 +3116,11 @@ WITH scan_anchor AS MATERIALIZED (
       + octet_length(m.metadata::text)
       + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
       + octet_length(COALESCE(m.display_text, ''))
-    )::BIGINT AS payload_bytes,
-    images.parts::BIGINT AS image_parts,
-    images.bytes::BIGINT AS image_bytes
+    )::BIGINT AS payload_bytes
   FROM ordered_rows ordered
   JOIN bot_visible_history_messages m
     ON m.id = ordered.id
    AND m.team_id = public.memoh_current_team_id()
-  CROSS JOIN LATERAL (
-    SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
-    FROM jsonb_array_elements(CASE
-      WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
-      WHEN jsonb_typeof(m.content) = 'array' THEN m.content
-      ELSE '[]'::jsonb
-    END) part
-    WHERE part->>'type' = 'image'
-  ) images
   WHERE ordered.held_by IS NULL
     AND NOT EXISTS (SELECT 1 FROM scan_anchor WHERE scan_anchor.id = ordered.id)
 ), protected_behind AS MATERIALIZED (
@@ -3167,10 +3155,6 @@ WITH scan_anchor AS MATERIALIZED (
     candidate_rows.*,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
-    COALESCE(SUM(image_parts) OVER (), 0)::BIGINT AS candidate_images,
-    COALESCE(SUM(image_bytes) OVER (), 0)::BIGINT AS candidate_image_bytes,
-    COALESCE(SUM(payload_bytes - image_bytes) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_bytes,
-    COALESCE(SUM(image_parts) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_images,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
     )::BIGINT AS cumulative_bytes
@@ -3210,12 +3194,6 @@ SELECT
   r.default_reply_target AS reply_target,
   admitted.candidate_count,
   admitted.candidate_bytes,
-  admitted.candidate_images,
-  admitted.candidate_image_bytes,
-  admitted.protected_bytes,
-  admitted.protected_images,
-  admitted.image_parts,
-  admitted.image_bytes,
   admitted.cumulative_bytes,
   admitted.gap_before::boolean AS gap_before,
   (protected_behind.protected_before OR admitted.protected_held_before)::boolean AS protected_before,
@@ -3243,11 +3221,6 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 -- name: MeasureUncompactedMessagesBySession :one
 -- Metadata-only companion for the bounded compaction read. It never returns
 -- message payloads and exposes the oversized-head degradation explicitly.
--- CandidateImages counts image parts and CandidateImageBytes their payload
--- bytes: an image replays at a flat estimate rather than by its bytes.
--- ProtectedBytes and ProtectedImages are the share of the given current
--- input, which the caller budgets itself: bytes other than images, and
--- images.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(SUM(
@@ -3261,33 +3234,8 @@ SELECT
     + octet_length(m.metadata::text)
     + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
     + octet_length(COALESCE(m.display_text, ''))
-  ), 0)::BIGINT AS largest_candidate_bytes,
-  COALESCE(SUM(images.parts), 0)::BIGINT AS candidate_images,
-  COALESCE(SUM(images.bytes), 0)::BIGINT AS candidate_image_bytes,
-  COALESCE(SUM(
-    octet_length(m.content::text)
-    + octet_length(m.metadata::text)
-    + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
-    + octet_length(COALESCE(m.display_text, ''))
-    - images.bytes
-  ) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_bytes,
-  COALESCE(SUM(images.parts) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_images
+  ), 0)::BIGINT AS largest_candidate_bytes
 FROM bot_visible_history_messages m
-CROSS JOIN LATERAL (
-  SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
-  FROM jsonb_array_elements(CASE
-    WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
-    WHEN jsonb_typeof(m.content) = 'array' THEN m.content
-    ELSE '[]'::jsonb
-  END) part
-  WHERE part->>'type' = 'image'
-) images
-CROSS JOIN LATERAL (
-  SELECT (
-    m.id::text = ANY(sqlc.arg(protected_message_ids)::text[])
-    OR BTRIM(m.source_message_id) = ANY(sqlc.arg(protected_external_ids)::text[])
-  ) AS is_protected
-) protected
 JOIN bot_sessions s
   ON s.id = m.session_id
  AND s.team_id = public.memoh_current_team_id()

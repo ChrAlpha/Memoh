@@ -18,8 +18,7 @@ import (
 )
 
 func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (res Result, err error) {
-	protectedIDs, externalIDs := protectedSourceIDs(cfg.ProtectedSources)
-	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{SessionID: sessionUUID, ProtectedMessageIds: protectedIDs, ProtectedExternalIds: externalIDs})
+	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -42,16 +41,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	maxOutputTokens := maxCompactionSummaryTokens
 	if cfg.SummaryWindowTokens > 0 {
 		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
-	}
-	if cfg.HistoryBudgetTokens > 0 {
-		outputBudget := cfg.HistoryBudgetTokens
-		if cfg.TargetTokens > 0 {
-			outputBudget = min(outputBudget, cfg.TargetTokens)
-		}
-		maxOutputTokens = summaryOutputLimit(outputBudget, maxOutputTokens)
-		if maxOutputTokens <= 0 {
-			return Result{Status: StatusNoop}, nil
-		}
 	}
 	maxCompactTokens, err := boundedCompactionInputTokens(cfg, baseMaxCompactTokens, maxOutputTokens, systemPrompt)
 	if err != nil {
@@ -82,7 +71,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	selectCfg := cfg
 	selectCfg.TargetTokens = rawTarget
-	scan, err := s.readCompactionSpan(ctx, sessionUUID, selectCfg, measure, entriesBudget)
+	scan, err := s.readCompactionSpan(ctx, sessionUUID, selectCfg, entriesBudget)
 	if err != nil {
 		return Result{}, err
 	}
@@ -99,7 +88,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		}
 	}()
 	rows, messages, toCompact := scan.rows, scan.items, scan.span
-	truncatedRead := scan.partial
 	fusing := len(toCompact) == 0 && scan.done && canFuse
 	if len(toCompact) == 0 && !fusing {
 		return Result{Status: StatusNoop}, nil
@@ -165,22 +153,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			err = fmt.Errorf("%w: %w", ErrIneffectiveSummary, err)
 		}
 		return Result{}, err
-	}
-
-	replayBudget, retainedTokens := 0, 0
-	if cfg.HistoryBudgetTokens > 0 {
-		retainedTokens = scan.behindTokens + retainedReplayTokens(messages, compactedMessageIDs, frontier.Artifacts, fusing, cfg.ProtectedSources)
-		replayBudget = cfg.TargetTokens
-		if replayBudget <= 0 {
-			replayBudget = cfg.HistoryBudgetTokens
-		}
-		if remaining := cfg.HistoryBudgetTokens - retainedTokens; remaining > summaryProviderReplayTokens("") {
-			replayBudget = min(replayBudget, remaining)
-		}
-		maxOutputTokens = summaryOutputLimit(replayBudget, maxOutputTokens)
-		if maxOutputTokens <= 0 {
-			return Result{Status: StatusNoop}, nil
-		}
 	}
 
 	expectedCompactIDs, err := expectedCompactionClaims(rows, compactedMessageIDs)
@@ -312,12 +284,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Result{}, err
 	}
 
-	if replayBudget > 0 && summaryProviderReplayTokens(summary) > replayBudget {
-		err = fmt.Errorf("compaction: summary replay exceeds output budget: replay=%d budget=%d", summaryProviderReplayTokens(summary), replayBudget)
-		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
-		return Result{}, err
-	}
-
 	usageJSON, _ := json.Marshal(result.Usage)
 
 	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelRecordID)
@@ -333,11 +299,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	status := StatusOK
-	if cfg.HistoryBudgetTokens > 0 && (truncatedRead || retainedTokens+summaryProviderReplayTokens(summary) > cfg.HistoryBudgetTokens) {
-		status = StatusProgress
-	}
-	return Result{Status: status, Summary: summary, MessageCount: len(compactedMessageIDs)}, nil
+	return Result{Status: StatusOK, Summary: summary, MessageCount: len(compactedMessageIDs)}, nil
 }
 
 func boundedCompactionInputTokens(cfg TriggerConfig, maxCompactTokens, maxOutputTokens int, prompt string) (int, error) {

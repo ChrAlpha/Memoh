@@ -5463,7 +5463,6 @@ WITH scan_anchor AS MATERIALIZED (
     ordered.created_at,
     ordered.gap_before,
     ordered.protected_held_before,
-    ordered.protected,
     COALESCE(ordered.id = (
       SELECT latest.id
       FROM bot_visible_history_messages latest
@@ -5480,22 +5479,11 @@ WITH scan_anchor AS MATERIALIZED (
       + octet_length(m.metadata::text)
       + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
       + octet_length(COALESCE(m.display_text, ''))
-    )::BIGINT AS payload_bytes,
-    images.parts::BIGINT AS image_parts,
-    images.bytes::BIGINT AS image_bytes
+    )::BIGINT AS payload_bytes
   FROM ordered_rows ordered
   JOIN bot_visible_history_messages m
     ON m.id = ordered.id
    AND m.team_id = public.memoh_current_team_id()
-  CROSS JOIN LATERAL (
-    SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
-    FROM jsonb_array_elements(CASE
-      WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
-      WHEN jsonb_typeof(m.content) = 'array' THEN m.content
-      ELSE '[]'::jsonb
-    END) part
-    WHERE part->>'type' = 'image'
-  ) images
   WHERE ordered.held_by IS NULL
     AND NOT EXISTS (SELECT 1 FROM scan_anchor WHERE scan_anchor.id = ordered.id)
 ), protected_behind AS MATERIALIZED (
@@ -5527,19 +5515,15 @@ WITH scan_anchor AS MATERIALIZED (
   ) AS protected_before
 ), ranked_candidates AS MATERIALIZED (
   SELECT
-    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.gap_before, candidate_rows.protected_held_before, candidate_rows.protected, candidate_rows.latest_user, candidate_rows.payload_bytes, candidate_rows.image_parts, candidate_rows.image_bytes,
+    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.gap_before, candidate_rows.protected_held_before, candidate_rows.latest_user, candidate_rows.payload_bytes,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
-    COALESCE(SUM(image_parts) OVER (), 0)::BIGINT AS candidate_images,
-    COALESCE(SUM(image_bytes) OVER (), 0)::BIGINT AS candidate_image_bytes,
-    COALESCE(SUM(payload_bytes - image_bytes) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_bytes,
-    COALESCE(SUM(image_parts) FILTER (WHERE protected) OVER (), 0)::BIGINT AS protected_images,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
     )::BIGINT AS cumulative_bytes
   FROM candidate_rows
 ), admitted_candidates AS MATERIALIZED (
-  SELECT ranked_candidates.id, ranked_candidates.turn_position, ranked_candidates.turn_message_seq, ranked_candidates.created_at, ranked_candidates.gap_before, ranked_candidates.protected_held_before, ranked_candidates.protected, ranked_candidates.latest_user, ranked_candidates.payload_bytes, ranked_candidates.image_parts, ranked_candidates.image_bytes, ranked_candidates.candidate_count, ranked_candidates.candidate_bytes, ranked_candidates.candidate_images, ranked_candidates.candidate_image_bytes, ranked_candidates.protected_bytes, ranked_candidates.protected_images, ranked_candidates.cumulative_bytes, payload_bytes > $6::BIGINT AS oversized
+  SELECT ranked_candidates.id, ranked_candidates.turn_position, ranked_candidates.turn_message_seq, ranked_candidates.created_at, ranked_candidates.gap_before, ranked_candidates.protected_held_before, ranked_candidates.latest_user, ranked_candidates.payload_bytes, ranked_candidates.candidate_count, ranked_candidates.candidate_bytes, ranked_candidates.cumulative_bytes, payload_bytes > $6::BIGINT AS oversized
   FROM ranked_candidates
   WHERE cumulative_bytes <= $6::BIGINT
      OR cumulative_bytes = payload_bytes
@@ -5573,12 +5557,6 @@ SELECT
   r.default_reply_target AS reply_target,
   admitted.candidate_count,
   admitted.candidate_bytes,
-  admitted.candidate_images,
-  admitted.candidate_image_bytes,
-  admitted.protected_bytes,
-  admitted.protected_images,
-  admitted.image_parts,
-  admitted.image_bytes,
   admitted.cumulative_bytes,
   admitted.gap_before::boolean AS gap_before,
   (protected_behind.protected_before OR admitted.protected_held_before)::boolean AS protected_before,
@@ -5638,12 +5616,6 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 	ReplyTarget             pgtype.Text        `json:"reply_target"`
 	CandidateCount          int64              `json:"candidate_count"`
 	CandidateBytes          int64              `json:"candidate_bytes"`
-	CandidateImages         int64              `json:"candidate_images"`
-	CandidateImageBytes     int64              `json:"candidate_image_bytes"`
-	ProtectedBytes          int64              `json:"protected_bytes"`
-	ProtectedImages         int64              `json:"protected_images"`
-	ImageParts              int64              `json:"image_parts"`
-	ImageBytes              int64              `json:"image_bytes"`
 	CumulativeBytes         int64              `json:"cumulative_bytes"`
 	GapBefore               bool               `json:"gap_before"`
 	ProtectedBefore         bool               `json:"protected_before"`
@@ -5694,12 +5666,6 @@ func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Contex
 			&i.ReplyTarget,
 			&i.CandidateCount,
 			&i.CandidateBytes,
-			&i.CandidateImages,
-			&i.CandidateImageBytes,
-			&i.ProtectedBytes,
-			&i.ProtectedImages,
-			&i.ImageParts,
-			&i.ImageBytes,
 			&i.CumulativeBytes,
 			&i.GapBefore,
 			&i.ProtectedBefore,
@@ -6256,38 +6222,13 @@ SELECT
     + octet_length(m.metadata::text)
     + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
     + octet_length(COALESCE(m.display_text, ''))
-  ), 0)::BIGINT AS largest_candidate_bytes,
-  COALESCE(SUM(images.parts), 0)::BIGINT AS candidate_images,
-  COALESCE(SUM(images.bytes), 0)::BIGINT AS candidate_image_bytes,
-  COALESCE(SUM(
-    octet_length(m.content::text)
-    + octet_length(m.metadata::text)
-    + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
-    + octet_length(COALESCE(m.display_text, ''))
-    - images.bytes
-  ) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_bytes,
-  COALESCE(SUM(images.parts) FILTER (WHERE protected.is_protected), 0)::BIGINT AS protected_images
+  ), 0)::BIGINT AS largest_candidate_bytes
 FROM bot_visible_history_messages m
-CROSS JOIN LATERAL (
-  SELECT count(*) AS parts, COALESCE(SUM(octet_length(part::text)), 0) AS bytes
-  FROM jsonb_array_elements(CASE
-    WHEN jsonb_typeof(m.content->'content') = 'array' THEN m.content->'content'
-    WHEN jsonb_typeof(m.content) = 'array' THEN m.content
-    ELSE '[]'::jsonb
-  END) part
-  WHERE part->>'type' = 'image'
-) images
-CROSS JOIN LATERAL (
-  SELECT (
-    m.id::text = ANY($1::text[])
-    OR BTRIM(m.source_message_id) = ANY($2::text[])
-  ) AS is_protected
-) protected
 JOIN bot_sessions s
   ON s.id = m.session_id
  AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = $3
+  AND m.session_id = $1
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()
@@ -6311,41 +6252,18 @@ WHERE m.team_id = public.memoh_current_team_id()
   )
 `
 
-type MeasureUncompactedMessagesBySessionParams struct {
-	ProtectedMessageIds  []string    `json:"protected_message_ids"`
-	ProtectedExternalIds []string    `json:"protected_external_ids"`
-	SessionID            pgtype.UUID `json:"session_id"`
-}
-
 type MeasureUncompactedMessagesBySessionRow struct {
 	CandidateCount        int64 `json:"candidate_count"`
 	CandidateBytes        int64 `json:"candidate_bytes"`
 	LargestCandidateBytes int64 `json:"largest_candidate_bytes"`
-	CandidateImages       int64 `json:"candidate_images"`
-	CandidateImageBytes   int64 `json:"candidate_image_bytes"`
-	ProtectedBytes        int64 `json:"protected_bytes"`
-	ProtectedImages       int64 `json:"protected_images"`
 }
 
 // Metadata-only companion for the bounded compaction read. It never returns
 // message payloads and exposes the oversized-head degradation explicitly.
-// CandidateImages counts image parts and CandidateImageBytes their payload
-// bytes: an image replays at a flat estimate rather than by its bytes.
-// ProtectedBytes and ProtectedImages are the share of the given current
-// input, which the caller budgets itself: bytes other than images, and
-// images.
-func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg MeasureUncompactedMessagesBySessionParams) (MeasureUncompactedMessagesBySessionRow, error) {
-	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, arg.ProtectedMessageIds, arg.ProtectedExternalIds, arg.SessionID)
+func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) (MeasureUncompactedMessagesBySessionRow, error) {
+	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, sessionID)
 	var i MeasureUncompactedMessagesBySessionRow
-	err := row.Scan(
-		&i.CandidateCount,
-		&i.CandidateBytes,
-		&i.LargestCandidateBytes,
-		&i.CandidateImages,
-		&i.CandidateImageBytes,
-		&i.ProtectedBytes,
-		&i.ProtectedImages,
-	)
+	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)
 	return i, err
 }
 
