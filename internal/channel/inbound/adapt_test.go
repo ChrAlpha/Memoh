@@ -327,3 +327,46 @@ func TestAdaptInbound_CarriesReplyAttachments(t *testing.T) {
 		t.Fatalf("reply attachments = %+v", me.ReplyToAttachments)
 	}
 }
+
+func TestAdaptInbound_TranscriptNodeWithPartsOnly(t *testing.T) {
+	msg := channel.InboundMessage{Message: channel.Message{
+		ID:       "m1",
+		Parts:    []channel.MessagePart{{Type: channel.MessagePartText, Text: "look"}},
+		Metadata: map[string]any{"transcript": "hello from voice"},
+	}}
+	me := AdaptInbound(msg, "sess", "", "").(timeline.MessageEvent)
+	if len(me.Content) != 2 || me.Content[0].Text != "look" || me.Content[1].Text != formatInboundTranscript("hello from voice") {
+		t.Fatalf("content = %+v", me.Content)
+	}
+}
+
+func TestAdaptInbound_NoTranscriptUnchanged(t *testing.T) {
+	msg := channel.InboundMessage{Message: channel.Message{
+		ID:    "m1",
+		Parts: []channel.MessagePart{{Type: channel.MessagePartText, Text: "look"}},
+	}}
+	me := AdaptInbound(msg, "sess", "", "").(timeline.MessageEvent)
+	if len(me.Content) != 1 || me.Content[0].Text != "look" {
+		t.Fatalf("content = %+v", me.Content)
+	}
+}
+
+func TestModelPlainText_TranscriptNotDuplicated(t *testing.T) {
+	m := channel.Message{
+		Text:     "caption",
+		Parts:    []channel.MessagePart{{Type: channel.MessagePartText, Text: "caption"}},
+		Metadata: map[string]any{"transcript": "hello from voice"},
+	}
+	got := modelPlainText(m)
+	want := strings.TrimSpace(m.PlainText()) + "\n\n" + formatInboundTranscript("hello from voice")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	if strings.Count(got, "caption") != strings.Count(m.PlainText(), "caption") {
+		t.Fatalf("body duplicated: %q", got)
+	}
+	m.Metadata = nil
+	if modelPlainText(m) != strings.TrimSpace(m.PlainText()) {
+		t.Fatalf("no-transcript query changed")
+	}
+}

@@ -92,10 +92,40 @@ func adaptContent(text string) []timeline.ContentNode {
 }
 
 func adaptBody(m channel.Message) []timeline.ContentNode {
-	if nodes := adaptParts(m.Parts); len(nodes) > 0 {
-		return nodes
+	nodes := adaptParts(m.Parts)
+	if len(nodes) == 0 {
+		nodes = adaptContent(m.Text)
 	}
-	return adaptContent(m.Text)
+	if label := transcriptLabel(m); label != "" {
+		nodes = append(nodes, timeline.ContentNode{Type: "text", Text: label})
+	}
+	return nodes
+}
+
+// transcriptLabel returns the labeled voice transcription stored in the
+// message metadata, or "" when there is none or the body already carries it.
+func transcriptLabel(m channel.Message) string {
+	transcript, _ := m.Metadata["transcript"].(string)
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" || strings.Contains(m.PlainText(), transcript) {
+		return ""
+	}
+	return formatInboundTranscript(transcript)
+}
+
+// modelPlainText is the message body as the model sees it: the plain text
+// followed by the labeled transcription.
+func modelPlainText(m channel.Message) string {
+	plain := strings.TrimSpace(m.PlainText())
+	label := transcriptLabel(m)
+	switch {
+	case label == "":
+		return plain
+	case plain == "":
+		return label
+	default:
+		return plain + "\n\n" + label
+	}
 }
 
 func adaptParts(parts []channel.MessagePart) []timeline.ContentNode {

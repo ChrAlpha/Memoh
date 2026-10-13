@@ -854,16 +854,10 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	// transcription to avoid the cost.
 	if sessionType == sessionpkg.TypeDiscuss || shouldTrigger {
 		if transcript := p.transcribeInboundAttachments(ctx, strings.TrimSpace(identity.BotID), resolvedAttachments); transcript != "" {
-			labeledTranscript := formatInboundTranscript(transcript)
 			if msg.Message.Metadata == nil {
 				msg.Message.Metadata = make(map[string]any)
 			}
 			msg.Message.Metadata["transcript"] = transcript
-			if plain := strings.TrimSpace(msg.Message.PlainText()); plain == "" {
-				msg.Message.Text = labeledTranscript
-			} else if !strings.Contains(plain, transcript) {
-				msg.Message.Text = plain + "\n\n" + labeledTranscript
-			}
 		} else if hadVoiceAttachment && strings.TrimSpace(msg.Message.PlainText()) == "" {
 			msg.Message.Text = formatVoiceTranscriptionUnavailableNotice(resolvedAttachments)
 		}
@@ -871,7 +865,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			text = strings.TrimSpace(userVisibleText)
 			modelText = strings.TrimSpace(turn.SkillActivationModelQuery(skillActivation))
 		} else {
-			text = strings.TrimSpace(msg.Message.PlainText())
+			text = modelPlainText(msg.Message)
 			modelText = text
 		}
 	}
