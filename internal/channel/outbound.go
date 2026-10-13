@@ -642,7 +642,7 @@ func validateStreamEvent(registry *Registry, channelType ChannelType, event Stre
 		if err := validateMessageAgainstCapabilities(caps, ok, Message{Attachments: event.Attachments}); err != nil {
 			return err
 		}
-	case StreamEventAgentStart, StreamEventAgentEnd, StreamEventProcessingStarted, StreamEventProcessingCompleted, StreamEventReset:
+	case StreamEventAgentStart, StreamEventAgentEnd, StreamEventProcessingStarted, StreamEventProcessingCompleted, StreamEventReset, StreamEventSegmentEnd:
 		return nil
 	case StreamEventFinal:
 		if event.Final == nil {
@@ -824,9 +824,9 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) err
 	if event.Type == StreamEventDelta && event.Delta != "" && event.Phase != StreamPhaseReasoning {
 		return s.pushDelta(ctx, event)
 	}
-	if event.Type == StreamEventReset {
-		// The adapter drops its buffered text, so the split window restarts
-		// with it.
+	if event.Type == StreamEventReset || event.Type == StreamEventSegmentEnd {
+		// The adapter drops its buffered text, or commits it as its own
+		// message, so the split window restarts with it.
 		s.deltaRunes = 0
 		s.deltaText.Reset()
 	}

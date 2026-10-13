@@ -118,6 +118,7 @@ func (s *qqOutboundStream) Push(ctx context.Context, event channel.PreparedStrea
 		channel.StreamEventPhaseStart,
 		channel.StreamEventPhaseEnd,
 		channel.StreamEventToolCallStart,
+		channel.StreamEventSegmentEnd,
 		channel.StreamEventAgentStart,
 		channel.StreamEventAgentEnd,
 		channel.StreamEventProcessingStarted,

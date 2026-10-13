@@ -3868,9 +3868,13 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 				// Approval continuations should not flash transient "running"
 				// tool messages in IM. If tool visibility is enabled, the
 				// completed tool state may still be shown on tool_call_end.
+				// The hidden start still ends the IM text segment before it.
 				if event.Type == channel.StreamEventToolCallStart &&
 					(event.ToolCall == nil || (strings.TrimSpace(event.ToolCall.ApprovalID) == "" && !hasUserInputAction(event.ToolCall.Actions))) {
-					continue
+					if isLocalChannelType(msg.Channel) {
+						continue
+					}
+					event = channel.StreamEvent{Type: channel.StreamEventSegmentEnd}
 				}
 				if event.Type == channel.StreamEventReaction && len(event.Reactions) > 0 {
 					p.dispatchReactions(ctx, identity.BotID, msg.Channel, target, sourceMessageID, event.Reactions)

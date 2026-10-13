@@ -279,6 +279,7 @@ func (s *wecomOutboundStream) Push(ctx context.Context, event channel.PreparedSt
 		channel.StreamEventPhaseStart,
 		channel.StreamEventPhaseEnd,
 		channel.StreamEventToolCallStart,
+		channel.StreamEventSegmentEnd,
 		channel.StreamEventAgentStart,
 		channel.StreamEventAgentEnd,
 		channel.StreamEventProcessingStarted,

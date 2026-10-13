@@ -399,6 +399,28 @@ func (s *telegramOutboundStream) deliverFinalTextWithActions(ctx context.Context
 }
 
 func (s *telegramOutboundStream) pushToolCallStart(ctx context.Context, tc *channel.StreamToolCall) error {
+	s.commitSegment(ctx)
+	return s.sendToolCallMessage(ctx, tc, channel.BuildToolCallStart(tc))
+}
+
+// pushSegmentEnd closes the text streamed before a hidden tool call as its own
+// message. With nothing buffered there is no segment to close, so the stream
+// message (if any) is kept for the text that follows.
+func (s *telegramOutboundStream) pushSegmentEnd(ctx context.Context) error {
+	s.mu.Lock()
+	hasText := strings.TrimSpace(s.buf.String()) != ""
+	s.mu.Unlock()
+	if hasText {
+		s.commitSegment(ctx)
+	}
+	return nil
+}
+
+// commitSegment commits the buffered text as its own message and resets the
+// streaming state, so the next delta starts a fresh message. In draft mode
+// the text is sent as a permanent message; otherwise the streamed message is
+// edited to its final text.
+func (s *telegramOutboundStream) commitSegment(ctx context.Context) {
 	s.mu.Lock()
 	bufText := strings.TrimSpace(s.buf.String())
 	hasMsg := s.streamMsgID != 0
@@ -419,7 +441,6 @@ func (s *telegramOutboundStream) pushToolCallStart(ctx context.Context, tc *chan
 		_ = s.editStreamMessageFinal(ctx, bufText)
 	}
 	s.resetStreamState()
-	return s.sendToolCallMessage(ctx, tc, channel.BuildToolCallStart(tc))
 }
 
 func (s *telegramOutboundStream) pushToolCallEnd(ctx context.Context, tc *channel.StreamToolCall) error {
@@ -938,6 +959,8 @@ func (s *telegramOutboundStream) Push(ctx context.Context, event channel.Prepare
 		return s.pushToolCallStart(ctx, event.ToolCall)
 	case channel.StreamEventToolCallEnd:
 		return s.pushToolCallEnd(ctx, event.ToolCall)
+	case channel.StreamEventSegmentEnd:
+		return s.pushSegmentEnd(ctx)
 	case channel.StreamEventAttachment:
 		return s.pushAttachment(ctx, event)
 	case channel.StreamEventPhaseEnd:

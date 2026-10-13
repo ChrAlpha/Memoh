@@ -160,6 +160,7 @@ func TestValidateStreamEventSupportedTypes(t *testing.T) {
 		{name: "processing started", event: StreamEvent{Type: StreamEventProcessingStarted}},
 		{name: "processing completed", event: StreamEvent{Type: StreamEventProcessingCompleted}},
 		{name: "reset", event: StreamEvent{Type: StreamEventReset}},
+		{name: "segment end", event: StreamEvent{Type: StreamEventSegmentEnd}},
 		{name: "final", event: StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: "done"}}}},
 		{name: "error", event: StreamEvent{Type: StreamEventError, Error: "boom"}},
 	}
@@ -1848,6 +1849,35 @@ func TestPushDelta_ResetRestartsSplitWindow(t *testing.T) {
 	events := reo.streams[0].Events()
 	if len(events) != 13 || events[6].Type != StreamEventReset {
 		t.Fatalf("expected the reset forwarded between the deltas, got %+v", events)
+	}
+}
+
+func TestPushDelta_SegmentEndRestartsSplitWindow(t *testing.T) {
+	t.Parallel()
+	stream, reo, _ := newDeltaSplitTestStream(t, 100, 2)
+
+	push := func(event StreamEvent) {
+		t.Helper()
+		if err := stream.Push(context.Background(), event); err != nil {
+			t.Fatalf("Push %s failed: %v", event.Type, err)
+		}
+	}
+	for range 6 {
+		push(StreamEvent{Type: StreamEventDelta, Delta: strings.Repeat("x", 10)})
+	}
+	push(StreamEvent{Type: StreamEventSegmentEnd})
+	for range 6 {
+		push(StreamEvent{Type: StreamEventDelta, Delta: strings.Repeat("x", 10)})
+	}
+
+	// The adapter committed the first 60 runes as their own message and only
+	// holds the next 60, so nothing is split.
+	if stream.splitCount != 0 {
+		t.Fatalf("expected no split after segment end, got %d", stream.splitCount)
+	}
+	events := reo.streams[0].Events()
+	if len(events) != 13 || events[6].Type != StreamEventSegmentEnd {
+		t.Fatalf("expected the segment end forwarded between the deltas, got %+v", events)
 	}
 }
 

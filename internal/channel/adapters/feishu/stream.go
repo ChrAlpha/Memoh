@@ -78,15 +78,15 @@ func (s *feishuOutboundStream) Push(ctx context.Context, event channel.PreparedS
 		s.textBuffer.Reset()
 		return nil
 	case channel.StreamEventToolCallStart:
-		bufText := strings.TrimSpace(s.textBuffer.String())
-		if s.cardMessageID != "" && bufText != "" {
-			_ = s.patchCard(ctx, bufText)
-		}
-		s.cardMessageID = ""
-		s.lastPatched = ""
-		s.lastPatchedAt = time.Time{}
-		s.textBuffer.Reset()
+		s.commitSegment(ctx)
 		return s.renderToolCallCard(ctx, event.ToolCall, channel.BuildToolCallStart(event.ToolCall))
+	case channel.StreamEventSegmentEnd:
+		// The text before a hidden tool call keeps its own card. With nothing
+		// buffered, keep the placeholder card for the text that follows.
+		if strings.TrimSpace(s.textBuffer.String()) != "" {
+			s.commitSegment(ctx)
+		}
+		return nil
 	case channel.StreamEventToolCallEnd:
 		s.cardMessageID = ""
 		s.lastPatched = ""
@@ -151,6 +151,19 @@ func (s *feishuOutboundStream) Push(ctx context.Context, event channel.PreparedS
 	default:
 		return nil
 	}
+}
+
+// commitSegment patches the buffered text into the current card and resets
+// the streaming state, so the next text opens a fresh card.
+func (s *feishuOutboundStream) commitSegment(ctx context.Context) {
+	bufText := strings.TrimSpace(s.textBuffer.String())
+	if s.cardMessageID != "" && bufText != "" {
+		_ = s.patchCard(ctx, bufText)
+	}
+	s.cardMessageID = ""
+	s.lastPatched = ""
+	s.lastPatchedAt = time.Time{}
+	s.textBuffer.Reset()
 }
 
 func renderFeishuStreamFinalText(msg channel.Message, buffered string) string {
