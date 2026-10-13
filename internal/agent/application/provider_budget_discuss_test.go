@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -19,30 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/contextview"
 )
 
-type discussBudgetCompactor struct {
-	configs []compaction.TriggerConfig
-	status  string
-	err     error
-	delay   time.Duration
-	started chan struct{}
-}
-
-func (c *discussBudgetCompactor) RunCompactionSync(ctx context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
-	c.configs = append(c.configs, cfg)
-	if c.started != nil {
-		close(c.started)
-	}
-	if c.delay > 0 {
-		select {
-		case <-time.After(c.delay):
-		case <-ctx.Done():
-			return compaction.Result{}, context.Cause(ctx)
-		}
-	}
-	return compaction.Result{Status: c.status}, c.err
-}
-
-func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, *countingDiscussLifecycleProvider, *discussBudgetCompactor, turn.StartTurnCommand) {
+func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, *countingDiscussLifecycleProvider, *gatedCompactionRunner, turn.StartTurnCommand) {
 	t.Helper()
 	logger := slog.New(slog.DiscardHandler)
 	provider := &countingDiscussLifecycleProvider{}
@@ -60,8 +36,9 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 	service.settingsService = policyService.settingsService
 	service.modelsService = policyService.modelsService
 	service.queries = policyService.queries
-	compactor := &discussBudgetCompactor{status: compaction.StatusOK}
-	service.compactionService = compactor
+	runner := newGatedCompactionRunner()
+	t.Cleanup(func() { close(runner.release) })
+	service.compactionService = runner
 	cmd := lifecycleDiscussCommand()
 	cmd.DiscussMessages = nil
 	for i := 0; i < 20; i++ {
@@ -73,11 +50,11 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 		turn.DiscussMessage{Role: "assistant", Content: strings.Repeat("h", 8000)},
 		turn.DiscussMessage{Role: "user", Content: "continue"},
 	)
-	return service, resolver, provider, compactor, cmd
+	return service, resolver, provider, runner, cmd
 }
 
 func TestDiscussProviderAdmissionLeavesFittingHistoryUnchanged(t *testing.T) {
-	service, resolver, _, compactor, cmd := discussBudgetRecoveryFixture(t)
+	service, resolver, _, runner, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
 	provider := &triggerLifecycleProvider{}
 	resolver.resolveResult.RunConfig.Model.Provider = provider
@@ -95,16 +72,17 @@ func TestDiscussProviderAdmissionLeavesFittingHistoryUnchanged(t *testing.T) {
 	for err := range handle.Errs() {
 		t.Errorf("fitting history turn failed: %v", err)
 	}
-	if len(compactor.configs) != 0 || provider.callCount() != 1 || resolver.storeCalls != 1 {
-		t.Fatalf("compaction/provider/history=%d/%d/%d, want 0/1/1 for 50 history tokens within the final 500-token allowance", len(compactor.configs), provider.callCount(), resolver.storeCalls)
+	if provider.callCount() != 1 || resolver.storeCalls != 1 {
+		t.Fatalf("provider/history=%d/%d, want 1/1 for 50 history tokens within the final 500-token allowance", provider.callCount(), resolver.storeCalls)
 	}
+	runner.assertNoPass(t)
 	assertSDKMessagesEqual(t, provider.params.Messages, []sdk.Message{sdk.AssistantMessage(history), sdk.UserMessage(current)})
 }
 
 func TestDiscussProviderAdmissionNeverWaitsForCompaction(t *testing.T) {
 	for _, overflow := range []bool{false, true} {
 		t.Run(fmt.Sprintf("overflow=%t", overflow), func(t *testing.T) {
-			service, resolver, provider, _, cmd := discussBudgetRecoveryFixture(t)
+			service, resolver, provider, runner, cmd := discussBudgetRecoveryFixture(t)
 			configureDiscussLifecycle(service)
 			cmd.DiscussMessages = cmd.DiscussMessages[20:]
 			if overflow {
@@ -114,9 +92,6 @@ func TestDiscussProviderAdmissionNeverWaitsForCompaction(t *testing.T) {
 					Budget: contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 				})}
 			}
-			runner := newGatedCompactionRunner()
-			defer close(runner.release)
-			service.compactionService = runner
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			handle, err := service.StartTurn(ctx, cmd)
@@ -157,7 +132,7 @@ func echoDiscussImages(_ context.Context, _ string, refs []timeline.ImageAttachm
 }
 
 func TestDiscussImageAdmissionDoesNotRequireRecovery(t *testing.T) {
-	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
+	service, resolver, provider, runner, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
 	service.queries.(*controllerQueries).settings.CompactionEnabled = false
 	resolver.resolveResult.RunConfig.SupportsImageInput = true
@@ -172,7 +147,8 @@ func TestDiscussImageAdmissionDoesNotRequireRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	drainDiscuss(t, h)
-	if provider.callCount() != 1 || countRecoveryText(provider.params.Messages, "older-a ") != 1 || len(compactor.configs) != 0 {
-		t.Fatalf("local admission lost text: provider=%d compactions=%d messages=%+v", provider.callCount(), len(compactor.configs), provider.params.Messages)
+	if provider.callCount() != 1 || countRecoveryText(provider.params.Messages, "older-a ") != 1 {
+		t.Fatalf("local admission lost text: provider=%d messages=%+v", provider.callCount(), provider.params.Messages)
 	}
+	runner.assertNoPass(t)
 }

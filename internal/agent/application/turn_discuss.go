@@ -177,6 +177,7 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		}
 	}()
 	if cmd.DiscussContextOverflow {
+		s.scheduleDiscussCompactionWithin(ctx, cmd, s.discussBudget(resolved)-cmd.DiscussCurrentTokens, resolved.ModelID)
 		cause := apperror.New(apperror.CodeContextProtectedOverflow, nil)
 		cfg := resolved.RunConfig
 		cfg.RunID = h.id
@@ -197,12 +198,9 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle, resolved ResolveRunConfigResult) {
 	runConfig := resolved.RunConfig
 	runConfig.RunID = h.id
-	budgetTokens := resolved.ContextBudgetMaxTokens
-	if budgetTokens <= 0 {
-		budgetTokens = s.contextAbsoluteMaxTokens()
-	}
-	admitted, admission := admitDiscussMessages(cmd.DiscussMessages, budgetTokens)
+	admitted, admission := admitDiscussMessages(cmd.DiscussMessages, s.discussBudget(resolved))
 	if admission.ProtectedOverflow {
+		s.scheduleDiscussCompactionWithin(ctx, cmd, admission.HistoryBudgetTokens, resolved.ModelID)
 		s.logger.ErrorContext(ctx, "context_admission_rejected",
 			slog.String("path", "discuss_turn"),
 			slog.String("bot_id", cmd.BotID),
@@ -565,6 +563,7 @@ func (s *Service) pumpDiscussAgent(ctx context.Context, cmd turn.StartTurnComman
 	// the absolute cap before any concatenation (CM-ADM-001).
 	admitted, admission := admitDiscussAgentMessages(cmd.DiscussMessages, s.contextAbsoluteMaxTokens())
 	if admission.ProtectedOverflow {
+		s.scheduleDiscussCompactionWithin(ctx, cmd, admission.HistoryBudgetTokens, "")
 		s.logger.ErrorContext(ctx, "context_admission_rejected",
 			slog.String("path", "discuss_agent"),
 			slog.String("bot_id", cmd.BotID),

@@ -33,8 +33,8 @@ func overflowTestRC() timeline.RenderedContext {
 func TestDiscussChannelOverflowStartsOneMetadataOnlyTurnWithoutConsuming(t *testing.T) {
 	svc := &fakeTurnService{}
 	svc.onStart = func(cmd turn.StartTurnCommand) {
-		if !cmd.DiscussContextOverflow || len(cmd.DiscussMessages) != 0 || cmd.DiscussContextTokens <= 1000 {
-			t.Errorf("overflow must carry pressure metadata only: overflow=%v messages=%d pressure=%d", cmd.DiscussContextOverflow, len(cmd.DiscussMessages), cmd.DiscussContextTokens)
+		if !cmd.DiscussContextOverflow || len(cmd.DiscussMessages) != 0 || cmd.DiscussContextTokens <= 1000 || cmd.DiscussCurrentTokens <= 0 || cmd.DiscussCurrentTokens >= 1000 {
+			t.Errorf("overflow must carry pressure metadata only: overflow=%v messages=%d pressure=%d current=%d", cmd.DiscussContextOverflow, len(cmd.DiscussMessages), cmd.DiscussContextTokens, cmd.DiscussCurrentTokens)
 		}
 	}
 	artifacts := &countingArtifactProvider{artifacts: []timeline.CompactionArtifact{{ID: "summary", Summary: strings.Repeat("s", 8000)}}}

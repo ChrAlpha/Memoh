@@ -102,7 +102,7 @@ func admitDiscussMessages(messages []turn.DiscussMessage, budgetTokens int) ([]t
 		}
 	}
 	decision := turn.AdmitContextEntries(entries, budgetTokens)
-	admission.recordProtection(messages, entries, budgetTokens, decision)
+	admission.HistoryBudgetTokens = max(0, budgetTokens-admission.recordProtection(messages, entries, budgetTokens, decision))
 	admission.EstimatedTokens = decision.EstimatedTokens
 	admission.SelectedTokens = decision.SelectedTokens
 	admission.DroppedMessages = decision.DroppedEntries

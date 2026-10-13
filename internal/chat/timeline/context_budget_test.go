@@ -155,7 +155,7 @@ func TestComposeProtectsEveryUnconsumedExternalInput(t *testing.T) {
 	rc[3].IsMyself = true
 	after := DiscussCursorPosition{SourceCursor: 100}
 	composed, admission := ComposeContextWithArtifactsBudgeted(rc, nil, nil, ComposeBudget{MaxTokens: 810, After: &after})
-	if composed == nil || len(composed.Messages) != 3 {
+	if composed == nil || admission.CurrentTokens != 800 || len(composed.Messages) != 3 {
 		t.Fatalf("batch selection=%+v result=%+v", admission, composed)
 	}
 	for _, message := range composed.Messages[:2] {
@@ -164,7 +164,7 @@ func TestComposeProtectsEveryUnconsumedExternalInput(t *testing.T) {
 		}
 	}
 	composed, admission = ComposeContextWithArtifactsBudgeted(rc, nil, nil, ComposeBudget{MaxTokens: 700, After: &after})
-	if composed == nil || admission.ProtectedOverflow || len(composed.Messages) != 2 || composed.Messages[0].Source.ID != "m3" {
+	if composed == nil || admission.ProtectedOverflow || admission.CurrentTokens != 400 || len(composed.Messages) != 2 || composed.Messages[0].Source.ID != "m3" {
 		t.Fatalf("an oversized batch must keep its newest fitting suffix: admission=%+v result=%+v", admission, composed)
 	}
 	if len(admission.OmittedSources) != 1 || admission.OmittedSources[0].ID != "m2" || !admission.OmittedSources[0].Current {
