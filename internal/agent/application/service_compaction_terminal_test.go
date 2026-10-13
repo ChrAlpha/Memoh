@@ -104,3 +104,34 @@ func TestCompactionWaitsWhileRunIsParkedForDecision(t *testing.T) {
 		t.Fatalf("pass started before parked run became terminal: %s", state)
 	}
 }
+
+func TestTriggeredRunDoesNotEndItsParentCompaction(t *testing.T) {
+	fixture, _ := newRunEndFixture(t)
+	runEndManager(t, fixture.service, sessionledger.New())
+	parent, endParent := WithRunEnd(t.Context())
+	parentWork := make(chan struct{})
+	AfterRunEnds(parent, func() { close(parentWork) })
+	child, _, finish, err := fixture.service.admitTriggeredRun(parent, "subagent", lifecycleTestBotID, lifecycleTestSessionID, "child-run", []byte(`{"kind":"subagent"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childWork := make(chan struct{})
+	AfterRunEnds(child, func() { close(childWork) })
+	finish(RunOutcome{})
+	select {
+	case <-childWork:
+	case <-time.After(time.Second):
+		t.Fatal("child terminal did not release its compaction")
+	}
+	select {
+	case <-parentWork:
+		t.Fatal("child terminal released its parent's compaction")
+	case <-time.After(20 * time.Millisecond):
+	}
+	endParent()
+	select {
+	case <-parentWork:
+	case <-time.After(time.Second):
+		t.Fatal("parent terminal did not release its compaction")
+	}
+}

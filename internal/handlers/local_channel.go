@@ -1571,9 +1571,10 @@ func (h *LocalChannelHandler) admitWSTurn(ctx context.Context, writer *wsWriter,
 		InvocationID: ref.InvocationID,
 		Payload:      submission,
 		Execution: sessionruntime.Execution{
-			Admission: admissionBuilder,
-			AbortCh:   abortCh,
-			Cancel:    cancel,
+			OnTerminal: application.BindRunEnd(ctx),
+			Admission:  admissionBuilder,
+			AbortCh:    abortCh,
+			Cancel:     cancel,
 			// Revoking ownership cancels the run with a cause, which is what lets
 			// the execution below tell "this run was stopped" apart from "this run
 			// was taken away". Only the second must leave no durable trace.
@@ -1735,6 +1736,7 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 	// process may no longer write for the run.
 	streamCtx, streamCancelCause := context.WithCancelCause(baseCtx)
 	streamCancel := func() { streamCancelCause(context.Canceled) }
+	streamCtx, endRun := application.WithRunEnd(streamCtx)
 	abortCh := make(chan struct{}, 1)
 
 	admission, ok := h.admitWSTurn(streamCtx, writer, botID, ref, logLabel, submission, admissionBuilder, abortCh, streamCancel, streamCancelCause)
@@ -1768,14 +1770,13 @@ func (h *LocalChannelHandler) startWSStream(baseCtx, connCtx context.Context, wr
 	forwarded := make(chan struct{})
 	go func() {
 		defer streamCancel()
-		runCtx, endRun := application.WithRunEnd(streamCtx)
 		defer endRun()
 		delivered, err := func() (application.RunOutcome, error) {
 			if onFinish != nil {
 				defer onFinish()
 			}
 			defer close(eventCh)
-			return runner(runCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
+			return runner(streamCtx, ref, wsAdmittedTurn{TurnID: admission.TurnID, Position: admission.TurnPosition, Handle: admission.Handle, InjectCh: injectCh}, eventCh, abortCh)
 		}()
 		close(injectCh)
 		// Every event this run produced has to be published before the run is

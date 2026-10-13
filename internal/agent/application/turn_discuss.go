@@ -119,7 +119,7 @@ func (h *discussHandle) emitErr(err error) bool {
 }
 
 func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle) {
-	ctx, endRun := WithRunEnd(ctx)
+	ctx, endRun := joinRunEnd(ctx)
 	defer endRun()
 	// Registered first so it runs last: the span covers the run's terminal
 	// write and reports what the run finished with.

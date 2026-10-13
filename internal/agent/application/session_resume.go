@@ -418,7 +418,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		req.discussPromptPrefix = resumeInstruction
 		req.Query = resumeInstruction + discussAgentFullContextPrompt(data.DiscussMessages) + req.discussPromptSuffix
 	}
-	runCtx, endRun := WithRunEnd(runCtx)
+	runCtx, endRun := joinRunEnd(runCtx)
 	chunks, errs := s.streamTurnChat(runCtx, req)
 	h := &runHandle{
 		id: admission.RunID, ctx: runCtx, cancel: cancel, events: make(chan turn.Event, 16), errs: make(chan error, 1), inject: make(chan turn.InjectMessage),

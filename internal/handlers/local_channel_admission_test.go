@@ -94,6 +94,13 @@ func (a *stubWSTurnAdmitter) FinishRunWithErrorCode(_ context.Context, handle se
 	case a.terminal <- wsTerminalWrite{handle: handle, status: status, errorCode: errorCode}:
 	default:
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, input := range a.admitted {
+		if input.Execution.OnTerminal != nil {
+			input.Execution.OnTerminal()
+		}
+	}
 	return sessionruntime.TerminalRun{}, nil
 }
 

@@ -308,6 +308,7 @@ func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, 
 		resumeRunID = resumeRunIDs[0]
 	}
 	runCtx, cancelCause := context.WithCancelCause(ctx)
+	runCtx, _ = WithRunEnd(runCtx)
 	admission, err := s.sessionRuntime.Admit(runCtx, sessionruntime.AdmitInput{
 		BotID:        botID,
 		SessionID:    threadID,
@@ -315,6 +316,7 @@ func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, 
 		Payload:      submission,
 		ResumeRunID:  resumeRunID,
 		Execution: sessionruntime.Execution{
+			OnTerminal: BindRunEnd(runCtx),
 			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 				if viewFn == nil {
 					return sessionruntime.RunAdmissionView{}, nil
