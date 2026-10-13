@@ -381,7 +381,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	if view != nil {
 		var sources []string
 		for _, edit := range view.Manifest.EditTrace {
-			if id, ok := strings.CutPrefix(edit.EditID, "images.budget_omit."); ok {
+			if id, ok := strings.CutPrefix(edit.EditID, imageOmitEditPrefix); ok {
 				for _, frag := range frags {
 					if frag.ID == id {
 						sources = append(sources, frag.Provenance.SourceID)

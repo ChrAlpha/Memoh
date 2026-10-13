@@ -8,6 +8,8 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
+const imageOmitEditPrefix = "images.budget_omit."
+
 func shedOptionalHistoryImages(frags []contextfrag.ContextFrag, optional []string, historyBudget int) ([]contextfrag.ContextFrag, []fragBudgetEdit) {
 	excess, total, trimmable, inInput := -historyBudget, -historyBudget, false, false
 	for _, frag := range frags {
@@ -52,7 +54,7 @@ func shedOptionalHistoryImages(frags []contextfrag.ContextFrag, optional []strin
 		}
 		if len(kept.Content) != len(msg.Content) {
 			edits = append(edits, fragBudgetEdit{fragID: frag.ID, reason: string(contextfrag.MutationCurrentInputImagesOmitted), trace: contextfrag.ContextEditTrace{
-				EditID: "images.budget_omit." + frag.ID, Op: contextfrag.EditReplace, Slot: frag.Slot, Refs: []contextfrag.ContextRef{out[i].Ref},
+				EditID: imageOmitEditPrefix + frag.ID, Op: contextfrag.EditReplace, Slot: frag.Slot, Refs: []contextfrag.ContextRef{out[i].Ref},
 			}})
 		}
 	}

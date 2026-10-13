@@ -30,28 +30,31 @@ func (l chatHistoryLayout) owns(frag contextfrag.ContextFrag) bool {
 }
 
 func (l chatHistoryLayout) availableHistoryBudget(cfg native.RunConfig) (int, int) {
-	plan := cfg.ContextManifest.BudgetPlan
-	if plan == nil {
-		return 0, 0
-	}
-	available, raw, summaries := plan.HistoryBudget, 0, 0
-	for _, frag := range cfg.ContextSourceFrags {
-		if frag.Slot == contextfrag.SlotSystem || frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
-			continue
-		}
-		if l.owns(frag) {
-			if frag.Kind == contextfrag.KindConversationSummary {
-				summaries += contextfrag.ResolveProviderBudgetFragTokens(frag)
-			} else {
-				raw += contextfrag.ResolveProviderBudgetFragTokens(frag)
-			}
-		} else {
-			available -= contextfrag.ResolveProviderBudgetFragTokens(frag)
-		}
-	}
-	pressure := max(contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(l.pressureTokens))), raw+summaries)
+	available, history := historyAllowance(cfg, l.owns)
+	pressure := max(contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(l.pressureTokens))), history)
 	if pressure <= available {
 		return 0, pressure
 	}
 	return max(0, available), pressure
+}
+
+// historyAllowance returns what the final history budget leaves after every
+// frag that is neither system, current input nor history, and the history's
+// cost.
+func historyAllowance(cfg native.RunConfig, history func(contextfrag.ContextFrag) bool) (int, int) {
+	plan := cfg.ContextManifest.BudgetPlan
+	if plan == nil {
+		return 0, 0
+	}
+	available, cost := plan.HistoryBudget, 0
+	for _, frag := range cfg.ContextSourceFrags {
+		switch {
+		case frag.Slot == contextfrag.SlotSystem, frag.Slot == contextfrag.SlotCurrentUser, frag.Kind == contextfrag.KindCurrentUserMessage:
+		case history(frag):
+			cost += contextfrag.ResolveProviderBudgetFragTokens(frag)
+		default:
+			available -= contextfrag.ResolveProviderBudgetFragTokens(frag)
+		}
+	}
+	return available, cost
 }

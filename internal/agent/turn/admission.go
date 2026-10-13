@@ -156,9 +156,9 @@ func newestRawEntry(entries []AdmissionEntry) int {
 
 // ProtectedAdmissionEntries marks the current entries no admission may drop:
 // the whole unconsumed batch when it fits beside the pinned entries, otherwise
-// the newest contiguous run of it that leaves a tenth of the budget for the
-// summary of the rest. The newest current entry is always protected. Older
-// current entries become ordinary history that recovery compacts.
+// the newest contiguous run of it that leaves a tenth of the budget for older
+// context. The newest current entry is always protected. Older current entries
+// become ordinary history; a run that omits them records the omission.
 func ProtectedAdmissionEntries(entries []AdmissionEntry, budgetTokens int) []bool {
 	current := CurrentAdmissionEntries(entries)
 	if budgetTokens <= 0 {

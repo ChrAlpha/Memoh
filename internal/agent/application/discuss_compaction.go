@@ -47,23 +47,13 @@ func discussCompactionRequest(cmd turn.StartTurnCommand) ChatRequest {
 
 func (s *Service) discussBudgetObserver(cmd turn.StartTurnCommand, modelID string) func(context.Context, native.RunConfig) {
 	return func(ctx context.Context, cfg native.RunConfig) {
-		plan := cfg.ContextManifest.BudgetPlan
-		if plan == nil {
-			return
-		}
-		available, pressure, newest := plan.HistoryBudget, 0, 0
+		available, pressure := historyAllowance(cfg, func(frag contextfrag.ContextFrag) bool {
+			return frag.Kind == contextfrag.KindConversationSummary || frag.Slot == contextfrag.SlotHistory && frag.Kind == contextfrag.KindConversationEvent
+		})
+		newest := 0
 		for _, message := range cmd.DiscussMessages {
 			if message.Source != nil && message.Source.Current {
 				newest = discussMessageTokens(message)
-			}
-		}
-		for _, frag := range cfg.ContextSourceFrags {
-			switch {
-			case frag.Slot == contextfrag.SlotSystem, frag.Slot == contextfrag.SlotCurrentUser, frag.Kind == contextfrag.KindCurrentUserMessage:
-			case frag.Kind == contextfrag.KindConversationSummary, frag.Slot == contextfrag.SlotHistory && frag.Kind == contextfrag.KindConversationEvent:
-				pressure += contextfrag.ResolveProviderBudgetFragTokens(frag)
-			default:
-				available -= contextfrag.ResolveProviderBudgetFragTokens(frag)
 			}
 		}
 		pressure = max(pressure, contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(max(0, cmd.DiscussContextTokens-newest)))))
