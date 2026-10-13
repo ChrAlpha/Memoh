@@ -96,7 +96,7 @@ func TestDiscussReplyHasItsOwnRequestID(t *testing.T) {
 	for range 2 {
 		logs.Reset()
 		sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
-		driver.handleReply(context.Background(), sess, recomposeTestRC(), driver.logger)
+		driver.handleReply(context.Background(), sess, overflowTestRC(), driver.logger)
 
 		var turnID string
 		ids := map[string]bool{}

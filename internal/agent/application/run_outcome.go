@@ -129,12 +129,6 @@ func (r *outcomeRecorder) observe(event native.StreamEvent) error {
 	return eventErr
 }
 
-// handOff ends a run that returned its context to the driver for
-// recomposition before any model call; the resubmitted turn owns the outcome.
-func (r *outcomeRecorder) handOff() {
-	r.deferred = true
-}
-
 // observeSnapshot records the terminal snapshot decoded from a terminal event.
 func (r *outcomeRecorder) observeSnapshot(snap terminalSnapshot) {
 	r.deferred = r.deferred || snap.deferredToolID != ""

@@ -230,24 +230,6 @@ func TestAutomaticCompactionAppliesTargetAndBoundsDrain(t *testing.T) {
 			t.Fatalf("pass %d HardPressure = true, want false below 75%% of the window", pass+1)
 		}
 	}
-
-	runner.configs = nil
-	result := service.runBudgetCompactionSync(context.Background(), req, 150000, 200000, "")
-	if result.Status != compaction.StatusOK {
-		t.Fatalf("recovery compaction status = %q, want %q", result.Status, compaction.StatusOK)
-	}
-	if len(runner.configs) != 1 {
-		t.Fatalf("recovery compaction passes = %d, want 1", len(runner.configs))
-	}
-	if got := runner.configs[0].TargetTokens; got != 100000 {
-		t.Fatalf("recovery TargetTokens = %d, want 100000 soft-share cap", got)
-	}
-	if !runner.configs[0].AllowFrontierFusion {
-		t.Fatal("recovery must be able to replace oversized summaries")
-	}
-	if got := runner.configs[0].HistoryBudgetTokens; got != 200000 {
-		t.Fatalf("recovery HistoryBudgetTokens = %d, want 200000", got)
-	}
 }
 
 // A configured target at or above the hard share would keep every raw token
@@ -329,19 +311,7 @@ func TestDrainContinuesPastAnIneffectiveSummary(t *testing.T) {
 	}
 }
 
-func TestRecoveryRunsPastAnIneffectiveSummary(t *testing.T) {
-	t.Parallel()
-
-	service, runner := newControllerPolicyService(t, nil)
-	runner.errs = []error{fmt.Errorf("pass: %w", compaction.ErrIneffectiveSummary)}
-	req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
-	result := service.runBudgetCompactionSync(context.Background(), req, 150000, 200000, "")
-	if result.Status != compaction.StatusOK || len(runner.configs) != 2 {
-		t.Fatalf("recovery = %q after %d passes, want the next pass to move past the rows that did not shrink", result.Status, len(runner.configs))
-	}
-}
-
-func TestScanContinuationIsBoundedAndDoesNotReportRecovery(t *testing.T) {
+func TestScanContinuationIsBounded(t *testing.T) {
 	t.Parallel()
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pending=%t", pending), func(t *testing.T) {
@@ -358,12 +328,6 @@ func TestScanContinuationIsBoundedAndDoesNotReportRecovery(t *testing.T) {
 			}
 			if len(runner.configs) != want {
 				t.Fatalf("async passes=%d, want %d", len(runner.configs), want)
-			}
-			runner.configs = nil
-			req := ChatRequest{BotID: "00000000-0000-0000-0000-000000000453", ThreadID: "00000000-0000-0000-0000-000000000454"}
-			res := service.runBudgetCompactionSync(t.Context(), req, 150000, 200000, "")
-			if res.Status != compaction.StatusNoop || len(runner.configs) != min(2, want) {
-				t.Fatalf("sync scan reported recovery or exceeded its bound: %+v passes=%d", res, len(runner.configs))
 			}
 		})
 	}

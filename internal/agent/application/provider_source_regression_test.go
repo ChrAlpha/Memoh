@@ -61,11 +61,11 @@ func TestDiscussAdmissionKeepsNewestFittingSuffixOfCurrentBatch(t *testing.T) {
 	}
 	for _, admit := range []func([]turn.DiscussMessage, int) ([]turn.DiscussMessage, discussAdmission){admitDiscussMessages, admitDiscussAgentMessages} {
 		kept, admission := admit(messages, 1000)
-		if admission.ProtectedOverflow || len(admission.ProtectedSources) != 1 || admission.ProtectedSources[0].ID != "b" || admission.ProtectedTokens != 600 {
+		if admission.ProtectedOverflow || admission.ProtectedTokens != 600 {
 			t.Fatalf("an oversized batch must protect its newest fitting suffix: %+v", admission)
 		}
-		if len(admission.OmittedSources) != 1 || admission.OmittedSources[0].ID != "a" || admission.RecoveryBudgetTokens <= 0 || len(kept) != 2 {
-			t.Fatalf("older input must be reported for recovery, with room left to compact it: %+v kept=%d", admission, len(kept))
+		if len(admission.OmittedSources) != 1 || admission.OmittedSources[0].ID != "a" || len(kept) != 2 || kept[0].Source.ID != "b" {
+			t.Fatalf("older input must be reported as omitted: %+v kept=%d", admission, len(kept))
 		}
 		if _, admission := admit(messages[1:2], 500); !admission.ProtectedOverflow {
 			t.Fatalf("the newest input alone must never be dropped: %+v", admission)
@@ -79,7 +79,7 @@ func TestDiscussBackgroundCompactionProtectsEveryPendingSource(t *testing.T) {
 	defer close(runner.release)
 	service.compactionService = runner
 	sources := []turn.ContextMessageSource{{Kind: "external", ID: "a", Current: true}, {Kind: "external", ID: "b", Current: true}}
-	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 100, DiscussCurrentSources: sources}
+	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentSources: sources}
 	ctx, endRun := WithRunEnd(t.Context())
 	service.scheduleDiscussCompaction(ctx, cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000})
 	runner.assertNoPass(t)

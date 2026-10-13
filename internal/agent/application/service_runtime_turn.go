@@ -130,23 +130,6 @@ func (s *Service) streamRuntimeChunks(ctx context.Context, driver external.Drive
 				done = nil
 				continue
 			}
-			if errors.Is(err, native.ErrContextRecompose) && !cancelled {
-				if ctx.Err() != nil {
-					cancelled = true
-					ctxDone = nil
-					fail(ctx.Err())
-					continue
-				}
-				data, _ := json.Marshal(native.StreamEvent{Type: native.EventContextRecompose})
-				select {
-				case chunkCh <- data:
-				case <-ctx.Done():
-					cancelled = true
-					ctxDone = nil
-					fail(ctx.Err())
-				}
-				continue
-			}
 			if err != nil && !cancelled {
 				fail(err)
 			}
@@ -230,11 +213,9 @@ func (s *Service) streamRuntimeWS(ctx context.Context, driver external.Driver, r
 		contextLifecycle.SetMemoryRecall(*memoryTrace)
 	}
 	failAdmission := func(err error) (RunOutcome, error) {
-		if !errors.Is(err, native.ErrContextRecompose) {
-			s.contextLifecycleTerminal(ctx, native.RunConfig{
-				RunID: req.RunID, Identity: native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID}, ContextLifecycle: contextLifecycle,
-			})(err)
-		}
+		s.contextLifecycleTerminal(ctx, native.RunConfig{
+			RunID: req.RunID, Identity: native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID}, ContextLifecycle: contextLifecycle,
+		})(err)
 		return RunOutcome{}, err
 	}
 	if req.discussMessages != nil {

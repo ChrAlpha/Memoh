@@ -13,8 +13,6 @@ import (
 
 const discussIdleTimeout = 10 * time.Minute
 
-const maxDiscussRecoveries = 3
-
 func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 	initialConfig := d.sessionConfigSnapshot(sess)
 	sessionID := initialConfig.ThreadID
@@ -67,8 +65,7 @@ func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 
 // handleReply answers one trigger under a request id of its own. The session
 // worker outlives every message that wakes it, so no request it could inherit
-// an id from names this work; resubmits after a recompose are the same work
-// and share the id.
+// an id from names this work.
 func (d *DiscussDriver) handleReply(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger) {
 	ctx = logger.ContextWithRequestID(ctx, httpx.NewRequestID())
 	d.handleReplyWithTurn(ctx, sess, rc, log, d.turnServiceSnapshot())
@@ -115,69 +112,55 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 		return
 	}
 
-	for recoveries := 0; recoveries <= maxDiscussRecoveries; recoveries++ {
-		artifacts, artifactsErr := d.loadArtifacts(ctx, cfg)
-		if artifactsErr != nil {
-			log.WarnContext(ctx, "context_admission_degraded",
-				slog.String("reason", "artifact_load_failed"),
-				slog.Any("error", artifactsErr))
-		}
-		plan, admission, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessed, artifacts, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
-		if !ok {
-			if admission.ProtectedOverflow {
-				log.ErrorContext(ctx, "context_admission_rejected",
-					slog.String("code", "context.protected_overflow"),
-					slog.Int("estimated_tokens", admission.EstimatedTokens),
-					slog.Int("budget_tokens", d.admissionMaxTokens()))
-			} else {
-				return
-			}
-		}
-		if admission.DroppedEntries > 0 {
-			log.InfoContext(ctx, "context_admission",
-				slog.String("path", "discuss_compose"),
-				slog.Int("estimated_tokens", admission.EstimatedTokens),
-				slog.Int("selected_tokens", admission.SelectedTokens),
-				slog.Int("budget_tokens", d.admissionMaxTokens()),
-				slog.Int("dropped_entries", admission.DroppedEntries),
-				slog.Int("total_entries", admission.TotalEntries),
-				slog.Bool("degraded_artifacts", artifactsErr != nil))
-		}
-		log.InfoContext(ctx, "triggering discuss turn",
-			slog.Int("messages", plan.messageCount),
-			slog.Int("estimated_tokens", plan.estimatedTokens))
-
-		plan.command.DiscussRecoveryExhausted = recoveries == maxDiscussRecoveries
-		outcome, started := d.runner.Run(ctx, turnSvc, plan.command, log)
-		if !started || outcome.cancelled || outcome.runtimeType == "" {
-			return
-		}
-		if outcome.recomposeRequested {
-			if plan.command.DiscussRecoveryExhausted {
-				log.WarnContext(ctx, "discuss recompose limit reached, deferring to next trigger",
-					slog.Int("recoveries", recoveries))
-				return
-			}
-			log.InfoContext(ctx, "discuss recompose requested, rebuilding context",
-				slog.Int("recoveries", recoveries+1))
-			continue
-		}
-		if outcome.skipped {
-			d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
-			return
-		}
+	artifacts, artifactsErr := d.loadArtifacts(ctx, cfg)
+	if artifactsErr != nil {
+		log.WarnContext(ctx, "context_admission_degraded",
+			slog.String("reason", "artifact_load_failed"),
+			slog.Any("error", artifactsErr))
+	}
+	plan, admission, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessed, artifacts, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
+	if !ok {
 		if admission.ProtectedOverflow {
+			log.ErrorContext(ctx, "context_admission_rejected",
+				slog.String("code", "context.protected_overflow"),
+				slog.Int("estimated_tokens", admission.EstimatedTokens),
+				slog.Int("budget_tokens", d.admissionMaxTokens()))
+		} else {
 			return
 		}
-		if outcome.runtimeType == sessionRuntimeACPAgent {
-			if outcome.streamed && outcome.terminal && !outcome.failed {
-				d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
-			}
-			return
-		}
-		if outcome.endedClean || !outcome.failed {
+	}
+	if admission.DroppedEntries > 0 {
+		log.InfoContext(ctx, "context_admission",
+			slog.String("path", "discuss_compose"),
+			slog.Int("estimated_tokens", admission.EstimatedTokens),
+			slog.Int("selected_tokens", admission.SelectedTokens),
+			slog.Int("budget_tokens", d.admissionMaxTokens()),
+			slog.Int("dropped_entries", admission.DroppedEntries),
+			slog.Int("total_entries", admission.TotalEntries),
+			slog.Bool("degraded_artifacts", artifactsErr != nil))
+	}
+	log.InfoContext(ctx, "triggering discuss turn",
+		slog.Int("messages", plan.messageCount),
+		slog.Int("estimated_tokens", plan.estimatedTokens))
+
+	outcome, started := d.runner.Run(ctx, turnSvc, plan.command, log)
+	if !started || outcome.cancelled || outcome.runtimeType == "" {
+		return
+	}
+	if outcome.skipped {
+		d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
+		return
+	}
+	if admission.ProtectedOverflow {
+		return
+	}
+	if outcome.runtimeType == sessionRuntimeACPAgent {
+		if outcome.streamed && outcome.terminal && !outcome.failed {
 			d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
 		}
 		return
+	}
+	if outcome.endedClean || !outcome.failed {
+		d.cursor.Advance(ctx, sess, cfg, plan.consumed, log)
 	}
 }

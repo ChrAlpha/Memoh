@@ -270,16 +270,10 @@ func TestDiscussAtHardPressureRunsTheModelWhileCompactionIsPending(t *testing.T)
 	close(agent.release)
 	drained := make(chan []turn.Event, 1)
 	go func() { drained <- drainDiscuss(t, h) }()
-	var events []turn.Event
 	select {
-	case events = <-drained:
+	case <-drained:
 	case <-time.After(2 * time.Second):
 		t.Fatal("discuss run did not end")
-	}
-	for _, event := range events {
-		if event.Kind == turn.DiscussEventRecompose {
-			t.Fatal("discuss under hard pressure ended its run to recompose")
-		}
 	}
 	cfg := runner.awaitPass(t)
 	if cfg.SessionID != scheduleSessionID || !cfg.HardPressure || cfg.ContextWindowTokens != 1000 || cfg.TargetTokens != 400 {

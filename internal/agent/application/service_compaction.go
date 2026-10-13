@@ -265,65 +265,6 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 	return nil
 }
 
-// runBudgetCompactionSync compacts while a turn waits, only when the turn's
-// context does not fit its final history allowance: older history becomes
-// summaries instead of being dropped. A noop leaves the turn to selection.
-func (s *Service) runBudgetCompactionSync(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) compaction.Result {
-	if ctx.Err() != nil {
-		return compaction.Result{}
-	}
-	if s.compactionService == nil || s.settingsService == nil {
-		s.logger.WarnContext(ctx, "compaction sync: skipped, service or settings nil")
-		return compaction.Result{}
-	}
-	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
-	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed to load settings", slog.Any("error", err))
-		return compaction.Result{}
-	}
-	if !botSettings.CompactionEnabled {
-		s.logger.WarnContext(ctx, "compaction sync: compaction disabled, skipping")
-		return compaction.Result{}
-	}
-	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)
-	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed to build config", slog.Any("error", err))
-		return compaction.Result{}
-	}
-	if cfg.ModelID == "" {
-		// No model or model disabled means there is nothing to compact.
-		return compaction.Result{}
-	}
-	cfg.ProtectedSources = compactionProtectedSources(req)
-	cfg.AllowFrontierFusion = true
-	cfg.TargetTokens = hardPressureTargetTokens(botSettings.CompactionTargetPercent, historyBudget)
-	cfg.ContextWindowTokens = historyBudget
-	cfg.HardPressure = true
-	cfg.HistoryBudgetTokens = historyBudget
-
-	s.logger.InfoContext(ctx, "compaction sync: running synchronously",
-		slog.String("bot_id", req.BotID),
-		slog.String("session_id", req.ThreadID),
-		slog.Int("input_tokens", inputTokens),
-		slog.String("model_id", cfg.ModelID),
-	)
-
-	res, err := s.compactionService.RunCompactionSync(ctx, cfg)
-	if errors.Is(err, compaction.ErrIneffectiveSummary) || (err == nil && res.ScanPending) {
-		res, err = s.compactionService.RunCompactionSync(ctx, cfg)
-	}
-	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed", slog.Any("error", err))
-		return compaction.Result{}
-	}
-	s.logger.InfoContext(ctx, "compaction sync: finished",
-		slog.String("bot_id", req.BotID),
-		slog.String("session_id", req.ThreadID),
-		slog.String("status", res.Status),
-	)
-	return res
-}
-
 // buildCompactionConfig resolves the summarizer through the shared model
 // policy — explicit override first, then the turn's actually-resolved model,
 // then the bot chat default, then the session's latest model — and attaches
@@ -379,8 +320,6 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 }
 
 // compactionProtectedSources is the current input a compaction must keep raw.
-// Discuss recovery passes the protected suffix its admission chose, so older
-// unconsumed input stays compactable.
 func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 	sources := append([]turn.ContextMessageSource(nil), req.discussCurrentSources...)
 	if req.ExternalMessageID != "" {

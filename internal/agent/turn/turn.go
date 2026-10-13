@@ -118,16 +118,15 @@ type StartTurnCommand struct {
 	// before the runtime starts streaming.
 	DiscussCurrentSources []ContextMessageSource
 	// DiscussOmittedSources is older unconsumed input Channel selection left
-	// out of DiscussMessages; the server compacts it or records its omission.
+	// out of DiscussMessages; the server records its omission.
 	DiscussOmittedSources []ContextMessageSource
 	DiscussMessages       []DiscussMessage
 	DiscussImageRefs      []DiscussImageRef
-	// Pressure is measured before Channel selection. Overflow requests recovery
-	// without materializing or forwarding the rejected context.
-	DiscussContextTokens     int
-	DiscussRecoveryExhausted bool
-	DiscussContextOverflow   bool
-	DiscussCurrentTokens     int
+	// Pressure is measured before Channel selection. Overflow fails the turn
+	// without materializing or forwarding the rejected context; the server
+	// still reports the pressure as compaction demand.
+	DiscussContextTokens   int
+	DiscussContextOverflow bool
 	// DiscussAddressed covers an explicit @-mention, a reply-to, or a direct
 	// (1:1) conversation. Expensive external runtimes (ACP) use it as a
 	// participation gate and skip the run when false. Mention/reply details
@@ -168,11 +167,6 @@ const (
 	// DiscussEventSkipped signals the runtime declined to start (e.g. ACP
 	// participation gate); the run ends after this event.
 	DiscussEventSkipped = "discuss_skipped"
-	// DiscussEventRecompose signals the runtime compacted the thread
-	// synchronously before calling the model; the run ends after this event
-	// and the driver must recompose against the refreshed artifact frontier
-	// and resubmit (CM-CMP-001). The cursor must not advance.
-	DiscussEventRecompose = "discuss_recompose"
 )
 
 // DiscussRunResolvedPayload is the payload of DiscussEventRunResolved.

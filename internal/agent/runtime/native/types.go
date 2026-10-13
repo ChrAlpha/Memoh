@@ -188,7 +188,6 @@ type RunConfig struct {
 	ContextBudgetMaxTokens         int
 	// ModelMaxOutputTokens is the model's configured output cap; zero means unknown.
 	ModelMaxOutputTokens         int
-	RecoverContextBudget         func(context.Context, RunConfig) (RunConfig, bool, error)
 	ObserveContextBudget         func(context.Context, RunConfig)
 	ContextRecentProtectTokens   *int
 	ContextHistoryTokenEstimates []int

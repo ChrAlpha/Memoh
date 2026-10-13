@@ -38,7 +38,7 @@ func TestOptionalHistoryImagesRespectNoticeAndOriginalSources(t *testing.T) {
 }
 
 func TestImageOmissionAuditSurvivesLaterTextDrop(t *testing.T) {
-	cfg := recoveryBudgetFixture()
+	cfg := providerBudgetFixture()
 	frag := stableHistoryMessageFrag("history", sdk.UserMessage(strings.Repeat("text", 2000), sdk.ImagePart{Image: "data:image/png;base64,a"}))
 	frag.Provenance.SourceID = "older"
 	cfg.ContextSourceFrags[1] = frag

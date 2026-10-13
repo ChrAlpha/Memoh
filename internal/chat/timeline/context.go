@@ -287,10 +287,8 @@ type ComposeAdmission struct {
 	EstimatedTokens int
 	// SelectedTokens is the estimate of what was actually materialized.
 	SelectedTokens int
-	// CurrentTokens is the cost of the protected current input. OmittedSources
-	// lists older unconsumed input the selection left out; recovery must
-	// compact it or the run must record its omission.
-	CurrentTokens  int
+	// OmittedSources lists older unconsumed input the selection left out; the
+	// run must record its omission.
 	OmittedSources []turn.ContextMessageSource
 	// TotalEntries and DroppedEntries count merge entries, not messages.
 	TotalEntries   int
@@ -337,11 +335,6 @@ func ComposeContextWithArtifactsBudgeted(
 		TotalEntries:      len(entries),
 		DroppedEntries:    decision.DroppedEntries,
 		ProtectedOverflow: decision.ProtectedOverflow,
-	}
-	for i, protected := range turn.ProtectedAdmissionEntries(admitted, budget.MaxTokens) {
-		if protected {
-			admission.CurrentTokens += admitted[i].Cost
-		}
 	}
 	if decision.ProtectedOverflow {
 		return nil, admission

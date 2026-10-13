@@ -2,7 +2,6 @@ package native
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -13,8 +12,6 @@ import (
 // ContextViewApplier rebuilds provider-facing fields from the authoritative
 // context fragments immediately before generate options are assembled.
 type ContextViewApplier func(context.Context, RunConfig) (RunConfig, error)
-
-var ErrContextRecompose = errors.New("context requires recomposition after compaction")
 
 const (
 	DefaultToolOutputMaxBytes  = 64 * 1024

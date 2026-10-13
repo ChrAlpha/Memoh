@@ -10,18 +10,18 @@ import (
 // discussAdmission reports the agent-side admission decision made on a
 // composed discuss context before any SDK materialization (CM-ADM-001).
 type discussAdmission struct {
-	EstimatedTokens      int
-	SelectedTokens       int
-	BudgetTokens         int
-	DroppedMessages      int
-	RecoveryBudgetTokens int
-	// ProtectedSources is the current input admission may not drop: the whole
-	// unconsumed batch when it fits, otherwise its newest fitting suffix.
-	// ProtectedTokens is its cost. OmittedSources is older current input the
-	// selection left out; recovery compacts it or the run records it.
-	ProtectedSources []turn.ContextMessageSource
-	ProtectedTokens  int
-	OmittedSources   []turn.ContextMessageSource
+	EstimatedTokens int
+	SelectedTokens  int
+	BudgetTokens    int
+	DroppedMessages int
+	// HistoryBudgetTokens is what the budget leaves beside the protected
+	// current input: the whole unconsumed batch when it fits, otherwise its
+	// newest fitting suffix. ProtectedTokens is that input's cost.
+	// OmittedSources is older current input the selection left out; the run
+	// records its omission.
+	HistoryBudgetTokens int
+	ProtectedTokens     int
+	OmittedSources      []turn.ContextMessageSource
 	// ProtectedOverflow is set when artifact summaries plus the newest
 	// message alone exceed the budget, or when the newest message is a tool
 	// response that cannot open a valid window; the turn must fail closed
@@ -65,7 +65,7 @@ func admitDiscussAgentContext(messages []turn.DiscussMessage, budgetTokens, cont
 	}
 	decision := turn.AdmitContextEntries(entries, available)
 	protectedCost := admission.recordProtection(messages, entries, available, decision)
-	admission.RecoveryBudgetTokens = turn.EstimateTokensFromBytes(max(0, available-protectedCost))
+	admission.HistoryBudgetTokens = turn.EstimateTokensFromBytes(max(0, available-protectedCost))
 	admission.SelectedTokens = turn.EstimateTokensFromBytes(fixedBytes+decision.SelectedTokens) + imageTokens
 	admission.DroppedMessages = decision.DroppedEntries
 	admission.ProtectedOverflow = decision.ProtectedOverflow
@@ -88,7 +88,7 @@ func admitDiscussAgentContext(messages []turn.DiscussMessage, budgetTokens, cont
 // tool response at the window start. The input slice is not modified; the
 // returned slice shares its backing payloads.
 func admitDiscussMessages(messages []turn.DiscussMessage, budgetTokens int) ([]turn.DiscussMessage, discussAdmission) {
-	admission := discussAdmission{BudgetTokens: budgetTokens, RecoveryBudgetTokens: budgetTokens}
+	admission := discussAdmission{BudgetTokens: budgetTokens}
 	if len(messages) == 0 {
 		return messages, admission
 	}
@@ -102,7 +102,7 @@ func admitDiscussMessages(messages []turn.DiscussMessage, budgetTokens int) ([]t
 		}
 	}
 	decision := turn.AdmitContextEntries(entries, budgetTokens)
-	admission.RecoveryBudgetTokens = max(0, budgetTokens-admission.recordProtection(messages, entries, budgetTokens, decision))
+	admission.recordProtection(messages, entries, budgetTokens, decision)
 	admission.EstimatedTokens = decision.EstimatedTokens
 	admission.SelectedTokens = decision.SelectedTokens
 	admission.DroppedMessages = decision.DroppedEntries
@@ -122,8 +122,9 @@ func admitDiscussMessages(messages []turn.DiscussMessage, budgetTokens int) ([]t
 	return kept, admission
 }
 
-// recordProtection records which current input the decision protects and
-// which it omits, and returns the protected cost in the entries' unit.
+// recordProtection records the cost of the current input the decision
+// protects and which it omits, and returns the protected cost in the entries'
+// unit.
 func (a *discussAdmission) recordProtection(messages []turn.DiscussMessage, entries []turn.AdmissionEntry, budget int, decision turn.AdmissionDecision) int {
 	cost := 0
 	protected := turn.ProtectedAdmissionEntries(entries, budget)
@@ -132,9 +133,6 @@ func (a *discussAdmission) recordProtection(messages []turn.DiscussMessage, entr
 		case protected[i]:
 			cost += entries[i].Cost
 			a.ProtectedTokens += discussMessageTokens(messages[i])
-			if source := messages[i].Source; source != nil {
-				a.ProtectedSources = append(a.ProtectedSources, *source)
-			}
 		case current && !decision.ProtectedOverflow && !decision.Selected[i]:
 			if source := messages[i].Source; source != nil {
 				a.OmittedSources = append(a.OmittedSources, *source)

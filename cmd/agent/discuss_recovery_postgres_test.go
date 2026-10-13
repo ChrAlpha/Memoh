@@ -187,6 +187,11 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		driver.StopAll()
 		_ = manager.Close()
 	}
+	var rawGrowth int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND source_message_id LIKE 'growth-%' AND compact_id IS NULL`, sessionID).Scan(&rawGrowth); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("raw_growth=%d summaries=%d", rawGrowth, summaries.Load())
 	if summaries.Load() < rounds || summaries.Load() > (rounds+1)*3 {
 		t.Fatalf("unexpected bounded recovery count=%d", summaries.Load())
 	}

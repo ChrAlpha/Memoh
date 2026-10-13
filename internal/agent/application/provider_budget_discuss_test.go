@@ -90,10 +90,7 @@ func TestDiscussProviderAdmissionLeavesFittingHistoryUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for event := range handle.Events() {
-		if event.Kind == turn.DiscussEventRecompose {
-			t.Error("fitting history requested unnecessary compaction")
-		}
+	for range handle.Events() {
 	}
 	for err := range handle.Errs() {
 		t.Errorf("fitting history turn failed: %v", err)
@@ -126,10 +123,7 @@ func TestDiscussProviderAdmissionNeverWaitsForCompaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for event := range handle.Events() {
-				if event.Kind == turn.DiscussEventRecompose {
-					t.Fatal("admission requested a synchronous retry")
-				}
+			for range handle.Events() {
 			}
 			var failure error
 			for err := range handle.Errs() {
@@ -168,11 +162,6 @@ func TestDiscussImageAdmissionDoesNotRequireRecovery(t *testing.T) {
 	service.queries.(*controllerQueries).settings.CompactionEnabled = false
 	resolver.resolveResult.RunConfig.SupportsImageInput = true
 	service.turnHooks.inlineImages = echoDiscussImages
-	apply := contextview.ProviderRunConfigApplier(nil)
-	service.turnHooks.streamAgent = native.New(native.Deps{ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
-		cfg.RecoverContextBudget = nil
-		return apply(ctx, cfg)
-	}}).Stream
 	cmd.DiscussMessages = []turn.DiscussMessage{
 		{Role: "user", Content: "older-a " + strings.Repeat("a", 200), Source: &turn.ContextMessageSource{Kind: "external", ID: "older-a", Current: true}},
 		{Role: "user", Content: "newest continue", Source: &turn.ContextMessageSource{Kind: "external", ID: "newest", Current: true}},

@@ -41,14 +41,9 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		t.Run(strconv.FormatBool(streaming), func(t *testing.T) {
 			capability := &capabilityRefreshProvider{}
-			preflights, recoveries := 0, 0
-			a := New(Deps{ContextViewApplier: func(ctx context.Context, cfg RunConfig) (RunConfig, error) {
+			preflights := 0
+			a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 				preflights++
-				if cfg.RecoverContextBudget != nil {
-					var err error
-					cfg, _, err = cfg.RecoverContextBudget(ctx, cfg)
-					return cfg, err
-				}
 				return cfg, nil
 			}})
 			a.SetToolProviders([]tools.ToolProvider{capability})
@@ -77,13 +72,6 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 				}
 			}
 			cfg := RunConfig{SupportsToolCall: true, Messages: []sdk.Message{sdk.UserMessage("install and use")}}
-			cfg.RecoverContextBudget = func(_ context.Context, cfg RunConfig) (RunConfig, bool, error) {
-				recoveries++
-				if recoveries > 1 {
-					return cfg, false, ErrContextRecompose
-				}
-				return cfg, false, nil
-			}
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var committed []int
@@ -122,8 +110,8 @@ func TestCapabilityChangeRefreshesExecutableToolsInSameRun(t *testing.T) {
 			if capability.used != 1 || calls != 3 {
 				t.Fatalf("used=%d calls=%d", capability.used, calls)
 			}
-			if preflights != 1 || recoveries != 1 {
-				t.Fatalf("old history recovery crossed a completed tool: preflights=%d recoveries=%d", preflights, recoveries)
+			if preflights != 1 {
+				t.Fatalf("capability refresh recompiled the full context: preflights=%d", preflights)
 			}
 			if fmt.Sprint(committed) != "[0 1 2]" {
 				t.Fatalf("step commits=%v", committed)

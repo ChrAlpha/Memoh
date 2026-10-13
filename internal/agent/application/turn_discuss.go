@@ -171,8 +171,7 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		return
 	}
 	defer func() {
-		// A recompose already compacted and resubmits; an empty context
-		// leaves nothing to compact.
+		// An empty context leaves nothing to compact.
 		if !h.contentLightTerminal {
 			s.scheduleDiscussCompaction(ctx, cmd, resolved)
 		}
@@ -291,15 +290,6 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	var terminalEvent native.StreamEvent
 	var terminalPayload []byte
 	for event := range eventCh {
-		if event.Type == native.EventContextRecompose {
-			if h.emit(turn.DiscussEventRecompose, nil) {
-				h.contentLightTerminal = true
-				outcome.handOff()
-			} else {
-				outcome.recordCause(context.Cause(ctx))
-			}
-			return
-		}
 		idleCancel.Observe(event)
 		_ = outcome.observe(event)
 		if event.IsTerminal() {
@@ -641,12 +631,6 @@ func (s *Service) pumpDiscussAgent(ctx context.Context, cmd turn.StartTurnComman
 			if !ok {
 				chunks = nil
 				continue
-			}
-			if parseKind(chunk) == string(native.EventContextRecompose) {
-				if h.emit(turn.DiscussEventRecompose, nil) {
-					h.contentLightTerminal = true
-				}
-				return
 			}
 			if err := h.publishChunk(chunk); err != nil {
 				h.emitErr(err)

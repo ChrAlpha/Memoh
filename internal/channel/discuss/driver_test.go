@@ -573,10 +573,6 @@ type fakeTurnService struct {
 	onStart        func(turn.StartTurnCommand)
 	calls          int
 	lastCmd        turn.StartTurnCommand
-	// recomposeRuns makes the first N StartTurn calls end with a
-	// DiscussEventRecompose instead of a model stream, emulating the
-	// pre-turn synchronous compaction backstop.
-	recomposeRuns int
 }
 
 func (f *fakeTurnService) StartTurn(_ context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
@@ -592,7 +588,6 @@ func (f *fakeTurnService) StartTurn(_ context.Context, cmd turn.StartTurnCommand
 	if runtimeType == "" {
 		runtimeType = "native"
 	}
-	recompose := f.calls <= f.recomposeRuns
 	h := &fakeRunHandle{events: make(chan turn.Event, 8), errs: make(chan error, 1)}
 	go func() {
 		defer close(h.events)
@@ -606,10 +601,6 @@ func (f *fakeTurnService) StartTurn(_ context.Context, cmd turn.StartTurnCommand
 		emit(turn.DiscussEventRunResolved, resolved)
 		if runtimeType == sessionpkg.RuntimeACPAgent && !cmd.DiscussAddressed {
 			emit(turn.DiscussEventSkipped, nil)
-			return
-		}
-		if recompose {
-			emit(turn.DiscussEventRecompose, nil)
 			return
 		}
 		if f.streamErr != nil {

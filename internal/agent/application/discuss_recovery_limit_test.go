@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 	"time"
-
-	"github.com/felinics/memoh/internal/agent/turn"
 )
 
 func TestDiscussIrreducibleContextDoesNotWaitForCompaction(t *testing.T) {
@@ -23,10 +21,7 @@ func TestDiscussIrreducibleContextDoesNotWaitForCompaction(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for event := range handle.Events() {
-				if event.Kind == turn.DiscussEventRecompose {
-					t.Error("exhausted recovery requested another compaction")
-				}
+			for range handle.Events() {
 			}
 			failed := false
 			for err := range handle.Errs() {

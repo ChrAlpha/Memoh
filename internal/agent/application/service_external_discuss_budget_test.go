@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -330,22 +329,17 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			recomposed := false
-			for event := range handle.Events() {
-				recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-				if event.Kind == string(native.EventContextRecompose) {
-					t.Fatal("private runtime control leaked")
-				}
+			for range handle.Events() {
 			}
 			failures := 0
 			for err := range handle.Errs() {
 				failures++
-				if apperror.CodeOf(err) != apperror.CodeContextProtectedOverflow || errors.Is(err, native.ErrContextRecompose) {
+				if apperror.CodeOf(err) != apperror.CodeContextProtectedOverflow {
 					t.Fatalf("unexpected failure: %v", err)
 				}
 			}
-			if recomposed || failures != 1 {
-				t.Fatalf("irreducible context must fail closed without waiting: recompose=%v failures=%d", recomposed, failures)
+			if failures != 1 {
+				t.Fatalf("irreducible context must fail closed without waiting: failures=%d", failures)
 			}
 			if pool.calls != 0 || published != 0 || len(messages.persisted) != 0 || len(messages.roundOptions) != 0 || len(messages.deleted) != 0 {
 				t.Fatalf("rejected context had side effects: driver=%d public=%d history=%d rounds=%d deletes=%d", pool.calls, published, len(messages.persisted), len(messages.roundOptions), len(messages.deleted))

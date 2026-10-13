@@ -38,9 +38,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	// steer, so the observer here exists for the spans alone.
 	cfg.Model = modelWithProviderCallObserver(cfg.Model, nil, nil)
 	defer func() {
-		if errors.Is(retErr, ErrContextRecompose) {
-			return
-		}
 		event := hooks.EventTurnEnd
 		errMsg := ""
 		if retErr != nil {
