@@ -773,8 +773,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 	}
 	// The reaper runs on both backends. A single memory instance still needs the
-	// generation sweep — its previous process owned runs that no live backend
-	// remembers — and still needs orphan repair.
+	// generation sweep, because its previous process owned runs that no live
+	// backend remembers, and it still needs orphan repair. The sweep treats every
+	// active run under another generation as dead, which is only correct when no
+	// other process can hold one: admission refuses cluster=true on a memory
+	// backend (see admit.go), so this process is the only owner.
 	if err := m.startReaper(ctx); err != nil {
 		return err
 	}
