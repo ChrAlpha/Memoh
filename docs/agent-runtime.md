@@ -18,7 +18,7 @@
 - The chat timeline (`internal/chat/timeline/`) owns canonical events, projection, rendering, persistence, and context composition. Inbound adaptation lives in `internal/channel/inbound/`, while discuss-mode driving lives in `internal/channel/discuss/`.
 - Browser Use and Computer Use capabilities live in `internal/agent/tool/browser.go` (plus `internal/agent/tool/computer_a11y.go`) and are exposed only when the bot's workspace display is enabled. `browser_action` / `browser_observe` operate the headed workspace Chrome/Chromium instance over CDP, `browser_remote_session` exposes the same CDP endpoint for code-driven Playwright/CDP sessions, and the Computer Use pair (`computer_observe` / `computer_action`) drives the broader GUI desktop: snapshots come from the AT-SPI accessibility tree via the bundled `a11y-cli` Rust helper at `/opt/memoh/toolkit/display/bin/a11y-cli`, and raw RFB pointer/keyboard input remains as a fallback when accessibility cannot reach the target. Both browser and computer screenshots are saved to a workspace path and never auto-attached to the conversation, so the model must explicitly read the path when it wants the image. Prefer Browser Use for web pages; use Computer Use for native dialogs, non-browser apps, or GUI states that CDP cannot reach.
 - Headless Playwright scripts are still ordinary workspace commands, but they are not the same path as the headed workspace browser/display stack. Use the headed Browser Use tools when the user needs to inspect or operate the visible workspace browser.
-- The compaction service (`internal/agent/context/compaction/`) handles LLM-based conversation summarization. Passes run in the background after a run ends; a turn waits for compaction only when context budget recovery must compact before its first model call.
+- The compaction service (`internal/agent/context/compaction/`) handles LLM-based conversation summarization. Passes run in the background after a run ends and no turn waits for one: a run that measures pressure, either raw history against the trigger or a final request whose history exceeds its allowance, starts one pass at its end. Until a summary lands, admission trims over-budget history and records the input it leaves out.
 - Loop detection (text and tool loops) is built into the agent with configurable thresholds.
 - Tag extraction system processes inline tags in streaming output (attachments, reactions, speech/TTS).
 
@@ -90,9 +90,6 @@ continuations use the same phase-aware application watchdog:
   remain supervised; explicit cancellation and runtime ownership loss still win.
 - Managed subagents have a ten-minute progress watchdog, with no implicit total
   duration. Detachment preserves an explicit ancestor execution deadline.
-- Context budget recovery before the first native model call pauses the model
-  watchdog while its synchronous compaction runs; the model window restarts
-  when recovery returns. Cancellation and execution budgets still apply.
 
 Schedules expose `max_run_seconds` (default 3600, range 300–86400), independently
 of the selected runtime. Every fire uses its existing log UUID for turn admission,

@@ -194,7 +194,7 @@ func ShouldCompact(inputTokens, threshold int) bool {
 // scoped Result, so callers act on their own outcome (a noop keeps their
 // current context) instead of reading an unscoped bot-wide log that may belong
 // to another session. When another run for the session is already in flight,
-// the sync path waits for the owner and reuses its outcome — the summary is
+// the caller waits for the owner and reuses its outcome — the summary is
 // seconds away, and waiting removes a duplicate LLM call over the same span; a
 // canceled wait degrades to a noop.
 func (s *Service) RunCompactionSync(ctx context.Context, cfg TriggerConfig) (Result, error) {

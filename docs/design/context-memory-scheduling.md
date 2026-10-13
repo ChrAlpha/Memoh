@@ -227,9 +227,9 @@ MUST NOT disagree about the size of the same content. Divergent callers
 > are still active. The pre-turn backstops on pipeline chat and Discuss, the
 > `[agent] sync_compaction` gate, and the manual entry points CM-CMP-002 relied
 > on (`/compact`, the session compact endpoint, the Web button) were removed.
-> The only compaction a turn still waits for is context budget recovery: when
-> admission (CM-ADM-002) would reject the turn, it compacts and recomposes
-> (`ErrContextRecompose`, `DiscussEventRecompose`) before its first model call.
+> No turn waits for compaction, including when admission (CM-ADM-002) trims or
+> rejects it: the run reports that pressure and its end starts one background
+> pass for its most urgent demand.
 > Rows held after an unusable summary are retried when their hold lapses.
 > CM-CMP-001/002/003 below are kept as the historical record.
 
