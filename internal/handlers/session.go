@@ -41,13 +41,8 @@ type SessionHandler struct {
 	botService      *bots.Service
 	accountService  *accounts.Service
 	modelPrefs      modelPreferenceService
-	projectionCache sessionProjectionCache
 	invocations     sessionInvocationLookup
 	logger          *slog.Logger
-}
-
-type sessionProjectionCache interface {
-	DropSession(sessionID string)
 }
 
 // sessionAgentRuntimeService owns external-runtime fork preparation and active
@@ -136,10 +131,6 @@ func (h *SessionHandler) SetAgentRuntimeService(service sessionAgentRuntimeServi
 	if controls, ok := service.(turn.RuntimeControlService); ok {
 		h.runtimeControls = controls
 	}
-}
-
-func (h *SessionHandler) SetProjectionCache(cache sessionProjectionCache) {
-	h.projectionCache = cache
 }
 
 // Register registers session routes.
@@ -1133,9 +1124,6 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		if err := h.agentRuntimes.AbortSessionRuns(c.Request().Context(), botID, sessionID); err != nil {
 			return apperror.Wrap(apperror.CodeSessionAbortFailed, err, nil)
 		}
-	}
-	if h.projectionCache != nil {
-		h.projectionCache.DropSession(sessionID)
 	}
 	return c.NoContent(http.StatusNoContent)
 }

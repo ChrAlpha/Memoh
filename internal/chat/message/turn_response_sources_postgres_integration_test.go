@@ -1,7 +1,6 @@
 package message
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,9 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
-	dbpkg "github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
@@ -54,35 +51,31 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 			t.Fatal(err)
 		}
 	}
-	pgSessionID, err := dbpkg.ParseUUID(postgresMessageTestSessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, since := range []time.Time{time.Unix(0, 0), base.Add(3 * time.Second)} {
 		for _, budget := range []int64{0, 1, 100, 1 << 20} {
 			t.Run(fmt.Sprintf("since_%d/budget_%d", since.Unix(), budget), func(t *testing.T) {
-				old, err := queries.ListActiveMessagesSinceBySessionWithinBytes(ctx, dbsqlc.ListActiveMessagesSinceBySessionWithinBytesParams{
-					SessionID: pgSessionID, CreatedAt: pgtype.Timestamptz{Time: since, Valid: true}, MaxBytes: budget,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
 				got, err := svc.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, postgresMessageTestSessionID, since, budget)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(got) != len(old) {
-					t.Fatalf("window length=%d, want %d", len(got), len(old))
+				if len(got) == 0 && budget > 0 {
+					t.Fatal("a positive budget must load the newest row")
 				}
 				for i, m := range got {
-					if m.ID != old[i].ID.String() || m.Role != old[i].Role || !bytes.Equal(m.Content, old[i].Content) || !m.CreatedAt.Equal(old[i].CreatedAt.Time) {
-						t.Fatalf("history ordering/content changed at row %d", i)
+					if m.CreatedAt.Before(since) {
+						t.Fatalf("row %d precedes the window start", i)
 					}
-					var metadata map[string]any
-					if err := json.Unmarshal(old[i].Metadata, &metadata); err != nil {
+					var body struct {
+						Content string `json:"content"`
+					}
+					if err := json.Unmarshal(m.Content, &body); err != nil {
 						t.Fatal(err)
 					}
-					if m.Metadata[AgentStepInterruptedMetadataKey] != (metadata[AgentStepInterruptedMetadataKey] == true) {
+					var idx int
+					if _, err := fmt.Sscanf(body.Content, "reply-%d", &idx); err != nil {
+						t.Fatalf("row %d is not an active reply: %q", i, body.Content)
+					}
+					if m.Metadata[AgentStepInterruptedMetadataKey] != (flags[idx] == `true`) {
 						t.Fatalf("interrupted checkpoint changed at row %d", i)
 					}
 					if len(m.Metadata) != 1 || len(m.RawMetadata) != 0 || len(m.Usage) != 0 || m.DisplayContent != "" || m.Assets != nil {

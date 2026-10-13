@@ -6,11 +6,19 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 )
 
-func TestPruneMessagesForGateway_PrunesToolResultContent(t *testing.T) {
+// pruneEach applies the write-time prune to every message, as the store does.
+func pruneEach(messages []ModelMessage) []ModelMessage {
+	out := make([]ModelMessage, 0, len(messages))
+	for _, msg := range messages {
+		pruned, _ := pruneMessageForGateway(msg)
+		out = append(out, pruned)
+	}
+	return out
+}
+
+func TestPruneMessageForGateway_PrunesToolResultContent(t *testing.T) {
 	t.Parallel()
 
 	unit := "汉😀"
@@ -18,7 +26,7 @@ func TestPruneMessagesForGateway_PrunesToolResultContent(t *testing.T) {
 	msgs := []ModelMessage{
 		{Role: "tool", Content: newTextContent(huge), ToolCallID: "call-1"},
 	}
-	out := pruneMessagesForGateway(msgs)
+	out := pruneEach(msgs)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(out))
 	}
@@ -34,7 +42,7 @@ func TestPruneMessagesForGateway_PrunesToolResultContent(t *testing.T) {
 	}
 }
 
-func TestPruneMessagesForGateway_PrunesToolCallArguments(t *testing.T) {
+func TestPruneMessageForGateway_PrunesToolCallArguments(t *testing.T) {
 	t.Parallel()
 
 	repeated := strings.Repeat("猫😺", (gatewayToolPayloadMaxBytes/len("猫😺"))+20)
@@ -54,7 +62,7 @@ func TestPruneMessagesForGateway_PrunesToolCallArguments(t *testing.T) {
 			},
 		},
 	}
-	out := pruneMessagesForGateway(msgs)
+	out := pruneEach(msgs)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(out))
 	}
@@ -73,53 +81,7 @@ func TestPruneMessagesForGateway_PrunesToolCallArguments(t *testing.T) {
 	}
 }
 
-func TestPruneHistoryForGateway_ClearsStaleUsageTokensAfterPrune(t *testing.T) {
-	t.Parallel()
-
-	huge := strings.Repeat("汉😀", (gatewayToolPayloadMaxBytes/len("汉😀"))+20)
-	firstTokens := 123
-	secondTokens := 456
-
-	in := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{Role: "tool", Content: newTextContent(huge), ToolCallID: "call-1"}, func(record *historyfrag.HistoryRecord) {
-			record.UsageInputTokens = &firstTokens
-		}),
-		historyRecord("row-2", ModelMessage{Role: "user", Content: newTextContent("hi")}, func(record *historyfrag.HistoryRecord) {
-			record.UsageInputTokens = &secondTokens
-		}),
-	}
-
-	out := pruneHistoryForGateway(in)
-	if len(out) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(out))
-	}
-	if out[0].UsageInputTokens != nil {
-		t.Fatalf("expected first UsageInputTokens to be cleared after prune")
-	}
-	if out[1].UsageInputTokens != nil {
-		t.Fatalf("expected subsequent UsageInputTokens to be cleared after earlier prune")
-	}
-}
-
-func TestPruneHistoryForGateway_PreservesUsageTokensWhenUnchanged(t *testing.T) {
-	t.Parallel()
-
-	tokens := 321
-	in := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("short")}, func(record *historyfrag.HistoryRecord) {
-			record.UsageInputTokens = &tokens
-		}),
-	}
-	out := pruneHistoryForGateway(in)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(out))
-	}
-	if out[0].UsageInputTokens == nil || *out[0].UsageInputTokens != tokens {
-		t.Fatalf("expected UsageInputTokens to be preserved")
-	}
-}
-
-func TestPruneMessagesForGateway_ToolResultPartsRemainValidToolMessageSchema(t *testing.T) {
+func TestPruneMessageForGateway_ToolResultPartsRemainValidToolMessageSchema(t *testing.T) {
 	t.Parallel()
 
 	huge := strings.Repeat("a", gatewayToolPayloadMaxBytes+100)
@@ -148,7 +110,7 @@ func TestPruneMessagesForGateway_ToolResultPartsRemainValidToolMessageSchema(t *
 		{Role: "tool", Content: content, ToolCallID: "call-1"},
 	}
 
-	out := pruneMessagesForGateway(msgs)
+	out := pruneEach(msgs)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(out))
 	}

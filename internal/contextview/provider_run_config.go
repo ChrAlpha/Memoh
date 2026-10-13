@@ -373,7 +373,6 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 			MaxTokens:           cfg.ContextBudgetMaxTokens,
 			Plan:                budgetPlan,
 			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
-			ToolExchange:        cfg.ContextToolExchangePolicy,
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})

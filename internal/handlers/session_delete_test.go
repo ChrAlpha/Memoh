@@ -19,12 +19,6 @@ import (
 
 type sessionDeleteResetCtxKey struct{}
 
-type recordingProjectionCache struct{ dropped []string }
-
-func (c *recordingProjectionCache) DropSession(sessionID string) {
-	c.dropped = append(c.dropped, sessionID)
-}
-
 type sessionDeleteQueries struct {
 	dbstore.Queries
 	bot              sqlc.GetBotByIDRow
@@ -118,8 +112,6 @@ func TestDeleteACPAgentSessionSoftDeletesInsideResetLease(t *testing.T) {
 		bots.NewService(nil, queries),
 		newTestAdminAccountService("admin"),
 	)
-	projectionCache := &recordingProjectionCache{}
-	handler.SetProjectionCache(projectionCache)
 
 	rec, err := callDeleteSession(handler, botID, sessionID)
 	if err != nil {
@@ -144,9 +136,6 @@ func TestDeleteACPAgentSessionSoftDeletesInsideResetLease(t *testing.T) {
 	}
 	if !queries.softDeleteSawFenced {
 		t.Fatal("soft delete did not run on the reset-fenced context")
-	}
-	if len(projectionCache.dropped) != 1 || projectionCache.dropped[0] != sessionID {
-		t.Fatalf("projection cache drops = %v, want %s", projectionCache.dropped, sessionID)
 	}
 }
 

@@ -184,7 +184,6 @@ type RunConfig struct {
 	ContextHookText                string
 	ContextToolDefs                []contextfrag.ToolDefAccounting
 	ContextToolDefsResolved        bool
-	ContextToolExchangePolicy      *contextfrag.ToolExchangePolicy
 	ContextBudgetMaxTokens         int
 	ContextRecentProtectTokens     *int
 	ContextHistoryTokenEstimates   []int

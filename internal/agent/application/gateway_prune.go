@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	textprune "github.com/felinics/memoh/internal/prune"
 )
@@ -17,38 +16,6 @@ const (
 
 	gatewayToolPayloadPrunedMarker = textprune.DefaultMarker
 )
-
-func pruneHistoryForGateway(messages []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
-	if len(messages) == 0 {
-		return messages
-	}
-	out := make([]historyfrag.HistoryRecord, 0, len(messages))
-	staleUsage := false
-	for _, item := range messages {
-		msg, changed := pruneMessageForGateway(item.ModelMessage)
-		if changed {
-			item.ModelMessage = msg
-			staleUsage = true
-		}
-		if staleUsage {
-			item.UsageInputTokens = nil
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-func pruneMessagesForGateway(messages []ModelMessage) []ModelMessage {
-	if len(messages) == 0 {
-		return messages
-	}
-	out := make([]ModelMessage, 0, len(messages))
-	for _, msg := range messages {
-		pruned, _ := pruneMessageForGateway(msg)
-		out = append(out, pruned)
-	}
-	return out
-}
 
 func pruneMessageForGateway(msg ModelMessage) (ModelMessage, bool) {
 	changed := false

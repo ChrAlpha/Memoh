@@ -261,8 +261,7 @@ Session replay MUST NOT require loading all events unbounded:
 ### CM-RPL-002: Incremental projection
 
 Applying one event to the intermediate context MUST be O(event), not O(session):
-no full node-slice clone per event (`cloneIC`) and no full re-render per event
-(`PushEvent` → `Render`). Full re-rendering MAY still occur on explicit invalidation
+no full node-slice clone per event (`cloneIC`) and no full re-render per event. Full re-rendering MAY still occur on explicit invalidation
 (e.g. render-parameter changes).
 
 Incremental rendering MUST be correct under mutation, not only under append:
@@ -276,17 +275,12 @@ Incremental rendering MUST be correct under mutation, not only under append:
   package-level property/fuzz test and MAY additionally run as a sampled shadow
   check behind a debug flag.
 
-### CM-CCH-001: Bounded pipeline cache
+### CM-CCH-001: No resident projection cache
 
-`Pipeline.sessions` / `Pipeline.rendered` MUST be bounded by an eviction policy (LRU
-and/or TTL and/or resident-bytes cap). Eviction MUST actually be wired (`DropSession`
-or equivalent must have callers). A cold session MUST be recoverable via (bounded)
-replay, so eviction is always safe.
-
-Sequencing is a hard constraint: eviction MUST NOT be enabled before bounded replay
-(CM-RPL-001) has landed. Evicting a session whose cold-start recovery is still an
-unbounded full replay converts a standing leak into repeated load/evict thrash —
-memory spikes plus CPU churn. The two mechanisms ship together, or replay-first.
+The per-session `timeline.Pipeline` cache (and its `DropSession`/`DropAll`
+invalidation in the handlers) has been removed. Chat context is assembled from
+the history rows on every turn through the pure `timeline.BuildRC` fold, so no
+process-resident per-session state exists to bound or evict.
 
 ### CM-REP-001: Single materialized representation, zero-copy raw payloads
 
@@ -350,7 +344,7 @@ The following MUST be observable (metrics and/or structured logs with stable key
 |---|---|---|
 | L1 Hard boundary | Metadata-based admission check ahead of `trigger.Build` / pipeline composition / ACP prompt build; deterministic trim; `context_too_large` fail-closed | CM-ADM-001/002/003, CM-EST-001 |
 | L2 Pre-turn compaction | Synchronous hard-threshold backstop on Discuss native, Discuss ACP, and pipeline chat; then re-admission via L1; shadow-first gated rollout | CM-CMP-001/002/003 |
-| L3 Bounded replay & caches | Frontier-first replay, paginated tail loads, incremental IC, render-on-demand, LRU/TTL/bytes-bounded pipeline cache | CM-RPL-001/002, CM-CCH-001 |
+| L3 Bounded replay & caches | Frontier-first replay, paginated tail loads, incremental IC, render-on-demand, no resident projection cache | CM-RPL-001/002, CM-CCH-001 |
 | L4 Representation convergence | `DiscussContextPlan` (refs + measures before selection; single render after), zero-copy `RawContent`, incremental budget accounting, raw-bytes persistence, copy-on-write snapshots | CM-REP-001/002/003/004 |
 | L5 Process scheduling | `GOMEMLIMIT`, container memory limits, admission/compaction/eviction metrics | CM-PRC-001, CM-OBS-001 |
 
@@ -374,7 +368,7 @@ After all layers land, the process obeys:
 > turn concurrency) + bounded caches — independent of total history size.**
 
 Every current violation of this invariant (full materialization before guards, the
-representation copies, the never-evicted pipeline cache, O(N²) replay, per-delta
+representation copies, the former resident pipeline cache, O(N²) replay, per-delta
 snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap item in
 §7.
 
@@ -399,17 +393,17 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       database side until the budget's byte equivalent is spent. Every
       DB-backed history load that feeds composition is bounded by the budget:
       the discuss TR load (previously unbounded since the Unix epoch), the
-      pipeline-chat TR load, and the legacy `loadHistoryRecords` (both
-      session- and bot-scoped). Total history size never bounds process
+      pipeline-chat TR load, and the legacy `loadHistoryRecords` (the
+      session-scoped load). Total history size never bounds process
       memory; the budget does. The budget covers content only, so metadata
       is handled separately: both TR loads project content and the
       interrupted flag (`ListTurnResponseSourcesSinceBySessionWithinBytes`),
       and `loadHistoryRecords` receives metadata undecoded and decodes one
       row at a time — its source hash must still cover the full metadata,
-      which persisted compaction coverage compares. Remaining resident-state
-      bounds — the RC pipeline cache and event replay — are
-      CM-CCH-001/CM-RPL-001 and land in PR 3; PR 4's persisted per-fragment
-      costs refine the measures.
+      which persisted compaction coverage compares. The resident-state
+      bound on event replay is CM-RPL-001 (PR 3); the RC pipeline cache no
+      longer exists (CM-CCH-001); PR 4's persisted per-fragment costs refine
+      the measures.
 - [x] Deterministic over-budget trim (artifact summaries + newest message + recent
       contiguous window, no orphaned tool responses); `context.protected_overflow`
       stable error when even the protected set does not fit — CM-ADM-002. Both
@@ -473,14 +467,15 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       excluded) in the unified estimator; only `runCompactionSync`'s
       single-flight/epoch/cooldown semantics are reused — CM-CMP-001, CM-EST-001
 
-### PR 3 (P1) — Bounded replay + pipeline cache eviction
+### PR 3 (P1) — Bounded replay + pipeline cache eviction (cache since removed)
 
 Landing order inside this PR is a hard constraint: paginated, frontier-first replay
 ships before — or atomically with — cache eviction, never eviction first
 (CM-CCH-001).
 
 - [x] `Pipeline.sessions`/`rendered`: LRU + TTL + resident-bytes bound; wire
-      `DropSession` — CM-CCH-001
+      `DropSession` — CM-CCH-001. Superseded: the cache and `Pipeline` were
+      removed once chat context stopped depending on resident projections.
 - [x] Remove per-event `cloneIC` full copy (incremental IC or append-only nodes);
       remove per-event full `Render` with per-node dirty marking (edits/deletes
       invalidate affected nodes and coalesced neighbors, not a global tail) —

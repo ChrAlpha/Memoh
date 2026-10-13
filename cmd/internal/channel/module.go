@@ -21,7 +21,6 @@ func FoundationModule() fx.Option {
 		fx.Provide(
 			identities.NewService,
 			provideRouteService,
-			providePipeline,
 			provideEventStore,
 			provideDiscussDriver,
 			local.NewRouteHub,

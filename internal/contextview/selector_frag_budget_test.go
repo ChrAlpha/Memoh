@@ -11,6 +11,13 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
+func historyMessageFrag(id string, msg sdk.Message) contextfrag.ContextFrag {
+	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID: id, Message: msg, Kind: contextfrag.KindConversationEvent, Slot: contextfrag.SlotHistory,
+		Scope: contextfrag.Scope{BotID: "bot-1"}, Source: "run_config_fields", Collector: "history_messages",
+	})
+}
+
 func TestFragBudgetDropsOversizedFragEvenWithoutEnvelopeBudget(t *testing.T) {
 	t.Parallel()
 	selector := &FragmentSelector{}

@@ -70,10 +70,6 @@ import (
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
-func providePipeline(log *slog.Logger) *timeline.Pipeline {
-	return timeline.NewPipelineWithOptions(timeline.RenderParams{}, timeline.PipelineOptions{Logger: log})
-}
-
 func provideEventStore(log *slog.Logger, queries dbstore.Queries) *timeline.EventStore {
 	store := timeline.NewEventStore(log, queries)
 	store.SetReplayArtifactProvider(compaction.NewTimelineArtifactSource(queries))

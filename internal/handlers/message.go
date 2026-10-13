@@ -45,14 +45,8 @@ type MessageHandler struct {
 	toolApproval                  *toolapproval.Service
 	userInput                     *userinput.Service
 	bgManager                     *background.Manager
-	projectionCache               messageProjectionCache
 	compactionActivity            interface{ ActiveSessions(string) []string }
 	logger                        *slog.Logger
-}
-
-type messageProjectionCache interface {
-	DropSession(sessionID string)
-	DropAll()
 }
 
 // runtimeResetService is intentionally a narrow handler-owned port. Clearing the
@@ -97,10 +91,6 @@ func NewMessageHandler(log *slog.Logger, messageService messagepkg.Service, sess
 // SetMediaService sets the optional media service for asset serving.
 func (h *MessageHandler) SetMediaService(svc *media.Service) {
 	h.mediaService = svc
-}
-
-func (h *MessageHandler) SetProjectionCache(cache messageProjectionCache) {
-	h.projectionCache = cache
 }
 
 func (h *MessageHandler) SetCompactionActivity(activity interface{ ActiveSessions(string) []string }) {
@@ -731,9 +721,6 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 		if err := h.messageService.DeleteBySession(ctx, sessionID); err != nil {
 			return apperror.Wrap(apperror.CodeHistoryDeleteFailed, err, nil)
 		}
-		if h.projectionCache != nil {
-			h.projectionCache.DropSession(sessionID)
-		}
 	} else {
 		ctx, release, resetErr := h.runtimeResets.BeginBotHistoryReset(ctx, botID)
 		if resetErr != nil {
@@ -742,9 +729,6 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 		defer release()
 		if err := h.messageService.DeleteByBot(ctx, botID); err != nil {
 			return apperror.Wrap(apperror.CodeHistoryDeleteFailed, err, nil)
-		}
-		if h.projectionCache != nil {
-			h.projectionCache.DropAll()
 		}
 	}
 	messageevent.InvalidateSession(h.messagePublisher, botID, sessionID)

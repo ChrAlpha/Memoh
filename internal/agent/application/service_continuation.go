@@ -61,9 +61,6 @@ func (s *Service) prepareContinuationRunConfig(
 	base.Messages = modelMessagesToSDKMessages(repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError))
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
-	if base.ContextToolExchangePolicy == nil {
-		base.ContextToolExchangePolicy = defaultToolExchangePolicy()
-	}
 	base.Query = ""
 	// A question asked with nobody receiving the run's events could never be
 	// answered, so asking one is only offered to a run someone follows live.

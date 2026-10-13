@@ -120,7 +120,7 @@ func TestRenderDeletedMessagePopulatesSlotIdentityAndEditTime(t *testing.T) {
 
 func TestRenderMessage_ReplyAttachmentsVisibleAndReferenced(t *testing.T) {
 	t.Parallel()
-	pipeline := NewPipeline(RenderParams{})
+	pipeline := &eventFold{}
 	rc := pipeline.PushEvent("s", MessageEvent{
 		SessionID: "s", MessageID: "m2", ReceivedAtMs: 2, TimestampSec: 2,
 		Content:          []ContentNode{{Type: "text", Text: "what is this"}},

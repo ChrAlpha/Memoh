@@ -50,7 +50,7 @@ func TestAssignEventCursorRejectsInvalid(t *testing.T) {
 }
 
 func TestPushEventThreadsCursorIntoSegments(t *testing.T) {
-	pipeline := NewPipeline(RenderParams{})
+	pipeline := &eventFold{}
 	rc := pipeline.PushEvent("s1", MessageEvent{
 		SessionID:    "s1",
 		MessageID:    "m1",
@@ -148,7 +148,7 @@ func TestConsumedDiscussCursorTakesLatestGate(t *testing.T) {
 
 func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 	poisoned := MaxTrustedEventCursor + 1
-	pipeline := NewPipeline(RenderParams{})
+	pipeline := &eventFold{}
 	pipeline.PushEvent("s1", MessageEvent{
 		SessionID: "s1", MessageID: "m1", EventCursor: 7001,
 		ReceivedAtMs: 1000, TimestampSec: 1,
@@ -184,7 +184,7 @@ func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 
 func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
 	for _, poisoned := range []int64{MaxJSONSafeEventCursor + 1, MaxJSONSafeEventCursor, MaxTrustedEventCursor + 1} {
-		pipeline := NewPipeline(RenderParams{})
+		pipeline := &eventFold{}
 		rc := pipeline.PushEvent("s1", MessageEvent{
 			SessionID:    "s1",
 			MessageID:    "m1",

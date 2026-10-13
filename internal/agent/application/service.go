@@ -432,10 +432,6 @@ func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID 
 	}
 }
 
-func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
-	return contextfrag.DefaultToolExchangePolicy()
-}
-
 // resolve builds the run context for one turn and returns the effective
 // request alongside it. Resolution fills in defaults the caller's copy does not
 // have — a direct turn on a subagent thread learns its session type, pinned
@@ -582,9 +578,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
 	}
 	runCfg.ContextTrimmableMessages = trimmableMessages
-	if runCfg.ContextToolExchangePolicy == nil {
-		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
-	}
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
