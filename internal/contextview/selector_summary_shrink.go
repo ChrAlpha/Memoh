@@ -16,15 +16,15 @@ const summaryTruncateNotice = "\n\n[The rest of this summary was truncated to fi
 
 // minSummaryKeepRunes is the smallest truncated summary worth keeping,
 // notice included: below this a truncated summary carries no recall value,
-// so selection fails closed instead of shipping a stub.
+// so the summary is sent whole instead of as a stub.
 const minSummaryKeepRunes = 200
 
 const summaryBudgetEditReason = "summary_budget_truncate"
 
 // shrinkOversizedProtectedSummaries shortens must-keep conversation summaries
 // in place until the protected set fits ceiling, so a summary larger than the
-// history slot degrades to a truncated summary instead of failing the whole
-// selection. Under-target summaries settle at their actual cost and their
+// history slot degrades to a truncated summary instead of overflowing the
+// window on its own. Under-target summaries settle at their actual cost and their
 // unused share funds the oversized ones. It reports the applied edits; an
 // empty result means nothing could be shrunk.
 func shrinkOversizedProtectedSummaries(tagged []TaggedFrag, protectedCost, ceiling int) []fragBudgetEdit {
@@ -112,7 +112,7 @@ func shrinkSummaryFragToTokens(frag contextfrag.ContextFrag, target int) (contex
 		keepRunes = keepRunes * 4 / 5
 	}
 	// The geometric descent can overshoot straight past the floor on
-	// mixed-density text, so probe exactly the floor before failing closed:
+	// mixed-density text, so probe exactly the floor before giving up:
 	// cost is monotonic in kept runes, which makes this probe decisive.
 	next := rebuild(textutil.TruncateRunesWithSuffix(text, minSummaryKeepRunes, suffix))
 	if tokens := contextfrag.ResolveProviderBudgetFragTokens(next); tokens <= target {

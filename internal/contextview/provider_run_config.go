@@ -223,18 +223,6 @@ func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFra
 	})
 }
 
-const DefaultRecentProtectTokens = 20000
-
-func resolveRecentProtectTokens(override *int) int {
-	if override == nil {
-		return DefaultRecentProtectTokens
-	}
-	if *override < 0 {
-		return 0
-	}
-	return *override
-}
-
 func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*contextfrag.ContextBudgetPlan, error) {
 	if cfg.ContextBudgetMaxTokens == 0 {
 		return nil, nil
@@ -370,9 +358,8 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		Sources: []SourceSpec{{Name: sourceFragsCollectorName}},
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
-			MaxTokens:           cfg.ContextBudgetMaxTokens,
-			Plan:                budgetPlan,
-			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
+			MaxTokens: cfg.ContextBudgetMaxTokens,
+			Plan:      budgetPlan,
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
@@ -390,10 +377,6 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
 		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "unexpected_payload", "context view rendered unexpected payload", nil), nil
-	}
-	if err := validateProviderRenderedEnvelope(payload, cfg.ContextToolDefs, budgetPlan); err != nil {
-		recordContextBudgetFailure(ledger, err)
-		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
@@ -427,7 +410,6 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
-	cfg.ContextStepReselector = SelectProviderStepMessages
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
@@ -500,8 +482,7 @@ func providerBudgetAuditConfig(
 
 // providerViewFallback assembles the legacy payload when the context view
 // cannot. It is an assembly path, not a budget-disabled path: the budget plan
-// and step reselection stay in force so every dispatch still meets the final
-// envelope check.
+// stays recorded in the manifest.
 func providerViewFallback(
 	logger *slog.Logger,
 	cfg agentpkg.RunConfig,
@@ -533,7 +514,6 @@ func providerViewFallback(
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
-	cfg.ContextStepReselector = SelectProviderStepMessages
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}

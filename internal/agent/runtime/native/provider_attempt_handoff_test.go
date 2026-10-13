@@ -48,7 +48,7 @@ func TestProviderAttemptHandoffRejectRevokesStagedAttempt(t *testing.T) {
 		dynamicInputs:        dynamic,
 	}
 	handoff := newProviderAttemptHandoff(cfg)
-	handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, "dropped=1", 0, refs)
+	handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, refs)
 
 	// The loop's dispatch boundary refuses the attempt instead of publishing.
 	handoff.reject()
@@ -58,9 +58,6 @@ func TestProviderAttemptHandoffRejectRevokesStagedAttempt(t *testing.T) {
 	}
 	if got := ledger.StepSnapshots(); len(got) != 1 || got[0].PostPrepareInputHash != oldHash {
 		t.Fatalf("step snapshots = %#v, want only prior dispatched attempt", got)
-	}
-	if got := ledger.Records(); len(got) != 0 {
-		t.Fatalf("mutation records = %#v, want rejected reselection audit unpublished", got)
 	}
 	forkMessages, err := fork.Messages()
 	if err != nil {
@@ -109,7 +106,7 @@ func TestProviderAttemptHandoffPublishAppliesAttemptState(t *testing.T) {
 		dynamicInputs:        dynamic,
 	}
 	handoff := newProviderAttemptHandoff(cfg)
-	handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, "dropped=1", 0, dynamic.pendingRefs())
+	handoff.stage(contextfrag.StepSnapshot{StepIndex: 1}, false, dynamic.pendingRefs())
 
 	if err := handoff.publish(params); err != nil {
 		t.Fatalf("publish provider attempt: %v", err)
@@ -132,9 +129,6 @@ func TestProviderAttemptHandoffPublishAppliesAttemptState(t *testing.T) {
 	retryMessages, ok := attemptState.retryMessages(nil)
 	if !ok || !reflect.DeepEqual(retryMessages, params.Messages) {
 		t.Fatalf("retry messages = %#v, %t; want %#v", retryMessages, ok, params.Messages)
-	}
-	if records := ledger.Records(); len(records) != 1 || records[0].Kind != contextfrag.MutationLoopStepReselection {
-		t.Fatalf("mutation records = %#v, want published reselection audit", records)
 	}
 	additions := dynamic.stepAdditions(1)
 	if len(additions) != 1 || !reflect.DeepEqual(additions[0], admitted) {

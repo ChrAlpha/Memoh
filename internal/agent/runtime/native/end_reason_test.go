@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
+	"github.com/google/jsonschema-go/jsonschema"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // streamTerminal drives one run and returns its single terminal event. Every
@@ -123,42 +126,6 @@ func TestAgentStreamEndReasonFailed(t *testing.T) {
 	assertEndReason(t, terminal, EventAgentAbort, event.EndFailed)
 }
 
-// A step whose context does not fit ends the run on the budget, not on the
-// cancellation that reports it. The reselector fails the retry rebuild
-// fatally, which is the point in the loop where a budget overrun is known.
-func TestAgentStreamEndReasonContextBudget(t *testing.T) {
-	t.Parallel()
-
-	var invocations atomic.Int32
-	provider := &atomicMockProvider{}
-	provider.stream = streamScript(&invocations,
-		scriptToolCall("budget-call", "lookup"),
-		scriptStreamError("", rateLimitedErr()),
-	)
-	a := New(Deps{})
-	a.SetToolProviders(mockToolLoopTools())
-
-	var selectorCalls atomic.Int32
-	terminal := streamTerminal(context.Background(), t, a, RunConfig{
-		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
-		Messages:         []sdk.Message{sdk.UserMessage("original task")},
-		SupportsToolCall: true,
-		Identity:         SessionContext{BotID: "bot-1"},
-		ContextMutations: contextfrag.NewMutationLedger(),
-		Retry:            fastRetry,
-		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
-			if selectorCalls.Add(1) == 1 {
-				return ContextStepSelectionResult{}
-			}
-			return ContextStepSelectionResult{FatalError: contextfrag.ErrBudgetUnsatisfied}
-		},
-	})
-	assertEndReason(t, terminal, EventAgentAbort, event.EndContextBudget)
-	if got := int(invocations.Load()); got != 2 {
-		t.Fatalf("provider invocations = %d, want 2: the budget stops the run before another call", got)
-	}
-}
-
 // The text guard aborts the run itself. Its reason is recorded where the guard
 // fires, which is before the loop cancels the stream context, so the terminal
 // reports the loop and not the cancellation that follows it.
@@ -189,3 +156,18 @@ func TestAgentStreamEndReasonLoopDetected(t *testing.T) {
 		t.Fatalf("provider invocations = %d, want 1: the guard ends the run it caught", got)
 	}
 }
+
+func mockToolLoopTools() []agenttools.ToolProvider {
+	return []agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
+		Name:       "lookup",
+		Parameters: &jsonschema.Schema{Type: "object"},
+		Execute: func(_ *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+			return toolexec.OutputFromValue(strings.Repeat("large tool result ", 80)), nil
+		},
+	}}}}
+}
+
+// TestAgentGenerateOffModeNeverInvokesReselectorAndMatchesReselectorNilRun
+// drives off mode with a non-nil counting reselector and asserts it is never
+// called, the ledger records legacy_prune, and the resulting provider
+// payload sequence is identical to a control run that never had a

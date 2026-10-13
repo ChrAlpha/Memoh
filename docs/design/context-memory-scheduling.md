@@ -108,7 +108,7 @@ Representations materialized per Discuss turn, in order:
 | 3 | `[]sdk.Message` | `turn_discuss.go` `discussMessagesToSDK` | **Full `json.Marshal` + `json.Unmarshal` round-trip per RawContent message** |
 | 4 | `[]contextfrag.ContextFrag` (source frags) | `internal/contextview/collector_discuss.go` `discussContextMessageToSDK` | **A second identical per-message marshal/unmarshal round-trip**; tail messages pay it twice via `latestComposedUserMessageIndex` |
 | 5 | Compiled frags + rendered assembly | `internal/agent/context/fragment/compile.go` `CompileFrags` + `Render` | Two `cloneMessage` passes — O(parts) header copies, payloads shared |
-| 6 | Provider view + step reselection | `internal/contextview/provider_run_config.go`, `provider_step_reselection.go` | Prefix `cloneSDKMessages` per changed attempt; **up to `len(frags)+2` full `ProviderPayloadHashAndBytes` serializations of the whole payload per step**, plus one per-fragment serialization per step in `applyProviderStepSerializedCosts`. *In-flight fix: #1072 makes every envelope decision price through the estimator and `ProviderPayloadHash` hash-only.* |
+| 6 | Provider view | `internal/contextview/provider_run_config.go` | One selection and render per run; the tool loop no longer reselects per step |
 | 7 | Terminal persistence | `turn_discuss.go` → `internal/messageconv` → `service_store.go` | **Four serializations**: `event.Messages` + a retained `json.Marshal(event)` terminal payload, `json.Unmarshal` back to SDK messages, then a per-message marshal/unmarshal in `messageconv` before the DB write |
 
 The genuinely payload-doubling steps are the three JSON round-trips (#3, #4, #7); the
@@ -159,12 +159,10 @@ so compaction persistently triggers later than budget pressure implies.
   (`internal/settings/types.go`). Derived thresholds are hardcoded constants
   (soft 50% / hard 75% / target 40%, `service_compaction.go`).
 - `[agent]` TOML: `tool_output_max_bytes`, `tool_output_max_lines`,
-  `system_files_max_bytes`, `context_loop_reselect` (`internal/config/config.go`).
+  `system_files_max_bytes` (`internal/config/config.go`).
   There is **no server-side context-size or admission knob today**.
 - `[session_runtime]` TOML: `state_ttl` (default 24 h) is the only retention bound on
   session snapshots, and it never evicts active runs.
-- `DefaultRecentProtectTokens = 20000`
-  (`internal/contextview/provider_run_config.go`), per-run override only.
 
 ## 4. Correctness requirements
 
@@ -497,12 +495,8 @@ ships before — or atomically with — cache eviction, never eviction first
       `discussContextMessageToSDK`) — frags reference `json.RawMessage` bytes
       directly, under the read-only contract with checksum test protection —
       CM-REP-001
-- [ ] Step reselection: stop serializing the full payload per attempt —
-      CM-REP-002. **Defer to #1072** (`ProviderEnvelopeTokens`: every envelope
-      decision prices through the estimator, `ProviderPayloadHash` becomes
-      hash-only), which is in flight in the context-budget landing stack;
-      this roadmap only adds persisted per-fragment costs on top if a gap
-      remains after it lands, rather than re-implementing the accounting.
+- [x] Step reselection: removed; the tool loop sends its messages as they are —
+      CM-REP-002
 - [ ] Terminal persistence: pass `json.RawMessage` through to the store; drop the
       decode/re-encode chain (`turn_discuss.go` → `messageconv`) — CM-REP-003
 - [ ] Snapshot backend: copy-on-write per-delta updates instead of full

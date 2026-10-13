@@ -152,29 +152,6 @@ func TestMutationLedgerModelInfo(t *testing.T) {
 	}
 }
 
-func TestMutationLedgerLoopSelectionMode(t *testing.T) {
-	t.Parallel()
-
-	ledger := NewMutationLedger()
-	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
-	if got := ledger.LoopSelectionMode(); got != LoopSelectionSuffixOnly {
-		t.Fatalf("LoopSelectionMode() = %q, want %q", got, LoopSelectionSuffixOnly)
-	}
-}
-
-func TestMutationLedgerLoopSelectionModeSuffixOnlyShadow(t *testing.T) {
-	t.Parallel()
-
-	ledger := NewMutationLedger()
-	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnlyShadow)
-	if got := ledger.LoopSelectionMode(); got != LoopSelectionSuffixOnlyShadow {
-		t.Fatalf("LoopSelectionMode() = %q, want %q", got, LoopSelectionSuffixOnlyShadow)
-	}
-	if LoopSelectionSuffixOnlyShadow != "suffix_only_shadow" {
-		t.Fatalf("LoopSelectionSuffixOnlyShadow = %q, want suffix_only_shadow", LoopSelectionSuffixOnlyShadow)
-	}
-}
-
 func TestMutationLedgerStepAttemptModelNilSafe(t *testing.T) {
 	t.Parallel()
 
@@ -183,15 +160,11 @@ func TestMutationLedgerStepAttemptModelNilSafe(t *testing.T) {
 	ledger.AdvanceAttempt()
 	ledger.RecordCacheUsage(CacheUsageRecord{StepIndex: 0})
 	ledger.SetModelInfo("m", "c")
-	ledger.SetLoopSelectionMode(LoopSelectionLegacyPrune)
 	if ledger.StepSnapshots() != nil || ledger.CacheUsageRecords() != nil {
 		t.Fatal("nil ledger step/cache records must be nil")
 	}
 	if model, clientType := ledger.ModelInfo(); model != "" || clientType != "" {
 		t.Fatalf("nil ledger ModelInfo() = (%q, %q), want empty", model, clientType)
-	}
-	if got := ledger.LoopSelectionMode(); got != "" {
-		t.Fatalf("nil ledger LoopSelectionMode() = %q, want empty", got)
 	}
 }
 
@@ -202,11 +175,10 @@ func TestMutationLedgerMarshalJSONIncludesAttemptAudit(t *testing.T) {
 	ledger.Record(MutationMidTaskPrune, "truncated=2")
 	ledger.SetFinalInputHash("final-hash")
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
-	ledger.SetLoopSelectionMode(LoopSelectionSuffixOnly)
 	ledger.AppendStepSnapshot(StepSnapshot{
 		StepIndex:            0,
 		PostPrepareInputHash: "step-hash-0",
-		ReselectionOutcome:   ReselectionOutcomeApplied,
+		ReselectionOutcome:   "applied",
 		ReselectionApplied:   true,
 		Dropped:              3,
 		DropReasons:          map[string]int{"budget": 3},
@@ -221,7 +193,7 @@ func TestMutationLedgerMarshalJSONIncludesAttemptAudit(t *testing.T) {
 	}
 	for _, want := range []string{
 		"mid_task_prune", "truncated=2", "final-hash",
-		`"model":"claude-x"`, `"client_type":"anthropic-messages"`, `"loop_selection_mode":"suffix_only"`,
+		`"model":"claude-x"`, `"client_type":"anthropic-messages"`,
 		`"step_index":0`, "step-hash-0", `"reselection_outcome":"applied"`, `"reselection_applied":true`, `"dropped":3`, `"budget":3`, `"cache_read_tokens":11`,
 		`"step_index":1`, "step-hash-1", `"attempt":1`, `"truncated":2`,
 	} {

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -164,8 +165,7 @@ func TestStage4PreTurnCompactionReplacesCoveredRowsInTheProviderRequest(t *testi
 // A summarizer that fails does not stop the turn: the request still reaches
 // the provider, no row is left claimed by a failed summary, and the context
 // the turn goes on with is the history as it was (ruling 4, what does not fit
-// goes to the provider as it is). The last check calls the backstop itself,
-// because the request is also shaped by the context view's own budget.
+// goes to the provider as it is): every row reaches the request, in order.
 func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 	s, fixture, recorder := stage4DriveSession(t)
 	s.padding = 3000
@@ -181,8 +181,23 @@ func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 	if strings.Contains(body, "SUMMARY-") {
 		t.Fatalf("the request carries a summary the summarizer never produced")
 	}
-	if !strings.Contains(body, "what now?") || !strings.Contains(body, "a-07 padding") {
-		t.Fatal("the request lacks the current message or the newest row")
+	last := -1
+	for i := range ids {
+		label := fmt.Sprintf("a-%02d padding", i)
+		at := strings.Index(body, label)
+		if at < 0 {
+			t.Fatalf("the request lost row %s:\n%s", label, body)
+		}
+		if at < last {
+			t.Fatalf("row %s is out of order", label)
+		}
+		last = at
+	}
+	if at := strings.Index(body, "what now?"); at < last {
+		t.Fatal("the request lacks the current message after the history")
+	}
+	if strings.Contains(body, "trimmed to fit") {
+		t.Fatal("the request carries a trim notice")
 	}
 	if covered, raw := s.compactedLabels(); len(covered) != 0 || len(raw) != len(ids) {
 		t.Fatalf("a failed compaction left covered=%v raw=%v", covered, raw)

@@ -348,7 +348,7 @@ func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
 	}
 }
 
-func TestSystemBudgetActualCostShrinksHistoryBudgetAndChargesProtectedHistory(t *testing.T) {
+func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 	t.Parallel()
 
 	frags := []contextfrag.ContextFrag{
@@ -364,28 +364,24 @@ func TestSystemBudgetActualCostShrinksHistoryBudgetAndChargesProtectedHistory(t 
 		t.Fatalf("plan-disabled selection dropped %v, want none", fragIDs(withoutPlan.Dropped))
 	}
 
-	noticeCost := contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
 	plan := &contextfrag.ContextBudgetPlan{
 		Window:       1000,
-		SystemBudget: 150 + 40 + noticeCost + 1,
+		SystemBudget: 150 + 40 + 1,
 	}
-	withPlan := selector.Select(frags, profile, BudgetEnvelope{
-		MaxTokens:           200,
-		RecentProtectTokens: 0,
-		Plan:                plan,
-	})
+	withPlan := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 200, Plan: plan})
 	if withPlan.FatalError != nil {
 		t.Fatalf("Select() error = %v", withPlan.FatalError)
 	}
-	if got := fragIDs(withPlan.Dropped); !reflect.DeepEqual(got, []string{"old"}) {
-		t.Fatalf("dropped = %v, want old history after protected history and notice consume the allowance", got)
+	if len(withPlan.Dropped) != 0 {
+		t.Fatalf("dropped = %v, want history over its budget kept", fragIDs(withPlan.Dropped))
 	}
-	if plan.HistoryBudget != 40+noticeCost+1 {
-		t.Fatalf("history budget = %d, want protected history plus notice and one token %d", plan.HistoryBudget, 40+noticeCost+1)
+	if plan.HistoryBudget != 40+1 {
+		t.Fatalf("history budget = %d, want the system budget minus the actual system cost %d", plan.HistoryBudget, 40+1)
 	}
 }
 
-func TestHistoryBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
+// Protected history over its budget goes to the provider as it is.
+func TestHistoryBudgetProtectedOverflowIsKept(t *testing.T) {
 	t.Parallel()
 
 	protected := historyBudgetTestFrag("latest", 40)
@@ -400,11 +396,11 @@ func TestHistoryBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("Select() error = %v, want ErrProtectedContextOverflow", result.FatalError)
+	if result.FatalError != nil {
+		t.Fatalf("Select() error = %v, want none", result.FatalError)
 	}
 	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{"latest"}) {
-		t.Fatalf("selected = %v, want protected history retained for audit", got)
+		t.Fatalf("selected = %v, want protected history kept", got)
 	}
 	if len(result.Dropped) != 0 {
 		t.Fatalf("dropped = %v, want no protected history drop", fragIDs(result.Dropped))

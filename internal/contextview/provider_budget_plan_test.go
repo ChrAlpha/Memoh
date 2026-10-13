@@ -178,22 +178,6 @@ func TestProviderContextBudgetPlanRejectsNegativeWindow(t *testing.T) {
 	}
 }
 
-func TestResolveRecentProtectTokens(t *testing.T) {
-	t.Parallel()
-
-	zero := 0
-	negative := -1
-	if got := resolveRecentProtectTokens(nil); got != DefaultRecentProtectTokens {
-		t.Fatalf("default = %d", got)
-	}
-	if got := resolveRecentProtectTokens(&zero); got != 0 {
-		t.Fatalf("zero override = %d", got)
-	}
-	if got := resolveRecentProtectTokens(&negative); got != 0 {
-		t.Fatalf("negative override = %d", got)
-	}
-}
-
 func TestProviderBudgetPlanIsAppliedAndRetained(t *testing.T) {
 	t.Parallel()
 
@@ -437,44 +421,6 @@ func TestApplyProviderRunConfigBudgetErrorKeepsAuditWhenRenderFails(t *testing.T
 	if len(snapshot.Mutations) != 1 ||
 		snapshot.Mutations[0].Kind != contextfrag.MutationContextBudgetFailure {
 		t.Fatalf("lifecycle mutations = %#v, want budget failure", snapshot.Mutations)
-	}
-}
-
-func TestProviderSelectorReservesHistoryTrimNoticeWithinPlan(t *testing.T) {
-	t.Parallel()
-
-	frags := []contextfrag.ContextFrag{
-		attentionMessageFrag("old-1", sdk.UserMessage("old one"), 100),
-		attentionMessageFrag("old-2", sdk.AssistantMessage("old two"), 100),
-		contextfrag.TextFrag(contextfrag.TextFragInput{
-			ID:    "current",
-			Kind:  contextfrag.KindCurrentUserMessage,
-			Role:  sdk.MessageRoleUser,
-			Slot:  contextfrag.SlotCurrentUser,
-			Text:  "current",
-			Trust: contextfrag.TrustUser,
-		}),
-	}
-	plan := &contextfrag.ContextBudgetPlan{SystemBudget: 120}
-
-	result := (&FragmentSelector{}).Select(
-		frags,
-		(&FragmentSelector{}).ProfileFor(contextfrag.IntentRunConfigPreProvider),
-		BudgetEnvelope{Plan: plan},
-	)
-
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
-	if !result.TrimNotice {
-		t.Fatal("history pressure must retain its notice")
-	}
-	if len(result.Dropped) != 2 {
-		t.Fatalf("dropped = %#v, want both 100-token history fragments so the notice fits", result.Dropped)
-	}
-	noticeCost := contextfrag.ResolveFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
-	if noticeCost > plan.HistoryBudget {
-		t.Fatalf("notice cost %d exceeds history budget %d", noticeCost, plan.HistoryBudget)
 	}
 }
 

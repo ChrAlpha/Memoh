@@ -88,7 +88,6 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 
 	ledger := contextfrag.NewMutationLedger()
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
-	ledger.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
 	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash-0"})
 	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{
 		StepIndex:        0,
@@ -105,9 +104,6 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
 		t.Fatalf("snapshot model/client_type = (%q, %q)", snapshot.Model, snapshot.ClientType)
 	}
-	if snapshot.LoopSelectionMode != contextfrag.LoopSelectionSuffixOnly {
-		t.Fatalf("snapshot loop selection mode = %q", snapshot.LoopSelectionMode)
-	}
 	if len(snapshot.Steps) != 1 || snapshot.Steps[0].PostPrepareInputHash != "step-hash-0" {
 		t.Fatalf("snapshot steps = %#v", snapshot.Steps)
 	}
@@ -121,7 +117,7 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"model":"claude-x"`, `"client_type":"anthropic-messages"`,
-		`"loop_selection_mode":"suffix_only"`, `"steps":`, "step-hash-0",
+		`"steps":`, "step-hash-0",
 		`"step_index":0`, `"cache_read_tokens":11`, `"cache_write_tokens":7`,
 	} {
 		if !strings.Contains(string(raw), want) {
@@ -187,7 +183,6 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 	}
 	ledger := contextfrag.NewMutationLedger()
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
-	ledger.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
 
 	holder := contextfrag.NewLifecycleHolder()
 	holder.SetAssistantMessageID(" assistant-1 ")
@@ -240,8 +235,8 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 || len(snapshot.CacheUsage) != 1 {
 		t.Fatalf("live cache audit = %#v, totals = %d/%d", snapshot.CacheUsage, snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
 	}
-	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" || snapshot.LoopSelectionMode != contextfrag.LoopSelectionSuffixOnly {
-		t.Fatalf("live provider audit = (%q, %q, %q)", snapshot.Model, snapshot.ClientType, snapshot.LoopSelectionMode)
+	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
+		t.Fatalf("live provider audit = (%q, %q)", snapshot.Model, snapshot.ClientType)
 	}
 	if len(snapshot.Steps) != 1 || snapshot.Steps[0].DropReasons["budget"] != 1 {
 		t.Fatalf("live step audit = %#v", snapshot.Steps)

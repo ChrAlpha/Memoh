@@ -2,8 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -46,9 +44,6 @@ func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *tes
 	if plan.ActualSystemCost != 0 || plan.HistoryBudget != 0 {
 		t.Fatalf("fallback plan = %+v, want the failed build's system and history figures cleared", plan)
 	}
-	if out.ContextStepReselector == nil {
-		t.Fatal("fallback assembly must keep step reselection; it is an assembly path, not a budget-disabled path")
-	}
 	if out.ContextMutations == nil {
 		t.Fatal("fallback lost the mutation ledger")
 	}
@@ -58,11 +53,12 @@ func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *tes
 	}
 }
 
-func TestFallbackDispatchFailsClosedWhenLegacyPayloadExceedsAllowance(t *testing.T) {
+// A fallback payload over the allowance goes to the provider as it is.
+func TestFallbackDispatchSendsLegacyPayloadOverTheAllowance(t *testing.T) {
 	t.Parallel()
 
-	provider := &envelopeProbeProvider{handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
-		return sdk.ModelResult{}, fmt.Errorf("provider must not be called for an oversized fallback payload (call %d)", call)
+	provider := &envelopeProbeProvider{handler: func(int, sdk.Request) (sdk.ModelResult, error) {
+		return sdk.ModelResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: ProviderRunConfigApplier(nil)})
 	const window = 2_000
@@ -76,15 +72,14 @@ func TestFallbackDispatchFailsClosedWhenLegacyPayloadExceedsAllowance(t *testing
 	cfg.ContextMutations = contextfrag.NewMutationLedger()
 	cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
 
-	_, err := agent.Generate(context.Background(), cfg)
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
+	if _, err := agent.Generate(context.Background(), cfg); err != nil {
+		t.Fatalf("Generate() error = %v, want the payload sent as it is", err)
 	}
-	if calls := provider.calls.Load(); calls != 0 {
-		t.Fatalf("provider calls = %d, want 0", calls)
+	if calls := provider.calls.Load(); calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
 	}
 	records := cfg.ContextMutations.Records()
-	if !hasMutation(records, contextfrag.MutationContextViewFallback) || !hasMutation(records, contextfrag.MutationContextBudgetFailure) {
-		t.Fatalf("mutations = %+v, want both the fallback and the budget failure recorded", records)
+	if !hasMutation(records, contextfrag.MutationContextViewFallback) || hasMutation(records, contextfrag.MutationContextBudgetFailure) {
+		t.Fatalf("mutations = %+v, want the fallback recorded and no budget failure", records)
 	}
 }

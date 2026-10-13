@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -112,17 +111,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	if err != nil {
 		return nil, err
 	}
-	// The generate loop surfaces context-preparation failures as returned
-	// errors at the next dispatch boundary; the run context is no longer
-	// cancelled with the failure cause.
-	failure := &contextStepFailureCapture{}
-	installContextStepFailureHandler(&cfg, failure.capture)
 	dispatch, dispatchErr := a.buildGenerateDispatch(genCtx, cfg, sdkTools, approvalTools, prepareStep)
 	if dispatchErr != nil {
 		return nil, fmt.Errorf("generate: %w", dispatchErr)
-	}
-	if stepErr := failure.err(); stepErr != nil {
-		return nil, stepErr
 	}
 	if cfg.Model == nil {
 		return nil, fmt.Errorf("generate: %w", errors.New("twilightai: model is required (use WithModel)"))
@@ -197,9 +188,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			committed: len(allSteps),
 			readMedia: readMediaState,
 		})
-		if stepErr := failure.err(); stepErr != nil {
-			return nil, stepErr
-		}
 		// Dispatch boundary: never invoke the provider on a dead context, and
 		// publish the staged provider-attempt state exactly once per call.
 		if ctxErr := genCtx.Err(); ctxErr != nil {
@@ -364,18 +352,6 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	handoff := newProviderAttemptHandoff(cfg)
 	sdkTools = canonicalizeProviderToolSchemas(sdkTools)
 	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
-	loopReselectMode := a.LoopReselectMode()
-	if loopReselectMode == LoopReselectOff {
-		cfg.ContextStepReselector = nil
-	}
-	switch {
-	case cfg.ContextStepReselector == nil:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionLegacyPrune)
-	case loopReselectMode == LoopReselectShadow:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnlyShadow)
-	default:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
-	}
 
 	plan := cfg.ContextCachePlan
 	providerAttemptPrefixCount := len(cfg.Messages)
@@ -408,7 +384,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	if toolDefErr != nil {
 		return generateDispatch{}, toolDefErr
 	}
-	initialParams := prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, 0, providerRefs, &sdk.Request{
+	initialParams := prepareProviderAttempt(ctx, cfg, handoff, systemPrepended, 0, providerRefs, &sdk.Request{
 		System: system, Messages: messages, Tools: toolDefs,
 	})
 	system = initialParams.System
@@ -468,7 +444,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			return nil
 		}
 		defer func() { prepareIndex++ }()
-		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, prefix.count, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
+		return prepareProviderAttempt(ctx, cfg, handoff, systemPrepended, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
 	}
 
 	if key := models.PromptCacheKey(cfg.Model, cfg.PromptCacheTTL, cfg.Identity.SessionID); key != "" {
@@ -488,44 +464,6 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		prefix:          prefix,
 		systemPrepended: systemPrepended,
 	}, nil
-}
-
-// contextStepFailureCapture records the first context-preparation failure the
-// shared prepare helpers report through cfg.contextStepFailure. The generate
-// loop returns it at the next dispatch boundary instead of cancelling the run
-// context with the failure cause.
-type contextStepFailureCapture struct {
-	mu    sync.Mutex
-	cause error
-}
-
-func (c *contextStepFailureCapture) capture(cause error) {
-	if cause == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cause == nil {
-		c.cause = cause
-	}
-}
-
-// err returns the captured failure, normalized to the budget sentinels the
-// legacy path surfaced via contextStepBudgetError.
-func (c *contextStepFailureCapture) err() error {
-	c.mu.Lock()
-	cause := c.cause
-	c.mu.Unlock()
-	switch {
-	case cause == nil:
-		return nil
-	case errors.Is(cause, contextfrag.ErrProtectedContextOverflow):
-		return contextfrag.ErrProtectedContextOverflow
-	case errors.Is(cause, contextfrag.ErrBudgetUnsatisfied):
-		return contextfrag.ErrBudgetUnsatisfied
-	default:
-		return cause
-	}
 }
 
 // joinFinalTexts joins the answers of a continued run the way the segment

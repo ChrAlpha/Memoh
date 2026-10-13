@@ -102,22 +102,25 @@ func TestDiscussSelector_ProfileMustKeepSystemAndCurrentUser(t *testing.T) {
 	}
 }
 
-func TestDiscussSelector_BudgetedSelectionDropsCanDropHistory(t *testing.T) {
+// History over the budget goes to the provider as it is: selection drops
+// nothing to make it fit.
+func TestSelector_OverBudgetHistoryIsKept(t *testing.T) {
 	t.Parallel()
 
-	frags := []contextfrag.ContextFrag{
-		messageFrag("old-user", sdk.UserMessage("old question")),
-		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
-		messageFrag("latest", sdk.UserMessage("latest question")),
+	for _, intent := range []contextfrag.Intent{contextfrag.IntentDiscussReply, contextfrag.IntentRunConfigPreProvider} {
+		frags := []contextfrag.ContextFrag{
+			messageFrag("old-user", sdk.UserMessage("old question")),
+			messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
+			messageFrag("latest", sdk.UserMessage("latest question")),
+		}
+		selector := &FragmentSelector{}
+		result := selector.Select(frags, selector.ProfileFor(intent), BudgetEnvelope{MaxTokens: 1})
+
+		assertSelectedIDs(t, result, []string{"old-user", "old-assistant", "latest"})
+		if len(result.Dropped) != 0 {
+			t.Fatalf("%s dropped = %#v, want none", intent, fragIDs(result.Dropped))
+		}
 	}
-	selector := &FragmentSelector{}
-	profile := selector.ProfileFor(contextfrag.IntentDiscussReply)
-
-	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
-
-	assertSelectedIDs(t, result, []string{"latest"})
-	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
-	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
 }
 
 func TestDiscussSelector_BudgetedSelectionKeepsAllWhenWithinBudget(t *testing.T) {
@@ -137,24 +140,6 @@ func TestDiscussSelector_BudgetedSelectionKeepsAllWhenWithinBudget(t *testing.T)
 	if len(result.Dropped) != 0 {
 		t.Fatalf("dropped = %#v, want none", fragIDs(result.Dropped))
 	}
-}
-
-func TestSelector_ProviderBudgetedIntentDropsCanDropHistory(t *testing.T) {
-	t.Parallel()
-
-	frags := []contextfrag.ContextFrag{
-		messageFrag("old-user", sdk.UserMessage("old question")),
-		messageFrag("old-assistant", sdk.AssistantMessage("old answer")),
-		messageFrag("latest", sdk.UserMessage("latest question")),
-	}
-	selector := &FragmentSelector{}
-	profile := selector.ProfileFor(contextfrag.IntentRunConfigPreProvider)
-
-	result := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 1})
-
-	assertSelectedIDs(t, result, []string{"latest"})
-	assertDroppedReason(t, result, "old-user", budgetDropReasonUntiered)
-	assertDroppedReason(t, result, "old-assistant", budgetDropReasonUntiered)
 }
 
 type discussLegacyInput struct {

@@ -11,6 +11,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -25,8 +26,6 @@ type compactionRun struct {
 	sent     [][]sdk.Message
 	inputs   []StepContextInput
 	replaced bool
-	// prefixes are the protected prefix lengths step reselection was given.
-	prefixes []int
 }
 
 func (r *compactionRun) config(t *testing.T, a *Agent, replace func(call int) []sdk.Message) RunConfig {
@@ -61,12 +60,6 @@ func (r *compactionRun) config(t *testing.T, a *Agent, replace func(call int) []
 		Messages:         []sdk.Message{sdk.UserMessage("start")},
 		SupportsToolCall: true,
 		Identity:         SessionContext{BotID: "bot-1"},
-		ContextStepReselector: func(_ context.Context, in ContextStepSelectionInput) ContextStepSelectionResult {
-			r.mu.Lock()
-			r.prefixes = append(r.prefixes, in.InitialMessageCount)
-			r.mu.Unlock()
-			return ContextStepSelectionResult{}
-		},
 		StepContextCompactor: func(_ context.Context, in StepContextInput) []sdk.Message {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -121,11 +114,6 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		if len(r.sent[3]) != 4 || !reflect.DeepEqual(r.sent[3][:2], r.sent[2]) {
 			t.Fatalf("call 4 sent %d messages, want the replacement plus the step after it", len(r.sent[3]))
 		}
-		// The replacement is all protected prefix: the loop's own messages
-		// start after it.
-		if want := []int{1, 2}; !reflect.DeepEqual(r.prefixes, want) {
-			t.Fatalf("reselection prefixes = %v, want %v", r.prefixes, want)
-		}
 	})
 	t.Run("a system prompt moved into the messages is not the compactor's", func(t *testing.T) {
 		t.Parallel()
@@ -149,6 +137,43 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		}
 		if want := append([]sdk.Message{r.sent[1][0]}, summary, sdk.UserMessage("start")); !reflect.DeepEqual(r.sent[2], want) {
 			t.Fatalf("call 3 sent %#v, want the system prompt ahead of the replacement", r.sent[2])
+		}
+	})
+	t.Run("a replacement is prefix the background summary refresh keeps", func(t *testing.T) {
+		t.Parallel()
+		bgMgr := background.New(nil)
+		sessionID := "sess-" + strings.ReplaceAll(t.Name(), "/", "-")
+		_, release := spawnBlockedBackgroundTask(t, bgMgr, "bot-1", sessionID, "long build")
+		t.Cleanup(func() { close(release) })
+		carried := backgroundSummaryMessage("carried over by the compactor")
+		var r compactionRun
+		a := New(Deps{})
+		cfg := r.config(t, a, func(boundary int) []sdk.Message {
+			if boundary == 2 {
+				return []sdk.Message{summary, carried, sdk.UserMessage("start")}
+			}
+			return nil
+		})
+		cfg.Identity.SessionID = sessionID
+		cfg.BackgroundManager = bgMgr
+		run(a, cfg)
+		if len(r.sent) != 4 {
+			t.Fatalf("provider calls = %d, want 4", len(r.sent))
+		}
+		for call := 3; call <= 4; call++ {
+			sent := r.sent[call-1]
+			if len(sent) < 4 || !reflect.DeepEqual(sent[:3], []sdk.Message{summary, carried, sdk.UserMessage("start")}) {
+				t.Fatalf("call %d sent %#v, want the replacement kept whole as the prefix", call, sent)
+			}
+			fresh := 0
+			for _, message := range sent[3:] {
+				if contextfrag.IsBackgroundSummaryCarrier(message) {
+					fresh++
+				}
+			}
+			if fresh != 1 || !contextfrag.IsBackgroundSummaryCarrier(sent[len(sent)-1]) {
+				t.Fatalf("call %d carries %d summaries after the prefix, want one fresh summary last: %#v", call, fresh, sent)
+			}
 		}
 	})
 	t.Run("a compactor that keeps the conversation leaves it untouched", func(t *testing.T) {

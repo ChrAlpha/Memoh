@@ -63,87 +63,23 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 	}
 
 	tagged := tagFragments(frags, profile)
-	historyBudget := budget.MaxTokens
-	trimDrops := budgetTrimDrops
-	hardBudget := budget.Plan != nil || budget.EnforceProtectedBudget
-	if hardBudget {
+	if budget.Plan != nil {
 		for i := range tagged {
 			tagged[i].Tokens = contextfrag.ResolveProviderBudgetFragTokens(tagged[i].Frag)
 		}
-		protectedCost := protectedHistoryTokenCost(tagged)
-		// Protected content must leave room for the trim notice exactly when
-		// trimming will happen: droppable rows that cannot all fit force
-		// spatial drops, and the notice they require is charged against the
-		// summary's ceiling instead of failing the selection afterwards.
-		summaryCeiling := historyBudget
-		if droppable := droppableHistoryTokenCost(tagged); droppable > 0 && droppable > historyBudget-protectedCost {
-			summaryCeiling -= contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
+		if protectedCost := protectedHistoryTokenCost(tagged); protectedCost > budget.MaxTokens {
+			fragBudgetEdits = append(fragBudgetEdits, shrinkOversizedProtectedSummaries(tagged, protectedCost, budget.MaxTokens)...)
 		}
-		if protectedCost > summaryCeiling {
-			if edits := shrinkOversizedProtectedSummaries(tagged, protectedCost, summaryCeiling); len(edits) > 0 {
-				fragBudgetEdits = append(fragBudgetEdits, edits...)
-				protectedCost = protectedHistoryTokenCost(tagged)
-			}
-		}
-		if protectedCost > historyBudget {
-			result := selectionResultFromTaggedReasons(tagged, allSelectedIndexes(tagged), nil)
-			result.FatalError = contextfrag.ErrProtectedContextOverflow
-			return finalizeSelection(
-				result,
-				profile,
-				gated,
-				superseded,
-				fragBudgetDropped,
-				fragBudgetEdits,
-				fragBudgetWarnings,
-				systemBudgetDropped,
-			)
-		}
-		historyBudget -= protectedCost
-		trimDrops = budgetTrimDropsEnabled
 	}
 
-	if drops, dropReasons := trimDrops(tagged, historyBudget, budget.RecentProtectTokens); len(drops) > 0 {
-		if hardBudget && hasSpatialBudgetDrop(dropReasons) {
-			noticeCost := contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
-			if noticeCost > historyBudget {
-				result := selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
-				result.FatalError = contextfrag.ErrProtectedContextOverflow
-				return finalizeSelection(
-					result,
-					profile,
-					gated,
-					superseded,
-					fragBudgetDropped,
-					fragBudgetEdits,
-					fragBudgetWarnings,
-					systemBudgetDropped,
-				)
-			}
-			drops, dropReasons = budgetTrimDropsEnabled(
-				tagged,
-				historyBudget-noticeCost,
-				budget.RecentProtectTokens,
-			)
-		}
-		result := selectionResultFromTaggedReasons(tagged, keptIndexes(tagged, drops), dropReasons)
-		if hasSpatialBudgetDrop(dropReasons) {
-			result.TrimNotice = true
-			result.TrimNoticeIndex = trimNoticeIndex(tagged, drops)
-		}
-		return finalizeSelection(
-			result,
-			profile,
-			gated,
-			superseded,
-			fragBudgetDropped,
-			fragBudgetEdits,
-			fragBudgetWarnings,
-			systemBudgetDropped,
-		)
+	selectedIndexes := allSelectedIndexes(tagged)
+	var dropReasons map[int]string
+	if budget.Plan != nil || budget.MaxTokens > 0 {
+		var drops map[int]bool
+		drops, dropReasons = orphanToolExchangeDrops(tagged)
+		selectedIndexes = keptIndexes(tagged, drops)
 	}
-
-	result := selectionResultFromTaggedReasons(tagged, allSelectedIndexes(tagged), nil)
+	result := selectionResultFromTaggedReasons(tagged, selectedIndexes, dropReasons)
 	return finalizeSelection(
 		result,
 		profile,
@@ -245,64 +181,6 @@ func keptIndexes(tagged []TaggedFrag, drops map[int]bool) map[int]bool {
 		}
 	}
 	return kept
-}
-
-// trimNoticeIndex returns the closure-safe position nearest to the first kept
-// fragment that follows the last dropped fragment.
-func trimNoticeIndex(tagged []TaggedFrag, drops map[int]bool) int {
-	lastDropped := -1
-	for i := range tagged {
-		if drops[i] {
-			lastDropped = i
-		}
-	}
-	if lastDropped < 0 {
-		return -1
-	}
-	kept := make([]contextfrag.ContextFrag, 0, len(tagged)-len(drops))
-	base := -1
-	for i := range tagged {
-		if drops[i] {
-			continue
-		}
-		if base < 0 && i > lastDropped {
-			base = len(kept)
-		}
-		kept = append(kept, tagged[i].Frag)
-	}
-	if base < 0 {
-		base = len(kept)
-	}
-	return closureSafeNoticeIndex(kept, base)
-}
-
-func closureSafeNoticeIndex(kept []contextfrag.ContextFrag, base int) int {
-	open := make(map[string]int)
-	fallback := 0
-	for pos := 0; pos <= len(kept); pos++ {
-		if len(open) == 0 {
-			if pos >= base {
-				return pos
-			}
-			fallback = pos
-		}
-		if pos == len(kept) {
-			break
-		}
-		for _, id := range fragToolCallIDs(kept[pos]) {
-			open[id]++
-		}
-		for _, id := range fragToolResultCallIDs(kept[pos]) {
-			if count, ok := open[id]; ok {
-				if count <= 1 {
-					delete(open, id)
-				} else {
-					open[id] = count - 1
-				}
-			}
-		}
-	}
-	return fallback
 }
 
 func allSelectedIndexes(tagged []TaggedFrag) map[int]bool {

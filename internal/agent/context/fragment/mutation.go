@@ -13,8 +13,11 @@ import (
 type MutationKind string
 
 const (
-	MutationBeforeModelCallHook   MutationKind = "before_model_call_hook"
-	MutationBackgroundSummary     MutationKind = "background_summary"
+	MutationBeforeModelCallHook MutationKind = "before_model_call_hook"
+	MutationBackgroundSummary   MutationKind = "background_summary"
+	// MutationMidTaskPrune and MutationLoopStepReselection are no longer
+	// recorded; persisted snapshots from runs that had in-loop reselection
+	// still carry them.
 	MutationMidTaskPrune          MutationKind = "mid_task_prune"
 	MutationLoopStepReselection   MutationKind = "loop_step_reselection"
 	MutationInjectedMessage       MutationKind = "injected_message"
@@ -33,7 +36,7 @@ const (
 	MutationRunAbortObserved MutationKind = "run_abort_observed"
 )
 
-// AllMutationKinds lists every mutation kind the ledger can record; the
+// AllMutationKinds lists every mutation kind a snapshot can carry; the
 // generated API contract is pinned to this list.
 func AllMutationKinds() []MutationKind {
 	return []MutationKind{
@@ -87,25 +90,9 @@ type CacheUsageRecord struct {
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 }
 
-// Loop-selection modes identify which policy governed mid-run context.
-const (
-	LoopSelectionSuffixOnly       = "suffix_only"
-	LoopSelectionLegacyPrune      = "legacy_prune"
-	LoopSelectionSuffixOnlyShadow = "suffix_only_shadow"
-)
-
-// Provider-attempt reselection outcomes distinguish an applied decision from
-// the same decision observed under shadow mode. The empty value means no
-// reselector governed that attempt.
-const (
-	ReselectionOutcomeUnchanged  = "unchanged"
-	ReselectionOutcomeApplied    = "applied"
-	ReselectionOutcomeWouldApply = "would_apply"
-	ReselectionOutcomeFailed     = "failed"
-	ReselectionOutcomeWouldFail  = "would_fail"
-)
-
 // StepSnapshot records the content-light audit for one provider attempt.
+// The reselection and drop fields are no longer written; persisted snapshots
+// from runs that had in-loop reselection still carry them.
 type StepSnapshot struct {
 	Attempt              int            `json:"attempt,omitempty"`
 	StepIndex            int            `json:"step_index"`
@@ -120,15 +107,14 @@ type StepSnapshot struct {
 // MutationLedger records post-render changes, provider-attempt metadata, and
 // content-light step snapshots. All methods are nil-safe.
 type MutationLedger struct {
-	mu                sync.Mutex
-	records           []MutationRecord
-	cacheUsage        []CacheUsageRecord
-	finalInputHash    string
-	steps             []StepSnapshot
-	attempt           int
-	model             string
-	clientType        string
-	loopSelectionMode string
+	mu             sync.Mutex
+	records        []MutationRecord
+	cacheUsage     []CacheUsageRecord
+	finalInputHash string
+	steps          []StepSnapshot
+	attempt        int
+	model          string
+	clientType     string
 }
 
 func NewMutationLedger() *MutationLedger {
@@ -269,24 +255,6 @@ func (l *MutationLedger) ModelInfo() (string, string) {
 	return l.model, l.clientType
 }
 
-func (l *MutationLedger) SetLoopSelectionMode(mode string) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.loopSelectionMode = mode
-}
-
-func (l *MutationLedger) LoopSelectionMode() string {
-	if l == nil {
-		return ""
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.loopSelectionMode
-}
-
 // ProviderInputHash hashes the assembled provider payload deterministically.
 func ProviderInputHash(system string, messages any) string {
 	return ProviderPayloadHash(system, messages, nil)
@@ -330,20 +298,18 @@ func nilIfEmptyValue(value any) any {
 func (l *MutationLedger) MarshalJSON() ([]byte, error) {
 	model, clientType := l.ModelInfo()
 	return json.Marshal(struct {
-		Records           []MutationRecord   `json:"records,omitempty"`
-		CacheUsage        []CacheUsageRecord `json:"cache_usage,omitempty"`
-		FinalInputHash    string             `json:"final_input_hash,omitempty"`
-		Steps             []StepSnapshot     `json:"steps,omitempty"`
-		Model             string             `json:"model,omitempty"`
-		ClientType        string             `json:"client_type,omitempty"`
-		LoopSelectionMode string             `json:"loop_selection_mode,omitempty"`
+		Records        []MutationRecord   `json:"records,omitempty"`
+		CacheUsage     []CacheUsageRecord `json:"cache_usage,omitempty"`
+		FinalInputHash string             `json:"final_input_hash,omitempty"`
+		Steps          []StepSnapshot     `json:"steps,omitempty"`
+		Model          string             `json:"model,omitempty"`
+		ClientType     string             `json:"client_type,omitempty"`
 	}{
-		Records:           l.Records(),
-		CacheUsage:        l.CacheUsageRecords(),
-		FinalInputHash:    l.FinalInputHash(),
-		Steps:             l.StepSnapshots(),
-		Model:             model,
-		ClientType:        clientType,
-		LoopSelectionMode: l.LoopSelectionMode(),
+		Records:        l.Records(),
+		CacheUsage:     l.CacheUsageRecords(),
+		FinalInputHash: l.FinalInputHash(),
+		Steps:          l.StepSnapshots(),
+		Model:          model,
+		ClientType:     clientType,
 	})
 }

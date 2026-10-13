@@ -160,18 +160,10 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, failure)
 		return
 	}
-	installContextStepFailureHandler(&cfg, cancel)
 	dispatch, dispatchErr := a.buildGenerateDispatch(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	if dispatchErr != nil {
 		failure := localFailureEvent(fmt.Errorf("stream start: %w", dispatchErr))
 		turnError = turnHookError(failure)
-		sendEvent(ctx, ch, failure)
-		return
-	}
-	if stepErr := contextStepBudgetError(streamCtx); stepErr != nil {
-		failure := contextViewStreamError(stepErr)
-		turnError = turnHookError(failure)
-		aborted = true
 		sendEvent(ctx, ch, failure)
 		return
 	}
@@ -284,11 +276,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			segmentReason = event.EndCanceled
 		}
 	}
-	budgetErr := contextStepBudgetError(streamCtx)
-	if budgetErr != nil {
-		aborted = true
-		segmentReason = event.EndContextBudget
-	}
 
 	if aborted && !engineClosed {
 		// The engine is expected to stop when the stream context is cancelled,
@@ -308,13 +295,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			}
 		}
 	}
-	if budgetErr != nil {
-		// Published after the backlog so the consumer sees the events the
-		// engine produced before the boundary refused the next call.
-		failure := contextViewStreamError(budgetErr)
-		turnError = turnHookError(failure)
-		sendEvent(ctx, ch, failure)
-	}
 	// The engine goroutine having returned is what makes the reads below
 	// safe: no further complete step can commit after this checkpoint, and
 	// its published state is ordered by the channel close (or the done
@@ -330,8 +310,8 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			turnError = eng.turnError
 		}
 	}
-	// The engine's reason is the specific one: it knew which guard, which
-	// budget check or which failure ended it. The segment owner's own reason is
+	// The engine's reason is the specific one: it knew which guard or which
+	// failure ended it. The segment owner's own reason is
 	// the generic cancellation and only stands in when the engine reported
 	// nothing.
 	endReason := segmentReason
@@ -598,16 +578,8 @@ func (e *streamEngine) run() {
 			drainInjected: e.drainInjectedMessages,
 		})
 
-		// Dispatch boundary: never invoke the provider on a dead or
-		// budget-failed context, and publish the staged provider-attempt state
-		// exactly once per call. The budget failure surfaces as the public
-		// context error in the segment owner, never as a raw provider error.
-		if contextStepBudgetError(e.streamCtx) != nil {
-			e.dispatch.handoff.reject()
-			e.noteEndReason(event.EndContextBudget)
-			e.aborted = true
-			return
-		}
+		// Dispatch boundary: never invoke the provider on a dead context, and
+		// publish the staged provider-attempt state exactly once per call.
 		if e.streamCtx.Err() != nil {
 			e.dispatch.handoff.reject()
 			e.aborted = true
@@ -685,11 +657,6 @@ func (e *streamEngine) run() {
 			return
 		}
 		e.reset(dispatch)
-		if contextStepBudgetError(e.streamCtx) != nil {
-			e.noteEndReason(event.EndContextBudget)
-			e.aborted = true
-			return
-		}
 		attemptSteps = nil
 		attemptStep = 0
 	}
@@ -956,10 +923,6 @@ partLoop:
 			}
 
 		case *sdk.ErrorPart:
-			if contextStepBudgetError(e.streamCtx) != nil {
-				e.aborted = true
-				break
-			}
 			if e.streamCtx.Err() != nil {
 				// The provider is reporting the run's own cancellation.
 				e.aborted = true
@@ -1084,16 +1047,9 @@ partLoop:
 // providerFailure handles a failed model call and marks it as one for
 // IsModelCallFailure. A failure worth another call is returned for the retry
 // transition, which publishes nothing until it gives up; any other failure
-// ends the run. A failure observed after a
-// context-budget cancellation stays off the wire: the segment owner emits the
-// stable public error instead.
+// ends the run.
 func (e *streamEngine) providerFailure(err error) (retry error) {
 	err = &modelCallFailure{err: err}
-	if contextStepBudgetError(e.streamCtx) != nil {
-		e.noteEndReason(event.EndContextBudget)
-		e.aborted = true
-		return nil
-	}
 	if _, ok := modelretry.Retryable(err); ok {
 		return err
 	}
@@ -1104,13 +1060,8 @@ func (e *streamEngine) providerFailure(err error) (retry error) {
 // localFailure ends the run on a failure of the loop's own work: the
 // provider-attempt handoff, the commit barrier, a capability refresh or the
 // tool batch. It is never retried, since the step's tools may already have
-// run. The context-budget fence applies as in providerFailure.
+// run.
 func (e *streamEngine) localFailure(err error) {
-	if contextStepBudgetError(e.streamCtx) != nil {
-		e.noteEndReason(event.EndContextBudget)
-		e.aborted = true
-		return
-	}
 	e.endWithFailure(localFailureEvent(err))
 }
 

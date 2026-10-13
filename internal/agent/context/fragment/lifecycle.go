@@ -194,7 +194,6 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 		snapshot.CacheUsage = ledger.CacheUsageRecords()
 		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
 		snapshot.Model, snapshot.ClientType = ledger.ModelInfo()
-		snapshot.LoopSelectionMode = ledger.LoopSelectionMode()
 		snapshot.Steps = ledger.StepSnapshots()
 	}
 	return snapshot, true
@@ -229,7 +228,6 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		snapshot.CacheUsage = manifest.Mutations.CacheUsageRecords()
 		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
 		snapshot.Model, snapshot.ClientType = manifest.Mutations.ModelInfo()
-		snapshot.LoopSelectionMode = manifest.Mutations.LoopSelectionMode()
 		snapshot.Steps = manifest.Mutations.StepSnapshots()
 	}
 	return snapshot

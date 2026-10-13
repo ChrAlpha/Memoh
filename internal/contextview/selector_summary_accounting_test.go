@@ -1,7 +1,6 @@
 package contextview
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
-func TestConversationSummarySurvivesHistoryBudgetTrim(t *testing.T) {
+func TestConversationSummaryAndHistoryOverBudgetAreKept(t *testing.T) {
 	t.Parallel()
 
 	selector := &FragmentSelector{}
@@ -44,8 +43,8 @@ func TestConversationSummarySurvivesHistoryBudgetTrim(t *testing.T) {
 	if !containsFragID(result.Selected, "raw-19") {
 		t.Fatalf("newest raw row missing: selected=%v", fragIDs(result.Selected))
 	}
-	if !containsFragID(result.Dropped, "raw-0") {
-		t.Fatalf("oldest raw row must fund the trim: dropped=%v", fragIDs(result.Dropped))
+	if len(result.Dropped) != 0 {
+		t.Fatalf("history over its budget must be kept: dropped=%v", fragIDs(result.Dropped))
 	}
 }
 
@@ -108,7 +107,8 @@ func TestOversizedConversationSummaryTruncatesInsteadOfFailingClosed(t *testing.
 	}
 }
 
-func TestOversizedSummaryStillFailsClosedBelowMinimumBudget(t *testing.T) {
+// Below the minimum viable summary the summary goes to the provider whole.
+func TestOversizedSummaryIsKeptWholeBelowMinimumBudget(t *testing.T) {
 	t.Parallel()
 
 	selector := &FragmentSelector{}
@@ -124,8 +124,11 @@ func TestOversizedSummaryStillFailsClosedBelowMinimumBudget(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 40},
 	})
 
-	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("Select() fatal = %v, want fail-closed below the minimum viable summary", result.FatalError)
+	if result.FatalError != nil {
+		t.Fatalf("Select() fatal = %v, want the summary sent as it is", result.FatalError)
+	}
+	if text := selectedFragText(result.Selected, "summary"); len(text) != 40_000 {
+		t.Fatalf("summary text len=%d, want the whole summary below the minimum viable size", len(text))
 	}
 }
 
@@ -185,40 +188,6 @@ func TestSummaryShrinkRedistributesUnusedShares(t *testing.T) {
 	}
 	if big := selectedFragText(result.Selected, "summary-big"); !strings.Contains(big, "truncated to fit") {
 		t.Fatalf("oversized summary must be truncated, got len=%d", len(big))
-	}
-}
-
-func TestSummaryYieldsSpaceForTheTrimNotice(t *testing.T) {
-	t.Parallel()
-
-	selector := &FragmentSelector{}
-	profile := selector.ProfileFor(contextfrag.IntentRunConfigPreProvider)
-
-	frags := []contextfrag.ContextFrag{contextfrag.TextFrag(contextfrag.TextFragInput{
-		ID: "summary", Kind: contextfrag.KindConversationSummary, Role: sdk.MessageRoleUser,
-		Slot: contextfrag.SlotHistory, Text: strings.Repeat("s", 2_720),
-		Trust: contextfrag.TrustExternal,
-	})}
-	for i := range 2 {
-		frags = append(frags, contextfrag.TextFrag(contextfrag.TextFragInput{
-			ID: fmt.Sprintf("raw-%d", i), Kind: contextfrag.KindConversationEvent,
-			Role: sdk.MessageRoleUser, Slot: contextfrag.SlotHistory,
-			Text: strings.Repeat("r", 400), Trust: contextfrag.TrustExternal,
-		}))
-	}
-
-	result := selector.Select(frags, profile, BudgetEnvelope{
-		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 1_000},
-	})
-
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v; the summary must yield enough space to fund the trim notice", result.FatalError)
-	}
-	if !strings.Contains(selectedFragText(result.Selected, "summary"), "truncated to fit") {
-		t.Fatal("summary must be shaved to make room for the trim notice")
-	}
-	if !containsFragID(result.Selected, "raw-1") || !containsFragID(result.Dropped, "raw-0") {
-		t.Fatalf("newest raw row must survive and the oldest fund the trim: selected=%v dropped=%v", fragIDs(result.Selected), fragIDs(result.Dropped))
 	}
 }
 

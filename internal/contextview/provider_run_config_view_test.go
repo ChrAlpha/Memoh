@@ -15,7 +15,6 @@ func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure
 
 	currentUserIndex := 3
 	memoryIndex := 1
-	zero := 0
 	cfg := agentpkg.RunConfig{
 		Messages: []sdk.Message{
 			sdk.AssistantMessage("old answer"),
@@ -27,7 +26,6 @@ func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure
 		ContextMemoryMessageIndex:      &memoryIndex,
 		ContextHistoryTokenEstimates:   []int{200, 20, 20, 100},
 		ContextTrimmableMessages:       1,
-		ContextRecentProtectTokens:     &zero,
 	}
 	activateHistoryBudget(&cfg, 100)
 	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
@@ -77,6 +75,5 @@ func activeHistoryInputBudget(legacyBudget int) (inputBudget, scale int) {
 	if scaled := legacyBudget * scale; scaled < MinimumSystemBudgetTokens {
 		scale = (MinimumSystemBudgetTokens + legacyBudget - 1) / legacyBudget
 	}
-	noticeCost := contextfrag.ResolveProviderBudgetFragTokens(TrimNoticeFrag(contextfrag.Scope{}))
-	return legacyBudget*scale + noticeCost, scale
+	return legacyBudget * scale, scale
 }

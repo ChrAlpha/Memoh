@@ -23,10 +23,10 @@ func (p namedEnvelopeProbeProvider) Name() string { return p.name }
 // TestProviderEnvelopeAuthorityMatrix pins the cross-boundary contract across
 // client types, thinking decisions, and assembly paths: the plan reserves the
 // resolved output allowance, the request carries it only where the adapter
-// would have resolved the same value, a fitting payload dispatches, and a
-// payload that fits the window but not the allowance never reaches the
-// provider. Fragment-first assembly rejects it while planning the budget;
-// the fallback assembles the legacy payload and relies on the dispatch check.
+// would have resolved the same value, and a fitting payload dispatches. A
+// current request that fits the window but not the allowance is rejected by
+// fragment-first assembly while planning the budget; the fallback assembles
+// the legacy payload and sends it as it is.
 func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +115,16 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 
 				probe.calls.Store(0)
 				_, records, err := run(oversized)
-				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) && !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+				if path.name == "fallback" {
+					if err != nil || probe.calls.Load() != 1 {
+						t.Fatalf("fallback over the allowance: error = %v, provider calls = %d, want it sent as it is", err, probe.calls.Load())
+					}
+					if !hasMutation(records, contextfrag.MutationContextViewFallback) || hasMutation(records, contextfrag.MutationContextBudgetFailure) {
+						t.Fatalf("mutations = %+v, want the fallback recorded and no budget failure", records)
+					}
+					return
+				}
+				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
 					t.Fatalf("oversized payload error = %v, want a typed budget failure", err)
 				}
 				if probe.calls.Load() != 0 {
@@ -123,9 +132,6 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 				}
 				if !hasMutation(records, contextfrag.MutationContextBudgetFailure) {
 					t.Fatalf("mutations = %+v, want a context budget failure", records)
-				}
-				if path.name == "fallback" && !hasMutation(records, contextfrag.MutationContextViewFallback) {
-					t.Fatalf("mutations = %+v, want the fallback recorded alongside the failure", records)
 				}
 			})
 		}
@@ -172,4 +178,21 @@ func TestProviderEnvelopeEstimatorParity(t *testing.T) {
 	if images := contextfrag.ProviderEnvelopeTokens("", []sdk.Message{messages["multi images"]}, nil); images != 2*contextfrag.EstimateImageTokens {
 		t.Fatalf("two images priced at %d, want %d", images, 2*contextfrag.EstimateImageTokens)
 	}
+}
+
+func imageUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
+	parts := append([]sdk.MessagePart{sdk.ImagePart{
+		Image:     "data:image/png;base64," + strings.Repeat("A", size),
+		MediaType: "image/png",
+	}}, extra...)
+	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
+}
+
+func fileUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
+	parts := append([]sdk.MessagePart{sdk.FilePart{
+		Data:      strings.Repeat("A", size),
+		MediaType: "application/pdf",
+		Filename:  "report.pdf",
+	}}, extra...)
+	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
 }
