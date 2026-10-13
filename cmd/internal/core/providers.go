@@ -565,6 +565,9 @@ func injectToolProviders(a *native.Agent, msgService *message.DBService, hookSer
 			// terminal-snapshot behavior on its own.
 			adapter.SetStepCommitFactory(agentService.SubagentStepCommit)
 			adapter.SetRunObserverFactory(agentService.SubagentRunObserver)
+			// A spawned run whose steps are committed compacts its own thread
+			// between model calls, like any other native run.
+			adapter.SetCompactorFactory(agentService.SubagentStepCompactor)
 			// The parent model reads a spawned run's failure by the code the
 			// run itself failed with.
 			adapter.SetFailureTranslator(agentService.SubagentFailure)

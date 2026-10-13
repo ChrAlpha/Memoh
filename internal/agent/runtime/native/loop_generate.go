@@ -192,7 +192,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	// same budget the streaming loop keeps.
 	retries := 0
 	for sdkStep := 0; ; sdkStep++ {
-		stepParams := thread.advance(cfg, dynamic, stepBoundary{
+		stepParams := thread.advance(genCtx, cfg, dynamic, stepBoundary{
 			first:     sdkStep == 0,
 			committed: len(allSteps),
 			readMedia: readMediaState,
@@ -332,6 +332,10 @@ func (a *Agent) generateStep(ctx context.Context, cfg RunConfig, params sdk.Requ
 	}
 }
 
+// providerPrefix is the number of leading provider messages the loop did not
+// append itself.
+type providerPrefix struct{ count int }
+
 // generateDispatch is the assembled single-call input for the generate loop:
 // the initial provider request, the executable tool set, the composed per-step
 // prepare chain, the provider-attempt handoff, and the approval handler.
@@ -341,9 +345,10 @@ type generateDispatch struct {
 	prepareStep func(*sdk.Request) *sdk.Request
 	handoff     *providerAttemptHandoff
 	approve     func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error)
-	// initialMessageCount is the compiled provider prefix length (including a
-	// promoted system message), the guard for background-summary stripping.
-	initialMessageCount int
+	// prefix is the compiled provider prefix length (including a promoted
+	// system message). It is shared with the prepare chain, which reads it on
+	// every call, so a rebuilt conversation moves the boundary for both.
+	prefix *providerPrefix
 	// systemPrepended records that the prompt-cache plan moved the system
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
@@ -392,6 +397,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		providerAttemptPrefixCount++
 	}
 	initialProviderMessageCount := clampStableMessageCount(providerAttemptPrefixCount, len(messages))
+	prefix := &providerPrefix{count: initialProviderMessageCount}
 	publishContextCachePlan(cfg, plan)
 
 	var executableTools []toolexec.Tool
@@ -414,7 +420,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			if p == nil {
 				return nil
 			}
-			p.Messages = removeBackgroundSummaryMessages(p.Messages, initialProviderMessageCount)
+			p.Messages = removeBackgroundSummaryMessages(p.Messages, prefix.count)
 			if basePrepare != nil {
 				if override := basePrepare(p); override != nil {
 					p = override
@@ -462,7 +468,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			return nil
 		}
 		defer func() { prepareIndex++ }()
-		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
+		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, prefix.count, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
 	}
 
 	if key := models.PromptCacheKey(cfg.Model, cfg.PromptCacheTTL, cfg.Identity.SessionID); key != "" {
@@ -474,13 +480,13 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		ReasoningConfig:       cfg.ReasoningConfig,
 	})
 	return generateDispatch{
-		params:              params,
-		execTools:           executableTools,
-		prepareStep:         stepPrepare,
-		handoff:             handoff,
-		approve:             approvalHandler,
-		initialMessageCount: initialProviderMessageCount,
-		systemPrepended:     systemPrepended,
+		params:          params,
+		execTools:       executableTools,
+		prepareStep:     stepPrepare,
+		handoff:         handoff,
+		approve:         approvalHandler,
+		prefix:          prefix,
+		systemPrepended: systemPrepended,
 	}, nil
 }
 

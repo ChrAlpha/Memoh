@@ -205,6 +205,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, paylo
 	if committer != nil {
 		committer.bindContinuation(&cfg)
 	}
+	s.bindStepCompaction(&cfg, req, committer)
 	return runPlan{
 		Exec: &nativeExecutor{
 			agent:     s.agent,

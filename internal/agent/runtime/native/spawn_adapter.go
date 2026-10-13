@@ -31,6 +31,21 @@ type SpawnStepCommitFactory func(
 	func(context.Context, int, *step.Record) error,
 )
 
+// SpawnCompaction names the persisted thread of one spawned run, which is what
+// a compactor needs to read the run's committed steps back.
+type SpawnCompaction struct {
+	BotID, ChatID, SessionID, UserID string
+	ModelUUID                        string
+	// TurnRequestMessageID is the persisted task message the steps bind to.
+	TurnRequestMessageID   string
+	ContextBudgetMaxTokens int
+}
+
+// SpawnCompactorFactory builds the between-calls context compactor of one
+// spawned run whose steps are committed as they complete. A nil return leaves
+// the run without one.
+type SpawnCompactorFactory func(ctx context.Context, run SpawnCompaction) StepContextCompactor
+
 // SpawnRunObservation carries the terminal outcome selected by the session
 // runtime that serialized terminal publication against routed controls.
 type SpawnRunObservation struct {
@@ -55,6 +70,7 @@ type SpawnAdapter struct {
 	agent       *Agent
 	stepCommit  SpawnStepCommitFactory
 	runObserver SpawnRunObserverFactory
+	compactor   SpawnCompactorFactory
 	failure     func(StreamEvent) error
 }
 
@@ -66,6 +82,13 @@ func NewSpawnAdapter(a *Agent) *SpawnAdapter {
 // SetStepCommitFactory installs incremental step persistence for spawned runs.
 func (s *SpawnAdapter) SetStepCommitFactory(f SpawnStepCommitFactory) {
 	s.stepCommit = f
+}
+
+// SetCompactorFactory installs between-calls context compaction for spawned
+// runs. It applies to the runs whose steps are committed as they complete:
+// the compaction reads those steps back from the run's thread.
+func (s *SpawnAdapter) SetCompactorFactory(f SpawnCompactorFactory) {
+	s.compactor = f
 }
 
 // SetRunObserverFactory installs live event publishing for spawned runs.
@@ -115,6 +138,17 @@ func (s *SpawnAdapter) installStepCommit(ctx context.Context, cfg tools.SpawnRun
 		return StepDirective{}, commit(ctx, stepIndex, step)
 	}
 	rc.OnStepInterrupted = interrupt
+	if s.compactor != nil {
+		rc.StepContextCompactor = s.compactor(ctx, SpawnCompaction{
+			BotID:                  cfg.Identity.BotID,
+			ChatID:                 cfg.Identity.ChatID,
+			SessionID:              cfg.Identity.SessionID,
+			UserID:                 cfg.Identity.UserID,
+			ModelUUID:              cfg.ModelUUID,
+			TurnRequestMessageID:   cfg.TurnRequestMessageID,
+			ContextBudgetMaxTokens: rc.ContextBudgetMaxTokens,
+		})
+	}
 	return true
 }
 

@@ -56,15 +56,16 @@ func (t *stepThread) reset(dispatch generateDispatch) {
 // carriers, live injections, directive inputs) join the conversation, then
 // the prepare chain (before-model-call hook, background summary,
 // provider-attempt budgeting/reselection) runs.
-func (t *stepThread) advance(cfg RunConfig, dynamic *loopDynamicInputs, boundary stepBoundary) sdk.Request {
+func (t *stepThread) advance(ctx context.Context, cfg RunConfig, dynamic *loopDynamicInputs, boundary stepBoundary) sdk.Request {
 	if t.pendingRefresh != nil {
 		t.messages = t.pendingRefresh.apply(&t.dispatch, &t.params, t.messages)
 		t.pendingRefresh = nil
 	}
 	if !boundary.first {
+		t.compactContext(ctx, cfg)
 		dynamic.beginBoundary(boundary.committed)
 		if cfg.BackgroundManager != nil {
-			t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.initialMessageCount)
+			t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.prefix.count)
 		}
 		t.messages = drainReadMediaMessage(boundary.readMedia, dynamic, cfg.ContextMutations, boundary.committed, t.messages)
 		if boundary.drainInjected != nil {

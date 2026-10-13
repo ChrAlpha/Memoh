@@ -479,3 +479,11 @@ func stepPersistenceContext(ctx, owner context.Context) (context.Context, error)
 	}
 	return context.WithoutCancel(ctx), nil
 }
+
+// requestMessageID is the row of the user message this run answers; empty
+// until the first step has stored it.
+func (c *agentStepCommitter) requestMessageID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turnRequestMessageID
+}

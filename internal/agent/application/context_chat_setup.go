@@ -125,6 +125,7 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 		}
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
+	s.bindStepCompaction(&cfg, req, stepCommitter)
 
 	if req.OnModelPreferenceSettled != nil {
 		req.OnModelPreferenceSettled()

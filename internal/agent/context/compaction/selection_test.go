@@ -455,3 +455,37 @@ func repeat(s string, n int) string {
 	}
 	return string(out)
 }
+
+// A run compacted between model calls reads its own committed steps: the
+// user's message and the newest tool exchange stay raw, the steps between go.
+func TestSplitByTargetKeepsTheNewestToolExchangeOfARunningTurn(t *testing.T) {
+	t.Parallel()
+
+	call := func(id string) string {
+		return `[{"type":"tool-call","toolName":"lookup","toolCallId":"` + id + `","input":{}}]`
+	}
+	result := func(id string) string {
+		return `[{"type":"tool-result","toolName":"lookup","toolCallId":"` + id + `","result":{"ok":true}}]`
+	}
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"current instruction"`, 100),
+		mkRow(t, "assistant", call("c1"), 100),
+		mkRow(t, "tool", result("c1"), 100),
+		mkRow(t, "assistant", call("c2"), 100),
+		mkRow(t, "tool", result("c2"), 100),
+		mkRow(t, "assistant", call("c3"), 100),
+		mkRow(t, "tool", result("c3"), 100),
+	}
+	items, _ := itemsFromRows(rows)
+
+	_, ids := buildEntriesAndIDs(splitByTarget(items, 100))
+	if len(ids) == 0 {
+		t.Fatal("the steps between the user's message and the newest exchange must be compacted")
+	}
+	protected := map[pgtype.UUID]bool{rows[0].ID: true, rows[5].ID: true, rows[6].ID: true}
+	for _, id := range ids {
+		if protected[id] {
+			t.Fatalf("a row of the user's message or the newest tool exchange was marked for compaction")
+		}
+	}
+}

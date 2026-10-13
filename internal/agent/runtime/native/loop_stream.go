@@ -591,7 +591,7 @@ func (e *streamEngine) run() {
 	for {
 		// A retried dispatch's first call skips the boundary drain, exactly
 		// like the initial dispatch's step zero.
-		stepParams := e.advance(e.baseCfg, e.dynamic, stepBoundary{
+		stepParams := e.advance(e.streamCtx, e.baseCfg, e.dynamic, stepBoundary{
 			first:         attemptStep == 0,
 			committed:     len(e.steps),
 			readMedia:     e.readMedia,

@@ -193,6 +193,7 @@ type RunConfig struct {
 	ContextDynamicMutators         []contextfrag.DynamicMutator
 	ContextLifecycle               *contextfrag.LifecycleHolder
 	ContextStepReselector          ContextStepReselector
+	StepContextCompactor           StepContextCompactor
 	initialProviderMessageCount    int
 	initialProviderPrefixSet       bool
 	providerAttemptState           *providerAttemptState

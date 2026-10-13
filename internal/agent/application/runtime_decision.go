@@ -484,6 +484,7 @@ func (s *Service) nativeContinuationPlan(ctx context.Context, req ChatRequest, c
 	}
 	timing := newReasoningTimingTracker(nil)
 	configureNativeReasoningTiming(&cfg, timing, committer)
+	s.bindStepCompaction(&cfg, req, committer)
 	rc.runConfig = cfg
 	return runPlan{
 		Exec: &nativeExecutor{
