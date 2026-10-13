@@ -456,7 +456,10 @@ func (h *ContainerdHandler) LoadSkills(ctx context.Context, botID string) ([]Ski
 		return nil, err
 	}
 	items, err := skillset.LoadEffective(ctx, client, roots)
-	return skillItemsFromEntries(items), err
+	if err != nil {
+		return nil, err
+	}
+	return skillItemsFromEntries(items), nil
 }
 
 func (h *ContainerdHandler) ListSafeSkillCatalog(ctx context.Context, botID string) ([]skillset.SafeCatalogItem, error) {

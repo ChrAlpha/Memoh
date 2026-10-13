@@ -158,7 +158,6 @@ func (a *Agent) SetToolProviders(providers []tools.ToolProvider) {
 
 // Stream runs the agent in streaming mode, emitting events to the returned channel.
 func (a *Agent) Stream(ctx context.Context, cfg RunConfig) <-chan StreamEvent {
-	ctx = prepareNativeRunContext(ctx, cfg)
 	ch := make(chan StreamEvent)
 	go func() {
 		defer close(ch)
@@ -169,7 +168,7 @@ func (a *Agent) Stream(ctx context.Context, cfg RunConfig) <-chan StreamEvent {
 
 // Generate runs the agent in non-streaming mode, returning the complete result.
 func (a *Agent) Generate(ctx context.Context, cfg RunConfig) (*GenerateResult, error) {
-	return a.runGenerate(prepareNativeRunContext(ctx, cfg), cfg)
+	return a.runGenerate(ctx, cfg)
 }
 
 func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCall) (sdk.ToolResultPart, error) {
@@ -546,9 +545,6 @@ func (a *Agent) assembleTools(
 	emitter tools.StreamEmitter,
 	liveStream bool,
 ) ([]toolexec.Tool, string, []contextfrag.ContextFrag, []contextfrag.ToolDefAccounting, error) {
-	if cfg.WorkspaceUnavailable {
-		return nil, "", nil, nil, nil
-	}
 	if len(a.toolProviders) == 0 {
 		return nil, "", nil, nil, nil
 	}
@@ -926,15 +922,4 @@ func detectGenerateLoopAbort(ctx context.Context, err error) error {
 	default:
 		return nil
 	}
-}
-
-func prepareNativeRunContext(ctx context.Context, cfg RunConfig) context.Context {
-	ctx = hooks.WithLoadState(ctx)
-	if cfg.Identity.WorkspaceTargetID != "" {
-		ctx = bridge.WithWorkspaceTarget(ctx, cfg.Identity.WorkspaceTargetID)
-	}
-	if cfg.WorkspaceUnavailable {
-		ctx = bridge.WithWorkspaceUnavailable(ctx)
-	}
-	return ctx
 }

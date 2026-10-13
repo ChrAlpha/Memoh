@@ -106,8 +106,6 @@ type SystemPromptParams struct {
 	Bot                       BotInfo
 	Skills                    []SkillEntry
 	Files                     []SystemFile
-	LoadNotices               []string
-	HooksLoadNotice           string
 	MaxFilesBytes             int
 	Timezone                  string
 	PlatformIdentitiesSection string

@@ -92,10 +92,7 @@ func (s *Server) ReadFile(_ context.Context, req *pb.ReadFileRequest) (*pb.ReadF
 
 	f, err := os.Open(path) //nolint:gosec // G304: workspace bridge intentionally serves agent-selected paths.
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, status.Errorf(codes.NotFound, "open: %v", err)
-		}
-		return nil, status.Errorf(codes.Internal, "open: %v", err)
+		return nil, status.Errorf(codes.NotFound, "open: %v", err)
 	}
 	defer func() { _ = f.Close() }()
 
@@ -154,9 +151,6 @@ func (s *Server) ReadFile(_ context.Context, req *pb.ReadFileRequest) (*pb.ReadF
 		totalLines++
 	}
 
-	if err := scanner.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "read: %v", err)
-	}
 	return &pb.ReadFileResponse{
 		Content:    out.String(),
 		TotalLines: totalLines,
@@ -846,10 +840,7 @@ func (s *Server) ReadRaw(req *pb.ReadRawRequest, stream pb.ContainerService_Read
 
 	f, err := os.Open(path) //nolint:gosec // G304: workspace bridge intentionally serves agent-selected paths.
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return status.Errorf(codes.NotFound, "open: %v", err)
-		}
-		return status.Errorf(codes.Internal, "open: %v", err)
+		return status.Errorf(codes.NotFound, "open: %v", err)
 	}
 	defer func() { _ = f.Close() }()
 

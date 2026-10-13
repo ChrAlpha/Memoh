@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
@@ -673,7 +672,7 @@ func (f *fakeClient) ListDirAll(_ context.Context, p string, _ bool) ([]*pb.File
 	}
 	items, ok := f.listings[p]
 	if !ok {
-		return nil, bridge.ErrNotFound
+		return nil, io.EOF
 	}
 	return items, nil
 }
@@ -684,7 +683,7 @@ func (f *fakeClient) ReadRaw(_ context.Context, p string) (io.ReadCloser, error)
 	}
 	content, ok := f.files[p]
 	if !ok {
-		return nil, bridge.ErrNotFound
+		return nil, io.EOF
 	}
 	return io.NopCloser(strings.NewReader(content)), nil
 }

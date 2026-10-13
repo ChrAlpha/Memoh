@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
-	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
-	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 var ErrExternalAgentWorkspaceTargetUnsupported = errors.New("workspace_target_id is not supported for external agent sessions")
@@ -27,15 +24,11 @@ func (s *Service) ValidateWorkspaceTarget(ctx context.Context, botID, targetID s
 	if s == nil || s.workspaceTargets == nil {
 		return errors.New("workspace target resolver not configured")
 	}
-	target, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, strings.TrimSpace(botID), targetID)
-	if errors.Is(err, workspace.ErrCapabilityUnavailable) && target.TargetID != "" {
-		return nil
-	}
+	_, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, strings.TrimSpace(botID), targetID)
 	return err
 }
 
 func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) (context.Context, ChatRequest, error) {
-	ctx = hooks.WithLoadState(ctx)
 	requestedTargetID := strings.TrimSpace(req.WorkspaceTargetID)
 	bound, hasWorkdir, err := s.resolveSessionWorkdirBinding(ctx, req.BotID, req.ThreadID)
 	if err != nil {
@@ -80,12 +73,9 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		}
 		return ctx, req, nil
 	}
-	resolved, err := s.resolveChatWorkspaceTarget(ctx, req.BotID, requestedTargetID)
+	resolved, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, req.BotID, requestedTargetID)
 	if err != nil {
-		if !errors.Is(err, workspace.ErrCapabilityUnavailable) || resolved.TargetID == "" {
-			return ctx, req, err
-		}
-		ctx = bridge.WithWorkspaceUnavailable(ctx)
+		return ctx, req, err
 	}
 	req.WorkspaceTargetID = strings.TrimSpace(resolved.TargetID)
 	req.WorkspaceTarget = &WorkspaceTarget{
@@ -94,7 +84,6 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		Name:     strings.TrimSpace(resolved.Name),
 	}
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
-	ctx = context.WithValue(ctx, preparedWorkspaceTargetKey{}, resolved)
 	return ctx, req, nil
 }
 
@@ -106,7 +95,7 @@ func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, tar
 		return nil, errors.New("workspace target resolver not configured")
 	}
 	resolved, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, botID, targetID)
-	if err != nil && (!errors.Is(err, workspace.ErrCapabilityUnavailable) || resolved.TargetID == "") {
+	if err != nil {
 		return nil, err
 	}
 	return &WorkspaceTarget{
@@ -132,21 +121,4 @@ func rejectExternalAgentWorkspaceTarget(req ChatRequest) error {
 		return nil
 	}
 	return ErrExternalAgentWorkspaceTargetUnsupported
-}
-
-type preparedWorkspaceTargetKey struct{}
-
-// Target resolution may return a lazy bridge client before it connects. Probe
-// it within the auxiliary budget so a dead bridge cannot register live tools.
-func (s *Service) resolveChatWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error) {
-	resolveCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
-	defer cancel()
-	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, botID, targetID)
-	if err == nil && target.Client != nil {
-		_, probeErr := target.Client.Stat(resolveCtx, "/")
-		if errors.Is(probeErr, bridge.ErrUnavailable) || errors.Is(probeErr, context.DeadlineExceeded) {
-			err = fmt.Errorf("%w: %w", workspace.ErrCapabilityUnavailable, probeErr)
-		}
-	}
-	return target, err
 }

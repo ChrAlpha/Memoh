@@ -1499,6 +1499,9 @@ type skillLoaderAdapter struct {
 
 func (a *skillLoaderAdapter) LoadSkills(ctx context.Context, botID string) ([]application.SkillEntry, error) {
 	items, err := a.handler.LoadSkills(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
 	entries := make([]application.SkillEntry, len(items))
 	for i, item := range items {
 		skillPath := ""
@@ -1513,7 +1516,7 @@ func (a *skillLoaderAdapter) LoadSkills(ctx context.Context, botID string) ([]ap
 			Metadata:    item.Metadata,
 		}
 	}
-	return entries, err
+	return entries, nil
 }
 
 type mediaAssetResolverAdapter struct {

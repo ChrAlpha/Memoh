@@ -212,7 +212,6 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 		}
 		return cfg, fmt.Errorf("before model call hook failed: %w", err)
 	}
-	cfg = refreshHookLoadStatus(ctx, cfg)
 	if strings.TrimSpace(res.AppendContext) != "" {
 		cfg = applyBeforeModelCallAppendContext(cfg, res.AppendContext)
 		if a.contextViewApplier == nil {
@@ -236,7 +235,6 @@ func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig,
 		return base
 	}
 	step := 1
-	previousNotice := cfg.HooksLoadNotice
 	return func(p *sdk.Request) *sdk.Request {
 		if base != nil {
 			if override := base(p); override != nil {
@@ -248,10 +246,6 @@ func (a *Agent) wrapPrepareStepWithModelHook(ctx context.Context, cfg RunConfig,
 		req.Turn = modelCallHookPayload(cfg, currentStep, len(p.Messages))
 		step++
 		res, err := a.hookService.Run(ctx, req, nil)
-		currentNotice := hooks.LoadNotice(ctx)
-		p.System = replaceHookLoadStatus(p.System, cfg.HooksLoadNotice, "")
-		p.System = replaceHookLoadStatus(p.System, previousNotice, currentNotice)
-		previousNotice = currentNotice
 		if err != nil {
 			if a.logger != nil {
 				a.logger.WarnContext(ctx, "before model call hook failed",
@@ -306,7 +300,7 @@ func (a *Agent) hookWorkspace(ctx context.Context, botID string) hooks.Workspace
 		CWD:     hooks.DefaultWorkDir,
 		Runtime: bridge.WorkspaceBackendContainer,
 	}
-	if a == nil || a.bridgeProvider == nil || bridge.WorkspaceUnavailableFromContext(ctx) {
+	if a == nil || a.bridgeProvider == nil {
 		return info
 	}
 	provider, ok := a.bridgeProvider.(bridge.WorkspaceInfoProvider)
@@ -371,19 +365,4 @@ func formatHookContext(eventName, text string) string {
 		return ""
 	}
 	return "[Hook Context: " + strings.TrimSpace(eventName) + "]\n" + text
-}
-
-func refreshHookLoadStatus(ctx context.Context, cfg RunConfig) RunConfig {
-	notice := hooks.LoadNotice(ctx)
-	cfg.System = replaceHookLoadStatus(cfg.System, cfg.HooksLoadNotice, notice)
-	cfg.HooksLoadNotice = notice
-	frags := make([]contextfrag.ContextFrag, 0, len(cfg.ContextSourceFrags)+1)
-	for _, frag := range cfg.ContextSourceFrags {
-		if frag.ID != sectionIDHookLoadStatus {
-			frags = append(frags, frag)
-		}
-	}
-	frags = append(frags, SystemSectionFrags(hookLoadStatusSections(notice), cfg.ContextScope)...)
-	cfg.ContextSourceFrags = frags
-	return cfg.RefreshContextFrag()
 }

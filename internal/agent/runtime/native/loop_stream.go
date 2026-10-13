@@ -157,6 +157,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// live InjectCh messages and read-media carriers.
 	dynamic := newLoopDynamicInputs(cfg.StepIndexOffset)
 	cfg.dynamicInputs = dynamic
+	prepareStep := a.wrapPrepareStepWithModelHook(streamCtx, cfg, nil)
 	var err error
 	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
 	if err != nil {
@@ -165,7 +166,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, failure)
 		return
 	}
-	prepareStep := a.wrapPrepareStepWithModelHook(streamCtx, cfg, nil)
 	installContextStepFailureHandler(&cfg, cancel)
 	dispatch, dispatchErr := a.buildGenerateDispatch(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	if dispatchErr != nil {
