@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "max_B_provider_delay_seconds": 2,
+  "observed_B_provider_delay_seconds": 0.09227705001831055,
+  "overlap": [
+    {
+      "start": 1791876839.4372327,
+      "end": 1791876869.4378479,
+      "kind": "summarizer",
+      "prompt_chars": 42214,
+      "stream": false
+    }
+  ]
+}

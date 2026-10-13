@@ -1,0 +1,42 @@
+{
+  "runs": [
+    {
+      "position": 1,
+      "state": "completed",
+      "created_at": "2026-10-13T07:35:31.20103+00:00",
+      "terminal_at": "2026-10-13T07:35:31.281068+00:00"
+    },
+    {
+      "position": 2,
+      "state": "completed",
+      "created_at": "2026-10-13T07:35:35.227324+00:00",
+      "terminal_at": "2026-10-13T07:35:35.297579+00:00"
+    },
+    {
+      "position": 3,
+      "state": "completed",
+      "created_at": "2026-10-13T07:35:39.27459+00:00",
+      "terminal_at": "2026-10-13T07:35:45.345873+00:00"
+    },
+    {
+      "position": 4,
+      "state": "completed",
+      "created_at": "2026-10-13T07:35:45.350497+00:00",
+      "terminal_at": "2026-10-13T07:35:51.42262+00:00"
+    },
+    {
+      "position": 5,
+      "state": "completed",
+      "created_at": "2026-10-13T07:35:51.428552+00:00",
+      "terminal_at": "2026-10-13T07:35:57.505714+00:00"
+    }
+  ],
+  "messages": [
+    "<message sender=\"User\" t=\"2026-10-13T07:35:31Z\" channel=\"web\" type=\"private\" target=\"bb002e8a-f17e-4d6b-a355-6692da4b517d\">\nqueued seed 1\n</message>",
+    "<message sender=\"User\" t=\"2026-10-13T07:35:35Z\" channel=\"web\" type=\"private\" target=\"bb002e8a-f17e-4d6b-a355-6692da4b517d\">\nqueued seed 2\n</message>",
+    "<message sender=\"User\" t=\"2026-10-13T07:35:39Z\" channel=\"web\" type=\"private\" target=\"bb002e8a-f17e-4d6b-a355-6692da4b517d\">\nqueued turn A\n</message>",
+    "<message sender=\"User\" t=\"2026-10-13T07:35:45Z\" channel=\"\">\nqueued turn B\n</message>",
+    "<message sender=\"User\" t=\"2026-10-13T07:35:51Z\" channel=\"\">\nqueued turn C\n</message>"
+  ],
+  "pending_claims": 0
+}
