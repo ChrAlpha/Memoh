@@ -96,6 +96,13 @@ func (a *scriptedAdmitter) FinishRunWithErrorCode(_ context.Context, handle sess
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message})
+	if a.finishErr == nil {
+		for i, input := range a.inputs {
+			if handle.RunID == "run-"+strconv.Itoa(i+1) && input.Execution.OnTerminal != nil {
+				input.Execution.OnTerminal()
+			}
+		}
+	}
 	return a.terminal, a.finishErr
 }
 

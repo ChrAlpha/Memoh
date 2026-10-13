@@ -46,6 +46,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	// can no longer pass.
 	runCtx, cancelCause := context.WithCancelCause(ctx)
 	cancel := func() { cancelCause(context.Canceled) }
+	runCtx, endRun := WithRunEnd(runCtx)
 
 	if cmd.Mode == turn.ModeDiscuss {
 		admission, err := s.admitTurnRun(runCtx, cmd, cancel, cancelCause, nil)
@@ -90,7 +91,6 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		return out
 	}
 
-	runCtx, endRun := WithRunEnd(runCtx)
 	chunkCh, errCh := s.streamTurnChat(runCtx, req)
 
 	h := &runHandle{

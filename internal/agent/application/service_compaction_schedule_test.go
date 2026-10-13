@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -26,6 +27,41 @@ const (
 	scheduleSessionID = "00000000-0000-0000-0000-000000000454"
 	scheduleModelID   = "00000000-0000-0000-0000-000000000451"
 )
+
+func TestRunEndBoundToDurableTerminal(t *testing.T) {
+	for _, terminalFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("terminal_first=%t", terminalFirst), func(t *testing.T) {
+			ctx, endStream := WithRunEnd(t.Context())
+			terminal := BindRunEnd(ctx)
+			if terminalFirst {
+				terminal()
+			}
+			started := make(chan struct{}, 2)
+			AfterRunEnds(ctx, func() { started <- struct{}{} })
+			endStream()
+			if !terminalFirst {
+				select {
+				case <-started:
+					t.Fatal("stream completion released a durably bound run")
+				case <-time.After(20 * time.Millisecond):
+				}
+				terminal()
+			}
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("durable terminal did not release deferred work")
+			}
+			terminal()
+			endStream()
+			select {
+			case <-started:
+				t.Fatal("terminal replay repeated deferred work")
+			case <-time.After(20 * time.Millisecond):
+			}
+		})
+	}
+}
 
 // gatedCompactionRunner stands in for the summarizer: each pass reports its
 // config and then blocks until the test releases it.

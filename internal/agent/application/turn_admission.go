@@ -132,6 +132,7 @@ func (s *Service) admitTurnRun(
 		InvocationID: invocationID,
 		Payload:      payload,
 		Execution: sessionruntime.Execution{
+			OnTerminal: BindRunEnd(ctx),
 			// Project the inbound user message so subscribers (an open web
 			// session on the thread) see what fired the run while it still
 			// executes — the same contract the ws and schedule admissions

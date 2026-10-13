@@ -106,6 +106,7 @@ type runEndKey struct{}
 type runEnd struct {
 	mu    sync.Mutex
 	ended bool
+	bound bool
 	work  []func()
 }
 
@@ -117,13 +118,33 @@ type runEnd struct {
 func WithRunEnd(ctx context.Context) (context.Context, func()) {
 	end := &runEnd{}
 	return context.WithValue(ctx, runEndKey{}, end), func() {
-		end.mu.Lock()
-		work := end.work
-		end.ended, end.work = true, nil
+		end.finish(false)
+	}
+}
+
+// BindRunEnd transfers the run's end to its durable admission callback.
+func BindRunEnd(ctx context.Context) func() {
+	end, ok := ctx.Value(runEndKey{}).(*runEnd)
+	if !ok {
+		return nil
+	}
+	end.mu.Lock()
+	end.bound = true
+	end.mu.Unlock()
+	return func() { end.finish(true) }
+}
+
+func (end *runEnd) finish(terminal bool) {
+	end.mu.Lock()
+	if end.bound && !terminal {
 		end.mu.Unlock()
-		for _, fn := range work {
-			go fn()
-		}
+		return
+	}
+	work := end.work
+	end.ended, end.work = true, nil
+	end.mu.Unlock()
+	for _, fn := range work {
+		go fn()
 	}
 }
 

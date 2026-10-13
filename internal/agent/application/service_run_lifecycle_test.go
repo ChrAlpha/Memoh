@@ -71,10 +71,11 @@ func (s *recordingContextLifecycleStore) CreateContextLifecycle(
 }
 
 type lifecycleTurnAdmitter struct {
-	admission sessionruntime.Admission
-	cancel    context.CancelFunc
-	finishes  []recordedFinish
-	finishErr error
+	admission  sessionruntime.Admission
+	cancel     context.CancelFunc
+	finishes   []recordedFinish
+	finishErr  error
+	onTerminal func()
 }
 
 func (a *lifecycleTurnAdmitter) Admit(
@@ -82,6 +83,7 @@ func (a *lifecycleTurnAdmitter) Admit(
 	input sessionruntime.AdmitInput,
 ) (sessionruntime.Admission, error) {
 	a.cancel = input.Execution.Cancel
+	a.onTerminal = input.Execution.OnTerminal
 	return a.admission, nil
 }
 
@@ -91,6 +93,9 @@ func (a *lifecycleTurnAdmitter) FinishRunWithErrorCode(
 	status, code string,
 ) (sessionruntime.TerminalRun, error) {
 	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: code})
+	if a.finishErr == nil && a.onTerminal != nil {
+		a.onTerminal()
+	}
 	return sessionruntime.TerminalRun{}, a.finishErr
 }
 
