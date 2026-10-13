@@ -278,13 +278,13 @@ func waitForOwner(ctx context.Context, cfg TriggerConfig, owner *inflightRun) (R
 	case <-owner.done:
 		if cfg.Manual && owner.err == nil && owner.res.Status == StatusNoop {
 			if ctx.Err() != nil {
-				return Result{Status: StatusNoop}, false, nil
+				return Result{Status: StatusNoop, Reason: ReasonCanceled}, false, nil
 			}
 			return Result{}, true, nil
 		}
 		return owner.res, false, owner.err
 	case <-ctx.Done():
-		return Result{Status: StatusNoop}, false, nil
+		return Result{Status: StatusNoop, Reason: ReasonCanceled}, false, nil
 	}
 }
 
@@ -299,7 +299,7 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 			slog.String("bot_id", cfg.BotID),
 			slog.String("session_id", cfg.SessionID),
 		)
-		return Result{Status: StatusNoop}, run, nil
+		return Result{Status: StatusNoop, Reason: ReasonInFlight}, run, nil
 	}
 
 	var compactRes Result
@@ -324,7 +324,7 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 			slog.String("bot_id", cfg.BotID),
 			slog.String("session_id", cfg.SessionID),
 		)
-		compactRes = Result{Status: StatusNoop}
+		compactRes = Result{Status: StatusNoop, Reason: ReasonCooldown}
 		return compactRes, nil, nil
 	}
 

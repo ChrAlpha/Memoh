@@ -254,8 +254,11 @@ func splitByRatio(items []CompactionCandidate, totalInputTokens, ratio int) []Co
 
 // splitByTarget returns the oldest items to compact so that the remaining newest
 // items fit within targetTokens. Used by synchronous compaction.
+// splitByTarget claims the oldest items until the newest ones fit in
+// targetTokens. A zero target claims every item the guards allow; the
+// preserve-recent tail stays regardless.
 func splitByTarget(items []CompactionCandidate, targetTokens int) []CompactionCandidate {
-	if targetTokens <= 0 || len(items) == 0 {
+	if len(items) == 0 {
 		return nil
 	}
 	accumulated := 0

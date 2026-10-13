@@ -159,9 +159,10 @@ func (c *stepCompaction) compact(ctx context.Context, input native.StepContextIn
 			current = rebuilt.tokens
 		}
 	}
-	res := s.runCompactionSync(ctx, req, current, c.budget, c.modelID)
+	res := s.runCompactionSyncFixed(ctx, req, current, c.fixedTokens(input), c.budget, c.modelID)
 	s.logger.InfoContext(ctx, "step_compaction",
 		slog.String("status", res.Status),
+		slog.String("reason", res.Reason),
 		slog.String("bot_id", req.BotID),
 		slog.String("session_id", req.ThreadID),
 		slog.String("run_id", req.RunID),
@@ -190,6 +191,25 @@ type rebuiltConversation struct {
 	tokens   int
 	// tailStart is where the run's own messages begin in messages.
 	tailStart int
+}
+
+// fixedTokens is the part of the run's current request that no compaction can
+// shrink: the system prompt and tools, plus the messages no stored row holds.
+// Those are a replacement's own messages from tailStart on, or otherwise the
+// run's notices and skills, and the user's message while no step of it is
+// stored. Everything else in the request is a row the compaction may claim.
+func (c *stepCompaction) fixedTokens(input native.StepContextInput) int {
+	own := c.extras
+	switch {
+	case c.replacement:
+		if c.tailStart < 0 || c.tailStart > len(input.Messages) {
+			return input.FixedTokens
+		}
+		own = input.Messages[c.tailStart:]
+	case c.requestMessageID() == "":
+		own = append(append([]sdk.Message(nil), c.extras...), c.request...)
+	}
+	return input.FixedTokens + requestInputTokens(0, own)
 }
 
 // adopt records that the loop continues on the rebuilt conversation.

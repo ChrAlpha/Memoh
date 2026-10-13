@@ -137,6 +137,12 @@ func (q *controllerQueries) GetSettingsByBotID(context.Context, pgtype.UUID) (sq
 	return q.settings, nil
 }
 
+// ListCompactionArtifactLineageBySession reports no summaries: the run-end
+// fixed-token measure reads the session the way a turn does.
+func (*controllerQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
+	return nil, nil
+}
+
 type recordingCompactionRunner struct {
 	configs []compaction.TriggerConfig
 }

@@ -11,11 +11,23 @@ const (
 	StatusNoop = "noop" // nothing to compact (already compact, cooled down, or in flight)
 )
 
+// Reasons a compaction ended as a noop. Every noop carries one.
+const (
+	ReasonNoModel         = "no_model"          // no summarizer is configured or the configured one is disabled
+	ReasonCooldown        = "cooldown"          // a recent failure is still cooling down
+	ReasonInFlight        = "in_flight"         // another compaction owns the session and finished without a summary
+	ReasonCanceled        = "canceled"          // the caller stopped waiting for the owner
+	ReasonNoCandidates    = "no_candidates"     // every row is protected, or none fits the read budget
+	ReasonBelowTarget     = "below_target"      // unprotected rows exist, but the rows above target fit inside it
+	ReasonNoCompleteGroup = "no_complete_group" // every selected group rendered empty, so none can be summarized
+)
+
 // Result is the scoped outcome of a synchronous compaction. Callers use it to
 // respond with this session's own result instead of reading unscoped bot-wide
 // logs. A failed attempt returns an error, not a Result.
 type Result struct {
 	Status       string
+	Reason       string // set when Status is StatusNoop
 	Summary      string
 	MessageCount int
 }
@@ -56,7 +68,15 @@ type TriggerConfig struct {
 	Ratio                 int
 	TotalInputTokens      int
 	MaxCompactTokens      int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
-	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
+	TargetTokens          int // if > 0, compaction goal: reduce the whole request to this many tokens (used by sync compaction)
+	// FixedTokens is the part of the judged request that no row can shrink:
+	// system prompt, tool definitions, and messages no history row holds. The
+	// rows are aimed at TargetTokens - FixedTokens, so the target and the
+	// pressure that triggered it measure the same request.
+	FixedTokens int
+	// HistoryCutoff limits the compaction to the history before a message the
+	// caller is about to replace. Nil means the whole visible history.
+	HistoryCutoff *HistoryCutoff
 	// SummaryWindowTokens is the summarizer model's full context window; it
 	// bounds the summary output reserve. Zero means the model declares none,
 	// and the service's fallback window applies.

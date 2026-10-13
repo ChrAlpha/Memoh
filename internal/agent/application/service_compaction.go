@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
@@ -109,6 +110,27 @@ func compactionNeed(pressure, contextTokenBudget, userThreshold int) compactionL
 // against the same thresholds.
 func requestInputTokens(fixedTokens int, messages []sdk.Message) int {
 	return fixedTokens + contextfrag.ProviderEnvelopeTokens("", messages, nil)
+}
+
+// compactableRequestTokens prices the raw history rows a compaction could
+// claim, in the units of the request pressure they are judged against.
+// Active summaries are not compactable and are left out.
+func compactableRequestTokens(records []historyfrag.HistoryRecord) int {
+	rows := make([]historyfrag.HistoryRecord, 0, len(records))
+	for _, record := range records {
+		if record.Kind == contextfrag.KindConversationSummary || record.Lifecycle == historyfrag.LifecycleActiveSummary {
+			continue
+		}
+		rows = append(rows, record)
+	}
+	return requestInputTokens(0, stepMessages(rows))
+}
+
+// fixedRequestTokens is the part of a judged request that no compaction can
+// shrink: the pressure less the rows it was measured from. It holds the system
+// prompt and tool definitions, this request's own messages, and the summaries.
+func fixedRequestTokens(pressure int, records []historyfrag.HistoryRecord) int {
+	return max(0, pressure-compactableRequestTokens(records))
 }
 
 // lastRunFixedTokens is what the session's latest run spent on its system
@@ -325,10 +347,34 @@ func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error 
 		return nil
 	}
 	cfg.TargetTokens = compactionTargetTokens(plan.settings.CompactionTargetPercent, plan.rc.contextTokenBudget)
+	cfg.FixedTokens = s.runEndFixedTokens(ctx, plan)
 	cfg.AllowFrontierFusion = true
 	cfg.ContextWindowTokens = plan.rc.contextTokenBudget
 	cfg.HardPressure = syncCompactionShouldRun(plan.inputTokens, plan.rc.contextTokenBudget)
 	return s.drainCompactionBacklog(ctx, cfg)
+}
+
+// runEndFixedTokens prices what the run's end request holds outside the
+// history rows. The judged pressure of a run is its whole request, so the
+// rows are measured from the session as it now stands. A replacement's cutoff
+// is dropped: the replaced turn is hidden once the run has finalized. A
+// discuss turn judges raw history alone, so it has no fixed part.
+func (s *Service) runEndFixedTokens(ctx context.Context, plan compactionPlan) int {
+	if plan.rc.pressure == nil {
+		return 0
+	}
+	req := plan.req
+	req.HistoryCutoffBeforeMessageID = ""
+	req.RequiredHistoryMessageID = ""
+	req.PersistedUserMessageID = ""
+	req.UserMessagePersisted = false
+	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeContinuation, req, plan.rc.contextTokenBudget))
+	if err != nil {
+		s.logger.WarnContext(ctx, "compaction: run-end fixed tokens unavailable, using none",
+			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.Any("error", err))
+		return 0
+	}
+	return fixedRequestTokens(plan.inputTokens, assembled.Records)
 }
 
 // drainCompactionBacklog runs bounded consecutive passes until the backlog is
@@ -347,6 +393,11 @@ func (s *Service) drainCompactionBacklog(ctx context.Context, cfg compaction.Tri
 			return err
 		}
 		if res.Status != compaction.StatusOK {
+			s.logger.InfoContext(ctx, "compaction: backlog pass ended without a summary",
+				slog.String("bot_id", cfg.BotID),
+				slog.String("session_id", cfg.SessionID),
+				slog.String("status", res.Status),
+				slog.String("reason", res.Reason))
 			return nil
 		}
 	}
@@ -363,11 +414,21 @@ func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerC
 // blocking share of the model's context window and reports the session-scoped
 // result. A compaction already in flight for the session is waited for and
 // its outcome reused; a noop (failure cooldown or nothing to compact) means
-// the caller proceeds with the context it has.
+// the caller proceeds with the context it has. The input is raw history alone,
+// so no part of it is fixed.
 func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string) compaction.Result {
+	return s.runCompactionSyncFixed(ctx, req, inputTokens, 0, contextTokenBudget, turnModelID)
+}
+
+// runCompactionSyncFixed is runCompactionSync for a request whose judged
+// pressure includes fixedTokens that no compaction can shrink. The rows are
+// aimed at the target less that part, so the target and the trigger measure
+// the same request. A replacement request compacts only the history before
+// its cutoff.
+func (s *Service) runCompactionSyncFixed(ctx context.Context, req ChatRequest, inputTokens, fixedTokens, contextTokenBudget int, turnModelID string) compaction.Result {
 	if s.compactionService == nil || s.settingsService == nil {
 		s.logger.WarnContext(ctx, "compaction sync: skipped, service or settings nil")
-		return compaction.Result{}
+		return compaction.Result{Status: compaction.StatusNoop, Reason: compaction.ReasonNoModel}
 	}
 	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
 	if err != nil {
@@ -382,16 +443,24 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 	if cfg.ModelID == "" {
 		// Same skip path as the async trigger above — no model or model
 		// disabled means there is nothing to compact.
-		return compaction.Result{}
+		return compaction.Result{Status: compaction.StatusNoop, Reason: compaction.ReasonNoModel}
 	}
 	cfg.TargetTokens = syncBackstopTargetTokens(botSettings.CompactionTargetPercent, contextTokenBudget)
+	cfg.FixedTokens = fixedTokens
 	cfg.ContextWindowTokens = contextTokenBudget
 	cfg.HardPressure = syncCompactionShouldRun(inputTokens, contextTokenBudget)
+	if cutoffID := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoffID != "" {
+		// An unresolved cutoff admits nothing, so the compaction stands down
+		// rather than summarizing rows after the replaced turn.
+		boundary := s.loadCompactionArtifactBoundary(ctx, nil, req.ThreadID, cutoffID)
+		cfg.HistoryCutoff = &compaction.HistoryCutoff{BeforeMs: boundary.cutoffMs}
+	}
 
 	s.logger.InfoContext(ctx, "compaction sync: running synchronously",
 		slog.String("bot_id", req.BotID),
 		slog.String("session_id", req.ThreadID),
 		slog.Int("input_tokens", inputTokens),
+		slog.Int("fixed_tokens", fixedTokens),
 		slog.String("model_id", cfg.ModelID),
 	)
 
@@ -406,6 +475,7 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 		slog.String("bot_id", req.BotID),
 		slog.String("session_id", req.ThreadID),
 		slog.String("status", res.Status),
+		slog.String("reason", res.Reason),
 	)
 	return res
 }
@@ -441,9 +511,10 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnMo
 	}
 	threshold := hardCompactionThreshold(contextTokenBudget)
 	start := time.Now()
-	res := s.runCompactionSync(ctx, req, pressure, contextTokenBudget, turnModelID)
+	res := s.runCompactionSyncFixed(ctx, req, pressure, fixedRequestTokens(pressure, assembled.Records), contextTokenBudget, turnModelID)
 	s.logger.InfoContext(ctx, "sync_compaction_backstop",
 		slog.String("status", res.Status),
+		slog.String("reason", res.Reason),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 		slog.String("bot_id", req.BotID),
 		slog.String("session_id", req.ThreadID),

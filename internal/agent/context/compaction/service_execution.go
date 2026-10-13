@@ -25,7 +25,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Result{}, err
 	}
 	if measure.CandidateCount == 0 {
-		return Result{Status: StatusNoop}, nil
+		return Result{Status: StatusNoop, Reason: ReasonNoCandidates}, nil
 	}
 	readMaxBytes := compactionReadMaxBytes(cfg)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
@@ -43,7 +43,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			slog.Int64("candidate_bytes", measure.CandidateBytes),
 			slog.Int64("largest_candidate_bytes", measure.LargestCandidateBytes),
 			slog.Int64("read_max_bytes", readMaxBytes))
-		return Result{Status: StatusNoop}, nil
+		return Result{Status: StatusNoop, Reason: ReasonNoCandidates}, nil
 	}
 	// Use the count captured by the same SQL statement as the payload rows for
 	// the selection decision. The metadata-only measure above is observability
@@ -61,6 +61,12 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		slog.Int64("read_max_bytes", readMaxBytes),
 		slog.Bool("truncated", truncatedRead))
 
+	// The cutoff is applied after the truncation check: rows past the cutoff
+	// are not missing from the read, they are out of scope for this summary.
+	rows = cfg.HistoryCutoff.rowsBeforeCutoff(rows)
+	if len(rows) == 0 {
+		return Result{Status: StatusNoop, Reason: ReasonNoCandidates}, nil
+	}
 	messages, barrierCount := itemsFromRows(rows)
 	if barrierCount > 0 {
 		s.logger.WarnContext(ctx, "compaction: kept unparseable history rows as span barriers",
@@ -69,10 +75,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		)
 	}
 	if len(messages) == 0 {
-		return Result{Status: StatusNoop}, nil
+		return Result{Status: StatusNoop, Reason: ReasonNoCandidates}, nil
 	}
 
 	var toCompact []CompactionCandidate
+	rowTarget := max(0, cfg.TargetTokens-cfg.FixedTokens)
 	switch {
 	case truncatedRead:
 		// Rows are an oldest-first prefix. When more history exists outside the
@@ -82,15 +89,17 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		// precisely what should be kept.
 		toCompact = messages
 	case cfg.TargetTokens > 0:
-		// Sync compaction: compress enough messages to bring context
-		// down to TargetTokens. Calculate how many tokens to keep
-		// (newest messages) and compact everything older.
-		toCompact = splitByTarget(messages, cfg.TargetTokens)
+		// Sync compaction: bring the whole request down to TargetTokens. The
+		// fixed part of the request stays as it is, so the rows are aimed at
+		// what is left. A fixed part that already exceeds the target leaves a
+		// zero row target, and every row outside the preserve-recent tail is
+		// claimed; the tail is kept by the guard in guardedCompactionItems.
+		toCompact = splitByTarget(messages, rowTarget)
 	default:
 		toCompact = splitByRatio(messages, cfg.TotalInputTokens, cfg.Ratio)
 	}
 	if len(toCompact) == 0 {
-		return Result{Status: StatusNoop}, nil
+		return Result{Status: StatusNoop, Reason: noCompactionReason(messages)}, nil
 	}
 
 	// Cap the compaction input to avoid exceeding the compaction model's
@@ -122,6 +131,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	for _, issue := range frontier.Issues {
 		s.logger.WarnContext(ctx, "compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
 	}
+	frontier.Artifacts = cfg.HistoryCutoff.artifactsBeforeCutoff(frontier.Artifacts)
 	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens)
 	if fusing && !frontierHasPersistedCoverage(frontier.Artifacts) {
 		s.logger.WarnContext(ctx, "compaction: frontier fusion skipped",
@@ -172,6 +182,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		slog.Int("messages", len(toCompact)),
 		slog.Int("total_uncompacted", len(messages)),
 		slog.Int("max_compact_tokens", maxCompactTokens),
+		slog.Int("target_tokens", cfg.TargetTokens),
+		slog.Int("fixed_tokens", cfg.FixedTokens),
+		slog.Int("row_target_tokens", rowTarget),
 		slog.Int("prior_context_tokens", priorTokens),
 		slog.Int("absorbed_context_tokens", absorbTokens),
 	)
@@ -196,7 +209,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		// empty). buildEntriesAndIDs withholds such a group from both entries and
 		// ids, so summarizing here would either destroy rows for a junk summary or
 		// mark rows we cannot faithfully summarize. Leave them in raw history.
-		return Result{Status: StatusNoop}, nil
+		return Result{Status: StatusNoop, Reason: ReasonNoCompleteGroup}, nil
 	}
 	// Cap the rendered entries and verify the final prompt cost before any
 	// row is claimed: a selection that cannot fit (an unsplittable tool
@@ -339,6 +352,16 @@ const (
 	minCompactionReadBytes = 512 << 10
 	maxCompactionReadBytes = 8 << 20
 )
+
+// noCompactionReason names why a selection came out empty: no row is outside
+// the preserve-recent tail at all, or the rows outside it are all above what
+// the target lets through.
+func noCompactionReason(messages []CompactionCandidate) string {
+	if len(guardedCompactionItems(messages, len(messages))) == 0 {
+		return ReasonNoCandidates
+	}
+	return ReasonBelowTarget
+}
 
 func compactionReadMaxBytes(cfg TriggerConfig) int64 {
 	tokens := cfg.MaxCompactTokens
