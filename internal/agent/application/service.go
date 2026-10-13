@@ -816,7 +816,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, errors.New("runtime sessions support only streaming chat surfaces")
 	default:
 		var err error
-		ctx, req, err = s.prepareWorkspaceRequest(ctx, req)
+		ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
 		if err != nil {
 			return ChatResponse{}, err
 		}
@@ -1050,22 +1050,21 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 	if s.toolApproval != nil || s.userInput != nil {
 		cfg.ToolApprovalHandler = s.buildToolApprovalHandler(p)
 	}
-	if bound, hasWorkdir, workdirErr := s.resolveSessionWorkdirBinding(ctx, p.BotID, p.SessionID); workdirErr != nil {
-		return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, workdirErr
-	} else if hasWorkdir {
-		cfg.Identity.WorkdirPath = bound.WorkDir
-		// Pin the workdir's target so the resolution below runs against it —
-		// including its error path when the target is unreachable.
-		ctx = workspace.WithWorkspaceTarget(ctx, bound.TargetID)
+	// Entries here carry no end user to authorize: the target was authorized
+	// when the entry (or the session's workdir) chose it, so no principal.
+	_, ws, wsErr := s.resolveWorkspace(ctx, workspaceInput{
+		BotID:      p.BotID,
+		SessionID:  p.SessionID,
+		BestEffort: true,
+	})
+	if wsErr != nil {
+		return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, wsErr
 	}
-	if s.workspaceTargets != nil {
-		if target, targetErr := s.workspaceTargets.ResolveWorkspaceTarget(ctx, p.BotID, ""); targetErr == nil {
-			cfg.Identity.WorkspaceTargetID = strings.TrimSpace(target.TargetID)
-			cfg.Identity.WorkspaceTargetKind = strings.TrimSpace(target.Kind)
-			cfg.Identity.WorkspaceTargetName = strings.TrimSpace(target.Name)
-		} else if workspace.WorkspaceTargetFromContext(ctx) != "" {
-			return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, targetErr
-		}
+	cfg.Identity.WorkdirPath = ws.WorkdirPath
+	if ws.Target != nil {
+		cfg.Identity.WorkspaceTargetID = ws.Target.TargetID
+		cfg.Identity.WorkspaceTargetKind = ws.Target.Kind
+		cfg.Identity.WorkspaceTargetName = ws.Target.Name
 	}
 
 	return cfg, chatModel, provider, nil

@@ -69,7 +69,7 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 		}, nil
 	}
 
-	ctx, req, err = s.prepareWorkspaceRequest(ctx, req)
+	ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
 	if err != nil {
 		return runPlan{}, err
 	}

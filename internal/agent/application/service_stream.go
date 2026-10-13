@@ -291,7 +291,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 			s.streamRuntimeChunks(ctx, dispatch.driver, streamReq, chunkCh, fail)
 			return
 		}
-		streamCtx, preparedReq, prepareErr := s.prepareWorkspaceRequest(ctx, streamReq)
+		streamCtx, preparedReq, prepareErr := s.bindRequestWorkspace(ctx, streamReq, userPrincipal(streamReq), false)
 		if prepareErr != nil {
 			fail(prepareErr)
 			return

@@ -31,22 +31,22 @@ func TestPrepareWorkspaceRequestRequiresWorkspaceRead(t *testing.T) {
 	base := ChatRequest{BotID: "bot-1", WorkspaceTargetID: "computer-b"}
 
 	resolver := &Service{workspaceTargets: workspaceRequestTargetService{}}
-	if _, _, err := resolver.prepareWorkspaceRequest(t.Context(), base); err == nil || !strings.Contains(err.Error(), "user id") {
+	if _, _, err := resolver.bindRequestWorkspace(t.Context(), base, userPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "user id") {
 		t.Fatalf("missing user error = %v", err)
 	}
 
 	base.UserID = "user-1"
-	if _, _, err := resolver.prepareWorkspaceRequest(t.Context(), base); err == nil || !strings.Contains(err.Error(), "permission checker") {
+	if _, _, err := resolver.bindRequestWorkspace(t.Context(), base, userPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "permission checker") {
 		t.Fatalf("missing checker error = %v", err)
 	}
 
 	resolver.botPermissions = workspaceRequestPermission(false)
-	if _, _, err := resolver.prepareWorkspaceRequest(t.Context(), base); err == nil || !strings.Contains(err.Error(), "workspace_read") {
+	if _, _, err := resolver.bindRequestWorkspace(t.Context(), base, userPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "workspace_read") {
 		t.Fatalf("denied permission error = %v", err)
 	}
 
 	resolver.botPermissions = workspaceRequestPermission(true)
-	ctx, got, err := resolver.prepareWorkspaceRequest(t.Context(), base)
+	ctx, got, err := resolver.bindRequestWorkspace(t.Context(), base, userPrincipal(base), false)
 	if err != nil {
 		t.Fatalf("prepare allowed request: %v", err)
 	}

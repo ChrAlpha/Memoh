@@ -16,7 +16,6 @@ import (
 	"github.com/felinics/memoh/internal/bots"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/runtimefence"
-	"github.com/felinics/memoh/internal/workspace"
 )
 
 // RuntimeControlRequest is scoped to a thread and its current actor.
@@ -304,15 +303,16 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 	return run(controlCtx, sess, driver, input)
 }
 
+// runtimeControlContext pins the session's workspace target for a runtime
+// command. It carries no principal: the command continues a session whose
+// target was authorized when it was chosen.
 func (s *Service) runtimeControlContext(ctx context.Context, request RuntimeControlRequest) (context.Context, error) {
-	bound, found, err := s.resolveSessionWorkdirBinding(ctx, request.BotID, request.ThreadID)
-	if err != nil {
-		return ctx, err
-	}
-	if found {
-		return workspace.WithWorkspaceTarget(ctx, bound.TargetID), nil
-	}
-	return ctx, nil
+	ctx, _, err := s.resolveWorkspace(ctx, workspaceInput{
+		BotID:      request.BotID,
+		SessionID:  request.ThreadID,
+		BestEffort: true,
+	})
+	return ctx, err
 }
 
 // publicRuntimeControlError keeps the team routing sentinel intact for its

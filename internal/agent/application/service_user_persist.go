@@ -15,7 +15,7 @@ import (
 func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req ChatRequest) (ChatRequest, messagepkg.Message, error) {
 	if req.WorkspaceTarget == nil {
 		var err error
-		ctx, req, err = s.prepareWorkspaceRequest(ctx, req)
+		ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
 		if err != nil {
 			return req, messagepkg.Message{}, err
 		}

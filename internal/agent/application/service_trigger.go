@@ -169,6 +169,13 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 
 // nativeSchedulePlan resolves a scheduled run the built-in agent executes.
 func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, payload schedule.TriggerPayload) (runPlan, error) {
+	// The run acts for the bot's owner, who holds every permission, so there
+	// is no principal to check; binding the workspace here puts the target on
+	// the history rows the run writes.
+	ctx, req, err := s.bindRequestWorkspace(ctx, req, nil, true)
+	if err != nil {
+		return runPlan{}, err
+	}
 	rc, req, err := s.resolve(ctx, req)
 	if err != nil {
 		return runPlan{}, err
