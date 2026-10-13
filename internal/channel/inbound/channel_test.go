@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -1605,10 +1606,10 @@ func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntim
 		"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec: true,
 		"bot-1:" + actorID + ":" + bots.PermissionWorkspaceExec: true,
 	}})
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	discussDriver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{})
+	eventStore := &memEventStore{}
+	discussDriver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
 	t.Cleanup(discussDriver.StopAll)
-	processor.SetPipeline(pipeline, nil, discussDriver)
+	processor.SetPipeline(eventStore, discussDriver)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("feishu")}
 	msg := channel.InboundMessage{
@@ -3093,8 +3094,8 @@ func TestChannelInboundProcessorPipelineUsesResolvedAttachments(t *testing.T) {
 	mediaSvc := &fakeMediaIngestor{nextID: "asset-pipeline-photo", nextMime: "image/jpeg"}
 	processor.SetMediaService(mediaSvc)
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-pipeline-asset", Type: "chat"}})
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	processor.SetPipeline(pipeline, nil, nil)
+	eventStore := &memEventStore{}
+	processor.SetPipeline(eventStore, nil)
 	sender := &fakeReplySender{}
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-pipeline-asset", BotID: "bot-1", ChannelType: channel.ChannelTypeTelegram}
@@ -3129,16 +3130,16 @@ func TestChannelInboundProcessorPipelineUsesResolvedAttachments(t *testing.T) {
 		t.Fatalf("expected media ingest to be called once, got %d", mediaSvc.calls)
 	}
 
-	ic, ok := pipeline.GetIC("session-pipeline-asset")
-	if !ok {
-		t.Fatal("expected pipeline session to be created")
+	ic := timeline.NewEmptyIC("session-pipeline-asset")
+	for _, event := range eventStore.events {
+		ic = timeline.Reduce(ic, event)
 	}
 	if len(ic.Nodes) == 0 || ic.Nodes[0].Message == nil {
-		t.Fatal("expected first pipeline node to be a message")
+		t.Fatal("expected first persisted event to be a message")
 	}
 	atts := ic.Nodes[0].Message.Attachments
 	if len(atts) != 1 {
-		t.Fatalf("expected one pipeline attachment, got %d", len(atts))
+		t.Fatalf("expected one persisted attachment, got %d", len(atts))
 	}
 	if got := atts[0].FilePath; got != "/data/.memoh/media/test/asset-pipeline-photo" {
 		t.Fatalf("expected pipeline attachment path to use media store, got %q", got)
@@ -4450,10 +4451,10 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-voice", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}})
 	processor.SetMediaService(&fakeMediaIngestor{})
 	processor.SetTranscriptionService(&fakeTranscriber{text: "hello from voice"}, fakeSTTResolver{})
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{})
+	eventStore := &memEventStore{}
+	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
 	defer driver.StopAll()
-	processor.SetPipeline(pipeline, nil, driver)
+	processor.SetPipeline(eventStore, driver)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4472,7 +4473,7 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	if !driver.HasSession("discuss-voice") {
 		t.Fatal("discuss driver did not receive the session")
 	}
-	if got := timeline.RCToXML(pipeline.GetRC("discuss-voice")); !strings.Contains(got, "hello from voice") {
+	if got := timeline.RCToXML(timeline.BuildRC(eventStore.events, timeline.RenderParams{})); !strings.Contains(got, "hello from voice") {
 		t.Fatalf("timeline lacks transcript: %s", got)
 	}
 }
@@ -4484,8 +4485,8 @@ func TestChannelInboundProcessorPassiveChatVoiceNotTranscribed(t *testing.T) {
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "chat-passive", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
 	processor.SetMediaService(&fakeMediaIngestor{})
 	processor.SetTranscriptionService(&fakeTranscriber{text: "hello from voice"}, fakeSTTResolver{})
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	processor.SetPipeline(pipeline, nil, nil)
+	eventStore := &memEventStore{}
+	processor.SetPipeline(eventStore, nil)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4501,7 +4502,110 @@ func TestChannelInboundProcessorPassiveChatVoiceNotTranscribed(t *testing.T) {
 	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := timeline.RCToXML(pipeline.GetRC("chat-passive")); strings.Contains(got, "hello from voice") {
+	if got := timeline.RCToXML(timeline.BuildRC(eventStore.events, timeline.RenderParams{})); strings.Contains(got, "hello from voice") {
 		t.Fatalf("passive message must not be transcribed: %s", got)
+	}
+}
+
+// memEventStore stands in for the durable event store: it implements both the
+// inbound write side and the discuss read side.
+type memEventStore struct {
+	mu         sync.Mutex
+	events     []timeline.CanonicalEvent
+	persistErr error
+}
+
+func (s *memEventStore) PersistEvent(_ context.Context, _, _ string, event timeline.CanonicalEvent) (string, timeline.CanonicalEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.persistErr != nil {
+		return "", event, s.persistErr
+	}
+	s.events = append(s.events, event)
+	return "event-" + strconv.Itoa(len(s.events)), event, nil
+}
+
+func (s *memEventStore) LoadEventsForReplay(context.Context, string, string) ([]timeline.CanonicalEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]timeline.CanonicalEvent(nil), s.events...), nil
+}
+
+func newDiscussSignalFixture(t *testing.T, store *memEventStore) (*ChannelInboundProcessor, *discuss.DiscussDriver, channel.ChannelConfig, channel.InboundMessage) {
+	t.Helper()
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-discuss", RouteID: "route-discuss"}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, &fakeChatGateway{},
+		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-signal"}}, &fakePolicyService{}, "", 0)
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-signal", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}})
+	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: store})
+	t.Cleanup(driver.StopAll)
+	processor.SetPipeline(store, driver)
+	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
+	msg := channel.InboundMessage{
+		BotID:        "bot-1",
+		Channel:      channel.ChannelType("telegram"),
+		Message:      channel.Message{ID: "m-signal", Text: "ping from group"},
+		ReplyTarget:  "group-target",
+		Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "A"},
+		Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
+	}
+	return processor, driver, cfg, msg
+}
+
+func TestChannelInboundProcessorDiscussSignalsAfterEventCommit(t *testing.T) {
+	store := &memEventStore{}
+	processor, driver, cfg, msg := newDiscussSignalFixture(t, store)
+
+	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !driver.HasSession("discuss-signal") {
+		t.Fatal("discuss driver was not signalled after the event commit")
+	}
+	if got := timeline.RCToXML(timeline.BuildRC(store.events, timeline.RenderParams{})); !strings.Contains(got, "ping from group") {
+		t.Fatalf("committed events lack the message the driver reads: %s", got)
+	}
+}
+
+func TestChannelInboundProcessorDiscussNotSignalledWhenEventPersistFails(t *testing.T) {
+	store := &memEventStore{persistErr: errors.New("insert unavailable")}
+	processor, driver, cfg, msg := newDiscussSignalFixture(t, store)
+
+	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if driver.HasSession("discuss-signal") {
+		t.Fatal("discuss driver must not be signalled when the event was not committed")
+	}
+}
+
+func TestChannelInboundProcessorPassiveRowCarriesReplyAndMention(t *testing.T) {
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-passive-hdr", RouteID: "route-passive-hdr"}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, &fakeChatGateway{},
+		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-hdr", DisplayName: "Alice"}}, &fakePolicyService{}, "", 0)
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "chat-passive-hdr", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
+	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
+	msg := channel.InboundMessage{
+		BotID:        "bot-1",
+		Channel:      channel.ChannelType("telegram"),
+		Message:      channel.Message{ID: "m-hdr", Text: "agreed", Reply: &channel.ReplyRef{MessageID: "m-prev", Sender: "Bob"}},
+		ReplyTarget:  "group-target",
+		Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "Alice"},
+		Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
+	}
+	// A group message neither mentioning nor replying to the bot is passive.
+	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chatSvc.persistedIn) != 1 {
+		t.Fatalf("expected one passive row, got %d", len(chatSvc.persistedIn))
+	}
+	var model turn.ModelMessage
+	if err := json.Unmarshal(chatSvc.persistedIn[0].Content, &model); err != nil {
+		t.Fatal(err)
+	}
+	text := model.TextContent()
+	if !strings.Contains(text, `<in-reply-to id="m-prev" sender="Bob"></in-reply-to>`) {
+		t.Fatalf("passive header lacks the reply: %s", text)
 	}
 }

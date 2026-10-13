@@ -126,11 +126,11 @@ func TestHandleReplyWithTurn_ACPAdvancesCursorOnCleanTerminal(t *testing.T) {
 	}
 }
 
-func TestNotifyRCRefreshesExistingDiscussSessionConfig(t *testing.T) {
+func TestNotifyRefreshesExistingDiscussSessionConfig(t *testing.T) {
 	driver := NewDiscussDriver(DiscussDriverDeps{})
 	defer driver.StopSession("sess-1")
 
-	driver.NotifyRC(context.Background(), "sess-1", timeline.RenderedContext{}, DiscussSessionConfig{
+	driver.Notify("sess-1", DiscussSessionConfig{
 		BotID:        "bot-1",
 		ThreadID:     "sess-1",
 		RouteID:      "route-old",
@@ -138,7 +138,7 @@ func TestNotifyRCRefreshesExistingDiscussSessionConfig(t *testing.T) {
 		SessionToken: "session-token-old",
 		ToolHTTPURL:  "http://old.example/tools",
 	})
-	driver.NotifyRC(context.Background(), "sess-1", timeline.RenderedContext{}, DiscussSessionConfig{
+	driver.Notify("sess-1", DiscussSessionConfig{
 		BotID:        "bot-1",
 		ThreadID:     "sess-1",
 		RouteID:      "route-new",
@@ -151,7 +151,7 @@ func TestNotifyRCRefreshesExistingDiscussSessionConfig(t *testing.T) {
 	got := driver.sessions["sess-1"].config
 	driver.mu.Unlock()
 	if got.RouteID != "route-new" || got.ChatToken != "chat-token-new" || got.SessionToken != "session-token-new" || got.ToolHTTPURL != "http://new.example/tools" {
-		t.Fatalf("config = %#v, want latest NotifyRC config", got)
+		t.Fatalf("config = %#v, want latest Notify config", got)
 	}
 }
 

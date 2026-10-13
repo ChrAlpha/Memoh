@@ -77,3 +77,46 @@ func TestUnwrapUserMessageEnvelope(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatUserHeaderZeroReplyAndMentionIsByteIdentical(t *testing.T) {
+	t.Parallel()
+
+	input := UserMessageHeaderInput{
+		MessageID:        "msg_1",
+		DisplayName:      "Alice",
+		Channel:          "feishu",
+		ConversationType: "group",
+		AttachmentPaths:  []string{"/tmp/a.txt"},
+		Time:             time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+	}
+	want := "<message id=\"msg_1\" sender=\"Alice\" t=\"2026-04-06T10:00:00Z\" channel=\"feishu\" type=\"group\">\n" +
+		"<attachment path=\"/tmp/a.txt\"/>\nhello\n</message>"
+	if got := FormatUserHeader(input, "hello"); got != want {
+		t.Fatalf("header changed for zero reply/mention input\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestFormatUserHeaderRendersReplyAndMention(t *testing.T) {
+	t.Parallel()
+
+	input := UserMessageHeaderInput{
+		MessageID:        "msg_2",
+		DisplayName:      "Alice",
+		Channel:          "feishu",
+		ConversationType: "group",
+		Time:             time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+		ReplyToMessageID: "msg_1",
+		ReplyToSender:    "Bob",
+		MentionsMe:       true,
+		RepliesToMe:      true,
+	}
+	want := "<message id=\"msg_2\" sender=\"Alice\" mentions_me=\"true\" replies_to_me=\"true\" t=\"2026-04-06T10:00:00Z\" channel=\"feishu\" type=\"group\">\n" +
+		"<in-reply-to id=\"msg_1\" sender=\"Bob\"></in-reply-to>\nhello\n</message>"
+	got := FormatUserHeader(input, "hello")
+	if got != want {
+		t.Fatalf("header\ngot:  %q\nwant: %q", got, want)
+	}
+	if unwrapped := UnwrapUserMessageEnvelope(got); unwrapped != "hello" {
+		t.Fatalf("unwrap = %q, want hello", unwrapped)
+	}
+}

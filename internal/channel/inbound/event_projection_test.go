@@ -1,8 +1,11 @@
 package inbound
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/felinics/memoh/internal/chat/timeline"
@@ -34,40 +37,35 @@ func inboundTestEvent() timeline.MessageEvent {
 	}
 }
 
-func TestPersistAndProjectEventProjectsStampedCursor(t *testing.T) {
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
+func TestPersistInboundEventReportsCommit(t *testing.T) {
 	store := stampingEventStore{cursor: 4242, id: "event-1"}
 
-	id, rc := persistAndProjectEvent(context.Background(), store, pipeline, nil, "bot-1", "s1", inboundTestEvent())
+	id, ok := persistInboundEvent(context.Background(), store, nil, "bot-1", "s1", inboundTestEvent())
 
-	if id != "event-1" {
-		t.Fatalf("event id = %q, want event-1", id)
-	}
-	if len(rc) != 1 || rc[0].LastEventCursor != 4242 {
-		t.Fatalf("projected segment must carry the stamped cursor, got %+v", rc)
+	if !ok || id != "event-1" {
+		t.Fatalf("persist = (%q, %v), want (event-1, true)", id, ok)
 	}
 }
 
-func TestPersistAndProjectEventProjectsStampedCursorOnPersistFailure(t *testing.T) {
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	store := stampingEventStore{cursor: 4243, err: errors.New("insert unavailable"), id: "ignored"}
+func TestPersistInboundEventFailureWarnsAndDoesNotReportCommit(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	store := stampingEventStore{err: errors.New("insert unavailable"), id: "ignored"}
 
-	id, rc := persistAndProjectEvent(context.Background(), store, pipeline, nil, "bot-1", "s1", inboundTestEvent())
+	id, ok := persistInboundEvent(context.Background(), store, log, "bot-1", "s1", inboundTestEvent())
 
-	if id != "" {
-		t.Fatalf("failed persist must not report an event id, got %q", id)
+	if ok || id != "" {
+		t.Fatalf("failed persist = (%q, %v), want (\"\", false)", id, ok)
 	}
-	if len(rc) != 1 || rc[0].LastEventCursor != 4243 {
-		t.Fatalf("projection must still use the store's event, got %+v", rc)
+	if got := logs.String(); !strings.Contains(got, "WARN") || !strings.Contains(got, "insert unavailable") {
+		t.Fatalf("expected a warn log with the cause, got %q", got)
 	}
 }
 
-func TestPersistAndProjectEventWithoutStore(t *testing.T) {
-	pipeline := timeline.NewPipeline(timeline.RenderParams{})
+func TestPersistInboundEventWithoutStore(t *testing.T) {
+	id, ok := persistInboundEvent(context.Background(), nil, nil, "bot-1", "s1", inboundTestEvent())
 
-	id, rc := persistAndProjectEvent(context.Background(), nil, pipeline, nil, "bot-1", "s1", inboundTestEvent())
-
-	if id != "" || len(rc) != 1 || rc[0].LastEventCursor != 0 {
-		t.Fatalf("storeless projection must still render the event, got id=%q rc=%+v", id, rc)
+	if ok || id != "" {
+		t.Fatalf("storeless persist = (%q, %v), want (\"\", false)", id, ok)
 	}
 }

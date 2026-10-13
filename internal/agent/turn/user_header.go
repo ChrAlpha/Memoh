@@ -18,6 +18,10 @@ type UserMessageMeta struct {
 	Time              string   `json:"time"`
 	Timezone          string   `json:"timezone,omitempty"`
 	AttachmentPaths   []string `json:"attachments"`
+	ReplyToMessageID  string   `json:"reply-to-message-id,omitempty"`
+	ReplyToSender     string   `json:"reply-to-sender,omitempty"`
+	MentionsMe        bool     `json:"mentions-me,omitempty"`
+	RepliesToMe       bool     `json:"replies-to-me,omitempty"`
 }
 
 // UserMessageHeaderInput is the unified input for building user message headers.
@@ -34,6 +38,13 @@ type UserMessageHeaderInput struct {
 	AttachmentPaths   []string
 	Time              time.Time
 	Timezone          string
+	// Reply and mention facts are rendered the same way the event timeline
+	// renders them, so a message looks identical whichever path persisted it.
+	// Zero values add nothing to the header.
+	ReplyToMessageID string
+	ReplyToSender    string
+	MentionsMe       bool
+	RepliesToMe      bool
 }
 
 // BuildUserMessageMetaFromInput constructs metadata from one cohesive input.
@@ -53,6 +64,10 @@ func BuildUserMessageMetaFromInput(input UserMessageHeaderInput) UserMessageMeta
 		Time:              time.Now().UTC().Format(time.RFC3339),
 		Timezone:          strings.TrimSpace(input.Timezone),
 		AttachmentPaths:   attachmentPaths,
+		ReplyToMessageID:  strings.TrimSpace(input.ReplyToMessageID),
+		ReplyToSender:     strings.TrimSpace(input.ReplyToSender),
+		MentionsMe:        input.MentionsMe,
+		RepliesToMe:       input.RepliesToMe,
 	}
 	if !input.Time.IsZero() {
 		meta.Time = input.Time.Format(time.RFC3339)
@@ -104,6 +119,18 @@ func (m UserMessageMeta) ToMap() map[string]any {
 	if strings.TrimSpace(m.Timezone) != "" {
 		result["timezone"] = m.Timezone
 	}
+	if m.ReplyToMessageID != "" {
+		result["reply-to-message-id"] = m.ReplyToMessageID
+	}
+	if m.ReplyToSender != "" {
+		result["reply-to-sender"] = m.ReplyToSender
+	}
+	if m.MentionsMe {
+		result["mentions-me"] = true
+	}
+	if m.RepliesToMe {
+		result["replies-to-me"] = true
+	}
 	return result
 }
 
@@ -126,6 +153,12 @@ func FormatUserHeaderFromMeta(meta UserMessageMeta, query string) string {
 		writeXMLAttr(&sb, "id", meta.MessageID)
 	}
 	writeXMLAttr(&sb, "sender", meta.DisplayName)
+	if meta.MentionsMe {
+		writeXMLAttr(&sb, "mentions_me", "true")
+	}
+	if meta.RepliesToMe {
+		writeXMLAttr(&sb, "replies_to_me", "true")
+	}
 	writeXMLAttr(&sb, "t", meta.Time)
 	writeXMLAttr(&sb, "channel", meta.Channel)
 	if meta.ConversationName != "" {
@@ -138,6 +171,15 @@ func FormatUserHeaderFromMeta(meta UserMessageMeta, query string) string {
 		writeXMLAttr(&sb, "target", meta.Target)
 	}
 	sb.WriteString(">\n")
+
+	if meta.ReplyToMessageID != "" {
+		sb.WriteString("<in-reply-to")
+		writeXMLAttr(&sb, "id", meta.ReplyToMessageID)
+		if meta.ReplyToSender != "" {
+			writeXMLAttr(&sb, "sender", meta.ReplyToSender)
+		}
+		sb.WriteString("></in-reply-to>\n")
+	}
 
 	if len(meta.AttachmentPaths) > 0 {
 		for _, p := range meta.AttachmentPaths {

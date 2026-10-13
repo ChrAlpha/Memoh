@@ -21,6 +21,11 @@ type DiscussArtifactProvider interface {
 	ActiveCompactionArtifacts(ctx context.Context, botID, sessionID string) ([]timeline.CompactionArtifact, error)
 }
 
+// DiscussEventLoader reads a session's persisted event tail for rendering.
+type DiscussEventLoader interface {
+	LoadEventsForReplay(ctx context.Context, botID, sessionID string) ([]timeline.CanonicalEvent, error)
+}
+
 // DiscussStreamBroadcaster publishes stream events to local UI subscribers.
 // Implemented by local.RouteHub.
 type DiscussStreamBroadcaster interface {
@@ -32,6 +37,7 @@ type DiscussDriverDeps struct {
 	Turn           turn.Service
 	MessageService HistoryReader
 	CursorStore    DiscussCursorStore
+	Events         DiscussEventLoader
 	Artifacts      DiscussArtifactProvider
 	Broadcaster    DiscussStreamBroadcaster
 	Logger         *slog.Logger
@@ -66,6 +72,7 @@ type DiscussDriver struct {
 	sessions           map[string]*discussSession
 	history            discussHistoryReader
 	cursor             discussCursorTracker
+	events             DiscussEventLoader
 	trigger            discussTriggerBuilder
 	runner             discussTurnRunner
 	artifacts          DiscussArtifactProvider
@@ -84,7 +91,7 @@ func (d *DiscussDriver) admissionMaxTokens() int {
 
 type discussSession struct {
 	config        DiscussSessionConfig
-	rcCh          chan timeline.RenderedContext
+	wakeCh        chan struct{}
 	stopCh        chan struct{}
 	cancel        context.CancelFunc
 	lastProcessed timeline.DiscussCursorPosition
@@ -111,6 +118,7 @@ func NewDiscussDriver(deps DiscussDriverDeps) *DiscussDriver {
 			logger:   logger,
 		},
 		cursor:             discussCursorTracker{store: deps.CursorStore},
+		events:             deps.Events,
 		runner:             discussTurnRunner{projector: projector},
 		artifacts:          deps.Artifacts,
 		admissionCapTokens: capTokens,
@@ -131,16 +139,21 @@ func (d *DiscussDriver) SetBroadcaster(b DiscussStreamBroadcaster) {
 	d.runner.projector.SetBroadcaster(b)
 }
 
-// NotifyRC pushes a new timeline.RenderedContext to the discuss thread worker.
-// If the worker goroutine is not running, it starts one.
-func (d *DiscussDriver) NotifyRC(_ context.Context, sessionID string, rc timeline.RenderedContext, config DiscussSessionConfig) {
+// Notify wakes the discuss thread worker after an inbound event was committed
+// to the event store. If the worker goroutine is not running, it starts one.
+//
+// Ordering guarantee: the caller signals only after the event commit succeeded,
+// and the worker drains the signal before it reads the store. A signal sent
+// while the worker is mid-read therefore stays pending and triggers another
+// read, so no committed event is missed; a burst of signals collapses into one.
+func (d *DiscussDriver) Notify(sessionID string, config DiscussSessionConfig) {
 	d.mu.Lock()
 	sess, ok := d.sessions[sessionID]
 	if !ok {
 		sessCtx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel is stored in sess.cancel
 		sess = &discussSession{
 			config: config,
-			rcCh:   make(chan timeline.RenderedContext, 16),
+			wakeCh: make(chan struct{}, 1),
 			stopCh: make(chan struct{}),
 			cancel: cancel,
 		}
@@ -152,16 +165,8 @@ func (d *DiscussDriver) NotifyRC(_ context.Context, sessionID string, rc timelin
 	d.mu.Unlock()
 
 	select {
-	case sess.rcCh <- rc:
+	case sess.wakeCh <- struct{}{}:
 	default:
-		select {
-		case <-sess.rcCh:
-		default:
-		}
-		select {
-		case sess.rcCh <- rc:
-		default:
-		}
 	}
 }
 

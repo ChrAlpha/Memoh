@@ -30,7 +30,6 @@ import (
 	"github.com/felinics/memoh/internal/channel/route"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/command"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
@@ -210,8 +209,7 @@ type ChannelInboundProcessor struct {
 	transcriber         transcriptionRecognizer
 	sttModelResolver    transcriptionModelResolver
 	sessionEnsurer      SessionEnsurer
-	pipeline            *timeline.Pipeline
-	eventStore          *timeline.EventStore
+	eventStore          EventPersister
 	discussDriver       *discuss.DiscussDriver
 	imDisplayOptions    IMDisplayOptionsReader
 	defaultChatRuntime  DefaultChatRuntimeReader
@@ -350,12 +348,11 @@ func (p *ChannelInboundProcessor) SetRequestedSkillResolver(resolver RequestedSk
 	p.skillResolver = resolver
 }
 
-// SetPipeline configures the DCP pipeline, event store, and discuss driver.
-func (p *ChannelInboundProcessor) SetPipeline(pipeline *timeline.Pipeline, store *timeline.EventStore, driver *discuss.DiscussDriver) {
+// SetPipeline configures the event store and discuss driver.
+func (p *ChannelInboundProcessor) SetPipeline(store EventPersister, driver *discuss.DiscussDriver) {
 	if p == nil {
 		return
 	}
-	p.pipeline = pipeline
 	p.eventStore = store
 	p.discussDriver = driver
 }
@@ -870,31 +867,24 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		}
 	}
 
-	// Push event into the DCP pipeline (persist + in-memory projection).
-	// On first access for a session, replay persisted events to warm the pipeline.
-	var latestRC timeline.RenderedContext
+	// Persist the event. The discuss driver renders its context from the
+	// event store, so it is signalled below only after this commit succeeded.
 	var eventID string
-	if p.pipeline != nil && sessionID != "" && pendingSkillIntent == nil {
-		if !p.pipeline.HasSession(sessionID) {
-			p.replayPipelineSession(ctx, identity.BotID, sessionID)
-		}
+	var eventPersisted bool
+	if sessionID != "" && pendingSkillIntent == nil {
 		pipelineMsg := msg
 		pipelineMsg.Message = msg.Message
 		pipelineMsg.Message.Attachments = resolvedAttachments
 		event := AdaptInbound(pipelineMsg, sessionID, identity.ChannelIdentityID, identity.DisplayName)
-		var store sessionEventPersister
-		if p.eventStore != nil {
-			store = p.eventStore
-		}
-		eventID, latestRC = persistAndProjectEvent(ctx, store, p.pipeline, p.logger, identity.BotID, sessionID, event)
+		eventID, eventPersisted = persistInboundEvent(ctx, p.eventStore, p.logger, identity.BotID, sessionID, event)
 	}
 
 	// Discuss mode: dispatch to the discuss driver and return.
 	// The discuss driver autonomously decides whether to call the LLM.
-	if sessionType == sessionpkg.TypeDiscuss && p.discussDriver != nil && latestRC != nil && slashDecision.AgentCommand == "" {
+	if sessionType == sessionpkg.TypeDiscuss && p.discussDriver != nil && eventPersisted && slashDecision.AgentCommand == "" {
 		chatToken := p.issueChatToken(identity, resolved.RouteID, msg)
 		sessionToken := p.issueSessionBearerToken(ctx, identity, runtimeSession, sessionRuntimeOwner, chatToken)
-		p.discussDriver.NotifyRC(ctx, sessionID, latestRC, discuss.DiscussSessionConfig{
+		p.discussDriver.Notify(sessionID, discuss.DiscussSessionConfig{ //nolint:contextcheck // the discuss worker outlives the inbound request by design
 			TeamID:            cfg.TeamID,
 			BotID:             identity.BotID,
 			ThreadID:          sessionID,
@@ -2034,6 +2024,10 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		Target:            strings.TrimSpace(msg.ReplyTarget),
 		AttachmentPaths:   attachmentPaths,
 		Time:              time.Now().UTC(),
+		ReplyToMessageID:  inboundReplyMessageID(msg.Message.Reply),
+		ReplyToSender:     inboundReplySender(msg.Message.Reply),
+		MentionsMe:        metadataBool(msg.Metadata, "is_mentioned"),
+		RepliesToMe:       metadataBool(msg.Metadata, "is_reply_to_bot"),
 	}, trimmedText)
 
 	modelMsg := turn.ModelMessage{Role: "user", Content: turn.NewTextContent(headerifiedText)}
@@ -3108,27 +3102,6 @@ func extractStorageKey(accessPath string, _ string) string {
 func isLocalChannelType(ct channel.ChannelType) bool {
 	s := strings.ToLower(strings.TrimSpace(string(ct)))
 	return s == "web" || s == "cli"
-}
-
-// replayPipelineSession loads persisted events from the DB and replays them
-// into the pipeline. Called lazily on first access per session after cold start.
-func (p *ChannelInboundProcessor) replayPipelineSession(ctx context.Context, botID, sessionID string) {
-	if p.eventStore == nil || p.pipeline == nil {
-		return
-	}
-	events, err := p.eventStore.LoadEventsForReplay(ctx, botID, sessionID)
-	if err != nil {
-		if p.logger != nil {
-			p.logger.WarnContext(ctx, "pipeline replay failed", slog.String("session_id", sessionID), slog.Any("error", err))
-		}
-		return
-	}
-	if len(events) > 0 {
-		p.pipeline.ReplaySession(sessionID, events)
-		if p.logger != nil {
-			p.logger.InfoContext(ctx, "pipeline session replayed", slog.String("session_id", sessionID), slog.Int("events", len(events)))
-		}
-	}
 }
 
 // broadcastInboundMessage notifies the observer about the user's inbound

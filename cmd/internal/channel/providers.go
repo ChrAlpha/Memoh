@@ -84,6 +84,7 @@ func provideDiscussDriver(log *slog.Logger, eventStore *timeline.EventStore, msg
 	return discuss.NewDiscussDriver(discuss.DiscussDriverDeps{
 		MessageService:     msgService,
 		CursorStore:        eventStore,
+		Events:             eventStore,
 		Artifacts:          compaction.NewTimelineArtifactSource(queries),
 		Logger:             log,
 		AdmissionMaxTokens: cfg.Agent.EffectiveContextAbsoluteMaxTokens(),
@@ -203,7 +204,6 @@ func provideChannelRouter(
 	mediaService *media.Service,
 	audioService channelAudio,
 	settingsService channelSettings,
-	pipeline *timeline.Pipeline,
 	eventStore *timeline.EventStore,
 	discussDriver *discuss.DiscussDriver,
 	cfg config.Config,
@@ -226,7 +226,7 @@ func provideChannelRouter(
 	threadCoordinator := route.NewThreadCoordinator(log, routeService, sessionService)
 	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, turnService, identityService, policyService, cfg.Auth.JWTSecret, 5*time.Minute)
 	processor.SetSessionEnsurer(&sessionEnsurerAdapter{coordinator: threadCoordinator})
-	processor.SetPipeline(pipeline, eventStore, discussDriver)
+	processor.SetPipeline(eventStore, discussDriver)
 	discussDriver.SetTurnService(turnService)
 	discussDriver.SetBroadcaster(hub)
 	processor.SetACLService(aclService)

@@ -34,7 +34,6 @@ func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 	idle := time.NewTimer(discussIdleTimeout)
 	defer idle.Stop()
 
-	var latestRC timeline.RenderedContext
 	for {
 		select {
 		case <-sess.stopCh:
@@ -42,29 +41,44 @@ func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 		case <-idle.C:
 			log.InfoContext(ctx, "discuss session idle timeout, exiting")
 			return
-		case rc := <-sess.rcCh:
-			latestRC = rc
+		case <-sess.wakeCh:
 			idle.Reset(discussIdleTimeout)
 		}
 
-	drain:
-		for {
-			select {
-			case rc := <-sess.rcCh:
-				latestRC = rc
-			default:
-				break drain
-			}
+		// Drain before reading: a signal that arrives after this point
+		// belongs to an event the read below may not see, and stays pending
+		// for the next iteration.
+		select {
+		case <-sess.wakeCh:
+		default:
 		}
 
-		if len(latestRC) == 0 {
+		rc, err := d.loadRC(ctx, initialConfig.BotID, sessionID)
+		if err != nil {
+			log.WarnContext(ctx, "discuss event load failed", slog.Any("error", err))
 			continue
 		}
-		if !timeline.HasUncoveredExternalEvent(latestRC, sess.lastProcessed) {
+		if len(rc) == 0 {
 			continue
 		}
-		d.handleReply(ctx, sess, latestRC, log)
+		if !timeline.HasUncoveredExternalEvent(rc, sess.lastProcessed) {
+			continue
+		}
+		d.handleReply(ctx, sess, rc, log)
 	}
+}
+
+// loadRC renders the session's committed events. Render params are the zero
+// value: the bot identity is resolved by the turn runner, not the timeline.
+func (d *DiscussDriver) loadRC(ctx context.Context, botID, sessionID string) (timeline.RenderedContext, error) {
+	if d.events == nil {
+		return nil, nil
+	}
+	events, err := d.events.LoadEventsForReplay(ctx, botID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return timeline.BuildRC(events, timeline.RenderParams{}), nil
 }
 
 // handleReply answers one trigger under a request id of its own. The session
