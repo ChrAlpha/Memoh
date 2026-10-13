@@ -3997,7 +3997,8 @@ async function handleSend() {
     const complete = chatStore.beginCommandEvent({
       type: 'command_result', terminal: false, action_id: runtimeCommand.name,
       result: { kind: 'runtime_command', title, text: runtimeCommand.running_text, text_key: 'common.loading' },
-    }, currentPaneCommandScope())
+    }, currentPaneCommandScope(), runtimeCommand.kind === 'operation')
+    if (!complete) return
     inputText.value = ''
     saveInputDraft(draftKey, '')
     try {

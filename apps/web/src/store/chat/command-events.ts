@@ -28,6 +28,7 @@ export interface CommandEventRegistryDeps {
 
 export function createCommandEventRegistry({ currentBotId, sessionId }: CommandEventRegistryDeps) {
   const commandEvents = ref<Record<string, StoreCommandEvent>>({})
+  const exclusiveCommands = new Map<string, string>()
 
   function currentCommandScope(composerScope = 'chat'): CommandEventScope {
     return {
@@ -89,11 +90,17 @@ export function createCommandEventRegistry({ currentBotId, sessionId }: CommandE
 
   // A completion belongs to the operation that opened the panel. Dismissing it
   // or starting another command makes that completion obsolete.
-  function beginCommandEvent(event: CommandEventResponse, scope: CommandEventScope) {
+  function beginCommandEvent(event: CommandEventResponse, scope: CommandEventScope): (result: CommandEventResponse | null) => void
+  function beginCommandEvent(event: CommandEventResponse, scope: CommandEventScope, exclusive: boolean): ((result: CommandEventResponse | null) => void) | null
+  function beginCommandEvent(event: CommandEventResponse, scope: CommandEventScope, exclusive = false) {
+    const key = commandEventKey(scope)
+    if (exclusive && exclusiveCommands.has(key)) return null
     const invocationId = createInvocationId()
     const target = { ...scope }
+    if (exclusive) exclusiveCommands.set(key, invocationId)
     rememberCommandEvent({ ...event, invocation_id: invocationId }, target)
     return (result: CommandEventResponse | null) => {
+      if (exclusiveCommands.get(key) === invocationId) exclusiveCommands.delete(key)
       if (commandEventForScope(target)?.invocation_id !== invocationId) return
       rememberCommandEvent(result && { ...result, invocation_id: invocationId }, target)
     }
