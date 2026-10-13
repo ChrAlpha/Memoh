@@ -293,3 +293,18 @@ func TestCompactionRunFailureShapes(t *testing.T) {
 	cause := errors.New("window=512 output_reserve=51 fixed_prompt=180")
 	assertInternalFailure(t, compactionRunFailure(cause), cause)
 }
+
+// A summarizer that declares no window is priced with the fallback window, so
+// the session status reports automatic compaction as armed.
+func TestAutoCompactionArmedForASummarizerWithoutAWindow(t *testing.T) {
+	t.Parallel()
+
+	queries := compactionWindowQueries([]byte(`{}`), nil)
+	queries.model.Config = []byte(`{}`)
+	logger := slog.New(slog.DiscardHandler)
+	handler := NewSessionInfoHandler(logger, queries, nil, nil, models.NewService(logger, queries), settings.NewService(logger, queries, nil, nil))
+	botSettings := settings.Settings{CompactionModelID: queries.model.ID.String(), ChatModelID: queries.chatModel.ID.String()}
+	if !handler.autoCompactionArmed(context.Background(), botSettings, "00000000-0000-0000-0000-000000000434") {
+		t.Fatal("compaction.enabled = false, want armed: a missing window falls back instead of disabling compaction")
+	}
+}

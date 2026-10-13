@@ -258,8 +258,6 @@ func compactionUnavailableReason(err error) string {
 		return "provider_disabled"
 	case errors.Is(err, models.ErrCompactionOutputLimitUnsupported):
 		return "output_limit_unsupported"
-	case errors.Is(err, models.ErrCompactionWindowUnknown):
-		return "window_unknown"
 	default:
 		return "unavailable"
 	}

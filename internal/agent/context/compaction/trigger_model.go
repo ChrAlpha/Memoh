@@ -12,7 +12,7 @@ type TriggerModel struct {
 	BaseURL               string
 	ChatCompletionsCompat string
 	PromptCacheTTL        string
-	WindowTokens          int // summarizer model's declared context window
+	WindowTokens          int // summarizer model's declared context window; zero when undeclared
 }
 
 // NewTriggerConfig derives both window budgets from a resolved summarizer:
@@ -29,10 +29,19 @@ func NewTriggerConfig(model TriggerModel) TriggerConfig {
 		BaseURL:               model.BaseURL,
 		ChatCompletionsCompat: model.ChatCompletionsCompat,
 		PromptCacheTTL:        model.PromptCacheTTL,
-		SummaryWindowTokens:   model.WindowTokens,
 	}
 	if model.WindowTokens > 0 {
-		cfg.MaxCompactTokens = model.WindowTokens * 85 / 100
+		cfg = cfg.withSummaryWindow(model.WindowTokens)
+	}
+	return cfg
+}
+
+// withSummaryWindow prices the summarizer by window: candidate selection is
+// capped at 85% of it unless the caller set its own cap.
+func (cfg TriggerConfig) withSummaryWindow(window int) TriggerConfig {
+	cfg.SummaryWindowTokens = window
+	if cfg.MaxCompactTokens <= 0 {
+		cfg.MaxCompactTokens = window * 85 / 100
 	}
 	return cfg
 }

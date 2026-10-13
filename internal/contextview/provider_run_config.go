@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -22,8 +21,8 @@ const (
 )
 
 func ProviderRunConfigApplier(logger *slog.Logger) agentpkg.ContextViewApplier {
-	return func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-		return applyProviderRunConfig(ctx, logger, cfg)
+	return func(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+		return ApplyProviderRunConfig(ctx, logger, cfg)
 	}
 }
 
@@ -232,7 +231,7 @@ func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*co
 		return nil, err
 	}
 	limits := cfg.GenerationLimits()
-	plan, err := ComputeContextBudgetPlan(
+	plan := ComputeContextBudgetPlan(
 		cfg.ContextBudgetMaxTokens,
 		limits.MaxOutputTokens,
 		providerToolDefsCost(cfg.ContextToolDefs),
@@ -241,7 +240,7 @@ func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*co
 	if plan != nil {
 		plan.OutputReserveResolution = limits.Resolution
 	}
-	return plan, err
+	return plan, nil
 }
 
 func providerCurrentRequestCost(ctx context.Context, cfg agentpkg.RunConfig) (int, error) {
@@ -291,15 +290,11 @@ func currentRequestFragCost(frags []contextfrag.ContextFrag) int {
 	return total
 }
 
-// ApplyProviderRunConfig keeps the direct compiler helper source-compatible.
-// Native execution uses ProviderRunConfigApplier so typed budget failures are
-// returned to the runtime and fail closed before any provider call.
+// ApplyProviderRunConfig compiles the provider-facing fields from the run's
+// context fragments. It never fails the run: a view that cannot be built falls
+// back to the legacy payload, and a request larger than its window is sent as
+// it is.
 func ApplyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) agentpkg.RunConfig {
-	out, _ := applyProviderRunConfig(ctx, logger, cfg)
-	return out
-}
-
-func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
 	ledger := cfg.ContextMutations
 	if ledger == nil {
 		ledger = contextfrag.NewMutationLedger()
@@ -326,7 +321,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	} else {
 		frags = CollectProviderSourceFrags(ctx, cfg)
 		if frags == nil {
-			return providerViewFallback(logger, cfg, ledger, nil, "collect_error", "context view collection failed", nil), nil
+			return providerViewFallback(logger, cfg, ledger, nil, "collect_error", "context view collection failed", nil)
 		}
 		cfg = materializeLegacyQuery(cfg, false)
 	}
@@ -347,8 +342,8 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		}
 		selector = gate
 	}
-	if budgetErr != nil && !isContextBudgetError(budgetErr) {
-		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "budget_plan_error", "context budget plan failed", budgetErr), nil
+	if budgetErr != nil {
+		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "budget_plan_error", "context budget plan failed", budgetErr)
 	}
 
 	registry := NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})
@@ -363,20 +358,13 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
-	if budgetErr != nil {
-		recordContextBudgetFailure(ledger, budgetErr)
-		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
-	}
 	if err != nil {
-		if isContextBudgetError(err) {
-			recordContextBudgetFailure(ledger, err)
-			return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), err
-		}
-		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "build_error", "context view build failed", err), nil
+		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "build_error", "context view build failed", err)
 	}
+	warnPlanOverflow(ctx, logger, cfg, budgetPlan)
 	payload, ok := view.Rendered[contextfrag.RenderSDKMessages].Data.(*SDKRenderedPayload)
 	if !ok {
-		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "unexpected_payload", "context view rendered unexpected payload", nil), nil
+		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "unexpected_payload", "context view rendered unexpected payload", nil)
 	}
 
 	plan := cachePlanFromPlacement(view.Placement)
@@ -392,7 +380,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	cfg.Messages = payload.Messages
 	ordered, err := orderedSelectedFrags(view.Selected, view.Placement)
 	if err != nil {
-		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "placement_error", "context view placement invalid after render", err), nil
+		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "placement_error", "context view placement invalid after render", err)
 	}
 	currentIndex, memoryIndex := renderedSpecialMessageIndexes(ordered)
 	cfg.ContextMemoryMessageIndex = memoryIndex
@@ -413,20 +401,7 @@ func applyProviderRunConfig(ctx context.Context, logger *slog.Logger, cfg agentp
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
-	return cfg, nil
-}
-
-func isContextBudgetError(err error) bool {
-	return errors.Is(err, contextfrag.ErrProtectedContextOverflow) ||
-		errors.Is(err, contextfrag.ErrBudgetUnsatisfied)
-}
-
-func recordContextBudgetFailure(ledger *contextfrag.MutationLedger, err error) {
-	reason := "budget_unsatisfied"
-	if errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		reason = "protected_context_overflow"
-	}
-	recordMutationOnce(ledger, contextfrag.MutationContextBudgetFailure, reason)
+	return cfg
 }
 
 func recordMutationOnce(ledger *contextfrag.MutationLedger, kind contextfrag.MutationKind, detail string) {
@@ -436,48 +411,6 @@ func recordMutationOnce(ledger *contextfrag.MutationLedger, kind contextfrag.Mut
 		}
 	}
 	ledger.Record(kind, detail)
-}
-
-func providerBudgetAuditConfig(
-	cfg agentpkg.RunConfig,
-	view *ContextView,
-	ledger *contextfrag.MutationLedger,
-	budgetPlan *contextfrag.ContextBudgetPlan,
-) agentpkg.RunConfig {
-	if view == nil {
-		manifest := contextfrag.BuildManifest(nil)
-		manifest.View = contextfrag.ViewRunConfigPreProvider
-		manifest.DynamicMutators = normalizeDynamicMutators(cfg.ContextDynamicMutators)
-		if budgetPlan != nil {
-			plan := *budgetPlan
-			manifest.BudgetPlan = &plan
-		}
-		manifest.Mutations = ledger
-		appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
-		cfg.ContextManifest = manifest
-		cfg.ContextMutations = ledger
-		if cfg.ContextLifecycle != nil {
-			cfg.ContextLifecycle.SetManifest(manifest)
-		}
-		return cfg
-	}
-	cachePlan := cachePlanFromPlacement(view.Placement)
-	cachePlan.StablePrefixTokenEstimate = stablePrefixTokenEstimate(view.Placement, view.Selected, cfg.ContextToolDefs)
-	cachePlan.MidStableMessageCount = midStableMessageCount(view.Placement, view.Selected)
-	manifest := view.Manifest
-	manifest.CachePlan = &cachePlan
-	manifest.Mutations = ledger
-	manifest.ToolDefs = append([]contextfrag.ToolDefAccounting(nil), cfg.ContextToolDefs...)
-	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
-
-	cfg.ContextFrags = view.Selected
-	cfg.ContextManifest = manifest
-	cfg.ContextCachePlan = cachePlan
-	cfg.ContextMutations = ledger
-	if cfg.ContextLifecycle != nil {
-		cfg.ContextLifecycle.SetManifest(manifest)
-	}
-	return cfg
 }
 
 // providerViewFallback assembles the legacy payload when the context view
@@ -887,5 +820,23 @@ func warnMissingContextWindow(ctx context.Context, logger *slog.Logger, cfg agen
 		slog.String("bot_id", cfg.ContextScope.BotID),
 		slog.String("session_id", cfg.ContextScope.SessionID),
 		slog.String("model_id", cfg.CurrentModelID),
+	)
+}
+
+// warnPlanOverflow records a request larger than its window. It is sent as it
+// is: the provider's limit error, not a local one, is the outcome.
+func warnPlanOverflow(ctx context.Context, logger *slog.Logger, cfg agentpkg.RunConfig, plan *contextfrag.ContextBudgetPlan) {
+	if logger == nil || !PlanOverflows(plan) {
+		return
+	}
+	logger.WarnContext(ctx, "context exceeds the model window, sending as is",
+		slog.String("bot_id", cfg.ContextScope.BotID),
+		slog.String("session_id", cfg.ContextScope.SessionID),
+		slog.String("model_id", cfg.CurrentModelID),
+		slog.Int("window", plan.Window),
+		slog.Int("output_reserve", plan.OutputReserve),
+		slog.Int("tool_defs_tokens", plan.ToolDefsCost),
+		slog.Int("current_request_tokens", plan.CurrentRequestCost),
+		slog.Int("system_tokens", plan.ActualSystemCost),
 	)
 }

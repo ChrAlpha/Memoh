@@ -154,15 +154,12 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "s1"}
 	composedMessages := composeDiscussMessages(input.rc, input.trs, input.summary)
 	flatMessages := legacyContextMessagesToSDK(composedMessages)
-	legacyRendered, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	legacyRendered := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 		System:                   input.system,
 		Messages:                 flatMessages,
 		ContextQueryMaterialized: true,
 		ContextScope:             scope,
 	})
-	if err != nil {
-		t.Fatalf("legacy applyProviderRunConfig() error: %v", err)
-	}
 	typedFrags, err := (&DiscussSDKContextBuilder{}).CollectDiscussSourceFrags(
 		context.Background(),
 		scope,
@@ -172,16 +169,13 @@ func assertDiscussEquivalent(t *testing.T, input discussLegacyInput) {
 	if err != nil {
 		t.Fatalf("CollectDiscussSourceFrags() error: %v", err)
 	}
-	typedRendered, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	typedRendered := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 		System:                   input.system,
 		Messages:                 flatMessages,
 		ContextSourceFrags:       typedFrags,
 		ContextQueryMaterialized: true,
 		ContextScope:             scope,
 	})
-	if err != nil {
-		t.Fatalf("typed applyProviderRunConfig() error: %v", err)
-	}
 	for _, mutation := range typedRendered.ContextManifest.Mutations.Records() {
 		if mutation.Kind == contextfrag.MutationContextViewFallback {
 			t.Fatalf("typed provider path fell back to the flat oracle: %+v", mutation)

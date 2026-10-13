@@ -2,12 +2,8 @@ package native
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log/slog"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -22,7 +18,7 @@ func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
 	modelProvider := &usageRecordingProvider{}
 	ledger := contextfrag.NewMutationLedger()
 	called := 0
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
 		called++
 		if !strings.Contains(cfg.ContextToolUsage, usageMarker) {
 			t.Fatalf("applier tool usage = %q, want marker", cfg.ContextToolUsage)
@@ -41,7 +37,7 @@ func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
 		cfg.System = "compiled system"
 		cfg.Messages = []sdk.Message{sdk.UserMessage("compiled message")}
 		cfg.ContextMutations = ledger
-		return cfg, nil
+		return cfg
 	}})
 	a.SetToolProviders([]tools.ToolProvider{&usageTestProvider{emitTool: true, usage: usageMarker}})
 
@@ -78,9 +74,9 @@ func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
 		lastParams = params
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 	}}
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
 		cfg.ContextMutations = ledger
-		return cfg, nil
+		return cfg
 	}})
 	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
 		Name: "hash_tool",
@@ -105,12 +101,12 @@ func TestStreamAppliesContextViewOnce(t *testing.T) {
 	t.Parallel()
 	modelProvider := &usageStreamRecordingProvider{}
 	called := make(chan RunConfig, 1)
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
 		called <- cfg
 		cfg.System = "compiled stream system"
 		cfg.Messages = []sdk.Message{sdk.UserMessage("compiled stream message")}
 		cfg.ContextMutations = contextfrag.NewMutationLedger()
-		return cfg, nil
+		return cfg
 	}})
 
 	for range a.Stream(context.Background(), RunConfig{
@@ -137,106 +133,9 @@ func TestStreamAppliesContextViewOnce(t *testing.T) {
 func TestApplyContextViewFallsBackToLegacyRefresh(t *testing.T) {
 	t.Parallel()
 	cfg := RunConfig{System: "system", Messages: []sdk.Message{sdk.UserMessage("history")}}
-	got, err := New(Deps{}).applyContextView(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("applyContextView error = %v", err)
-	}
+	got := New(Deps{}).applyContextView(context.Background(), cfg)
 	if len(got.ContextFrags) == 0 || got.ContextManifest.Counts.Messages != 1 {
 		t.Fatalf("legacy context refresh = %#v", got.ContextManifest)
-	}
-}
-
-type preflightCountingProvider struct {
-	mu            sync.Mutex
-	generateCalls int
-	streamCalls   int
-}
-
-func (*preflightCountingProvider) Name() string { return "preflight-counting" }
-
-func (*preflightCountingProvider) ListModels(context.Context) ([]sdk.Model, error) { return nil, nil }
-
-func (*preflightCountingProvider) Test(context.Context) error {
-	return nil
-}
-
-func (*preflightCountingProvider) TestModel(context.Context, string) (*sdk.ModelTestResult, error) {
-	return &sdk.ModelTestResult{Supported: true}, nil
-}
-
-func (p *preflightCountingProvider) DoGenerate(context.Context, sdk.Request) (sdk.ModelResult, error) {
-	p.mu.Lock()
-	p.generateCalls++
-	p.mu.Unlock()
-	return sdk.ModelResult{Text: "unexpected", FinishReason: sdk.FinishReasonStop}, nil
-}
-
-func (p *preflightCountingProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
-	p.mu.Lock()
-	p.streamCalls++
-	p.mu.Unlock()
-	return nil, errors.New("unexpected provider stream call")
-}
-
-func (p *preflightCountingProvider) calls() (int, int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.generateCalls, p.streamCalls
-}
-
-func budgetErrorApplier(err error) ContextViewApplier {
-	return func(_ context.Context, cfg RunConfig) (RunConfig, error) { return cfg, err }
-}
-
-// A context the budget cannot fit is reported with its cause alone: the
-// application names the budget sentinels. Any other preparation failure is
-// the runtime's own and names runtime_run_failed. Neither carries text.
-func TestContextViewStreamErrorCarriesOnlyItsCause(t *testing.T) {
-	t.Parallel()
-
-	for _, tt := range []struct {
-		err      error
-		sentinel error
-		code     string
-	}{
-		{fmt.Errorf("%w: private cost", contextfrag.ErrProtectedContextOverflow), contextfrag.ErrProtectedContextOverflow, ""},
-		{fmt.Errorf("%w: private math", contextfrag.ErrBudgetUnsatisfied), contextfrag.ErrBudgetUnsatisfied, ""},
-		{errors.New("private collector failure"), nil, "runtime_run_failed"},
-	} {
-		event := contextViewStreamError(tt.err)
-		if event.Type != EventError || event.Code != tt.code || event.Error != "" || !errors.Is(event.Cause, tt.err) {
-			t.Fatalf("contextViewStreamError(%v) = %#v, want an error event with code %q and its cause", tt.err, event, tt.code)
-		}
-		if tt.sentinel != nil && !errors.Is(event.Cause, tt.sentinel) {
-			t.Fatalf("contextViewStreamError(%v) cause = %v, want %v in the chain", tt.err, event.Cause, tt.sentinel)
-		}
-	}
-}
-
-// A context preparation failure is recorded once, by the run's result record
-// at the boundary; the runtime publishes it and logs nothing of its own.
-func TestStreamContextViewFailureLeavesTheRecordToTheBoundary(t *testing.T) {
-	t.Parallel()
-
-	handler := &lifecycleRecordingHandler{}
-	a := New(Deps{Logger: slog.New(handler), ContextViewApplier: budgetErrorApplier(errors.New("private collector failure"))})
-	errorEvents := 0
-	for event := range a.Stream(context.Background(), RunConfig{
-		Model: &sdk.Model{ID: "context-view-log", Provider: &preflightCountingProvider{}, Type: sdk.ModelTypeChat},
-	}) {
-		if event.Type == EventError {
-			errorEvents++
-		}
-	}
-	if errorEvents != 1 {
-		t.Fatalf("error events = %d, want 1", errorEvents)
-	}
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	for _, record := range handler.records {
-		if record.Level >= slog.LevelWarn {
-			t.Fatalf("record %q at %v, want the failure left to the run's result record", record.Message, record.Level)
-		}
 	}
 }
 
@@ -244,50 +143,13 @@ func TestAgentInstallsLifecycleHolderBeforeContextPreflight(t *testing.T) {
 	t.Parallel()
 
 	seen := make(chan *contextfrag.LifecycleHolder, 1)
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
 		seen <- cfg.ContextLifecycle
-		return cfg, contextfrag.ErrBudgetUnsatisfied
+		return cfg
 	}})
 	_, _ = a.Generate(context.Background(), RunConfig{})
 	if holder := <-seen; holder == nil {
 		t.Fatal("context preflight received a nil lifecycle holder")
-	}
-}
-
-func TestGenerateContextBudgetErrorStopsBeforeProvider(t *testing.T) {
-	t.Parallel()
-
-	provider := &preflightCountingProvider{}
-	wantErr := fmt.Errorf("%w: private cost", contextfrag.ErrProtectedContextOverflow)
-	result, err := New(Deps{ContextViewApplier: budgetErrorApplier(wantErr)}).Generate(context.Background(), RunConfig{
-		Model: &sdk.Model{ID: "budget-generate", Provider: provider, Type: sdk.ModelTypeChat},
-	})
-	if result != nil || !errors.Is(err, wantErr) || !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("result/error = %#v/%v", result, err)
-	}
-	if generate, stream := provider.calls(); generate != 0 || stream != 0 {
-		t.Fatalf("provider calls = %d/%d, want zero", generate, stream)
-	}
-}
-
-func TestStreamContextBudgetErrorCarriesItsSentinelAndStopsBeforeProvider(t *testing.T) {
-	t.Parallel()
-
-	provider := &preflightCountingProvider{}
-	wantErr := fmt.Errorf("%w: window=31 private", contextfrag.ErrBudgetUnsatisfied)
-	var events []StreamEvent
-	for event := range New(Deps{ContextViewApplier: budgetErrorApplier(wantErr)}).Stream(context.Background(), RunConfig{
-		Model: &sdk.Model{ID: "budget-stream", Provider: provider, Type: sdk.ModelTypeChat},
-	}) {
-		if event.Type == EventError {
-			events = append(events, event)
-		}
-	}
-	if len(events) != 1 || events[0].Code != "" || events[0].Error != "" || !errors.Is(events[0].Cause, wantErr) {
-		t.Fatalf("error events = %#v, want one event whose cause is the budget failure", events)
-	}
-	if generate, stream := provider.calls(); generate != 0 || stream != 0 {
-		t.Fatalf("provider calls = %d/%d, want zero", generate, stream)
 	}
 }
 

@@ -41,13 +41,10 @@ func TestDiscussRetainsResolvedHookSystemSections(t *testing.T) {
 	if agent.lastConfig == nil {
 		t.Fatal("expected agent to be called")
 	}
-	rendered, err := contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(
+	rendered := contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(
 		context.Background(),
 		*agent.lastConfig,
 	)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-	}
 	if rendered.System != "base system\n\nhook system" {
 		t.Fatalf("System = %q, want resolved hook system section", rendered.System)
 	}

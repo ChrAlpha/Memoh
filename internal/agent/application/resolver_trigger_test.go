@@ -69,12 +69,12 @@ type triggerViewRecorder struct {
 	out agentpkg.RunConfig
 }
 
-func (v *triggerViewRecorder) apply(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
-	out, err := contextview.ProviderRunConfigApplier(slog.Default())(ctx, cfg)
+func (v *triggerViewRecorder) apply(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
+	out := contextview.ProviderRunConfigApplier(slog.Default())(ctx, cfg)
 	v.mu.Lock()
 	v.out = out
 	v.mu.Unlock()
-	return out, err
+	return out
 }
 
 func (v *triggerViewRecorder) snapshot() agentpkg.RunConfig {

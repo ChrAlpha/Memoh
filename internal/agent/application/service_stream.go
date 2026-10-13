@@ -9,7 +9,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -129,21 +128,14 @@ func agentStreamFailure(event native.StreamEvent) error {
 	return apperror.Wrap(nativeFailureCode(event.Cause), event.Cause, nil)
 }
 
-// nativeFailureCode names the failure a native run ended with. A context the
-// budget cannot fit is named before anything else, since only compacting or
-// another model helps. A provider that named why it refused the request is
+// nativeFailureCode names the failure a native run ended with. A provider
+// that named why it refused the request is
 // reported with that reason: an exhausted balance and a rejected key both need
 // the user to go change something, and "the model response was interrupted,
 // please try again" sends them back into a call that cannot succeed. A model
 // call that got no response reports the provider unreachable. Anything else
 // is an interrupted response; the runtime names its own failures itself.
 func nativeFailureCode(cause error) apperror.Code {
-	switch {
-	case errors.Is(cause, contextfrag.ErrProtectedContextOverflow):
-		return apperror.CodeContextProtectedOverflow
-	case errors.Is(cause, contextfrag.ErrBudgetUnsatisfied):
-		return apperror.CodeContextBudgetUnsatisfied
-	}
 	if code := providerFailureCode(cause, native.IsModelCallFailure(cause)); code != "" {
 		return code
 	}
@@ -567,6 +559,7 @@ func (s *Service) persistTerminalSnapshotResult(ctx context.Context, req ChatReq
 		if err := s.persistSessionWorkspaceTarget(ctx, storeReq); err != nil {
 			return nil, err
 		}
+		rc.pressure.add(snap.sdkMessages)
 	}
 
 	if inputTokens := extractInputTokensFromUsage(snap.usage); inputTokens > 0 {

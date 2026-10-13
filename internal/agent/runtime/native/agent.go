@@ -19,7 +19,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
-	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -67,22 +66,11 @@ func captureProviderAttemptPrefix(cfg RunConfig) RunConfig {
 // applyContextView compiles the provider-facing fields from authoritative
 // fragments when the application installed the PR1 compiler. Direct Agent
 // users retain the legacy refresh path.
-func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) (RunConfig, error) {
+func (a *Agent) applyContextView(ctx context.Context, cfg RunConfig) RunConfig {
 	if a != nil && a.contextViewApplier != nil {
 		return a.contextViewApplier(ctx, cfg)
 	}
-	return cfg.RefreshContextFrag(), nil
-}
-
-// contextViewStreamError is the error event for a model context that could not
-// be prepared. The chain keeps contextfrag's budget sentinels for the
-// application to name; any other preparation failure is the runtime's own.
-func contextViewStreamError(err error) StreamEvent {
-	event := StreamEvent{Type: EventError, Cause: errs.WrapWithDepth(1, err, "prepare context view")}
-	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) && !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		event.Code = codeRunFailed
-	}
-	return event
+	return cfg.RefreshContextFrag()
 }
 
 // BridgeProvider returns the underlying bridge provider (workspace manager).

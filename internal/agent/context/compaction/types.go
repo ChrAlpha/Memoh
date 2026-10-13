@@ -57,9 +57,9 @@ type TriggerConfig struct {
 	TotalInputTokens      int
 	MaxCompactTokens      int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
 	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
-	// SummaryWindowTokens is the summarizer model's full context window when
-	// declared; it bounds the summary output reserve. Zero means unknown and
-	// keeps the engine's conservative defaults.
+	// SummaryWindowTokens is the summarizer model's full context window; it
+	// bounds the summary output reserve. Zero means the model declares none,
+	// and the service's fallback window applies.
 	SummaryWindowTokens int
 	// ContextWindowTokens is the chat model's context window. It is separate
 	// from SummaryWindowTokens, which belongs to the summarizer model.

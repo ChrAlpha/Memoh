@@ -784,10 +784,7 @@ func TestDiscussCarriesComposedMessagesThroughTypedFragments(t *testing.T) {
 		t.Fatalf("dynamic placement memory=%d hook=%d current=%d", memoryIndex, hookIndex, currentIndex)
 	}
 
-	rendered, err := contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(context.Background(), *cfg)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-	}
+	rendered := contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(context.Background(), *cfg)
 	if rendered.System != "base system" {
 		t.Fatalf("System = %q, want legacy hook isolated from system", rendered.System)
 	}

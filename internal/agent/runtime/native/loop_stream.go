@@ -113,14 +113,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaToolPresent(sdkTools), a != nil && a.hookService != nil, true)
-	var contextViewErr error
-	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
-	if contextViewErr != nil {
-		failure := contextViewStreamError(contextViewErr)
-		turnError = turnHookError(failure)
-		sendEvent(ctx, ch, failure)
-		return
-	}
+	cfg = a.applyContextView(streamCtx, cfg)
 	cfg = captureProviderAttemptPrefix(cfg)
 	toolExecutionMetadata := newToolExecutionMetadataRegistry(func(call sdk.ToolCall, metadata map[string]any) {
 		eventGate.emitAgentEvent(StreamEvent{
@@ -573,6 +566,7 @@ func (e *streamEngine) run() {
 		// like the initial dispatch's step zero.
 		stepParams := e.advance(e.streamCtx, e.baseCfg, e.dynamic, stepBoundary{
 			first:         attemptStep == 0,
+			resent:        attemptStep == 0 && retryAttempts > 0,
 			committed:     len(e.steps),
 			readMedia:     e.readMedia,
 			drainInjected: e.drainInjectedMessages,

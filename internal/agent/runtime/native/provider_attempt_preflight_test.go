@@ -100,8 +100,8 @@ func TestAgentGenerateInitialHookWindowZeroRunsPreflightWithoutBudgetEnforcement
 	a := New(Deps{
 		BridgeProvider: bridgeProvider,
 		HookService:    hookService,
-		ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-			return cfg, nil
+		ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+			return cfg
 		},
 	})
 
@@ -226,8 +226,8 @@ func TestAgentGenerateHashesEveryAnthropicProviderStepWithHook(t *testing.T) {
 	a := New(Deps{
 		BridgeProvider: bridgeProvider,
 		HookService:    hookService,
-		ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-			return cfg, nil
+		ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+			return cfg
 		},
 	})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{

@@ -81,11 +81,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	}
 	sdkTools, readMediaState := decorateReadMediaTools(cfg.Model, sdkTools)
 	cfg.ContextDynamicMutators = cfg.contextDynamicMutators(readMediaToolPresent(sdkTools), a != nil && a.hookService != nil, false)
-	var contextViewErr error
-	cfg, contextViewErr = a.applyContextView(genCtx, cfg)
-	if contextViewErr != nil {
-		return nil, contextViewErr
-	}
+	cfg = a.applyContextView(genCtx, cfg)
 	cfg = captureProviderAttemptPrefix(cfg)
 	toolExecutionMetadata := newToolExecutionMetadataRegistry(nil)
 	cfg.ToolApprovalHandler = toolExecutionMetadata.wrap(cfg.ToolApprovalHandler)

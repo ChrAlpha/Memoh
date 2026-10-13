@@ -91,17 +91,17 @@ func configureTriggerLifecycleContextView(
 	applier := contextview.ProviderRunConfigApplier(logger)
 	fixture.service.agent = agentpkg.New(agentpkg.Deps{
 		Logger: logger,
-		ContextViewApplier: func(ctx context.Context, cfg agentpkg.RunConfig) (agentpkg.RunConfig, error) {
+		ContextViewApplier: func(ctx context.Context, cfg agentpkg.RunConfig) agentpkg.RunConfig {
 			if mutate != nil {
 				mutate(&cfg)
 			}
-			out, err := applier(ctx, cfg)
+			out := applier(ctx, cfg)
 			if out.Model != nil {
 				model := *out.Model
 				model.Provider = provider
 				out.Model = &model
 			}
-			return out, err
+			return out
 		},
 	})
 	return provider
@@ -222,43 +222,31 @@ func TestTriggerScheduleProviderFailurePersistsFailedProviderLifecycle(t *testin
 	}
 }
 
-func TestTriggerScheduleProviderBudgetFailurePersistsFailedBudgetWithoutAssistant(t *testing.T) {
+// A window smaller than the system prompt, tools and message is no local
+// failure: the request goes to the provider as it is, and the turn is written
+// to history like any other.
+func TestTriggerScheduleSendsARequestLargerThanTheWindowAsIs(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	setDirectLifecycleContextWindow(t, fixture, 1)
 	provider := configureTriggerLifecycleContextView(t, fixture, nil)
 
-	_, err := triggerDirectSchedule(t, fixture.service)
-	if apperror.CodeOf(err) != apperror.CodeContextBudgetUnsatisfied {
-		t.Fatalf("TriggerSchedule() error = %v, want code %v", err, apperror.CodeContextBudgetUnsatisfied)
+	result, err := triggerDirectSchedule(t, fixture.service)
+	if err != nil || result.Status != "ok" {
+		t.Fatalf("TriggerSchedule() = %q, %v; want the run to complete", result.Status, err)
 	}
-	if provider.callCount() != 0 {
-		t.Fatalf("provider calls = %d, want 0 after provider-budget rejection", provider.callCount())
+	if provider.callCount() != 1 {
+		t.Fatalf("provider calls = %d, want the request sent once", provider.callCount())
 	}
-	if len(fixture.messages.persisted) != 0 {
-		t.Fatalf("persisted messages = %#v, want none after provider-budget rejection", fixture.messages.persisted)
+	if len(fixture.messages.persisted) == 0 {
+		t.Fatal("no history written: the turn must be stored like any completed one")
 	}
-	assertDirectLifecycle(
-		t,
-		fixture.lifecycles,
-		lifecycleTestRunID,
-		contextLifecycleStatusFailedBudget,
-		"",
-	)
-	snapshot := assertDeferredLifecycleRow(
-		t,
-		fixture.lifecycles.creates(),
-		lifecycleTestRunID,
-		contextLifecycleStatusFailedBudget,
-		string(apperror.CodeContextBudgetUnsatisfied),
-	)
-	if snapshot.BudgetPlan == nil || snapshot.BudgetPlan.Window != 1 {
-		t.Fatalf("budget plan = %#v, want active provider plan with window 1", snapshot.BudgetPlan)
+	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted, "message-id")
+	snapshot := assertDeferredLifecycleRow(t, fixture.lifecycles.creates(), lifecycleTestRunID, contextLifecycleStatusCompleted, "")
+	if !contextview.PlanOverflows(snapshot.BudgetPlan) || snapshot.BudgetPlan.Window != 1 {
+		t.Fatalf("budget plan = %#v, want the window-1 plan recorded as overflowing", snapshot.BudgetPlan)
 	}
-	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextBudgetFailure) {
-		t.Fatalf("lifecycle mutations = %#v, want provider-budget failure", snapshot.Mutations)
-	}
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
-		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	if hasLifecycleMutation(snapshot, contextfrag.MutationContextBudgetFailure) {
+		t.Fatalf("lifecycle mutations = %#v, want no budget failure", snapshot.Mutations)
 	}
 }
 

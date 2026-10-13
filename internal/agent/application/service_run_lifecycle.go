@@ -658,18 +658,12 @@ func classifyContextLifecycleTerminal(
 	cause error,
 ) (string, string) {
 	budgetFailure, budgetReason, fallback := lifecycleBudgetEvidence(snapshot)
-	privateCause := apperror.CauseOf(cause)
 	code := apperror.CodeOf(cause)
-	protectedOverflow := errors.Is(cause, contextfrag.ErrProtectedContextOverflow) ||
-		errors.Is(privateCause, contextfrag.ErrProtectedContextOverflow)
-	budgetUnsatisfied := errors.Is(cause, contextfrag.ErrBudgetUnsatisfied) ||
-		errors.Is(privateCause, contextfrag.ErrBudgetUnsatisfied)
-	if budgetFailure || protectedOverflow || budgetUnsatisfied ||
-		code == apperror.CodeContextProtectedOverflow || code == apperror.CodeContextBudgetUnsatisfied {
+	if budgetFailure || code == apperror.CodeContextProtectedOverflow || code == apperror.CodeContextBudgetUnsatisfied {
 		switch {
 		case code == apperror.CodeContextProtectedOverflow, code == apperror.CodeContextBudgetUnsatisfied:
 			return contextLifecycleStatusFailedBudget, string(code)
-		case protectedOverflow, budgetReason == "protected_context_overflow":
+		case budgetReason == "protected_context_overflow":
 			return contextLifecycleStatusFailedBudget, string(apperror.CodeContextProtectedOverflow)
 		default:
 			return contextLifecycleStatusFailedBudget, string(apperror.CodeContextBudgetUnsatisfied)

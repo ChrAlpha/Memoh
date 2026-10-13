@@ -29,10 +29,7 @@ func buildErrorFragsFirstConfig(messages []sdk.Message, window int) agentpkg.Run
 func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *testing.T) {
 	t.Parallel()
 
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage("legacy message")}, 100_000))
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v, want ordinary build fallback", err)
-	}
+	out := ProviderRunConfigApplier(nil)(context.Background(), buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage("legacy message")}, 100_000))
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil {
 		t.Fatal("fallback manifest lost the budget plan")

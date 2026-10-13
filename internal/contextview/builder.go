@@ -100,9 +100,6 @@ func (b *Builder) Build(ctx context.Context, input BuildInput) (*ContextView, er
 		Trace:       trace,
 	}
 
-	if result.FatalError != nil {
-		return view, result.FatalError
-	}
 	if input.Options.DryRun {
 		return view, nil
 	}

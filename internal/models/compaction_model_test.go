@@ -156,13 +156,6 @@ func TestResolveCompactionModelSentinels(t *testing.T) {
 			candidates: []string{modelID},
 			wantErr:    ErrCompactionOutputLimitUnsupported,
 		},
-		{
-			name:       "window unknown fails closed",
-			model:      compactionTestModel(t, modelID, "nowin/model", 0, true),
-			provider:   compactionTestProvider("anthropic-messages"),
-			candidates: []string{modelID},
-			wantErr:    ErrCompactionWindowUnknown,
-		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -180,6 +173,26 @@ func TestResolveCompactionModelSentinels(t *testing.T) {
 				t.Fatalf("IsCompactionModelUnavailable(%v) = false, want true", err)
 			}
 		})
+	}
+}
+
+// A summarizer that declares no window still resolves; the engine prices it
+// with the fallback window, as the chat budget does.
+func TestResolveCompactionModelWithoutAWindow(t *testing.T) {
+	t.Parallel()
+
+	const modelID = "00000000-0000-0000-0000-00000000a006"
+	model := compactionTestModel(t, modelID, "nowin/model", 0, true)
+	queries := &compactionModelQueries{
+		models:   map[pgtype.UUID]sqlc.Model{model.ID: model},
+		provider: compactionTestProvider("anthropic-messages"),
+	}
+	resolution, err := ResolveCompactionModel(context.Background(), compactionResolverEnv(t, queries), queries, modelID)
+	if err != nil {
+		t.Fatalf("ResolveCompactionModel() error = %v", err)
+	}
+	if resolution.Model.ID != modelID || resolution.WindowTokens != 0 {
+		t.Fatalf("resolution = %s window %d, want %s with no declared window", resolution.Model.ID, resolution.WindowTokens, modelID)
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -69,54 +68,6 @@ func receiveTurnHook(t *testing.T, requests <-chan hooks.Request) hooks.Request 
 	case <-time.After(5 * time.Second):
 		t.Fatal("turn error hook did not run")
 		return hooks.Request{}
-	}
-}
-
-// A turn that context preparation failed hands the turn hook the failure's
-// catalog code; the internal text of the cause stays out of the hook.
-func TestContextFailureHandsTheTurnHookItsCode(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		err  error
-		want string
-	}{
-		{"protected overflow", fmt.Errorf("%w: private window", contextfrag.ErrProtectedContextOverflow), "context.protected_overflow"},
-		{"budget unsatisfied", fmt.Errorf("%w: private window", contextfrag.ErrBudgetUnsatisfied), "context.budget_unsatisfied"},
-		{"preparation failure", errors.New("private preparation failure"), "runtime_run_failed"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			deps, requests := newTurnErrorHook(t)
-			deps.ContextViewApplier = budgetErrorApplier(tt.err)
-			for range New(deps).Stream(context.Background(), RunConfig{
-				Model:    &sdk.Model{ID: "hook-stream", Provider: &preflightCountingProvider{}, Type: sdk.ModelTypeChat},
-				Identity: SessionContext{BotID: "bot-1"},
-			}) {
-			}
-			req := receiveTurnHook(t, requests)
-			if req.Event != hooks.EventTurnError || req.Error != tt.want || req.Turn["error"] != tt.want || strings.Contains(req.Error, "private") {
-				t.Fatalf("turn hook request = %#v, want error %q", req, tt.want)
-			}
-		})
-	}
-}
-
-// The non-streaming loop hands the turn hook the code of a context sentinel
-// in the same way.
-func TestGenerateContextFailureHandsTheTurnHookItsCode(t *testing.T) {
-	t.Parallel()
-	deps, requests := newTurnErrorHook(t)
-	deps.ContextViewApplier = budgetErrorApplier(fmt.Errorf("%w: private window", contextfrag.ErrBudgetUnsatisfied))
-	if _, err := New(deps).Generate(context.Background(), RunConfig{
-		Model:    &sdk.Model{ID: "hook-generate", Provider: &preflightCountingProvider{}, Type: sdk.ModelTypeChat},
-		Identity: SessionContext{BotID: "bot-1"},
-	}); err == nil {
-		t.Fatal("Generate() error = nil, want the budget failure")
-	}
-	if req := receiveTurnHook(t, requests); req.Error != "context.budget_unsatisfied" {
-		t.Fatalf("turn hook error = %q, want context.budget_unsatisfied", req.Error)
 	}
 }
 

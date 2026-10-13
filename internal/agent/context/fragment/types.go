@@ -3,7 +3,6 @@
 package contextfrag
 
 import (
-	"errors"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -171,11 +170,6 @@ const (
 	RetentionRequired    RetentionTier = "required"
 	RetentionPreferred   RetentionTier = "preferred"
 	RetentionOptional    RetentionTier = "optional"
-)
-
-var (
-	ErrProtectedContextOverflow = errors.New("protected context exceeds its budget")
-	ErrBudgetUnsatisfied        = errors.New("context budget reserves exceed the available window")
 )
 
 // DropPriority orders fragments within one retention tier. Higher values drop

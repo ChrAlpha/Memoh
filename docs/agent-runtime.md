@@ -168,8 +168,8 @@ a billed image, and the DashScope task API not at all.
 
 The application names the failure in one translation function shared by the
 WebSocket, IM, discuss, scheduled, decision-continuation and subagent paths. A
-context the budget cannot fit is `context.protected_overflow` or
-`context.budget_unsatisfied`. A provider's answer is named by its `Kind`:
+context larger than the model's window is sent as it is, so the provider's
+limit error is how it fails. A provider's answer is named by its `Kind`:
 `agent.provider_auth_failed`, `agent.provider_permission_denied`,
 `agent.provider_quota_exhausted`, `agent.provider_rate_limited` or
 `agent.provider_overloaded`, and `agent.provider_request_rejected` for any other

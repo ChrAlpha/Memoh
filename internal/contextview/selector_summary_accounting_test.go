@@ -34,9 +34,6 @@ func TestConversationSummaryAndHistoryOverBudgetAreKept(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 6_000},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v", result.FatalError)
-	}
 	if !containsFragID(result.Selected, "summary") {
 		t.Fatalf("summary evicted under history-budget pressure: dropped=%v", fragIDs(result.Dropped))
 	}
@@ -92,9 +89,6 @@ func TestOversizedConversationSummaryTruncatesInsteadOfFailingClosed(t *testing.
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 6_000},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v, want the summary truncated instead", result.FatalError)
-	}
 	if !containsFragID(result.Selected, "summary") {
 		t.Fatalf("summary missing after truncation: selected=%v", fragIDs(result.Selected))
 	}
@@ -124,9 +118,6 @@ func TestOversizedSummaryIsKeptWholeBelowMinimumBudget(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 40},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v, want the summary sent as it is", result.FatalError)
-	}
 	if text := selectedFragText(result.Selected, "summary"); len(text) != 40_000 {
 		t.Fatalf("summary text len=%d, want the whole summary below the minimum viable size", len(text))
 	}
@@ -148,9 +139,6 @@ func TestSummaryOnlySelectionSkipsTheNoticeReserve(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 100},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v; nothing can drop, so no trim notice is ever emitted and the full budget belongs to the summary", result.FatalError)
-	}
 	text := selectedFragText(result.Selected, "summary")
 	if !strings.Contains(text, "truncated to fit") {
 		t.Fatalf("summary must be truncated into the budget, got len=%d", len(text))
@@ -180,9 +168,6 @@ func TestSummaryShrinkRedistributesUnusedShares(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 150},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v; the small summary's unused share must fund the big one", result.FatalError)
-	}
 	if small := selectedFragText(result.Selected, "summary-small"); small != strings.Repeat("s", 32) {
 		t.Fatalf("under-target summary must stay untouched, got %q", small)
 	}
@@ -242,9 +227,6 @@ func TestSummaryTruncationClosesTheSummaryTag(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 2_000},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v", result.FatalError)
-	}
 	text := selectedFragText(result.Selected, "summary")
 	if !strings.Contains(text, "truncated to fit") {
 		t.Fatalf("summary must carry the truncation notice, got %.60q", text)
@@ -272,9 +254,6 @@ func TestOversizedMessageShapedSummaryTruncates(t *testing.T) {
 		Plan: &contextfrag.ContextBudgetPlan{SystemBudget: 2_000},
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() fatal = %v, want the message-shaped summary truncated", result.FatalError)
-	}
 	text := selectedFragText(result.Selected, "summary")
 	if len(text) >= 40_000 || !strings.Contains(text, "truncated to fit") {
 		t.Fatalf("summary text len=%d, want a shortened body carrying the truncation notice", len(text))

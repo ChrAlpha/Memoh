@@ -141,22 +141,16 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 			}
 
 			const toolUsage = "## Tool usage\n\nuse tools wisely"
-			legacyRendered, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+			legacyRendered := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 				ContextSourceFrags: legacyFrags,
 				ContextScope:       scope,
 				ContextToolUsage:   toolUsage,
 			})
-			if err != nil {
-				t.Fatalf("legacy applyProviderRunConfig error: %v", err)
-			}
-			sectionsRendered, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+			sectionsRendered := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 				ContextSourceFrags: sectionsFrags,
 				ContextScope:       scope,
 				ContextToolUsage:   toolUsage,
 			})
-			if err != nil {
-				t.Fatalf("sections applyProviderRunConfig error: %v", err)
-			}
 			if sectionsRendered.System != legacyRendered.System {
 				t.Fatalf("sections System diverges from reverse-parse System:\ngot:  %q\nwant: %q",
 					sectionsRendered.System, legacyRendered.System)
@@ -166,16 +160,13 @@ func TestCollectDiscussSourceFragsSectionsMatchReverseParseRender(t *testing.T) 
 					sectionsRendered.Messages, legacyRendered.Messages)
 			}
 
-			budgetedSectionsRendered, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+			budgetedSectionsRendered := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 				SessionType:            sessionmode.Discuss,
 				ContextSourceFrags:     sectionsFrags,
 				ContextScope:           scope,
 				ContextToolUsage:       toolUsage,
 				ContextBudgetMaxTokens: 128000,
 			})
-			if err != nil {
-				t.Fatalf("budgeted sections applyProviderRunConfig error: %v", err)
-			}
 			if budgetedSectionsRendered.ContextManifest.BudgetPlan == nil {
 				t.Fatal("budgeted discuss sections did not produce an active plan")
 			}

@@ -9,7 +9,6 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -41,7 +40,9 @@ func (s *Service) bindStepCompaction(cfg *native.RunConfig, req ChatRequest, com
 		replacement:      replacement,
 		tailStart:        cfg.ContextTrimmableMessages,
 		extras:           ephemeralRunMessages(*cfg),
+		request:          unstoredRequestMessage(*cfg, req),
 		inlineParts:      inlineRunParts(*cfg),
+		pressure:         committer.rc.pressure,
 	}
 	cfg.StepContextCompactor = run.compact
 }
@@ -91,9 +92,16 @@ type stepCompaction struct {
 	// holds (workspace notice, recalled memory, requested skills). They stay
 	// in front of the user message they were written for.
 	extras []sdk.Message
+	// request is the user's message as the run sends it, for a run whose
+	// message becomes a row only with its first step: before the first call
+	// no row holds it yet.
+	request []sdk.Message
 	// inlineParts are the images and attachments the run's user message
 	// carried inline; the stored row holds only the text.
 	inlineParts []sdk.MessagePart
+	// pressure follows the conversation each call sends, so the run's end is
+	// judged by what it grew to; nil when nothing reads it.
+	pressure *runPressure
 }
 
 // ephemeralRunMessages returns the messages a run adds between the stored
@@ -108,6 +116,15 @@ func ephemeralRunMessages(cfg native.RunConfig) []sdk.Message {
 		return nil
 	}
 	return append([]sdk.Message(nil), cfg.Messages[start:end]...)
+}
+
+// unstoredRequestMessage is the user's message a run sends from its query,
+// which is stored with the run's first step rather than ahead of it.
+func unstoredRequestMessage(cfg native.RunConfig, req ChatRequest) []sdk.Message {
+	if req.ReusePersistedUserMessage || strings.TrimSpace(cfg.Query) == "" {
+		return nil
+	}
+	return []sdk.Message{sdk.UserMessage(cfg.Query)}
 }
 
 // inlineRunParts returns the media the run attached to the user's message.
@@ -128,11 +145,12 @@ func inlineRunParts(cfg native.RunConfig) []sdk.MessagePart {
 // first and its summary used. Failure, cooldown, and a rebuilt context no
 // smaller than the current one keep the conversation as it is.
 func (c *stepCompaction) compact(ctx context.Context, input native.StepContextInput) []sdk.Message {
-	if compactionNeed(input.EstimatedInputTokens, c.budget, 0) != compactionSync {
+	c.pressure.observe(input.Messages)
+	current := requestInputTokens(input.FixedTokens, input.Messages)
+	if compactionNeed(current, c.budget, 0) != compactionSync {
 		return nil
 	}
 	s, req := c.service, c.req
-	current := input.EstimatedInputTokens
 	if s.awaitSessionCompaction(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID)) {
 		if rebuilt, ok := c.rebuild(ctx, input); ok && rebuilt.tokens < current {
 			if compactionNeed(rebuilt.tokens, c.budget, 0) != compactionSync {
@@ -177,6 +195,7 @@ type rebuiltConversation struct {
 // adopt records that the loop continues on the rebuilt conversation.
 func (c *stepCompaction) adopt(rebuilt rebuiltConversation) []sdk.Message {
 	c.tailStart = rebuilt.tailStart
+	c.pressure.observe(rebuilt.messages)
 	return rebuilt.messages
 }
 
@@ -224,16 +243,22 @@ func (c *stepCompaction) rebuild(ctx context.Context, input native.StepContextIn
 		messages = append(messages, input.Messages[c.tailStart:]...)
 		rebuilt.messages = messages
 	} else {
+		// The user's message and every step after it are rows once the
+		// first step is stored. Before the run's first call none are, and
+		// the message is the one the run sends from its query.
+		history, request := assembled.Records, append([]sdk.Message(nil), c.request...)
 		split, found := recordIndex(assembled.Records, c.requestMessageID())
+		if found {
+			history, request = assembled.Records[:split], stepMessages(assembled.Records[split:])
+		}
 		messages := c.forkContext(ctx)
-		messages = append(messages, stepMessages(assembled.Records[:split])...)
+		messages = append(messages, stepMessages(history)...)
 		messages = append(messages, c.extras...)
-		request := stepMessages(assembled.Records[split:])
 		attachInlineParts(request, c.inlineParts, found)
 		messages = append(messages, request...)
 		rebuilt.messages = messages
 	}
-	rebuilt.tokens = input.FixedTokens + contextfrag.ProviderEnvelopeTokens("", rebuilt.messages, nil)
+	rebuilt.tokens = requestInputTokens(input.FixedTokens, rebuilt.messages)
 	return rebuilt, true
 }
 

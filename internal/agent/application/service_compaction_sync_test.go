@@ -2,15 +2,18 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -108,6 +111,32 @@ func (noFrontierQueries) ListCompactionArtifactLineageBySession(context.Context,
 	return nil, nil
 }
 
+// GetLatestContextLifecycleBySession reports a session whose earlier runs
+// recorded no context plan.
+func (noFrontierQueries) GetLatestContextLifecycleBySession(context.Context, pgtype.UUID) ([]byte, error) {
+	return nil, pgx.ErrNoRows
+}
+
+// lastRunPlanQueries is a session whose latest run spent fixed tokens on its
+// system prompt and tools.
+type lastRunPlanQueries struct {
+	noFrontierQueries
+	system, tools int
+	reads         *int
+}
+
+func (q lastRunPlanQueries) GetLatestContextLifecycleBySession(context.Context, pgtype.UUID) ([]byte, error) {
+	*q.reads++
+	return json.Marshal(contextfrag.LifecycleSnapshot{
+		Version:    1,
+		BudgetPlan: &contextfrag.ContextBudgetPlan{Window: syncTestBudget, ActualSystemCost: q.system, ToolDefsCost: q.tools},
+	})
+}
+
+func syncTestEstimate(service *Service, req ChatRequest) *turnRequestEstimate {
+	return &turnRequestEstimate{service: service, ctx: context.Background(), sessionID: req.ThreadID}
+}
+
 const syncTestBudget = 1000
 
 func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedCompactionRunner, *stagedHistory, ChatRequest) {
@@ -150,7 +179,7 @@ func TestCompactBeforeTurnCompactsOnceAtTheHardShareAndReassembles(t *testing.T)
 		t.Fatalf("fixture pressure %d does not reach the hard share of %d", recordTokens(before), syncTestBudget)
 	}
 
-	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before)
+	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}
@@ -168,12 +197,60 @@ func TestCompactBeforeTurnLeavesContextBelowTheHardShareAlone(t *testing.T) {
 	before := assembleForSyncTest(t, service, req)
 	loads := history.afterCalls
 
-	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before)
+	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}
 	if runner.callCount() != 0 || history.afterCalls != loads || len(after.Messages) != len(before.Messages) {
 		t.Fatalf("calls=%d loads=%d->%d: a context below the hard share must be left alone", runner.callCount(), loads, history.afterCalls)
+	}
+}
+
+// The turn judges the whole request it is about to send. Rows well under the
+// hard share still call for compaction when the system prompt and tools the
+// session's last run measured, and the user's message, carry it over.
+func TestCompactBeforeTurnCountsTheWholeRequest(t *testing.T) {
+	t.Parallel()
+
+	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
+	history.big = []messagepkg.Message{assembleText(t, "rows", "user", strings.Repeat("r", 600), assembleBase)}
+	runner.onRun = history.markCompacted
+	reads := 0
+	service.queries = lastRunPlanQueries{noFrontierQueries: service.queries.(noFrontierQueries), system: 400, tools: 250, reads: &reads}
+	before := assembleForSyncTest(t, service, req)
+	if got := compactionNeed(recordTokens(before), syncTestBudget, 0); got == compactionSync {
+		t.Fatalf("fixture rows alone (%d) already reach the hard share", recordTokens(before))
+	}
+	estimate := syncTestEstimate(service, req)
+	estimate.own = currentUserMessageEstimate(ChatRequest{}, "what now?")
+
+	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, estimate)
+	if err != nil {
+		t.Fatalf("compactBeforeTurn: %v", err)
+	}
+	if runner.callCount() != 1 {
+		t.Fatalf("compaction ran %d times, want once: rows %d plus the fixed part cross the hard share", runner.callCount(), recordTokens(before))
+	}
+	assertTexts(t, after.Messages, "<summary>short</summary>")
+}
+
+// Compaction can only take raw rows. A request over the hard share without
+// any (a first turn, or a session already reduced to summaries) is sent as
+// it is, without a compaction call or a lifecycle read.
+func TestCompactBeforeTurnWithoutRawRowsSendsTheRequestAsIs(t *testing.T) {
+	t.Parallel()
+
+	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
+	history.big = nil
+	reads := 0
+	service.queries = lastRunPlanQueries{noFrontierQueries: service.queries.(noFrontierQueries), system: 900, tools: 100, reads: &reads}
+	before := assembleForSyncTest(t, service, req)
+
+	if _, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req)); err != nil {
+		t.Fatalf("compactBeforeTurn: %v", err)
+	}
+	if runner.callCount() != 0 || reads != 0 {
+		t.Fatalf("compaction calls=%d lifecycle reads=%d, want none without raw rows", runner.callCount(), reads)
 	}
 }
 
@@ -201,7 +278,7 @@ func TestCompactBeforeTurnSendsTheContextAsIsUnlessCompactionSucceeded(t *testin
 			before := assembleForSyncTest(t, service, req)
 			loads := history.afterCalls
 
-			after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before)
+			after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 			if err != nil {
 				t.Fatalf("compactBeforeTurn: %v", err)
 			}
@@ -229,7 +306,7 @@ func TestCompactBeforeTurnCompactsATruncatedLoad(t *testing.T) {
 	before := assembleForSyncTest(t, service, req)
 	before.Truncated = true
 
-	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before)
+	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}
@@ -255,7 +332,7 @@ func TestCompactBeforeTurnWaitsForARunningCompactionAndJudgesAgain(t *testing.T)
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		assembled, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before)
+		assembled, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 		done <- outcome{assembled, err}
 	}()
 

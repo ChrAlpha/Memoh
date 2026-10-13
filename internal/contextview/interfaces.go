@@ -39,10 +39,7 @@ type Selector interface {
 type SelectionResult struct {
 	Selected []contextfrag.ContextFrag
 	Dropped  []contextfrag.ContextFrag
-	// FatalError stops rendering while allowing Builder to return the partial,
-	// content-light selection audit accumulated before the failure.
-	FatalError error
-	Edited     []contextfrag.ContextEditTrace
+	Edited   []contextfrag.ContextEditTrace
 	// EditReasons maps an edited fragment ID to its stable selection reason.
 	EditReasons map[string]string
 	Warnings    []contextfrag.ValidationWarning

@@ -262,6 +262,9 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		}
 	}
 	c.persisted = append(c.persisted, persisted...)
+	if len(persisted) > 0 {
+		c.rc.pressure.add(record.Messages)
+	}
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
 	}

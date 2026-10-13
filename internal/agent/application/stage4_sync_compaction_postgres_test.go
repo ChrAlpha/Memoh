@@ -206,7 +206,7 @@ func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 	req := ChatRequest{BotID: s.botID, ChatID: s.botID, ThreadID: s.sessionID, RunID: "stage4-run"}
 	assembled := s.assemble(ChatRequest{})
 	before := stage4Labels(assembled.Messages)
-	after, err := fixture.service.compactBeforeTurn(s.ctx, req, "", 60000, assembled)
+	after, err := fixture.service.compactBeforeTurn(s.ctx, req, "", 60000, assembled, &turnRequestEstimate{service: fixture.service, ctx: s.ctx, sessionID: req.ThreadID})
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}

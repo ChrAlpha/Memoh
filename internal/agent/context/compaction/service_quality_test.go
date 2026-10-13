@@ -63,6 +63,31 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	}
 }
 
+// A summarizer that declares no window is priced with the fallback window
+// (200k unless configured), not skipped and not held to a small default.
+func TestRunCompactionPricesAnUndeclaredWindowWithTheFallback(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueries{uncompacted: qualityRows(t)}
+	stub := &stubModel{summary: "SUMMARY"}
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200)); err != nil {
+		t.Fatalf("RunCompactionSync: %v", err)
+	}
+	if want := int64(200000*85/100) * 8; q.readMaxBytes != want {
+		t.Fatalf("candidate read budget = %d bytes, want %d: 85%% of a 200k window", q.readMaxBytes, want)
+	}
+
+	configured := &stubModel{summary: "SUMMARY"}
+	svc := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)})
+	svc.SetFallbackWindowTokens(20000)
+	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(configured, 200)); err != nil {
+		t.Fatalf("RunCompactionSync with a configured fallback: %v", err)
+	}
+	if configured.maxTokens != 2000 {
+		t.Fatalf("summary max tokens = %d, want window/10 of the configured 20000 fallback", configured.maxTokens)
+	}
+}
+
 func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
 	t.Parallel()
 

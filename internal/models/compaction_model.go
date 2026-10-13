@@ -19,7 +19,6 @@ var (
 	ErrCompactionModelDisabled          = errors.New("compaction model is disabled")
 	ErrCompactionProviderDisabled       = errors.New("compaction model provider is disabled")
 	ErrCompactionOutputLimitUnsupported = errors.New("compaction model provider does not enforce the output limit")
-	ErrCompactionWindowUnknown          = errors.New("compaction model does not declare a context window")
 )
 
 // CompactionModelResolution is the resolved summarizer identity. Credentials
@@ -28,14 +27,15 @@ var (
 type CompactionModelResolution struct {
 	Model    GetResponse
 	Provider sqlc.Provider
-	// WindowTokens is the summarizer model's declared context window.
+	// WindowTokens is the summarizer model's declared context window, zero
+	// when it declares none; the compaction engine then applies its fallback
+	// window, as the chat budget does for a model without one.
 	WindowTokens int
 }
 
 // ResolveCompactionModel picks the first non-empty candidate model id and
 // validates that it can act as a summarizer: a chat-type, enabled model on an
-// enabled LLM provider that honors output caps and declares a context window
-// (the summary budget derives from it, so an unknown window fails closed).
+// enabled LLM provider that honors output caps.
 // Callers compose the candidate chain: automatic triggers pass the override
 // and the turn's actually-resolved model; manual surfaces prefer the
 // session's latest model before the bot default.
@@ -82,14 +82,11 @@ func ResolveCompactionModel(
 	if !EnforcesMaxOutputTokens(clientType) {
 		return CompactionModelResolution{}, ErrCompactionOutputLimitUnsupported
 	}
-	if model.Config.ContextWindow == nil || *model.Config.ContextWindow <= 0 {
-		return CompactionModelResolution{}, fmt.Errorf("%w: %s", ErrCompactionWindowUnknown, model.ModelID)
+	resolution := CompactionModelResolution{Model: model, Provider: provider}
+	if window := model.Config.ContextWindow; window != nil && *window > 0 {
+		resolution.WindowTokens = *window
 	}
-	return CompactionModelResolution{
-		Model:        model,
-		Provider:     provider,
-		WindowTokens: *model.Config.ContextWindow,
-	}, nil
+	return resolution, nil
 }
 
 // IsCompactionModelUnavailable reports whether the resolution failure means
@@ -99,8 +96,7 @@ func IsCompactionModelUnavailable(err error) bool {
 		errors.Is(err, ErrCompactionModelNotChat) ||
 		errors.Is(err, ErrCompactionModelDisabled) ||
 		errors.Is(err, ErrCompactionProviderDisabled) ||
-		errors.Is(err, ErrCompactionOutputLimitUnsupported) ||
-		errors.Is(err, ErrCompactionWindowUnknown)
+		errors.Is(err, ErrCompactionOutputLimitUnsupported)
 }
 
 // LatestSessionModelID returns the models.id UUID of the most recent history

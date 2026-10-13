@@ -774,7 +774,7 @@ func TestSpawnAgentPersistsLifecycleOnFinalAssistantAndAssociatesItsID(t *testin
 	}
 }
 
-func TestSpawnAgentRetainsContextLifecycleWhenBudgetPreflightFails(t *testing.T) {
+func TestSpawnAgentRetainsContextLifecycleWhenRunFails(t *testing.T) {
 	snapshot := &contextfrag.LifecycleSnapshot{
 		Version: 1,
 		Counts:  contextfrag.ManifestCounts{Fragments: 4, Messages: 3},
@@ -786,7 +786,7 @@ func TestSpawnAgentRetainsContextLifecycleWhenBudgetPreflightFails(t *testing.T)
 	}
 	agent := &fakeSpawnAgent{
 		failureResult: &SpawnResult{ContextLifecycle: snapshot},
-		failureErr:    contextfrag.ErrBudgetUnsatisfied,
+		failureErr:    errors.New("run failed"),
 	}
 	p, _, _, _ := newAgentControlProvider(t, agent)
 	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
@@ -798,7 +798,7 @@ func TestSpawnAgentRetainsContextLifecycleWhenBudgetPreflightFails(t *testing.T)
 	if result["status"] != string(background.TaskFailed) {
 		t.Fatalf("spawn_agent status = %v, want %q", result["status"], background.TaskFailed)
 	}
-	assertCatalogFailure(t, result, apperror.CodeContextBudgetUnsatisfied, contextfrag.ErrBudgetUnsatisfied.Error())
+	assertCatalogFailure(t, result, apperror.CodeRuntimeRunFailed, "run failed")
 	if _, ok := result["context_lifecycle"]; ok {
 		t.Fatalf("spawn_agent exposed internal context lifecycle: %#v", result)
 	}

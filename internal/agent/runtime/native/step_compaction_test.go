@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -24,6 +25,7 @@ import (
 type compactionRun struct {
 	mu       sync.Mutex
 	sent     [][]sdk.Message
+	request  sdk.Request
 	inputs   []StepContextInput
 	replaced bool
 }
@@ -34,6 +36,7 @@ func (r *compactionRun) config(t *testing.T, a *Agent, replace func(call int) []
 		handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
 			r.mu.Lock()
 			r.sent = append(r.sent, append([]sdk.Message(nil), params.Messages...))
+			r.request = params
 			r.mu.Unlock()
 			if call == 4 {
 				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
@@ -86,8 +89,8 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		t.Parallel()
 		var r compactionRun
 		a := New(Deps{})
-		cfg := r.config(t, a, func(boundary int) []sdk.Message {
-			if boundary == 2 {
+		cfg := r.config(t, a, func(call int) []sdk.Message {
+			if call == 3 {
 				return []sdk.Message{summary, sdk.UserMessage("start")}
 			}
 			return nil
@@ -96,14 +99,12 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		if len(r.sent) != 4 {
 			t.Fatalf("provider calls = %d, want 4", len(r.sent))
 		}
-		if len(r.inputs) != 3 {
-			t.Fatalf("compactor asked %d times, want once per call after the first", len(r.inputs))
+		if len(r.inputs) != 4 {
+			t.Fatalf("compactor asked %d times, want once per call", len(r.inputs))
 		}
-		if r.inputs[0].EstimatedInputTokens >= r.inputs[1].EstimatedInputTokens {
-			t.Fatalf("estimates did not grow with the loop: %+v", r.inputs)
-		}
-		if len(r.inputs[0].Messages) != 3 || len(r.inputs[1].Messages) != 5 {
-			t.Fatalf("compactor saw %d and %d messages, want the conversation as the loop holds it (3, 5)", len(r.inputs[0].Messages), len(r.inputs[1].Messages))
+		if len(r.inputs[0].Messages) != 1 || len(r.inputs[1].Messages) != 3 || len(r.inputs[2].Messages) != 5 {
+			t.Fatalf("compactor saw %d, %d and %d messages, want the conversation as the loop holds it (1, 3, 5)",
+				len(r.inputs[0].Messages), len(r.inputs[1].Messages), len(r.inputs[2].Messages))
 		}
 		if len(r.sent[1]) != 3 {
 			t.Fatalf("call 2 sent %d messages, want start, call, result", len(r.sent[1]))
@@ -115,12 +116,33 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 			t.Fatalf("call 4 sent %d messages, want the replacement plus the step after it", len(r.sent[3]))
 		}
 	})
+	t.Run("the first call is offered with the whole request", func(t *testing.T) {
+		t.Parallel()
+		var r compactionRun
+		a := New(Deps{})
+		cfg := r.config(t, a, func(call int) []sdk.Message {
+			if call == 1 {
+				return []sdk.Message{summary, sdk.UserMessage("start")}
+			}
+			return nil
+		})
+		run(a, cfg)
+		if len(r.inputs) == 0 || len(r.inputs[0].Messages) != 1 || r.inputs[0].FixedTokens == 0 {
+			t.Fatalf("first offer = %+v, want the compiled conversation and its tools", r.inputs)
+		}
+		if want := []sdk.Message{summary, sdk.UserMessage("start")}; len(r.sent) == 0 || !reflect.DeepEqual(r.sent[0], want) {
+			t.Fatalf("call 1 sent %#v, want the replacement", r.sent)
+		}
+		if len(r.sent) < 2 || len(r.sent[1]) != 4 || !reflect.DeepEqual(r.sent[1][:2], r.sent[0]) {
+			t.Fatalf("call 2 sent %#v, want the replacement plus the step after it", r.sent)
+		}
+	})
 	t.Run("a system prompt moved into the messages is not the compactor's", func(t *testing.T) {
 		t.Parallel()
 		var r compactionRun
 		a := New(Deps{})
-		cfg := r.config(t, a, func(boundary int) []sdk.Message {
-			if boundary == 2 {
+		cfg := r.config(t, a, func(call int) []sdk.Message {
+			if call == 3 {
 				return []sdk.Message{summary, sdk.UserMessage("start")}
 			}
 			return nil
@@ -132,8 +154,11 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		if len(r.sent) != 4 || len(r.sent[1]) != 4 || r.sent[1][0].Role != sdk.MessageRoleSystem {
 			t.Fatalf("call 2 = %#v, want the system prompt as the first message", r.sent)
 		}
-		if got := r.inputs[0].Messages; len(got) != 3 || got[0].Role == sdk.MessageRoleSystem {
+		if got := r.inputs[1].Messages; len(got) != 3 || got[0].Role == sdk.MessageRoleSystem {
 			t.Fatalf("compactor saw %#v, want the conversation without the system prompt", got)
+		}
+		if want := contextfrag.ProviderEnvelopeTokens(r.request.System, r.sent[1][:1], r.request.Tools); r.inputs[1].FixedTokens != want {
+			t.Fatalf("fixed tokens = %d, want %d: the moved system prompt and the tools", r.inputs[1].FixedTokens, want)
 		}
 		if want := append([]sdk.Message{r.sent[1][0]}, summary, sdk.UserMessage("start")); !reflect.DeepEqual(r.sent[2], want) {
 			t.Fatalf("call 3 sent %#v, want the system prompt ahead of the replacement", r.sent[2])
@@ -148,8 +173,8 @@ func runCompactionLoops(t *testing.T, run func(a *Agent, cfg RunConfig)) {
 		carried := backgroundSummaryMessage("carried over by the compactor")
 		var r compactionRun
 		a := New(Deps{})
-		cfg := r.config(t, a, func(boundary int) []sdk.Message {
-			if boundary == 2 {
+		cfg := r.config(t, a, func(call int) []sdk.Message {
+			if call == 3 {
 				return []sdk.Message{summary, carried, sdk.UserMessage("start")}
 			}
 			return nil
@@ -251,5 +276,47 @@ func TestSpawnAdapterInstallsACompactorOnlyForCommittedRuns(t *testing.T) {
 				t.Fatalf("compaction run = %+v, want the spawned run's identity", got)
 			}
 		})
+	}
+}
+
+// A mid-stream retry resends the failed attempt's own request, which the
+// compactor was offered before it went out; it is not offered again.
+func TestStreamRetryDoesNotOfferTheResentRequestAgain(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	provider := &atomicMockProvider{
+		stream: func(_ context.Context, _ sdk.Request) (<-chan sdk.StreamPart, error) {
+			call := calls.Add(1)
+			ch := make(chan sdk.StreamPart, 8)
+			go func() {
+				defer close(ch)
+				ch <- &sdk.StartPart{}
+				ch <- &sdk.StartStepPart{}
+				if call == 1 {
+					ch <- &sdk.ErrorPart{Error: serverErr()}
+					return
+				}
+				ch <- &sdk.TextStartPart{ID: "retried"}
+				ch <- &sdk.TextDeltaPart{ID: "retried", Text: "ok"}
+				ch <- &sdk.TextEndPart{ID: "retried"}
+				ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
+				ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
+			}()
+			return ch, nil
+		},
+	}
+	var offers atomic.Int32
+	drainStream(New(Deps{}), RunConfig{
+		Model:    &sdk.Model{ID: "mock-model", Provider: provider},
+		Messages: []sdk.Message{sdk.UserMessage("start")},
+		Identity: SessionContext{BotID: "bot-1"},
+		StepContextCompactor: func(context.Context, StepContextInput) []sdk.Message {
+			offers.Add(1)
+			return nil
+		},
+	})
+	if calls.Load() != 2 || offers.Load() != 1 {
+		t.Fatalf("provider calls = %d, compactor offers = %d; want the first call offered and its retry not", calls.Load(), offers.Load())
 	}
 }

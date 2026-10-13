@@ -40,13 +40,10 @@ func TestApplyProviderRunConfigSendsHistoryOverTheWindowAsItIs(t *testing.T) {
 	)
 	frags = append(frags, currentMessageFrag("current", "latest question"))
 
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+	out := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
 		ContextSourceFrags:     frags,
 		ContextBudgetMaxTokens: 16_000,
 	})
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v, want the history sent as it is", err)
-	}
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil {
 		t.Fatal("budget plan missing from manifest")

@@ -28,10 +28,7 @@ func TestApplyProviderContextViewKeepsMaterializedCurrentUserUnderBudgetPressure
 		ContextTrimmableMessages:       1,
 	}
 	activateHistoryBudget(&cfg, 100)
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-	}
+	out := ProviderRunConfigApplier(nil)(context.Background(), cfg)
 
 	if len(out.Messages) == 0 || messageText(t, out.Messages[len(out.Messages)-1]) != "pipeline current question" {
 		t.Fatalf("messages = %#v, materialized current user must survive as the trailing request", out.Messages)
@@ -72,8 +69,5 @@ func activeHistoryInputBudget(legacyBudget int) (inputBudget, scale int) {
 		return 0, 1
 	}
 	scale = 2
-	if scaled := legacyBudget * scale; scaled < MinimumSystemBudgetTokens {
-		scale = (MinimumSystemBudgetTokens + legacyBudget - 1) / legacyBudget
-	}
 	return legacyBudget * scale, scale
 }

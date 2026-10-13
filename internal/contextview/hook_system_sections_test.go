@@ -138,9 +138,6 @@ func TestHookSystemSectionsDropOptionalBeforePreferredWithNotice(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); len(got) != 1 || got[0] != optional.ID {
 		t.Fatalf("system-budget drops = %v, want only optional hook section", got)
 	}
@@ -180,8 +177,8 @@ func TestHookSystemSectionBudgetTrimsUnicodeByRunes(t *testing.T) {
 		BudgetEnvelope{},
 	)
 
-	if result.FatalError != nil || len(result.Selected) != 1 {
-		t.Fatalf("Select() error=%v selected=%v", result.FatalError, fragIDs(result.Selected))
+	if len(result.Selected) != 1 {
+		t.Fatalf("Select() selected=%v", fragIDs(result.Selected))
 	}
 	text := result.Selected[0].Parts[0].Text
 	if !utf8.ValidString(text) || utf8.RuneCountInString(text) > frag.Budget.MaxChars {
@@ -192,18 +189,13 @@ func TestHookSystemSectionBudgetTrimsUnicodeByRunes(t *testing.T) {
 	}
 }
 
-func TestProviderBudgetAuditCarriesHookSystemSourceWarnings(t *testing.T) {
+func TestApplyProviderRunConfigCarriesHookSystemSourceWarnings(t *testing.T) {
 	t.Parallel()
 
 	warning := contextfrag.ValidationWarning{Code: "hook_warning"}
-	got := providerBudgetAuditConfig(
-		agentpkg.RunConfig{
-			ContextSourceWarnings: []contextfrag.ValidationWarning{warning},
-		},
-		nil,
-		contextfrag.NewMutationLedger(),
-		nil,
-	)
+	got := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+		ContextSourceWarnings: []contextfrag.ValidationWarning{warning},
+	})
 
 	if !hasValidationWarning(got.ContextManifest.ValidationWarnings, warning) {
 		t.Fatalf("budget-audit warnings = %#v, want %#v", got.ContextManifest.ValidationWarnings, warning)

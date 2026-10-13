@@ -6,7 +6,6 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/felinics/memoh/internal/acl"
-	"github.com/felinics/memoh/internal/agent/context/compaction"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/apps"
@@ -130,7 +129,7 @@ func ServerModule() fx.Option {
 			provideScheduleTriggerer,
 			provideScheduleSessionCreator,
 			schedule.NewService,
-			compaction.NewService,
+			provideCompactionService,
 			provideContainerdHandler,
 			provideBotBackupService,
 			provideFederationGateway,

@@ -2,8 +2,6 @@ package native
 
 import (
 	"errors"
-
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
 // codeRunFailed is the catalog code of a failure of the runtime's own work.
@@ -19,37 +17,14 @@ func localFailureEvent(err error) StreamEvent {
 	return StreamEvent{Type: EventError, Code: codeRunFailed, Cause: err}
 }
 
-// Catalog codes of the context failures the runtime reports by their
-// sentinels, as internal/apperror registers them.
-const (
-	codeContextProtectedOverflow = "context.protected_overflow"
-	codeContextBudgetUnsatisfied = "context.budget_unsatisfied"
-)
-
-// contextFailureCode is the catalog code of a context failure the runtime
-// reports by its sentinel, and whether err is one.
-func contextFailureCode(err error) (string, bool) {
-	switch {
-	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
-		return codeContextProtectedOverflow, true
-	case errors.Is(err, contextfrag.ErrBudgetUnsatisfied):
-		return codeContextBudgetUnsatisfied, true
-	}
-	return "", false
-}
-
 // turnHookError is the turn hook's error for the failure a run ended with:
-// the code the failure event names, or the code of its context sentinel. A
-// hook command runs in the bot's workspace, so the internal text of a local
-// or context failure stays out of it. A model call failure names no code in
+// the code the failure event names. A hook command runs in the bot's
+// workspace, so the internal text of a local failure stays out of it. A model call failure names no code in
 // the runtime, which leaves classifying the provider's answer to the
 // application; the hook still receives its text.
 func turnHookError(failure StreamEvent) string {
 	if failure.Code != "" {
 		return failure.Code
-	}
-	if code, ok := contextFailureCode(failure.Cause); ok {
-		return code
 	}
 	if IsModelCallFailure(failure.Cause) {
 		return failure.Cause.Error()

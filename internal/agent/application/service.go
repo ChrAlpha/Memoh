@@ -389,13 +389,18 @@ func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs
 }
 
 type resolvedContext struct {
-	runConfig              native.RunConfig
-	model                  models.GetResponse
-	provider               sqlc.Provider
-	query                  string // headerified persistable query
-	injectedRecords        *[]InjectedMessageRecord
-	estimatedTokens        int // estimated input token count for compaction
-	compactableTokens      int // raw history eligible for compaction
+	runConfig       native.RunConfig
+	model           models.GetResponse
+	provider        sqlc.Provider
+	query           string // headerified persistable query
+	injectedRecords *[]InjectedMessageRecord
+	estimatedTokens int // estimated input token count for compaction
+	// pressure is a native chat run's estimate of its next request, which the
+	// background trigger judges the finished run by.
+	pressure *runPressure
+	// compactableTokens is the raw history share a discuss turn reports in
+	// place of a run estimate.
+	compactableTokens      int
 	compactableTokensKnown bool
 	contextTokenBudget     int // token budget used to clamp compaction triggers
 }
@@ -538,7 +543,26 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		)
 		return resolvedContext{}, req, err
 	}
-	assembled, err = s.compactBeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled)
+	forkContext := s.subagentForkContextModelMessages(ctx, req)
+	notice := s.currentWorkspaceContextMessage(ctx, req)
+	requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills)
+	var ownMessages []ModelMessage
+	ownMessages = append(ownMessages, forkContext...)
+	for _, message := range []*ModelMessage{notice, memoryMsg, requestedSkillMsg} {
+		if message != nil {
+			ownMessages = append(ownMessages, *message)
+		}
+	}
+	if !req.ReusePersistedUserMessage {
+		ownMessages = append(ownMessages, reqMessages...)
+	}
+	estimate := &turnRequestEstimate{
+		service:   s,
+		ctx:       ctx,
+		sessionID: req.ThreadID,
+		own:       append(modelMessagesToSDKMessages(ownMessages), currentUserMessageEstimate(req, modelQuery)...),
+	}
+	assembled, err = s.compactBeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled, estimate)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "resolve: assemble context failed",
 			slog.String("bot_id", req.BotID),
@@ -547,18 +571,18 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		)
 		return resolvedContext{}, req, err
 	}
+	pressure := newRunPressure(runCfg.ContextLifecycle, estimate.conversation(assembled.Messages))
 	messages := assembled.Messages
 	historyRecords := assembled.Records
 	estimatedTokens := assembled.EstimatedTokens
-	compactableTokens := assembled.CompactableTokens
-	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
+	if len(forkContext) > 0 {
 		// The inherited parent snapshot precedes the thread's own transcript,
 		// exactly as parent-driven subagent tasks assemble it.
 		messages = append(forkContext, messages...)
 	}
 	messages = normalizeContextMessages(messages)
 	trimmableMessages := len(messages)
-	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
+	if notice != nil {
 		messages = append(messages, *notice)
 	}
 	var memoryMessageIndex *int
@@ -566,7 +590,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		messages = append(messages, *memoryMsg)
 		memoryMessageIndex = intPointer(len(messages) - 1)
 	}
-	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
+	if requestedSkillMsg != nil {
 		messages = append(messages, *requestedSkillMsg)
 	}
 	if !req.ReusePersistedUserMessage {
@@ -660,15 +684,14 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	}
 
 	return resolvedContext{
-		runConfig:              runCfg,
-		model:                  chatModel,
-		provider:               provider,
-		query:                  headerifiedQuery,
-		injectedRecords:        injectedRecords,
-		estimatedTokens:        estimatedTokens,
-		compactableTokens:      compactableTokens,
-		compactableTokensKnown: true,
-		contextTokenBudget:     contextTokenBudget,
+		runConfig:          runCfg,
+		model:              chatModel,
+		provider:           provider,
+		query:              headerifiedQuery,
+		injectedRecords:    injectedRecords,
+		estimatedTokens:    estimatedTokens,
+		pressure:           pressure,
+		contextTokenBudget: contextTokenBudget,
 	}, req, nil
 }
 
@@ -760,6 +783,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 			lifecycleCause = err
 			return ChatResponse{}, err
 		}
+		rc.pressure.add(result.Messages)
 		if result.Usage != nil {
 			s.maybeCompact(context.WithoutCancel(ctx), req, rc, result.Usage.InputTokens)
 		}

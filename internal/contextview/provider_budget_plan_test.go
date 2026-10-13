@@ -3,7 +3,6 @@ package contextview
 import (
 	"bytes"
 	"context"
-	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -121,23 +120,23 @@ func TestProviderContextBudgetPlanOutputReserveCrossover(t *testing.T) {
 	}
 }
 
-func TestProviderContextBudgetPlanRejectsImpossibleWindow(t *testing.T) {
+func TestProviderContextBudgetPlanZeroSystemBudgetWhenReservesExceedWindow(t *testing.T) {
 	t.Parallel()
 
 	current := contextfrag.TextFrag(contextfrag.TextFragInput{
 		ID: "current", Kind: contextfrag.KindCurrentUserMessage, Role: sdk.MessageRoleUser,
 		Slot: contextfrag.SlotCurrentUser, Text: "oversized", Trust: contextfrag.TrustUser,
 	})
-	current.TokenEstimate = 6000
+	current.TokenEstimate = 6100
 	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{
 		ContextBudgetMaxTokens: 8192,
 		ContextSourceFrags:     []contextfrag.ContextFrag{current},
 		ContextToolDefs:        []contextfrag.ToolDefAccounting{{Name: "tool", TokenEstimate: 100}},
 	})
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("error = %v, want ErrBudgetUnsatisfied", err)
+	if err != nil {
+		t.Fatalf("error = %v, want none", err)
 	}
-	if plan == nil || plan.OutputReserve != 2048 || plan.SystemBudget != MinimumSystemBudgetTokens {
+	if plan == nil || plan.OutputReserve != 2048 || plan.SystemBudget != 0 {
 		t.Fatalf("plan = %#v", plan)
 	}
 }
@@ -169,12 +168,12 @@ func TestProviderContextBudgetPlanDisabledWithoutWindow(t *testing.T) {
 	}
 }
 
-func TestProviderContextBudgetPlanRejectsNegativeWindow(t *testing.T) {
+func TestProviderContextBudgetPlanNegativeWindowHasNoPlan(t *testing.T) {
 	t.Parallel()
 
 	plan, err := providerContextBudgetPlan(context.Background(), agentpkg.RunConfig{ContextBudgetMaxTokens: -1})
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || plan == nil {
-		t.Fatalf("plan/error = %#v/%v, want plan and ErrBudgetUnsatisfied", plan, err)
+	if err != nil || plan != nil {
+		t.Fatalf("plan/error = %#v/%v, want nil/nil", plan, err)
 	}
 }
 
@@ -187,13 +186,10 @@ func TestProviderBudgetPlanIsAppliedAndRetained(t *testing.T) {
 		Slot: contextfrag.SlotCurrentUser, Text: "current", Trust: contextfrag.TrustUser,
 	})
 	current.TokenEstimate = 120
-	out, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	out := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 		ContextSourceFrags: []contextfrag.ContextFrag{current}, ContextBudgetMaxTokens: 8192,
 		ContextLifecycle: holder,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil || plan.OutputReserve != 2048 || plan.CurrentRequestCost != 120 || plan.SystemBudget != 6024 {
 		t.Fatalf("budget plan = %#v", plan)
@@ -231,10 +227,7 @@ func TestApplyProviderRunConfigSemanticCurrentIsNotDoubleCharged(t *testing.T) {
 		ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(356),
 	}
 
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v, want payload that fits its provider envelope", err)
-	}
+	out := ProviderRunConfigApplier(nil)(context.Background(), cfg)
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil ||
 		plan.CurrentRequestCost != 100 ||
@@ -246,7 +239,7 @@ func TestApplyProviderRunConfigSemanticCurrentIsNotDoubleCharged(t *testing.T) {
 	assertMessagesEqual(t, out.Messages, []sdk.Message{sdk.UserMessage("current discuss request")})
 }
 
-func TestProviderBudgetFailureBypassesLegacyFallbackAndKeepsAudit(t *testing.T) {
+func TestProviderRequestOverWindowKeepsRequiredAndRetainsAudit(t *testing.T) {
 	t.Parallel()
 
 	holder := contextfrag.NewLifecycleHolder()
@@ -261,29 +254,78 @@ func TestProviderBudgetFailureBypassesLegacyFallbackAndKeepsAudit(t *testing.T) 
 		Slot: contextfrag.SlotCurrentUser, Text: "current", Trust: contextfrag.TrustUser,
 	})
 	current.TokenEstimate = 10
-	out, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	out := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 		System: "legacy must not be selected", Messages: []sdk.Message{sdk.UserMessage("legacy")},
 		ContextSourceFrags: []contextfrag.ContextFrag{required, current}, ContextBudgetMaxTokens: 400,
 		ContextLifecycle: holder,
 	})
-	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("error = %v, want ErrProtectedContextOverflow", err)
+	if !strings.Contains(out.System, "required") || strings.Contains(out.System, "legacy must not") {
+		t.Fatalf("system = %q, want the required section sent as it is", out.System)
 	}
-	if out.ContextManifest.BudgetPlan == nil || out.ContextManifest.Selection == nil {
-		t.Fatalf("failure manifest = %#v", out.ContextManifest)
+	if len(out.Messages) != 1 || out.Messages[0].Role != sdk.MessageRoleUser {
+		t.Fatalf("messages = %#v, want the current request", out.Messages)
 	}
-	records := out.ContextMutations.Records()
-	if len(records) != 1 || records[0].Kind != contextfrag.MutationContextBudgetFailure {
-		t.Fatalf("mutations = %#v", records)
+	plan := out.ContextManifest.BudgetPlan
+	if !PlanOverflows(plan) || plan.ActualSystemCost != 930 {
+		t.Fatalf("budget plan = %#v, want an overflowing plan with the required cost", plan)
 	}
-	for _, record := range records {
-		if record.Kind == contextfrag.MutationContextViewFallback {
-			t.Fatalf("budget failure used legacy fallback: %#v", records)
-		}
+	if records := out.ContextMutations.Records(); len(records) != 0 {
+		t.Fatalf("mutations = %#v, want none: overflow is not a failure and not a fallback", records)
 	}
 	snapshot, ok := holder.Snapshot()
-	if !ok || snapshot.BudgetPlan == nil || len(snapshot.Mutations) != 1 {
-		t.Fatalf("failure snapshot = %#v, %v", snapshot, ok)
+	if !ok || !PlanOverflows(snapshot.BudgetPlan) {
+		t.Fatalf("lifecycle snapshot = %#v, %v; want the overflowing plan retained", snapshot, ok)
+	}
+}
+
+// A window smaller than the reserves leaves no system budget. The request is
+// still rendered: optional sections go, required ones stay, and the plan
+// reports the overflow for the provider's own limit error to settle.
+func TestProviderApplierSendsOverWindowRequestAsIs(t *testing.T) {
+	t.Parallel()
+
+	required := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID: "system.required", Kind: contextfrag.KindSystemPrompt, Role: sdk.MessageRoleSystem,
+		Slot: contextfrag.SlotSystem, Text: "required-section", Trust: contextfrag.TrustSystem,
+		RetentionTier: contextfrag.RetentionRequired,
+	})
+	required.TokenEstimate = 50
+	optional := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID: "system.optional", Kind: contextfrag.KindSystemPrompt, Role: sdk.MessageRoleSystem,
+		Slot: contextfrag.SlotSystem, Text: "optional-section", Trust: contextfrag.TrustSystem,
+		RetentionTier: contextfrag.RetentionOptional,
+	})
+	optional.TokenEstimate = 40
+	current := contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID: "current", Kind: contextfrag.KindCurrentUserMessage, Role: sdk.MessageRoleUser,
+		Slot: contextfrag.SlotCurrentUser, Text: "current request", Trust: contextfrag.TrustUser,
+	})
+	current.TokenEstimate = 10
+
+	out := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+		ContextSourceFrags:      []contextfrag.ContextFrag{required, optional, current},
+		ContextToolDefsResolved: true,
+		ContextToolDefs:         []contextfrag.ToolDefAccounting{{Name: "tool", TokenEstimate: 400}},
+		ContextBudgetMaxTokens:  300,
+	})
+
+	if !strings.Contains(out.System, "required-section") || strings.Contains(out.System, "optional-section") {
+		t.Fatalf("system = %q, want the required section kept and the optional one dropped", out.System)
+	}
+	if len(out.Messages) != 1 || out.Messages[0].Role != sdk.MessageRoleUser {
+		t.Fatalf("messages = %#v, want the current request", out.Messages)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil || plan.SystemBudget != 0 || !PlanOverflows(plan) {
+		t.Fatalf("budget plan = %#v, want zero system budget and overflow", plan)
+	}
+	if decision, ok := decisionByID(out.ContextManifest.SelectionDecisions, optional.ID); !ok ||
+		decision.Decision != contextfrag.DecisionDropped || decision.Reason != systemBudgetDropReason {
+		t.Fatalf("optional decision = %#v, %v; want dropped/system_budget", decision, ok)
+	}
+	if decision, ok := decisionByID(out.ContextManifest.SelectionDecisions, required.ID); !ok ||
+		decision.Decision != contextfrag.DecisionSelected {
+		t.Fatalf("required decision = %#v, %v; want selected", decision, ok)
 	}
 }
 
@@ -297,10 +339,7 @@ func TestMissingContextWindowIsAuditedWithoutChangingProviderBytes(t *testing.T)
 		CurrentModelID: "model-1", ContextScope: contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"},
 		ContextLifecycle: holder,
 	}
-	out, err := applyProviderRunConfig(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := ApplyProviderRunConfig(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)), cfg)
 	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, []sdk.Message{sdk.AssistantMessage("legacy"), sdk.UserMessage("current")}) {
 		t.Fatalf("provider bytes changed: system=%q messages=%#v", out.System, out.Messages)
 	}
@@ -351,14 +390,8 @@ func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *test
 
 	disabled := cfg
 	disabled.ContextBudgetMaxTokens = 0
-	legacyOut, err := ProviderRunConfigApplier(nil)(context.Background(), disabled)
-	if err != nil {
-		t.Fatalf("plan-disabled ApplyProviderRunConfig() error = %v", err)
-	}
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-	}
+	legacyOut := ProviderRunConfigApplier(nil)(context.Background(), disabled)
+	out := ProviderRunConfigApplier(nil)(context.Background(), cfg)
 	plan := out.ContextManifest.BudgetPlan
 	if plan == nil {
 		t.Fatal("successful active run lost its budget plan")
@@ -380,50 +413,6 @@ func TestApplyProviderRunConfigStoresActivePlanWithoutNoPressureMutation(t *test
 	}
 }
 
-func TestApplyProviderRunConfigBudgetErrorKeepsAuditWhenRenderFails(t *testing.T) {
-	t.Parallel()
-
-	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
-	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
-	holder := contextfrag.NewLifecycleHolder()
-	cfg := agentpkg.RunConfig{
-		System:                 "legacy system",
-		Messages:               []sdk.Message{sdk.UserMessage("legacy message")},
-		ContextSourceFrags:     []contextfrag.ContextFrag{first, second},
-		ContextBudgetMaxTokens: 100,
-		ContextLifecycle:       holder,
-	}
-
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("ApplyProviderRunConfig() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
-	}
-	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, cfg.Messages) {
-		t.Fatalf("budget failure changed provider payload: system=%q messages=%#v", out.System, out.Messages)
-	}
-	plan := out.ContextManifest.BudgetPlan
-	if plan == nil || plan.Window != 100 {
-		t.Fatalf("budget plan = %#v, want retained 100-token window", plan)
-	}
-	records := out.ContextManifest.Mutations.Records()
-	if len(records) != 1 ||
-		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
-		records[0].Detail != "budget_unsatisfied" {
-		t.Fatalf("budget failure mutations = %#v, want one stable failure record", records)
-	}
-	if out.ContextMutations == nil {
-		t.Fatal("budget failure lost the run-config mutation ledger")
-	}
-	snapshot, ok := holder.Snapshot()
-	if !ok || snapshot.BudgetPlan == nil || snapshot.BudgetPlan.Window != 100 {
-		t.Fatalf("lifecycle snapshot = %#v, %v; want retained plan", snapshot, ok)
-	}
-	if len(snapshot.Mutations) != 1 ||
-		snapshot.Mutations[0].Kind != contextfrag.MutationContextBudgetFailure {
-		t.Fatalf("lifecycle mutations = %#v, want budget failure", snapshot.Mutations)
-	}
-}
-
 func TestApplyProviderRunConfigInternalBuildErrorStillFallsBack(t *testing.T) {
 	t.Parallel()
 
@@ -436,10 +425,7 @@ func TestApplyProviderRunConfigInternalBuildErrorStillFallsBack(t *testing.T) {
 		ContextBudgetMaxTokens: 100000,
 	}
 
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ApplyProviderRunConfig() error = %v, want ordinary build fallback", err)
-	}
+	out := ProviderRunConfigApplier(nil)(context.Background(), cfg)
 	if out.System != cfg.System || !reflect.DeepEqual(out.Messages, cfg.Messages) {
 		t.Fatalf("fallback payload = system %q messages %#v, want legacy payload", out.System, out.Messages)
 	}

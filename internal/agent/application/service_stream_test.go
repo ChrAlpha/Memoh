@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -12,7 +11,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -43,22 +41,6 @@ func TestAgentStreamFailureConversion(t *testing.T) {
 			name:  "provider answer",
 			event: native.StreamEvent{Type: native.EventError, Cause: overloaded},
 			code:  apperror.CodeAgentProviderOverloaded,
-		},
-		{
-			name:  "protected context overflow",
-			event: native.StreamEvent{Type: native.EventError, Cause: fmt.Errorf("prepare context view: %w", contextfrag.ErrProtectedContextOverflow)},
-			code:  apperror.CodeContextProtectedOverflow,
-		},
-		{
-			name:  "budget unsatisfied",
-			event: native.StreamEvent{Type: native.EventError, Cause: fmt.Errorf("prepare context view: %w", contextfrag.ErrBudgetUnsatisfied)},
-			code:  apperror.CodeContextBudgetUnsatisfied,
-		},
-		{
-			// Only compacting or another model helps, whatever else the chain holds.
-			name:  "context overflow over a provider answer",
-			event: native.StreamEvent{Type: native.EventError, Cause: fmt.Errorf("%w: %w", contextfrag.ErrProtectedContextOverflow, overloaded)},
-			code:  apperror.CodeContextProtectedOverflow,
 		},
 		{
 			name:  "runtime failure",
@@ -93,7 +75,7 @@ func TestPublicAgentStreamEventRedactsPrivateFailure(t *testing.T) {
 	for _, cause := range []error{
 		errors.New("SECRET provider payload"),
 		&sdk.APIError{Provider: "openai-completions", StatusCode: 401, Kind: sdk.KindAuthentication, Message: "Incorrect API key provided: SECRET", RequestID: "req_SECRET"},
-		fmt.Errorf("SECRET window: %w", contextfrag.ErrBudgetUnsatisfied),
+		errors.New("SECRET window"),
 	} {
 		event := publicAgentStreamEvent(native.StreamEvent{Type: native.EventError, Cause: cause})
 		definition, ok := apperror.Lookup(apperror.Code(event.Code))

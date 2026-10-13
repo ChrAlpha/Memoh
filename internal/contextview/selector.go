@@ -42,22 +42,7 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 		profile,
 		systemBudgetPlanActive(profile, budget.Plan),
 	)
-	frags, systemBudgetDropped, fatalError := enforceSystemBudget(frags, profile, budget.Plan, fragBudgetDropped)
-	if fatalError != nil {
-		tagged := tagFragments(frags, profile)
-		result := selectionResultFromTaggedReasons(tagged, allSelectedIndexes(tagged), nil)
-		result.FatalError = fatalError
-		return finalizeSelection(
-			result,
-			profile,
-			gated,
-			superseded,
-			fragBudgetDropped,
-			fragBudgetEdits,
-			fragBudgetWarnings,
-			systemBudgetDropped,
-		)
-	}
+	frags, systemBudgetDropped := enforceSystemBudget(frags, profile, budget.Plan, fragBudgetDropped)
 	if budget.Plan != nil {
 		budget.MaxTokens = budget.Plan.HistoryBudget
 	}

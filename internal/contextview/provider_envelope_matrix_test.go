@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -115,23 +114,14 @@ func TestProviderEnvelopeAuthorityMatrix(t *testing.T) {
 
 				probe.calls.Store(0)
 				_, records, err := run(oversized)
-				if path.name == "fallback" {
-					if err != nil || probe.calls.Load() != 1 {
-						t.Fatalf("fallback over the allowance: error = %v, provider calls = %d, want it sent as it is", err, probe.calls.Load())
-					}
-					if !hasMutation(records, contextfrag.MutationContextViewFallback) || hasMutation(records, contextfrag.MutationContextBudgetFailure) {
-						t.Fatalf("mutations = %+v, want the fallback recorded and no budget failure", records)
-					}
-					return
+				if err != nil || probe.calls.Load() != 1 {
+					t.Fatalf("over the allowance: error = %v, provider calls = %d, want it sent as it is", err, probe.calls.Load())
 				}
-				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-					t.Fatalf("oversized payload error = %v, want a typed budget failure", err)
+				if hasMutation(records, contextfrag.MutationContextBudgetFailure) {
+					t.Fatalf("mutations = %+v, want no budget failure record", records)
 				}
-				if probe.calls.Load() != 0 {
-					t.Fatalf("provider calls = %d, want zero dispatches over the allowance", probe.calls.Load())
-				}
-				if !hasMutation(records, contextfrag.MutationContextBudgetFailure) {
-					t.Fatalf("mutations = %+v, want a context budget failure", records)
+				if path.name == "fallback" && !hasMutation(records, contextfrag.MutationContextViewFallback) {
+					t.Fatalf("mutations = %+v, want the fallback recorded", records)
 				}
 			})
 		}

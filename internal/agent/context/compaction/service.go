@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -77,6 +78,10 @@ type Service struct {
 	nowFn       func() time.Time
 	events      messageevent.Publisher
 
+	// fallbackWindowTokens is the summarizer window assumed for a model that
+	// declares none.
+	fallbackWindowTokens int
+
 	inflightMu sync.Mutex
 	inflight   map[string]*inflightRun
 	failedAt   map[string]compactionFailure
@@ -92,11 +97,21 @@ type compactionFailure struct {
 // NewService creates a new compaction Service.
 func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 	return &Service{
-		queries:  queries,
-		logger:   log,
-		nowFn:    time.Now,
-		inflight: make(map[string]*inflightRun),
-		failedAt: make(map[string]compactionFailure),
+		queries:              queries,
+		logger:               log,
+		nowFn:                time.Now,
+		fallbackWindowTokens: contextfrag.DefaultContextFallbackTokens,
+		inflight:             make(map[string]*inflightRun),
+		failedAt:             make(map[string]compactionFailure),
+	}
+}
+
+// SetFallbackWindowTokens sets the window of a summarizer that declares none,
+// the same fallback the chat budget uses for such a model. Zero or negative
+// keeps the shared default.
+func (s *Service) SetFallbackWindowTokens(tokens int) {
+	if tokens > 0 {
+		s.fallbackWindowTokens = tokens
 	}
 }
 

@@ -106,14 +106,14 @@ func newDriveRequestFixture(t *testing.T) (directLifecycleFixture, *driveRequest
 	applier := contextview.ProviderRunConfigApplier(logger)
 	agent := native.New(native.Deps{
 		Logger: logger,
-		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
-			out, err := applier(ctx, cfg)
+		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) native.RunConfig {
+			out := applier(ctx, cfg)
 			if out.Model != nil {
 				model := *out.Model
 				model.Provider = recorder
 				out.Model = &model
 			}
-			return out, err
+			return out
 		},
 	})
 	agent.SetToolProviders([]tools.ToolProvider{

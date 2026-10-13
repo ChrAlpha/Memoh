@@ -46,13 +46,13 @@ type continuationRunConfigCapture struct {
 func (c *continuationRunConfigCapture) apply(
 	_ context.Context,
 	cfg native.RunConfig,
-) (native.RunConfig, error) {
+) native.RunConfig {
 	c.mu.Lock()
 	c.calls++
 	c.budget = cfg.ContextBudgetMaxTokens
 	c.runID = cfg.RunID
 	c.mu.Unlock()
-	return cfg.RefreshContextFrag(), nil
+	return cfg.RefreshContextFrag()
 }
 
 func (c *continuationRunConfigCapture) snapshot() (calls, budget int, runID string) {

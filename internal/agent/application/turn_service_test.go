@@ -247,10 +247,8 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 	logger := slog.New(slog.DiscardHandler)
 	applier := contextview.ProviderRunConfigApplier(logger)
 	fixture.service.agent = native.New(native.Deps{
-		Logger: logger,
-		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
-			return applier(ctx, cfg)
-		},
+		Logger:             logger,
+		ContextViewApplier: applier,
 	})
 	return chatTurnFixture{fixture: fixture, admitter: admitter}
 }

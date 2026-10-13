@@ -13,10 +13,6 @@ import (
 )
 
 const (
-	// MinimumSystemBudgetTokens prevents an active plan from treating a tiny
-	// positive remainder as a usable system envelope.
-	MinimumSystemBudgetTokens = 256
-
 	systemBudgetDropReason = "system_budget"
 	systemBudgetMarkerID   = "system.budget_notice"
 
@@ -26,27 +22,30 @@ const (
 
 // ComputeContextBudgetPlan allocates the fixed reserves named by the provider
 // envelope contract. outputReserve is the resolved generation limit, so the
-// plan reserves exactly what the provider request may emit.
-func ComputeContextBudgetPlan(window, outputReserve, toolDefsCost, currentRequestCost int) (*contextfrag.ContextBudgetPlan, error) {
-	if window == 0 {
-		return nil, nil
+// plan reserves exactly what the provider request may emit. Reserves that
+// leave nothing for the system prompt are not a local failure: the system
+// budget is zero, the system pass drops what its retention tiers allow, and
+// the request goes to the provider, whose limit error is the outcome.
+func ComputeContextBudgetPlan(window, outputReserve, toolDefsCost, currentRequestCost int) *contextfrag.ContextBudgetPlan {
+	if window <= 0 {
+		return nil
 	}
-	plan := &contextfrag.ContextBudgetPlan{
+	return &contextfrag.ContextBudgetPlan{
 		Estimator:                    contextfrag.ProviderBudgetEstimator,
 		EstimatorSafetyFactorPercent: contextfrag.ProviderBudgetSafetyFactorPercent,
 		Window:                       window,
 		OutputReserve:                outputReserve,
 		ToolDefsCost:                 toolDefsCost,
 		CurrentRequestCost:           currentRequestCost,
+		SystemBudget:                 max(window-outputReserve-toolDefsCost-currentRequestCost, 0),
 	}
-	remaining := window - outputReserve - toolDefsCost - currentRequestCost
-	if window < 0 || outputReserve < 0 || toolDefsCost < 0 || currentRequestCost < 0 ||
-		remaining < MinimumSystemBudgetTokens {
-		plan.SystemBudget = MinimumSystemBudgetTokens
-		return plan, contextfrag.ErrBudgetUnsatisfied
-	}
-	plan.SystemBudget = remaining
-	return plan, nil
+}
+
+// PlanOverflows reports whether the request a plan describes is larger than
+// the window it was planned for: the system sections the retention tiers keep
+// do not fit beside the reserves.
+func PlanOverflows(plan *contextfrag.ContextBudgetPlan) bool {
+	return plan != nil && plan.ActualSystemCost > plan.SystemBudget
 }
 
 type systemBudgetCandidate struct {
@@ -54,14 +53,18 @@ type systemBudgetCandidate struct {
 	frag  contextfrag.ContextFrag
 }
 
+// enforceSystemBudget drops optional, then preferred, system sections until
+// the rest fits the plan's system budget. Required sections are never
+// dropped; when they alone do not fit, the selection keeps them and the plan
+// records the overflow (PlanOverflows).
 func enforceSystemBudget(
 	frags []contextfrag.ContextFrag,
 	profile IntentProfile,
 	plan *contextfrag.ContextBudgetPlan,
 	fragBudgetDropped []fragBudgetDrop,
-) ([]contextfrag.ContextFrag, []contextfrag.ContextFrag, error) {
+) ([]contextfrag.ContextFrag, []contextfrag.ContextFrag) {
 	if !systemBudgetPlanActive(profile, plan) {
-		return frags, nil, nil
+		return frags, nil
 	}
 
 	droppedIDs := make([]string, 0, len(fragBudgetDropped))
@@ -98,7 +101,7 @@ func enforceSystemBudget(
 	total := systemFragCost(selected)
 	if total <= plan.SystemBudget {
 		finishSystemBudgetPlan(plan, total)
-		return selected, dropped, nil
+		return selected, dropped
 	}
 
 	candidates := make([]systemBudgetCandidate, 0)
@@ -142,7 +145,7 @@ func enforceSystemBudget(
 		actual := systemFragCost(selected)
 		if actual <= plan.SystemBudget {
 			finishSystemBudgetPlan(plan, actual)
-			return selected, dropped, nil
+			return selected, dropped
 		}
 	}
 
@@ -152,7 +155,7 @@ func enforceSystemBudget(
 	selected = systemBudgetSelection(frags, droppedIndexes, marker)
 	actual := systemFragCost(selected)
 	finishSystemBudgetPlan(plan, actual)
-	return selected, dropped, contextfrag.ErrProtectedContextOverflow
+	return selected, dropped
 }
 
 func systemBudgetPlanActive(profile IntentProfile, plan *contextfrag.ContextBudgetPlan) bool {

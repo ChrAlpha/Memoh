@@ -55,8 +55,8 @@ func TestAgentGenerateSendsMaxTokensOnlyWhenLimitsAreRequested(t *testing.T) {
 			case *atomicMockProvider:
 				p.handler = handler
 			}
-			a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-				return cfg, nil
+			a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
+				return cfg
 			}})
 			plan := contextfrag.ContextBudgetPlan{Window: 200_000, OutputReserve: 4096}
 			_, err := a.Generate(context.Background(), RunConfig{

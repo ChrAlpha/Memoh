@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,18 +14,12 @@ import (
 func TestComputeContextBudgetPlan(t *testing.T) {
 	t.Parallel()
 
-	disabled, err := ComputeContextBudgetPlan(0, 200, 100, 50)
-	if err != nil {
-		t.Fatalf("disabled plan error = %v", err)
-	}
+	disabled := ComputeContextBudgetPlan(0, 200, 100, 50)
 	if disabled != nil {
 		t.Fatalf("disabled plan = %#v, want nil", disabled)
 	}
 
-	plan, err := ComputeContextBudgetPlan(1000, 200, 100, 50)
-	if err != nil {
-		t.Fatalf("ComputeContextBudgetPlan() error = %v", err)
-	}
+	plan := ComputeContextBudgetPlan(1000, 200, 100, 50)
 	want := &contextfrag.ContextBudgetPlan{
 		Estimator:                    contextfrag.ProviderBudgetEstimator,
 		EstimatorSafetyFactorPercent: contextfrag.ProviderBudgetSafetyFactorPercent,
@@ -40,12 +33,11 @@ func TestComputeContextBudgetPlan(t *testing.T) {
 		t.Fatalf("plan = %#v, want %#v", plan, want)
 	}
 
-	unsatisfied, err := ComputeContextBudgetPlan(300, 200, 100, 50)
-	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-		t.Fatalf("reserves error = %v, want ErrBudgetUnsatisfied", err)
-	}
-	if unsatisfied == nil || unsatisfied.SystemBudget != MinimumSystemBudgetTokens {
-		t.Fatalf("unsatisfied plan = %#v, want minimum system budget recorded", unsatisfied)
+	// Reserves larger than the window leave no system budget; the plan is
+	// still produced so the request can be sent as it is.
+	squeezed := ComputeContextBudgetPlan(300, 200, 100, 50)
+	if squeezed == nil || squeezed.SystemBudget != 0 {
+		t.Fatalf("squeezed plan = %#v, want zero system budget", squeezed)
 	}
 }
 
@@ -64,9 +56,6 @@ func TestSystemBudgetNoPressurePreservesSelection(t *testing.T) {
 		Plan:      plan,
 	})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if !reflect.DeepEqual(result.Selected, frags) {
 		t.Fatalf("selected = %#v, want byte-equivalent passthrough", result.Selected)
 	}
@@ -108,9 +97,6 @@ func TestSystemBudgetDropsOptionalBeforePreferredInDeterministicOrder(t *testing
 	selector := &FragmentSelector{}
 	result := selector.Select(frags, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{Plan: plan})
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, wantDropped) {
 		t.Fatalf("system-budget drop order = %v, want %v", got, wantDropped)
 	}
@@ -144,9 +130,6 @@ func TestSystemBudgetDropsGroupedItemsIndividually(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, []string{alpha.ID}) {
 		t.Fatalf("system-budget drops = %v, want only %s", got, alpha.ID)
 	}
@@ -185,9 +168,6 @@ func TestSystemBudgetSweepsGroupHeaderAfterLastItemDrops(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, wantDropped) {
 		t.Fatalf("system-budget drops = %v, want items followed by swept header %v", got, wantDropped)
 	}
@@ -199,7 +179,7 @@ func TestSystemBudgetSweepsGroupHeaderAfterLastItemDrops(t *testing.T) {
 	}
 }
 
-func TestSystemBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
+func TestSystemBudgetProtectedOverflowKeepsProtectedSections(t *testing.T) {
 	t.Parallel()
 
 	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 100, 10, 0, "")
@@ -212,9 +192,6 @@ func TestSystemBudgetProtectedOverflowReturnsFatalError(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("Select() error = %v, want ErrProtectedContextOverflow", result.FatalError)
-	}
 	if len(result.Dropped) != 0 || hasFragID(result.Selected, systemBudgetMarkerID) {
 		t.Fatalf("protected overflow selected=%v dropped=%v, want no drop and no marker", fragIDs(result.Selected), fragIDs(result.Dropped))
 	}
@@ -307,9 +284,6 @@ func TestSystemBudgetRecomputesCostAfterEveryDrop(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v", result.FatalError)
-	}
 	if got := droppedIDsForReason(result.Summary.DropReasons, systemBudgetDropReason); !reflect.DeepEqual(got, []string{"optional-first", "optional-second"}) {
 		t.Fatalf("system-budget drop order = %v, want both optional sections", got)
 	}
@@ -318,7 +292,7 @@ func TestSystemBudgetRecomputesCostAfterEveryDrop(t *testing.T) {
 	}
 }
 
-func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
+func TestSystemBudgetRequiredMarkerOverflowKeepsRequiredSections(t *testing.T) {
 	t.Parallel()
 
 	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
@@ -334,9 +308,6 @@ func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if !errors.Is(result.FatalError, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("Select() error = %v, want ErrProtectedContextOverflow", result.FatalError)
-	}
 	if got := fragIDs(result.Dropped); !reflect.DeepEqual(got, []string{"optional"}) {
 		t.Fatalf("dropped = %v, want optional section", got)
 	}
@@ -345,6 +316,9 @@ func TestSystemBudgetRequiredMarkerOverflowIsProtected(t *testing.T) {
 	}
 	if plan.ActualSystemCost <= plan.SystemBudget {
 		t.Fatalf("actual system cost = %d, want marker overflow above budget %d", plan.ActualSystemCost, plan.SystemBudget)
+	}
+	if !PlanOverflows(plan) {
+		t.Fatalf("plan = %#v, want the kept sections reported as over budget", plan)
 	}
 }
 
@@ -369,9 +343,6 @@ func TestSystemBudgetActualCostShrinksHistoryBudget(t *testing.T) {
 		SystemBudget: 150 + 40 + 1,
 	}
 	withPlan := selector.Select(frags, profile, BudgetEnvelope{MaxTokens: 200, Plan: plan})
-	if withPlan.FatalError != nil {
-		t.Fatalf("Select() error = %v", withPlan.FatalError)
-	}
 	if len(withPlan.Dropped) != 0 {
 		t.Fatalf("dropped = %v, want history over its budget kept", fragIDs(withPlan.Dropped))
 	}
@@ -396,9 +367,6 @@ func TestHistoryBudgetProtectedOverflowIsKept(t *testing.T) {
 		BudgetEnvelope{Plan: plan},
 	)
 
-	if result.FatalError != nil {
-		t.Fatalf("Select() error = %v, want none", result.FatalError)
-	}
 	if got := fragIDs(result.Selected); !reflect.DeepEqual(got, []string{"latest"}) {
 		t.Fatalf("selected = %v, want protected history kept", got)
 	}
@@ -407,7 +375,7 @@ func TestHistoryBudgetProtectedOverflowIsKept(t *testing.T) {
 	}
 }
 
-func TestBuilderReturnsBudgetErrorWithContentLightAudit(t *testing.T) {
+func TestBuilderAuditsOverflowWithoutError(t *testing.T) {
 	t.Parallel()
 
 	required := systemBudgetTestFrag("required", contextfrag.RetentionRequired, 10, 10, 0, contextfrag.OverflowKeep)
@@ -451,11 +419,11 @@ func TestBuilderReturnsBudgetErrorWithContentLightAudit(t *testing.T) {
 		Budget:  BudgetEnvelope{Plan: overflowPlan},
 		Options: BuildOptions{DryRun: true},
 	})
-	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		t.Fatalf("Build() error = %v, want ErrProtectedContextOverflow", err)
+	if err != nil {
+		t.Fatalf("Build() error = %v, want the overflowing view built", err)
 	}
-	if overflowView == nil || overflowView.Manifest.BudgetPlan == nil {
-		t.Fatalf("overflow view = %#v, want partial audit view", overflowView)
+	if overflowView == nil || !PlanOverflows(overflowView.Manifest.BudgetPlan) {
+		t.Fatalf("overflow view = %#v, want a view whose plan reports overflow", overflowView)
 	}
 }
 

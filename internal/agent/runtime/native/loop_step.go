@@ -32,8 +32,11 @@ type stepThread struct {
 // stepBoundary describes the boundary before one model call.
 type stepBoundary struct {
 	// first is the dispatch's first call: it sends the dispatch's compiled
-	// request as is and drains nothing (a retried dispatch starts over too).
+	// request and drains nothing (a retried dispatch starts over too).
 	first bool
+	// resent is a retried dispatch's first call. It sends the failed
+	// attempt's own request, which was offered to the compactor already.
+	resent bool
 	// committed is the number of durable steps before this boundary.
 	committed int
 	// readMedia holds the images tools read since the previous call.
@@ -51,18 +54,22 @@ func (t *stepThread) reset(dispatch generateDispatch) {
 
 // advance prepares the request for the next model call. A pending capability
 // refresh is installed first, before the prepare chain, so budgeting and
-// reselection price the request that is actually sent. At every boundary
-// after a dispatch's first call the loop-owned dynamic inputs (read-media
-// carriers, live injections, directive inputs) join the conversation, then
-// the prepare chain (before-model-call hook, background summary,
-// provider-attempt budgeting/reselection) runs.
+// reselection price the request that is actually sent. Every call but a
+// resent one is offered to the run's compactor, the first included: only
+// there is the whole request known before anything is sent. At every
+// boundary after a dispatch's first call the loop-owned dynamic inputs
+// (read-media carriers, live injections, directive inputs) then join the
+// conversation, and the prepare chain (before-model-call hook, background
+// summary, provider-attempt budgeting/reselection) runs.
 func (t *stepThread) advance(ctx context.Context, cfg RunConfig, dynamic *loopDynamicInputs, boundary stepBoundary) sdk.Request {
 	if t.pendingRefresh != nil {
 		t.messages = t.pendingRefresh.apply(&t.dispatch, &t.params, t.messages)
 		t.pendingRefresh = nil
 	}
-	if !boundary.first {
+	if !boundary.resent {
 		t.compactContext(ctx, cfg)
+	}
+	if !boundary.first {
 		dynamic.beginBoundary(boundary.committed)
 		if cfg.BackgroundManager != nil {
 			t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.prefix.count)

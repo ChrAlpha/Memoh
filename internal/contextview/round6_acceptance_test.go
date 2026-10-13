@@ -2,7 +2,6 @@ package contextview
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -42,10 +41,7 @@ func TestNativeModeSystemBudgetPressure(t *testing.T) {
 				ContextToolUsage:       usage,
 				ContextBudgetMaxTokens: window,
 			}
-			out, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-			if err != nil {
-				t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-			}
+			out := ProviderRunConfigApplier(nil)(context.Background(), cfg)
 
 			plan := out.ContextManifest.BudgetPlan
 			if plan == nil || plan.ActualSystemCost > plan.SystemBudget {
@@ -71,33 +67,31 @@ func TestNativeModeSystemBudgetPressure(t *testing.T) {
 	}
 }
 
-func TestNativeModeProtectedOverflowFailsClosed(t *testing.T) {
+func TestNativeModeProtectedOverflowIsSentAsIs(t *testing.T) {
 	t.Parallel()
 
-	window := contextWindowForDefaultOutputReserve(MinimumSystemBudgetTokens)
+	window := contextWindowForDefaultOutputReserve(1)
 	for _, mode := range round6NativeModes {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 
-			out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+			out := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
 				SessionType:            mode,
 				ContextSourceFrags:     round6ProtectedOverflowSourceFrags(mode),
 				ContextBudgetMaxTokens: window,
 			})
 
-			if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-				t.Fatalf("ApplyProviderRunConfig() error = %v, want ErrProtectedContextOverflow", err)
+			if strings.TrimSpace(out.System) == "" {
+				t.Fatal("protected system sections were not rendered")
 			}
-			records := out.ContextManifest.Mutations.Records()
-			if len(records) != 1 ||
-				records[0].Kind != contextfrag.MutationContextBudgetFailure ||
-				records[0].Detail != "protected_context_overflow" {
-				t.Fatalf("budget failure mutations = %#v", records)
+			if !PlanOverflows(out.ContextManifest.BudgetPlan) {
+				t.Fatalf("budget plan = %#v, want the overflow reported", out.ContextManifest.BudgetPlan)
 			}
-			for _, record := range records {
-				if record.Kind == contextfrag.MutationContextViewFallback {
-					t.Fatalf("protected overflow triggered legacy fallback: %#v", records)
+			for _, record := range out.ContextManifest.Mutations.Records() {
+				if record.Kind == contextfrag.MutationContextViewFallback ||
+					record.Kind == contextfrag.MutationContextBudgetFailure {
+					t.Fatalf("protected overflow recorded %#v, want a plain view", record)
 				}
 			}
 		})
@@ -141,14 +135,11 @@ func TestProviderUsesByteEstimatorForStaticSystemFragsWithoutTokenizer(t *testin
 				contextfrag.EstimateBytesPerToken) * contextfrag.ProviderBudgetSafetyFactorPercent / 100
 			wantCost := max(resolvedCost, renderedCost)
 
-			out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+			out := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
 				SessionType:            mode,
 				ContextSourceFrags:     frags,
 				ContextBudgetMaxTokens: contextWindowForDefaultOutputReserve(wantCost + 128),
 			})
-			if err != nil {
-				t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-			}
 			if out.System != renderedPrompt {
 				t.Fatalf("provider system prompt changed without pressure")
 			}
@@ -204,7 +195,7 @@ func TestOversizedHookSystemSectionPrunesWithExplicitMarker(t *testing.T) {
 		systemFragCost(appendClone(base, marker)) + toolDefsCost,
 	)
 
-	out, err := applyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
+	out := ApplyProviderRunConfig(context.Background(), nil, agentpkg.RunConfig{
 		SessionType:             sessionmode.Chat,
 		ContextSourceFrags:      frags,
 		ContextBudgetMaxTokens:  window,
@@ -215,9 +206,6 @@ func TestOversizedHookSystemSectionPrunesWithExplicitMarker(t *testing.T) {
 			TokenEstimate: toolDefsCost,
 		}},
 	})
-	if err != nil {
-		t.Fatalf("applyProviderRunConfig() error = %v", err)
-	}
 	decision, ok := decisionByID(out.ContextManifest.SelectionDecisions, id)
 	if !ok ||
 		decision.Decision != contextfrag.DecisionDropped ||
@@ -342,7 +330,7 @@ func TestOversizedDynamicSystemSourcesPruneWithExplicitMarker(t *testing.T) {
 				systemFragCost(appendClone(base, marker)) + toolDefsCost,
 			)
 
-			out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
+			out := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
 				SessionType:             sessionmode.Chat,
 				ContextSourceFrags:      frags,
 				ContextBudgetMaxTokens:  window,
@@ -353,9 +341,6 @@ func TestOversizedDynamicSystemSourcesPruneWithExplicitMarker(t *testing.T) {
 					TokenEstimate: toolDefsCost,
 				}},
 			})
-			if err != nil {
-				t.Fatalf("ApplyProviderRunConfig() error = %v", err)
-			}
 			for _, id := range droppedIDs {
 				decision, ok := decisionByID(out.ContextManifest.SelectionDecisions, id)
 				if !ok ||
@@ -406,8 +391,8 @@ func TestFragBudgetMaxTokensTrimsUnicodeWithMarkerAndEstimate(t *testing.T) {
 		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
 		BudgetEnvelope{},
 	)
-	if result.FatalError != nil || len(result.Selected) != 1 {
-		t.Fatalf("Select() error/selected = %v/%v", result.FatalError, fragIDs(result.Selected))
+	if len(result.Selected) != 1 {
+		t.Fatalf("Select() selected = %v", fragIDs(result.Selected))
 	}
 	text := result.Selected[0].Parts[0].Text
 	if !utf8.ValidString(text) ||

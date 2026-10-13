@@ -1181,7 +1181,7 @@ func (r agentRunResult) failed(err error) agentRunResult {
 }
 
 // subagentFailureCode names a task failure: the catalog code err carries, the
-// code of a timeout or context sentinel, or runtime_run_failed for the
+// code of a watchdog timeout, or runtime_run_failed for the
 // runtime's own failure. A failure the spawned run ended with carries the code
 // the application named it with, so a provider failure reads as it would for
 // the run itself.
@@ -1189,13 +1189,8 @@ func subagentFailureCode(err error) apperror.Code {
 	if _, ok := apperror.Lookup(apperror.CodeOf(err)); ok {
 		return apperror.CodeOf(err)
 	}
-	switch {
-	case errors.Is(err, ErrWatchdogTimedOut):
+	if errors.Is(err, ErrWatchdogTimedOut) {
 		return apperror.CodeAgentResponseTimeout
-	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
-		return apperror.CodeContextProtectedOverflow
-	case errors.Is(err, contextfrag.ErrBudgetUnsatisfied):
-		return apperror.CodeContextBudgetUnsatisfied
 	}
 	return apperror.CodeRuntimeRunFailed
 }

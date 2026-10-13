@@ -13,7 +13,6 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -22,9 +21,18 @@ import (
 	"github.com/felinics/memoh/internal/chat/thread"
 )
 
-// overHardShare is an estimate past the hard share of syncTestBudget; the
+// overHardShare is a request past the hard share of syncTestBudget; the
 // fixed part (system prompt, tools) is what no rebuilt context can shrink.
-var overHardShare = native.StepContextInput{EstimatedInputTokens: 900, FixedTokens: 100}
+var overHardShare = native.StepContextInput{FixedTokens: 100, Messages: conversationOf(800)}
+
+// conversationOf is a conversation the estimator prices at about tokens.
+func conversationOf(tokens int) []sdk.Message {
+	text := ""
+	for requestInputTokens(0, []sdk.Message{sdk.UserMessage(text)}) < tokens {
+		text += "conversation "
+	}
+	return []sdk.Message{sdk.UserMessage(text)}
+}
 
 func newStepCompactionFixture(t *testing.T, status string) (stepCompaction, *scriptedCompactionRunner, *stagedHistory) {
 	t.Helper()
@@ -130,7 +138,7 @@ func TestStepCompactionLeavesAConversationBelowTheHardShareAlone(t *testing.T) {
 	run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
 	loads := history.afterCalls
 
-	below := native.StepContextInput{EstimatedInputTokens: 700, FixedTokens: 100}
+	below := native.StepContextInput{FixedTokens: 100, Messages: conversationOf(600)}
 	if got := run.compact(context.Background(), below); got != nil {
 		t.Fatalf("messages = %q, want the conversation kept", sdkTexts(got))
 	}
@@ -147,7 +155,7 @@ func TestStepCompactionKeepsTheConversationWhenTheRebuildIsNoSmaller(t *testing.
 	run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
 	runner.onRun = history.markCompacted
 
-	small := native.StepContextInput{EstimatedInputTokens: 760, FixedTokens: 760}
+	small := native.StepContextInput{FixedTokens: 760}
 	if got := run.compact(context.Background(), small); got != nil {
 		t.Fatalf("messages = %q, want the conversation kept", sdkTexts(got))
 	}
@@ -312,6 +320,9 @@ func TestStepCompactionKeepsTheRunsInlineImageOnTheNextRequest(t *testing.T) {
 	runner.onRun = history.markCompacted
 	image := sdk.ImagePart{Image: "data:image/png;base64,AAAA"}
 	run.inlineParts = []sdk.MessagePart{image}
+	// The image alone is priced below the hard share; with the tool result
+	// of the first step the second call is over it.
+	run.budget = 4000
 
 	model := &scriptedModel{}
 	agent := native.New(native.Deps{})
@@ -464,12 +475,7 @@ func replacementLoopMessages(image sdk.ImagePart) []sdk.Message {
 
 // loopInput is what the loop hands its compactor for messages.
 func loopInput(messages []sdk.Message) native.StepContextInput {
-	const fixed = 100
-	return native.StepContextInput{
-		EstimatedInputTokens: fixed + contextfrag.ProviderEnvelopeTokens("", messages, nil),
-		FixedTokens:          fixed,
-		Messages:             messages,
-	}
+	return native.StepContextInput{FixedTokens: 100, Messages: messages}
 }
 
 // A retry compacts the visible history before its cutoff and carries its own

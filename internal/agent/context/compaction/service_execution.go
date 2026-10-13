@@ -17,6 +17,9 @@ import (
 )
 
 func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (Result, error) {
+	if cfg.SummaryWindowTokens <= 0 && s.fallbackWindowTokens > 0 {
+		cfg = cfg.withSummaryWindow(s.fallbackWindowTokens)
+	}
 	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
 	if err != nil {
 		return Result{}, err

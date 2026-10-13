@@ -17,11 +17,7 @@ import (
 )
 
 func applyProviderRunConfigOK(ctx context.Context, _ any, cfg agentpkg.RunConfig) agentpkg.RunConfig {
-	out, err := applyProviderRunConfig(ctx, nil, cfg)
-	if err != nil {
-		panic(err)
-	}
-	return out
+	return ApplyProviderRunConfig(ctx, nil, cfg)
 }
 
 func sdkMessagesJSONEqual(got, want any) bool {

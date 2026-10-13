@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -60,10 +59,6 @@ const (
 	// call, which commits a step, and breaks the second call's stream after
 	// some text.
 	wsStepHistoryToolThenBrokenStream wsStepHistoryModel = "tool_then_broken_stream"
-	// wsStepHistoryContextBudget fails the run before the model is called:
-	// the context view cannot fit the window, which the runtime reports with
-	// the code context.budget_unsatisfied.
-	wsStepHistoryContextBudget wsStepHistoryModel = "context_budget"
 	// wsStepHistoryTextLoop repeats the same text until the runtime's loop
 	// detection aborts the run. The abort follows no error event, and its
 	// cause carries no catalogued code.
@@ -237,14 +232,6 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 	messages := messagepkg.NewService(service.logger, queries)
 	service.messageService = messages
 	service.streamHTTPClient = &http.Client{Transport: &wsStepHistoryTransport{base: service.streamHTTPClient.Transport, mode: mode}}
-	if mode == wsStepHistoryContextBudget {
-		service.agent = native.New(native.Deps{
-			Logger: service.logger,
-			ContextViewApplier: func(context.Context, native.RunConfig) (native.RunConfig, error) {
-				return native.RunConfig{}, contextfrag.ErrBudgetUnsatisfied
-			},
-		})
-	}
 	service.SetSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	service.queries = noDecisionQueries{service.queries.(*directLifecycleQueries)}
@@ -482,26 +469,6 @@ func TestPostgresWSStepHistoryFailureWithoutSteps(t *testing.T) {
 	)
 }
 
-// Every failure of an admitted send is written to history, whatever its code:
-// the user message and an empty assistant row carrying the code session_runs
-// records.
-func TestPostgresWSStepHistoryFailureWithAnyCode(t *testing.T) {
-	h := newWSStepHistoryHarness(t, wsStepHistoryContextBudget)
-	got := h.run(t, nil)
-	assertOrdered(t, got.events, "error")
-	assertWSStepHistory(t, got,
-		[3]string{"failed", "context.budget_unsatisfied", ""},
-		[]string{
-			`user`,
-			`assistant "" interrupted error_code=context.budget_unsatisfied`,
-		},
-		[]string{
-			`user "` + directLifecyclePrompt + `"`,
-			`assistant [error context.budget_unsatisfied]`,
-		},
-	)
-}
-
 // A run without step commits writes its turn when it ends, and records a
 // failure the same way: the user message and a row with the run's code.
 func TestPostgresWSStepHistoryUnfencedFailure(t *testing.T) {
@@ -510,7 +477,6 @@ func TestPostgresWSStepHistoryUnfencedFailure(t *testing.T) {
 		code string
 	}{
 		{wsStepHistoryAuthFailure, "agent.provider_auth_failed"},
-		{wsStepHistoryContextBudget, "context.budget_unsatisfied"},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			h := newWSStepHistoryHarness(t, tc.mode)

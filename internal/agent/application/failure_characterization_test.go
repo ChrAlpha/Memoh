@@ -162,18 +162,6 @@ func TestCharacterizeNativeStreamErrorClassification(t *testing.T) {
 			historyCode: "agent.response_interrupted",
 		},
 		{
-			name:        "context the budget cannot fit",
-			event:       native.StreamEvent{Type: native.EventError, Cause: fmt.Errorf("prepare context view: %w: SECRET math", contextfrag.ErrBudgetUnsatisfied)},
-			code:        "context.budget_unsatisfied",
-			historyCode: "",
-		},
-		{
-			name:        "protected context overflow",
-			event:       native.StreamEvent{Type: native.EventError, Cause: fmt.Errorf("prepare context view: %w: SECRET cost", contextfrag.ErrProtectedContextOverflow)},
-			code:        "context.protected_overflow",
-			historyCode: "",
-		},
-		{
 			name:        "failed steer checkpoint",
 			event:       native.StreamEvent{Type: native.EventError, Cause: errs.Wrap(errors.New("SECRET ledger"), "checkpoint steered model call")},
 			code:        "agent.response_interrupted",

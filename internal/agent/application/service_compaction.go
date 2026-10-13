@@ -4,9 +4,14 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/job"
@@ -97,11 +102,155 @@ func compactionNeed(pressure, contextTokenBudget, userThreshold int) compactionL
 	}
 }
 
-func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int {
-	if rc.compactableTokensKnown {
-		return rc.compactableTokens
+// requestInputTokens estimates the input of a whole provider request: the
+// part no compaction can shrink (system prompt, tool definitions, and
+// whatever else the caller counts as fixed) plus the conversation. The
+// pre-turn, between-calls and run-end decisions all measure this one number
+// against the same thresholds.
+func requestInputTokens(fixedTokens int, messages []sdk.Message) int {
+	return fixedTokens + contextfrag.ProviderEnvelopeTokens("", messages, nil)
+}
+
+// lastRunFixedTokens is what the session's latest run spent on its system
+// prompt and tool definitions, read from its context lifecycle. A turn judges
+// its pressure before either is built, so the previous run's measurement
+// stands in for them; a session that has none has no history to compact
+// either.
+func (s *Service) lastRunFixedTokens(ctx context.Context, sessionID string) int {
+	if s == nil || s.queries == nil {
+		return 0
 	}
-	return providerInputTokens
+	parsed, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return 0
+	}
+	raw, err := s.queries.GetLatestContextLifecycleBySession(ctx, parsed)
+	if err != nil {
+		return 0
+	}
+	snapshot, err := contextfrag.DecodeLifecycleSnapshot(raw)
+	if err != nil {
+		return 0
+	}
+	return lifecycleFixedTokens(snapshot)
+}
+
+// lifecycleFixedTokens is the system prompt and tool definitions a run's
+// context plan priced.
+func lifecycleFixedTokens(snapshot contextfrag.LifecycleSnapshot) int {
+	if snapshot.BudgetPlan == nil {
+		return 0
+	}
+	return snapshot.BudgetPlan.ActualSystemCost + snapshot.BudgetPlan.ToolDefsCost
+}
+
+// turnRequestEstimate prices the request a turn is about to make with
+// whatever history it ends up assembled from. Everything but the history is
+// fixed: the system prompt and tools, and this turn's own messages (fork
+// context, notices, recalled memory, requested skills, the user's message).
+type turnRequestEstimate struct {
+	service   *Service
+	ctx       context.Context
+	sessionID string
+	// own is this turn's messages that no history row holds.
+	own []sdk.Message
+	// systemAndTools is read on first use: a turn with nothing to compact
+	// never needs it.
+	systemAndTools      int
+	systemAndToolsKnown bool
+}
+
+func (e *turnRequestEstimate) tokens(history []ModelMessage) int {
+	if !e.systemAndToolsKnown {
+		e.systemAndTools = e.service.lastRunFixedTokens(e.ctx, e.sessionID)
+		e.systemAndToolsKnown = true
+	}
+	return requestInputTokens(e.systemAndTools, e.conversation(history))
+}
+
+// conversation is the turn's messages with history.
+func (e *turnRequestEstimate) conversation(history []ModelMessage) []sdk.Message {
+	return append(modelMessagesToSDKMessages(history), e.own...)
+}
+
+// currentUserMessageEstimate stands in for the user's message when it is not
+// a stored row yet: its text and one image part per image attachment, which is
+// how the estimator prices them.
+func currentUserMessageEstimate(req ChatRequest, modelQuery string) []sdk.Message {
+	if req.ReusePersistedUserMessage {
+		return nil
+	}
+	parts := []sdk.MessagePart{sdk.TextPart{Text: modelQuery}}
+	for _, attachment := range req.Attachments {
+		if strings.EqualFold(strings.TrimSpace(attachment.Type), "image") {
+			parts = append(parts, sdk.ImagePart{})
+		}
+	}
+	return []sdk.Message{{Role: sdk.MessageRoleUser, Content: parts}}
+}
+
+// runPressure is a native run's estimate of the request its next model call
+// would make. Its conversation starts from what the turn assembled, is
+// replaced by the loop's own at every call the run is offered, and grows by
+// every step committed after that; the system prompt and tools are priced
+// from the run's context plan. When the run ends it prices the context the
+// session now holds.
+type runPressure struct {
+	lifecycle *contextfrag.LifecycleHolder
+
+	mu           sync.Mutex
+	conversation int
+}
+
+func newRunPressure(lifecycle *contextfrag.LifecycleHolder, conversation []sdk.Message) *runPressure {
+	return &runPressure{lifecycle: lifecycle, conversation: requestInputTokens(0, conversation)}
+}
+
+// observe takes the conversation a model call is about to send.
+func (p *runPressure) observe(conversation []sdk.Message) {
+	if p == nil {
+		return
+	}
+	tokens := requestInputTokens(0, conversation)
+	p.mu.Lock()
+	p.conversation = tokens
+	p.mu.Unlock()
+}
+
+// add counts a committed step.
+func (p *runPressure) add(messages []sdk.Message) {
+	if p == nil || len(messages) == 0 {
+		return
+	}
+	tokens := requestInputTokens(0, messages)
+	p.mu.Lock()
+	p.conversation += tokens
+	p.mu.Unlock()
+}
+
+func (p *runPressure) tokens() int {
+	p.mu.Lock()
+	conversation := p.conversation
+	p.mu.Unlock()
+	fixed := 0
+	if snapshot, ok := p.lifecycle.Snapshot(); ok {
+		fixed = lifecycleFixedTokens(snapshot)
+	}
+	return fixed + conversation
+}
+
+// asyncCompactionInputTokens is the pressure the background trigger judges a
+// finished run by: the run's own estimate when it kept one. A discuss turn
+// reports its raw history share instead.
+func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int {
+	switch {
+	case rc.pressure != nil:
+		return rc.pressure.tokens()
+	case rc.compactableTokensKnown:
+		return rc.compactableTokens
+	default:
+		return providerInputTokens
+	}
 }
 
 // maybeCompact decides on the caller's goroutine whether this turn's pressure
@@ -261,15 +410,20 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 	return res
 }
 
-// compactBeforeTurn is the pre-turn compaction backstop. Context at or over
-// the hard share of the window, or a load that stopped short of the oldest
-// row, is compacted before the model call and reassembled once from the
-// summary. A compaction already running is waited for and the context is
-// judged again, since it may have made this pass unnecessary. Failure,
-// cooldown, or a context that still does not fit send the request as it is;
-// the provider's own limit error is the outcome.
-func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnModelID string, contextTokenBudget int, assembled assembledContext) (assembledContext, error) {
-	if !needsSyncCompaction(assembled, contextTokenBudget) {
+// compactBeforeTurn is the pre-turn compaction backstop. A request at or
+// over the hard share of the window, or a load that stopped short of the
+// oldest row, is compacted before the model call and reassembled once from
+// the summary. Compaction only ever removes raw rows, so a context without
+// any is sent as it is. A compaction already running is waited for and the
+// context is judged again, since it may have made this pass unnecessary.
+// Failure, cooldown, or a context that still does not fit send the request as
+// it is; the provider's own limit error is the outcome.
+func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnModelID string, contextTokenBudget int, assembled assembledContext, estimate *turnRequestEstimate) (assembledContext, error) {
+	if assembled.CompactableTokens == 0 {
+		return assembled, nil
+	}
+	pressure := estimate.tokens(assembled.Messages)
+	if !needsSyncCompaction(assembled, pressure, contextTokenBudget) {
 		return assembled, nil
 	}
 	assembleAgain := func() (assembledContext, error) {
@@ -280,20 +434,21 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnMo
 		if assembled, err = assembleAgain(); err != nil {
 			return assembledContext{}, err
 		}
-		if !needsSyncCompaction(assembled, contextTokenBudget) {
+		pressure = estimate.tokens(assembled.Messages)
+		if !needsSyncCompaction(assembled, pressure, contextTokenBudget) {
 			return assembled, nil
 		}
 	}
 	threshold := hardCompactionThreshold(contextTokenBudget)
 	start := time.Now()
-	res := s.runCompactionSync(ctx, req, assembled.CompactableTokens, contextTokenBudget, turnModelID)
+	res := s.runCompactionSync(ctx, req, pressure, contextTokenBudget, turnModelID)
 	s.logger.InfoContext(ctx, "sync_compaction_backstop",
 		slog.String("status", res.Status),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 		slog.String("bot_id", req.BotID),
 		slog.String("session_id", req.ThreadID),
 		slog.Bool("history_truncated", assembled.Truncated),
-		slog.Int("pressure_tokens", assembled.CompactableTokens),
+		slog.Int("pressure_tokens", pressure),
 		slog.Int("threshold_tokens", threshold))
 	if res.Status != compaction.StatusOK {
 		return assembled, nil
@@ -302,18 +457,18 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnMo
 	if err != nil {
 		return assembledContext{}, err
 	}
-	if needsSyncCompaction(compacted, contextTokenBudget) {
+	if pressure := estimate.tokens(compacted.Messages); needsSyncCompaction(compacted, pressure, contextTokenBudget) {
 		s.logger.WarnContext(ctx, "sync_compaction_insufficient",
 			slog.String("bot_id", req.BotID),
 			slog.String("session_id", req.ThreadID),
-			slog.Int("pressure_tokens", compacted.CompactableTokens),
+			slog.Int("pressure_tokens", pressure),
 			slog.Int("threshold_tokens", threshold))
 	}
 	return compacted, nil
 }
 
-func needsSyncCompaction(assembled assembledContext, contextTokenBudget int) bool {
-	return assembled.Truncated || compactionNeed(assembled.CompactableTokens, contextTokenBudget, 0) == compactionSync
+func needsSyncCompaction(assembled assembledContext, pressure, contextTokenBudget int) bool {
+	return assembled.Truncated || compactionNeed(pressure, contextTokenBudget, 0) == compactionSync
 }
 
 // buildCompactionConfig resolves the summarizer through the shared model

@@ -54,9 +54,9 @@ func TestAgentGenerateReadMediaRecordsMutationThroughContextViewApplier(t *testi
 	})
 
 	ledger := contextfrag.NewMutationLedger()
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) RunConfig {
 		cfg.ContextMutations = ledger
-		return cfg, nil
+		return cfg
 	}})
 	a.SetToolProviders([]agenttools.ToolProvider{
 		agenttools.NewContainerProvider(nil, bp, nil, "/data"),

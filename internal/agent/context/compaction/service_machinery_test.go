@@ -106,6 +106,7 @@ type fakeQueries struct {
 	logStatuses      map[pgtype.UUID]string
 	parentSuccessors map[pgtype.UUID]pgtype.UUID
 
+	readMaxBytes    int64
 	created         bool
 	createArg       sqlc.CreateCompactionLogParams
 	createErr       error
@@ -159,7 +160,8 @@ func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ p
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: count, CandidateBytes: bytes}, nil
 }
 
-func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, _ sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
+func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
+	f.readMaxBytes = arg.MaxBytes
 	legacy, err := f.ListUncompactedMessagesBySession(ctx, pgtype.UUID{})
 	if err != nil {
 		return nil, err

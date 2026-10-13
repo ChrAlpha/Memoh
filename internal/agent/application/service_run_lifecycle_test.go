@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -261,7 +260,7 @@ func TestContextLifecycleTerminalClassifiesTerminalState(t *testing.T) {
 				Kind:   contextfrag.MutationContextBudgetFailure,
 				Detail: "protected_context_overflow",
 			}},
-			cause:     fmt.Errorf("private detail: %w", contextfrag.ErrProtectedContextOverflow),
+			cause:     errors.New("private detail"),
 			status:    contextLifecycleStatusFailedBudget,
 			errorCode: string(apperror.CodeContextProtectedOverflow),
 		},
@@ -275,26 +274,10 @@ func TestContextLifecycleTerminalClassifiesTerminalState(t *testing.T) {
 			errorCode: string(apperror.CodeContextBudgetUnsatisfied),
 		},
 		{
-			name:      "typed budget failure without mutation",
-			cause:     fmt.Errorf("private detail: %w", contextfrag.ErrBudgetUnsatisfied),
-			status:    contextLifecycleStatusFailedBudget,
-			errorCode: string(apperror.CodeContextBudgetUnsatisfied),
-		},
-		{
 			name:      "stable protected overflow code without sentinel",
 			cause:     apperror.New(apperror.CodeContextProtectedOverflow, nil),
 			status:    contextLifecycleStatusFailedBudget,
 			errorCode: string(apperror.CodeContextProtectedOverflow),
-		},
-		{
-			name: "typed budget failure behind stable application error",
-			cause: apperror.Wrap(
-				apperror.CodeContextBudgetUnsatisfied,
-				contextfrag.ErrBudgetUnsatisfied,
-				nil,
-			),
-			status:    contextLifecycleStatusFailedBudget,
-			errorCode: string(apperror.CodeContextBudgetUnsatisfied),
 		},
 		{
 			name:   "provider cancellation while owner remains active",
@@ -774,7 +757,7 @@ func TestBudgetOverAbortKeepsAbortTraceInSnapshot(t *testing.T) {
 				Kind:   contextfrag.MutationContextBudgetFailure,
 				Detail: "budget_unsatisfied",
 			}},
-			cause:     contextfrag.ErrBudgetUnsatisfied,
+			cause:     errors.New("private detail"),
 			status:    contextLifecycleStatusFailedBudget,
 			wantTrace: false,
 		},

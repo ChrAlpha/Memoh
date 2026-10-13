@@ -52,6 +52,12 @@ func (q *directLifecycleQueries) GetSettingsByBotID(
 	}, nil
 }
 
+// GetLatestContextLifecycleBySession reports no earlier run plan, so a
+// turn's pressure is its rows and own messages.
+func (*directLifecycleQueries) GetLatestContextLifecycleBySession(context.Context, pgtype.UUID) ([]byte, error) {
+	return nil, pgx.ErrNoRows
+}
+
 func (*directLifecycleQueries) GetBotByID(
 	context.Context,
 	pgtype.UUID,

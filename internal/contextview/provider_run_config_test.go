@@ -88,10 +88,7 @@ func TestApplyProviderRunConfigMergesOnlyMatchingHistoryAuditMetadata(t *testing
 func TestProviderRunConfigApplierUsesInjectedLoggerShape(t *testing.T) {
 	t.Parallel()
 	applier := ProviderRunConfigApplier(nil)
-	got, err := applier(context.Background(), agentpkg.RunConfig{System: "system", Query: "query"})
-	if err != nil {
-		t.Fatalf("applier error = %v", err)
-	}
+	got := applier(context.Background(), agentpkg.RunConfig{System: "system", Query: "query"})
 	if got.System != "system" || len(got.Messages) != 1 {
 		t.Fatalf("got = %#v", got)
 	}
