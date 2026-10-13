@@ -30,6 +30,7 @@ vi.mock('@/store/capabilities', () => ({ useCapabilitiesStore: () => ({ connecto
 vi.mock('@/lib/api-client', () => ({ sdkApiUrl: vi.fn() }))
 vi.mock('../composables/useAppOperation', () => ({ useAppOperation: () => ({ ownsStream: () => false }) }))
 vi.mock('../composables/useDependencyOperation', () => ({ useDependencyOperation: () => ({ ownsStream: () => false }) }))
+vi.mock('@/composables/useComposerPrefill', () => ({ useComposerPrefill: () => ({ prefillComposer: vi.fn() }) }))
 vi.mock('./dependency-confirm-dialog.vue', () => ({ default: { render: () => null } }))
 vi.mock('./dependency-progress-dialog.vue', () => ({ default: { render: () => null } }))
 vi.mock('./dependency-rollback-dialog.vue', () => ({ default: { render: () => null } }))
