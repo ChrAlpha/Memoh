@@ -475,6 +475,63 @@ func (q *Queries) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (Bot
 	return i, err
 }
 
+const listActiveCompactionSummariesBySession = `-- name: ListActiveCompactionSummariesBySession :many
+SELECT c.id, c.summary, c.anchor_start_ms, c.anchor_end_ms, c.artifact_level, c.completed_at
+FROM bot_history_message_compacts c
+JOIN bot_sessions owner_session
+  ON owner_session.id = $1
+ AND owner_session.bot_id = c.bot_id
+ AND owner_session.team_id = c.team_id
+WHERE c.team_id = public.memoh_current_team_id()
+  AND c.session_id = owner_session.id
+  AND c.compaction_epoch = owner_session.compaction_epoch
+  AND c.status = 'ok'
+  AND c.superseded_by IS NULL
+  AND c.superseded_at IS NULL
+  AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+ORDER BY c.anchor_start_ms ASC, c.started_at ASC, c.id ASC
+`
+
+type ListActiveCompactionSummariesBySessionRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Summary       string             `json:"summary"`
+	AnchorStartMs int64              `json:"anchor_start_ms"`
+	AnchorEndMs   int64              `json:"anchor_end_ms"`
+	ArtifactLevel int32              `json:"artifact_level"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+}
+
+// The live summaries of a session: ok artifacts of the current epoch that no
+// successor has superseded, oldest anchor first. Paired with
+// ListActiveMessagesAfterCompactionBySessionWithinBytes, which returns the
+// rows these summaries do not cover.
+func (q *Queries) ListActiveCompactionSummariesBySession(ctx context.Context, sessionID pgtype.UUID) ([]ListActiveCompactionSummariesBySessionRow, error) {
+	rows, err := q.db.Query(ctx, listActiveCompactionSummariesBySession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveCompactionSummariesBySessionRow
+	for rows.Next() {
+		var i ListActiveCompactionSummariesBySessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Summary,
+			&i.AnchorStartMs,
+			&i.AnchorEndMs,
+			&i.ArtifactLevel,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCompactionArtifactLineageBySession = `-- name: ListCompactionArtifactLineageBySession :many
 SELECT c.id, c.bot_id, c.session_id, c.status, c.summary, c.message_count, c.error_message, c.usage, c.model_id,
        c.artifact_version, c.coverage, c.anchor_start_ms, c.anchor_end_ms, c.artifact_level, c.parent_ids,

@@ -1833,6 +1833,102 @@ FROM (
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
 
+-- name: ListActiveMessagesAfterCompactionBySessionWithinBytes :many
+-- Every active row of a session that no live summary covers: the rows after
+-- the latest compaction boundary, with no time lower bound. A row is covered
+-- when its compact_id points at an ok artifact of the session's current
+-- epoch; rows claimed by a pending or failed artifact are still returned
+-- because no summary stands in for them yet. Byte admission is the same as
+-- ListActiveMessagesSinceBySessionWithinBytes: newest-first, the crossing row
+-- is kept, rows are returned in ascending order.
+SELECT
+  ranked.id,
+  ranked.bot_id,
+  ranked.session_id,
+  ranked.sender_channel_identity_id,
+  ranked.sender_user_id,
+  ranked.external_message_id,
+  ranked.source_reply_to_message_id,
+  ranked.role,
+  ranked.content,
+  ranked.metadata,
+  ranked.usage,
+  ranked.session_mode,
+  ranked.runtime_type,
+  ranked.event_id,
+  ranked.display_text,
+  ranked.compact_id,
+  ranked.created_at,
+  ranked.sender_display_name,
+  ranked.sender_avatar_url,
+  ranked.platform
+FROM (
+  SELECT
+    m.id,
+    m.bot_id,
+    m.session_id,
+    m.sender_channel_identity_id,
+    m.sender_account_user_id AS sender_user_id,
+    m.source_message_id AS external_message_id,
+    m.source_reply_to_message_id,
+    m.role,
+    m.content,
+    m.metadata,
+    m.usage,
+    m.session_mode,
+    m.runtime_type,
+    m.event_id,
+    m.display_text,
+    m.compact_id,
+    m.created_at,
+    m.turn_position,
+    m.turn_message_seq,
+    ci.display_name AS sender_display_name,
+    ci.avatar_url AS sender_avatar_url,
+    s.channel_type AS platform,
+    (SUM(octet_length(m.content::text)) OVER (
+      ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+  FROM bot_visible_history_messages m
+  JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = sqlc.arg(session_id)
+    AND (m.compact_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM bot_history_message_compacts c
+      WHERE c.team_id = public.memoh_current_team_id()
+        AND c.id = m.compact_id
+        AND c.bot_id = m.bot_id
+        AND c.session_id = s.id
+        AND c.compaction_epoch = s.compaction_epoch
+        AND c.status = 'ok'
+        AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+    ))
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+) ranked
+WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
+ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
+
+-- name: ListRecentUserMessagesBySession :many
+-- The newest N user rows of a session in ascending order, for callers that
+-- need recent user text only and must not load the history.
+SELECT
+  recent.id,
+  recent.role,
+  recent.content,
+  recent.created_at
+FROM (
+  SELECT m.id, m.role, m.content, m.created_at, m.turn_position, m.turn_message_seq
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = sqlc.arg(session_id)
+    AND m.role = 'user'
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+  LIMIT sqlc.arg(row_limit)::INT
+) recent
+ORDER BY recent.turn_position ASC, recent.turn_message_seq ASC, recent.created_at ASC, recent.id ASC;
+
 -- name: ListActiveMessagesSinceWithinBytes :many
 -- Byte-budgeted variant of ListActiveMessagesSince (CM-ADM-001), same
 -- newest-first admission semantics scoped to a bot instead of a session.
@@ -2565,6 +2661,15 @@ deleted_compaction_artifacts AS (
     AND compact.id = target.id
   RETURNING compact.id
 ),
+-- Discuss replays bot_session_events after its cursor; leftover events would
+-- re-trigger it on messages the user just cleared.
+deleted_session_events AS (
+  DELETE FROM bot_session_events event
+  USING target_sessions target
+  WHERE event.team_id = public.memoh_current_team_id()
+    AND event.session_id = target.id
+  RETURNING event.id
+),
 target_messages AS MATERIALIZED (
   SELECT message.id
   FROM bot_history_messages message
@@ -2572,6 +2677,7 @@ target_messages AS MATERIALIZED (
     AND message.bot_id = sqlc.arg(target_bot_id)
     AND (SELECT count(*) FROM target_sessions) >= 0
     AND (SELECT count(*) FROM deleted_compaction_artifacts) >= 0
+    AND (SELECT count(*) FROM deleted_session_events) >= 0
   ORDER BY message.id
   FOR UPDATE
 )
@@ -2628,6 +2734,14 @@ deleted_compaction_artifacts AS (
     AND compact.id = target.id
   RETURNING compact.id
 ),
+-- Same event purge as ClearHistoryByBot.
+deleted_session_events AS (
+  DELETE FROM bot_session_events event
+  USING target_session target
+  WHERE event.team_id = public.memoh_current_team_id()
+    AND event.session_id = target.id
+  RETURNING event.id
+),
 target_messages AS MATERIALIZED (
   SELECT message.id
   FROM bot_history_messages message
@@ -2635,6 +2749,7 @@ target_messages AS MATERIALIZED (
     AND message.session_id = sqlc.arg(target_session_id)
     AND (SELECT count(*) FROM target_session) >= 0
     AND (SELECT count(*) FROM deleted_compaction_artifacts) >= 0
+    AND (SELECT count(*) FROM deleted_session_events) >= 0
   ORDER BY message.id
   FOR UPDATE
 )

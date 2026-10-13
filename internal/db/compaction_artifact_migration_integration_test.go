@@ -61,6 +61,12 @@ CREATE TABLE agent_session_publications (
   session_id UUID NOT NULL
 );
 
+CREATE TABLE bot_session_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id UUID NOT NULL DEFAULT public.memoh_current_team_id(),
+  session_id UUID NOT NULL
+);
+
 CREATE TABLE bot_history_message_compacts (
   id UUID PRIMARY KEY,
   bot_id UUID NOT NULL,

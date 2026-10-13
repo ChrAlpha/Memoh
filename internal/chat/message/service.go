@@ -1163,6 +1163,65 @@ func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, ses
 	return msgs, nil
 }
 
+// ListActiveAfterCompactionBySessionWithinBytes implements ContextHistoryReader.
+func (s *DBService) ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return SessionHistoryAfterCompaction{}, err
+	}
+	rows, err := s.queries.ListActiveMessagesAfterCompactionBySessionWithinBytes(ctx, sqlc.ListActiveMessagesAfterCompactionBySessionWithinBytesParams{
+		SessionID: pgSessionID,
+		MaxBytes:  maxBytes,
+	})
+	if err != nil {
+		return SessionHistoryAfterCompaction{}, err
+	}
+	summaryRows, err := s.queries.ListActiveCompactionSummariesBySession(ctx, pgSessionID)
+	if err != nil {
+		return SessionHistoryAfterCompaction{}, err
+	}
+	msgs := make([]Message, 0, len(rows))
+	for _, row := range rows {
+		msgs = append(msgs, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+	}
+	s.enrichAssets(ctx, msgs)
+	summaries := make([]CompactionSummary, 0, len(summaryRows))
+	for _, row := range summaryRows {
+		summaries = append(summaries, CompactionSummary{
+			ID:            uuidString(row.ID),
+			Summary:       row.Summary,
+			AnchorStartMs: row.AnchorStartMs,
+			AnchorEndMs:   row.AnchorEndMs,
+			Level:         row.ArtifactLevel,
+			CompletedAt:   row.CompletedAt.Time,
+		})
+	}
+	return SessionHistoryAfterCompaction{Summaries: summaries, Messages: msgs}, nil
+}
+
+// ListRecentUserBySession implements ContextHistoryReader.
+func (s *DBService) ListRecentUserBySession(ctx context.Context, sessionID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queries.ListRecentUserMessagesBySession(ctx, sqlc.ListRecentUserMessagesBySessionParams{
+		SessionID: pgSessionID,
+		RowLimit:  int32(min(limit, math.MaxInt32)), //nolint:gosec // clamped to MaxInt32 above
+	})
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]Message, 0, len(rows))
+	for _, row := range rows {
+		msgs = append(msgs, Message{ID: uuidString(row.ID), Role: row.Role, Content: row.Content, CreatedAt: row.CreatedAt.Time})
+	}
+	return msgs, nil
+}
+
 // MeasureActiveBySession aggregates a session's active message count and
 // content bytes on the database side (CM-ADM-001).
 func (s *DBService) MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error) {

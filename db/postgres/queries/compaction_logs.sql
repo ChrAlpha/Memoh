@@ -329,3 +329,23 @@ DELETE FROM bot_history_message_compacts AS compacts
 USING target_compaction_logs target
 WHERE compacts.team_id = public.memoh_current_team_id()
   AND compacts.id = target.id;
+
+-- name: ListActiveCompactionSummariesBySession :many
+-- The live summaries of a session: ok artifacts of the current epoch that no
+-- successor has superseded, oldest anchor first. Paired with
+-- ListActiveMessagesAfterCompactionBySessionWithinBytes, which returns the
+-- rows these summaries do not cover.
+SELECT c.id, c.summary, c.anchor_start_ms, c.anchor_end_ms, c.artifact_level, c.completed_at
+FROM bot_history_message_compacts c
+JOIN bot_sessions owner_session
+  ON owner_session.id = sqlc.arg(session_id)
+ AND owner_session.bot_id = c.bot_id
+ AND owner_session.team_id = c.team_id
+WHERE c.team_id = public.memoh_current_team_id()
+  AND c.session_id = owner_session.id
+  AND c.compaction_epoch = owner_session.compaction_epoch
+  AND c.status = 'ok'
+  AND c.superseded_by IS NULL
+  AND c.superseded_at IS NULL
+  AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+ORDER BY c.anchor_start_ms ASC, c.started_at ASC, c.id ASC;

@@ -355,6 +355,13 @@ deleted_compaction_artifacts AS (
     AND compact.id = target.id
   RETURNING compact.id
 ),
+deleted_session_events AS (
+  DELETE FROM bot_session_events event
+  USING target_sessions target
+  WHERE event.team_id = public.memoh_current_team_id()
+    AND event.session_id = target.id
+  RETURNING event.id
+),
 target_messages AS MATERIALIZED (
   SELECT message.id
   FROM bot_history_messages message
@@ -362,6 +369,7 @@ target_messages AS MATERIALIZED (
     AND message.bot_id = $1
     AND (SELECT count(*) FROM target_sessions) >= 0
     AND (SELECT count(*) FROM deleted_compaction_artifacts) >= 0
+    AND (SELECT count(*) FROM deleted_session_events) >= 0
   ORDER BY message.id
   FOR UPDATE
 )
@@ -371,6 +379,8 @@ WHERE message.team_id = public.memoh_current_team_id()
   AND message.id = target.id
 `
 
+// Discuss replays bot_session_events after its cursor; leftover events would
+// re-trigger it on messages the user just cleared.
 func (q *Queries) ClearHistoryByBot(ctx context.Context, targetBotID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, clearHistoryByBot, targetBotID)
 	return err
@@ -424,6 +434,13 @@ deleted_compaction_artifacts AS (
     AND compact.id = target.id
   RETURNING compact.id
 ),
+deleted_session_events AS (
+  DELETE FROM bot_session_events event
+  USING target_session target
+  WHERE event.team_id = public.memoh_current_team_id()
+    AND event.session_id = target.id
+  RETURNING event.id
+),
 target_messages AS MATERIALIZED (
   SELECT message.id
   FROM bot_history_messages message
@@ -431,6 +448,7 @@ target_messages AS MATERIALIZED (
     AND message.session_id = $1
     AND (SELECT count(*) FROM target_session) >= 0
     AND (SELECT count(*) FROM deleted_compaction_artifacts) >= 0
+    AND (SELECT count(*) FROM deleted_session_events) >= 0
   ORDER BY message.id
   FOR UPDATE
 )
@@ -440,6 +458,7 @@ WHERE message.team_id = public.memoh_current_team_id()
   AND message.id = target.id
 `
 
+// Same event purge as ClearHistoryByBot.
 func (q *Queries) ClearHistoryBySession(ctx context.Context, targetSessionID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, clearHistoryBySession, targetSessionID)
 	return err
@@ -2667,6 +2686,152 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.id = tail.message_id
 func (q *Queries) LinkUnassignedMessagesAfterHistoryTurnAssistant(ctx context.Context, turnID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, linkUnassignedMessagesAfterHistoryTurnAssistant, turnID)
 	return err
+}
+
+const listActiveMessagesAfterCompactionBySessionWithinBytes = `-- name: ListActiveMessagesAfterCompactionBySessionWithinBytes :many
+SELECT
+  ranked.id,
+  ranked.bot_id,
+  ranked.session_id,
+  ranked.sender_channel_identity_id,
+  ranked.sender_user_id,
+  ranked.external_message_id,
+  ranked.source_reply_to_message_id,
+  ranked.role,
+  ranked.content,
+  ranked.metadata,
+  ranked.usage,
+  ranked.session_mode,
+  ranked.runtime_type,
+  ranked.event_id,
+  ranked.display_text,
+  ranked.compact_id,
+  ranked.created_at,
+  ranked.sender_display_name,
+  ranked.sender_avatar_url,
+  ranked.platform
+FROM (
+  SELECT
+    m.id,
+    m.bot_id,
+    m.session_id,
+    m.sender_channel_identity_id,
+    m.sender_account_user_id AS sender_user_id,
+    m.source_message_id AS external_message_id,
+    m.source_reply_to_message_id,
+    m.role,
+    m.content,
+    m.metadata,
+    m.usage,
+    m.session_mode,
+    m.runtime_type,
+    m.event_id,
+    m.display_text,
+    m.compact_id,
+    m.created_at,
+    m.turn_position,
+    m.turn_message_seq,
+    ci.display_name AS sender_display_name,
+    ci.avatar_url AS sender_avatar_url,
+    s.channel_type AS platform,
+    (SUM(octet_length(m.content::text)) OVER (
+      ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+  FROM bot_visible_history_messages m
+  JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $1
+    AND (m.compact_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM bot_history_message_compacts c
+      WHERE c.team_id = public.memoh_current_team_id()
+        AND c.id = m.compact_id
+        AND c.bot_id = m.bot_id
+        AND c.session_id = s.id
+        AND c.compaction_epoch = s.compaction_epoch
+        AND c.status = 'ok'
+        AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+    ))
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+) ranked
+WHERE ranked.preceding_bytes < $2::BIGINT
+ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC
+`
+
+type ListActiveMessagesAfterCompactionBySessionWithinBytesParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	MaxBytes  int64       `json:"max_bytes"`
+}
+
+type ListActiveMessagesAfterCompactionBySessionWithinBytesRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	CompactID               pgtype.UUID        `json:"compact_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+}
+
+// Every active row of a session that no live summary covers: the rows after
+// the latest compaction boundary, with no time lower bound. A row is covered
+// when its compact_id points at an ok artifact of the session's current
+// epoch; rows claimed by a pending or failed artifact are still returned
+// because no summary stands in for them yet. Byte admission is the same as
+// ListActiveMessagesSinceBySessionWithinBytes: newest-first, the crossing row
+// is kept, rows are returned in ascending order.
+func (q *Queries) ListActiveMessagesAfterCompactionBySessionWithinBytes(ctx context.Context, arg ListActiveMessagesAfterCompactionBySessionWithinBytesParams) ([]ListActiveMessagesAfterCompactionBySessionWithinBytesRow, error) {
+	rows, err := q.db.Query(ctx, listActiveMessagesAfterCompactionBySessionWithinBytes, arg.SessionID, arg.MaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveMessagesAfterCompactionBySessionWithinBytesRow
+	for rows.Next() {
+		var i ListActiveMessagesAfterCompactionBySessionWithinBytesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.SessionMode,
+			&i.RuntimeType,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CompactID,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listActiveMessagesSince = `-- name: ListActiveMessagesSince :many
@@ -5087,6 +5252,64 @@ func (q *Queries) ListObservedConversationsByChannelType(ctx context.Context, ar
 			&i.ConversationName,
 			&i.ConversationAvatarUrl,
 			&i.LastObservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentUserMessagesBySession = `-- name: ListRecentUserMessagesBySession :many
+SELECT
+  recent.id,
+  recent.role,
+  recent.content,
+  recent.created_at
+FROM (
+  SELECT m.id, m.role, m.content, m.created_at, m.turn_position, m.turn_message_seq
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $1
+    AND m.role = 'user'
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+  LIMIT $2::INT
+) recent
+ORDER BY recent.turn_position ASC, recent.turn_message_seq ASC, recent.created_at ASC, recent.id ASC
+`
+
+type ListRecentUserMessagesBySessionParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	RowLimit  int32       `json:"row_limit"`
+}
+
+type ListRecentUserMessagesBySessionRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Role      string             `json:"role"`
+	Content   []byte             `json:"content"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+// The newest N user rows of a session in ascending order, for callers that
+// need recent user text only and must not load the history.
+func (q *Queries) ListRecentUserMessagesBySession(ctx context.Context, arg ListRecentUserMessagesBySessionParams) ([]ListRecentUserMessagesBySessionRow, error) {
+	rows, err := q.db.Query(ctx, listRecentUserMessagesBySession, arg.SessionID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentUserMessagesBySessionRow
+	for rows.Next() {
+		var i ListRecentUserMessagesBySessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Role,
+			&i.Content,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

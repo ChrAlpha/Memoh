@@ -237,6 +237,35 @@ type AgentReplacementPersister interface {
 	FinalizeAgentReplacement(context.Context, string, TurnReplacement, string, string) error
 }
 
+// CompactionSummary is one live compaction artifact of a session.
+type CompactionSummary struct {
+	ID            string
+	Summary       string
+	AnchorStartMs int64
+	AnchorEndMs   int64
+	Level         int32
+	CompletedAt   time.Time
+}
+
+// SessionHistoryAfterCompaction is a session's context source: the live
+// summaries plus every active row they do not cover.
+type SessionHistoryAfterCompaction struct {
+	Summaries []CompactionSummary
+	Messages  []Message
+}
+
+// ContextHistoryReader loads a session's context without a time window.
+type ContextHistoryReader interface {
+	// ListActiveAfterCompactionBySessionWithinBytes returns the live summaries
+	// and the rows after the latest compaction boundary, admitted newest-first
+	// within the content byte budget (CM-ADM-001; the crossing row is kept).
+	// Metadata is left undecoded, as in the other byte-budgeted loaders.
+	ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error)
+	// ListRecentUserBySession returns the newest limit user rows of a session
+	// in ascending order. Only ID, Role, Content and CreatedAt are populated.
+	ListRecentUserBySession(ctx context.Context, sessionID string, limit int) ([]Message, error)
+}
+
 // Service defines message read/write behavior.
 type Service interface {
 	Writer
