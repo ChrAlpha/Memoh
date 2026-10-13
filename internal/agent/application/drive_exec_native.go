@@ -123,7 +123,10 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 		}
 		summary.Persisted = append(summary.Persisted, e.committer.persistedMessages()...)
 		summary.UsageTokens = tokens
-		return summary, e.postPersist(ctx, summary)
+		// A replacement turn that commits its steps is finalized by its queue
+		// coordinator in the final step's transaction; rewriting it here
+		// again would find no visible old turn left to replace.
+		return summary, nil
 	}
 	if e.snapshot == nil {
 		// Nothing was checkpointed and the stream never produced a terminal
@@ -171,9 +174,10 @@ func (e *nativeExecutor) recordFailure(ctx context.Context, f RunFailure, _ comm
 	return e.service.persistFailureRow(ctx, e.req, e.rc, f, "")
 }
 
-// postPersist rewrites the replaced turn once its own history is written. A
-// replacement turn that cannot be rewritten failed, and the failure belongs to
-// the ending rather than to the turn it replaced.
+// postPersist rewrites the replaced turn once its own history is written, for
+// a run without step commits. A replacement turn that cannot be rewritten
+// failed, and the failure belongs to the ending rather than to the turn it
+// replaced.
 func (e *nativeExecutor) postPersist(ctx context.Context, summary commitSummary) error {
 	if e.replace == nil || e.replace.PostPersist == nil {
 		return nil

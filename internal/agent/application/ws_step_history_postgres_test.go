@@ -68,6 +68,10 @@ const (
 	// detection aborts the run. The abort follows no error event, and its
 	// cause carries no catalogued code.
 	wsStepHistoryTextLoop wsStepHistoryModel = "text_loop"
+	// wsStepHistoryNumbered answers every call with its own text, ANSWER-<n>
+	// for the n-th streamed call, so a replaced answer is told from its
+	// replacement.
+	wsStepHistoryNumbered wsStepHistoryModel = "numbered"
 )
 
 // wsStepHistoryTransport answers streaming model requests with the scripted
@@ -119,6 +123,16 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 			}, nil
 		}
 		return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+	case wsStepHistoryNumbered:
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(
+				"data: {\"id\":\"chatcmpl-ws-step\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ANSWER-%d\"},\"finish_reason\":null}]}\n\n"+
+					"data: {\"id\":\"chatcmpl-ws-step\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", call))),
+			Request: r,
+		}, nil
 	case wsStepHistoryAuthFailure:
 		return &http.Response{
 			StatusCode: http.StatusUnauthorized,
