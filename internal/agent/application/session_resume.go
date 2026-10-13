@@ -391,9 +391,19 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		}
 		return nil, err
 	}
+	// The interrupted turn's request row is already in history, and the
+	// instruction below carries the original task again. Naming the row lets
+	// context assembly drop the history copy so the model sees the task once.
+	// Without a resolvable row (older records, lookup failure) both stay.
+	requestMessageID, lookupErr := s.continuationTurnRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: decisionUUIDString(row.TurnID)})
+	if lookupErr != nil {
+		s.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
+		requestMessageID = ""
+	}
 	req := ChatRequest{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), ChatID: data.ChatID,
-		RunID: admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
+		PersistedUserMessageID: requestMessageID,
+		RunID:                  admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
 		Query: resumeInstruction + data.Query, UserID: data.UserID, SourceChannelIdentityID: data.ChannelIdentityID,
 		Token: token, ChatToken: chatToken, CurrentChannel: data.CurrentChannel, ReplyTarget: data.ReplyTarget,
 		ConversationType: data.ConversationType, Model: data.Model, ReasoningEffort: data.ReasoningEffort,

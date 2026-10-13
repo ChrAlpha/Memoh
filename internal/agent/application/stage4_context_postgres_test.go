@@ -110,10 +110,10 @@ func TestStage4RetryCutoffKeepsSummaryAndDropsLaterRows(t *testing.T) {
 	}
 }
 
-// A graceful-shutdown resume carries neither a persisted-row id nor an
-// external id, so its saved user row is part of the history and appears there
-// once; a request that does name its persisted row (ruling 14) has that row
-// taken out of history because the request itself supplies it.
+// A resume request that cannot name its persisted row (a record from before
+// the turn was tracked) keeps the saved user row in history; one that does
+// (ruling 14) has the row taken out, because the resume instruction supplies
+// the task. The provider-request count is in session_resume_dedup_test.go.
 func TestStage4ResumedRequestHasTheOriginalUserRowOnce(t *testing.T) {
 	s := newStage4Session(t)
 	original := s.persist("user", "original-task")
