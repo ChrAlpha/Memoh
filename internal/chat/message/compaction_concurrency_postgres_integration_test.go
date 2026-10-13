@@ -429,8 +429,10 @@ func TestPostgresReplaceTurnSeesConcurrentCompactionClaim(t *testing.T) {
 	if err := replaceTx.Commit(ctx); err != nil {
 		t.Fatalf("commit replacement: %v", err)
 	}
-	if got := fixture.epoch(t); got != 1 {
-		t.Fatalf("replace after concurrent claim left epoch %d, want 1", got)
+	// A replacement invalidates the claim that covers the replaced assistant
+	// without advancing the epoch, so the stale completion below must still fail.
+	if got := fixture.epoch(t); got != 0 {
+		t.Fatalf("replace after concurrent claim left epoch %d, want 0", got)
 	}
 	_, err = dbsqlc.New(fixture.pool).CompleteCompactionLog(ctx, dbsqlc.CompleteCompactionLogParams{
 		ID:           log.ID,

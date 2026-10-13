@@ -62,7 +62,10 @@ func TestPostgresReplaceTurnRetryHidesSupersededAssistant(t *testing.T) {
 	assertPostgresMessageVisibility(t, ctx, tx, assistant.ID, false, true)
 }
 
-func TestPostgresReplaceTurnAdvancesSessionCompactionEpoch(t *testing.T) {
+// A retry replaces the assistant of the turn and keeps its request. The
+// session epoch stays put, so a summary ending before the replaced assistant
+// survives, and a summary that reaches it is invalidated.
+func TestPostgresReplaceTurnInvalidatesOnlyArtifactsPastTheCutoff(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresMessageTestTx(t, ctx)
 	setupPostgresMessageTestFixtures(t, ctx, tx)
@@ -90,21 +93,28 @@ func TestPostgresReplaceTurnAdvancesSessionCompactionEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get old turn: %v", err)
 	}
-
+	var cutoffMs int64
+	if err := tx.QueryRow(ctx, `
+		SELECT FLOOR(EXTRACT(EPOCH FROM created_at) * 1000)::bigint FROM bot_history_messages WHERE id = $1
+	`, assistant.ID).Scan(&cutoffMs); err != nil {
+		t.Fatalf("read assistant created_at: %v", err)
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summary)
+		INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summary, anchor_start_ms, anchor_end_ms)
 		VALUES
-			('00000000-0000-0000-0000-000000074131', $1, $2, 'ok', 'covers replaced source'),
-			('00000000-0000-0000-0000-000000074132', $1, $2, 'ok', 'same session frontier')
-	`, postgresMessageTestBotID, postgresMessageTestSessionID); err != nil {
+			('00000000-0000-0000-0000-000000074131', $1, $2, 'ok', 'before the turn', 1, $3::bigint - 1),
+			('00000000-0000-0000-0000-000000074132', $1, $2, 'ok', 'reaches the turn', 1, $3)
+	`, postgresMessageTestBotID, postgresMessageTestSessionID, cutoffMs); err != nil {
 		t.Fatalf("insert compaction artifacts: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE bot_history_messages
-		SET compact_id = '00000000-0000-0000-0000-000000074131'
-		WHERE id = $1
-	`, assistant.ID); err != nil {
-		t.Fatalf("link assistant to compaction artifact: %v", err)
+		UPDATE bot_history_messages SET compact_id = CASE id
+			WHEN $1::uuid THEN '00000000-0000-0000-0000-000000074131'::uuid
+			WHEN $2::uuid THEN '00000000-0000-0000-0000-000000074132'::uuid
+		END
+		WHERE id IN ($1::uuid, $2::uuid)
+	`, user.ID, assistant.ID); err != nil {
+		t.Fatalf("link rows to compaction artifacts: %v", err)
 	}
 
 	replacement, err := svc.Persist(ctx, PersistInput{
@@ -126,39 +136,116 @@ func TestPostgresReplaceTurnAdvancesSessionCompactionEpoch(t *testing.T) {
 	if err := tx.QueryRow(ctx, `SELECT compaction_epoch FROM bot_sessions WHERE id = $1`, postgresMessageTestSessionID).Scan(&sessionEpoch); err != nil {
 		t.Fatalf("read session compaction epoch: %v", err)
 	}
-	if sessionEpoch != 1 {
-		var compactID *string
-		var artifactEpoch *int64
-		if err := tx.QueryRow(ctx, `
-			SELECT message.compact_id::text, compact.compaction_epoch
-			FROM bot_history_messages message
-			LEFT JOIN bot_history_message_compacts compact ON compact.id = message.compact_id
-			WHERE message.id = $1
-		`, assistant.ID).Scan(&compactID, &artifactEpoch); err != nil {
-			t.Fatalf("diagnose unchanged compaction epoch: %v", err)
-		}
-		compactValue := "<nil>"
-		if compactID != nil {
-			compactValue = *compactID
-		}
-		artifactValue := int64(-1)
-		if artifactEpoch != nil {
-			artifactValue = *artifactEpoch
-		}
-		t.Fatalf("session compaction epoch = %d, want 1 (message compact_id=%s artifact_epoch=%d)", sessionEpoch, compactValue, artifactValue)
+	if sessionEpoch != 0 {
+		t.Fatalf("session compaction epoch = %d, want 0: replacement must not advance the epoch", sessionEpoch)
 	}
-	var currentArtifacts int
+	assertPostgresArtifactInvalidated(t, ctx, tx, "00000000-0000-0000-0000-000000074131", false)
+	assertPostgresArtifactInvalidated(t, ctx, tx, "00000000-0000-0000-0000-000000074132", true)
+}
+
+// The cutoff rule has a Go half (compaction.HistoryCutoff) and a SQL half
+// (ReplaceHistoryTurn). Both run over the same table, so a drift between them
+// fails here.
+func TestPostgresReplaceTurnInvalidationMatchesCutoffAdmission(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      string
+		start       func(cutoffMs int64) int64
+		end         func(cutoffMs int64) int64
+		invalidated bool
+	}{
+		{"ends before the cutoff", "ok", constMs(1), offsetMs(-1), false},
+		{"ends at the cutoff", "ok", constMs(1), offsetMs(0), true},
+		{"ends after the cutoff", "ok", constMs(1), offsetMs(5), true},
+		{"no anchor start", "ok", constMs(0), offsetMs(-1), true},
+		{"inverted range", "ok", offsetMs(5), offsetMs(-1), true},
+		{"pending claim", "pending", constMs(0), constMs(0), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			tx := beginPostgresMessageTestTx(t, ctx)
+			setupPostgresMessageTestFixtures(t, ctx, tx)
+
+			svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+			user, err := svc.Persist(ctx, PersistInput{
+				BotID:     postgresMessageTestBotID,
+				SessionID: postgresMessageTestSessionID,
+				Role:      "user",
+				Content:   []byte(`{"role":"user","content":"hello"}`),
+			})
+			if err != nil {
+				t.Fatalf("persist user: %v", err)
+			}
+			assistant, err := svc.Persist(ctx, PersistInput{
+				BotID:     postgresMessageTestBotID,
+				SessionID: postgresMessageTestSessionID,
+				Role:      "assistant",
+				Content:   []byte(`{"role":"assistant","content":"old"}`),
+			})
+			if err != nil {
+				t.Fatalf("persist assistant: %v", err)
+			}
+			oldTurn, err := svc.GetVisibleTurnByMessage(ctx, postgresMessageTestSessionID, assistant.ID)
+			if err != nil {
+				t.Fatalf("get old turn: %v", err)
+			}
+			var cutoffMs int64
+			if err := tx.QueryRow(ctx, `
+				SELECT FLOOR(EXTRACT(EPOCH FROM created_at) * 1000)::bigint FROM bot_history_messages WHERE id = $1
+			`, assistant.ID).Scan(&cutoffMs); err != nil {
+				t.Fatalf("read assistant created_at: %v", err)
+			}
+			const artifactID = "00000000-0000-0000-0000-000000074133"
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summary, anchor_start_ms, anchor_end_ms)
+				VALUES ($1, $2, $3, $4, 'covers the turn', $5, $6)
+			`, artifactID, postgresMessageTestBotID, postgresMessageTestSessionID, tc.status, tc.start(cutoffMs), tc.end(cutoffMs)); err != nil {
+				t.Fatalf("insert compaction artifact: %v", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE bot_history_messages SET compact_id = $1 WHERE id = $2
+			`, artifactID, assistant.ID); err != nil {
+				t.Fatalf("link assistant to compaction artifact: %v", err)
+			}
+
+			replacement, err := svc.Persist(ctx, PersistInput{
+				BotID:           postgresMessageTestBotID,
+				SessionID:       postgresMessageTestSessionID,
+				Role:            "assistant",
+				Content:         []byte(`{"role":"assistant","content":"new"}`),
+				SkipHistoryTurn: true,
+			})
+			if err != nil {
+				t.Fatalf("persist replacement assistant: %v", err)
+			}
+			replacementTurnID, replacementTurnPosition := postgresReplacementIdentity(oldTurn)
+			if _, err := svc.ReplaceTurn(ctx, postgresMessageTestSessionID, oldTurn.ID, replacementTurnID, replacementTurnPosition, user.ID, replacement.ID, "retry"); err != nil {
+				t.Fatalf("replace turn: %v", err)
+			}
+			assertPostgresArtifactInvalidated(t, ctx, tx, artifactID, tc.invalidated)
+		})
+	}
+}
+
+func constMs(v int64) func(int64) int64 {
+	return func(int64) int64 { return v }
+}
+
+func offsetMs(delta int64) func(int64) int64 {
+	return func(cutoffMs int64) int64 { return cutoffMs + delta }
+}
+
+func assertPostgresArtifactInvalidated(t *testing.T, ctx context.Context, tx pgx.Tx, artifactID string, want bool) {
+	t.Helper()
+	var invalidated bool
 	if err := tx.QueryRow(ctx, `
-		SELECT count(*)
-		FROM bot_history_message_compacts compact
-		JOIN bot_sessions session ON session.id = compact.session_id
-		WHERE compact.session_id = $1
-		  AND compact.compaction_epoch = session.compaction_epoch
-	`, postgresMessageTestSessionID).Scan(&currentArtifacts); err != nil {
-		t.Fatalf("count current compaction artifacts: %v", err)
+		SELECT invalidated_at IS NOT NULL FROM bot_history_message_compacts WHERE id = $1
+	`, artifactID).Scan(&invalidated); err != nil {
+		t.Fatalf("read artifact %s invalidation: %v", artifactID, err)
 	}
-	if currentArtifacts != 0 {
-		t.Fatalf("current compaction artifacts = %d, want 0 after replacement", currentArtifacts)
+	if invalidated != want {
+		t.Fatalf("artifact %s invalidated = %v, want %v", artifactID, invalidated, want)
 	}
 }
 

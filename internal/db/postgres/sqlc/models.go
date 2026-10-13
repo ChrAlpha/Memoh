@@ -328,6 +328,7 @@ type BotHistoryMessageCompact struct {
 	SupersededBy    pgtype.UUID        `json:"superseded_by"`
 	SupersededAt    pgtype.Timestamptz `json:"superseded_at"`
 	CompactionEpoch int64              `json:"compaction_epoch"`
+	InvalidatedAt   pgtype.Timestamptz `json:"invalidated_at"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	CompletedAt     pgtype.Timestamptz `json:"completed_at"`
 	TeamID          pgtype.UUID        `json:"team_id"`

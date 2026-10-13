@@ -1015,6 +1015,7 @@ CREATE TABLE IF NOT EXISTS bot_history_message_compacts (
   superseded_by UUID REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL,
   superseded_at TIMESTAMPTZ,
   compaction_epoch BIGINT NOT NULL DEFAULT 0,
+  invalidated_at TIMESTAMPTZ,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ
 );

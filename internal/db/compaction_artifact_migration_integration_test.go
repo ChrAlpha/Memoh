@@ -183,6 +183,15 @@ INSERT INTO bot_history_messages (
 	assertCompactionEpoch(t, ctx, tx, "bot_history_message_compacts", repairArtifactID, 0)
 	assertCompactionEpoch(t, ctx, tx, "bot_sessions", clearedSessionID, 1)
 	assertCompactionEpoch(t, ctx, tx, "bot_history_message_compacts", clearedArtifactID, 0)
+	// The migration names public.bot_history_message_compacts; this legacy copy
+	// lives in the test schema, so the statement is pointed there.
+	up0167 := strings.ReplaceAll(
+		readEmbeddedMigration(t, "postgres/migrations/0167_compact_invalidated_at.up.sql"),
+		"public.bot_history_message_compacts", quotedSchema+".bot_history_message_compacts",
+	)
+	if _, err := tx.Exec(ctx, up0167); err != nil {
+		t.Fatalf("apply 0167 up: %v", err)
+	}
 	parsedClearedSessionID, err := ParseUUID(clearedSessionID)
 	if err != nil {
 		t.Fatalf("parse cleared session id: %v", err)

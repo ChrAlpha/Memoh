@@ -1126,7 +1126,7 @@ JOIN bot_history_messages m
 GROUP BY target.turn_id, target.session_id, target.turn_position;
 
 -- name: ReplaceHistoryTurn :one
-WITH owner_session AS MATERIALIZED (
+WITH RECURSIVE owner_session AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
   WHERE session.team_id = public.memoh_current_team_id()
@@ -1164,11 +1164,21 @@ old_turn AS (
   GROUP BY old_turn_target.turn_id, old_turn_target.session_id, old_turn_target.turn_position
 ),
 old_lock AS (
-  SELECT m.id, m.bot_id, m.session_id, m.compact_id
+  SELECT m.id, m.bot_id, m.session_id, m.compact_id, m.created_at
   FROM bot_history_messages m
   JOIN old_turn ON old_turn.id = m.turn_id
   WHERE m.team_id = public.memoh_current_team_id()
   FOR UPDATE
+),
+covering_chain(id) AS (
+  SELECT locked.compact_id
+  FROM old_lock locked
+  WHERE locked.compact_id IS NOT NULL
+  UNION
+  SELECT c.superseded_by
+  FROM covering_chain chain
+  JOIN bot_history_message_compacts c ON c.id = chain.id
+  WHERE c.superseded_by IS NOT NULL
 ),
 old_lock_guard AS (
   SELECT COUNT(*) AS count FROM old_lock
@@ -1220,35 +1230,43 @@ replacement_input AS (
       )
     )
 ),
-affected_compaction_sessions AS MATERIALIZED (
-  SELECT DISTINCT locked.session_id
+-- The truncation point is the first row the replacement hides: the assistant
+-- of a retry (the request stays), or the request of an edit. Assembly admits
+-- history strictly before it, so a summary is invalidated exactly when assembly
+-- would no longer admit it (see admitsCompactionArtifact).
+hidden_cutoff AS (
+  SELECT (FLOOR(EXTRACT(EPOCH FROM MIN(locked.created_at)) * 1000))::bigint AS before_ms
   FROM old_lock locked
-  JOIN replacement_input ON replacement_input.session_id = locked.session_id
-  JOIN bot_history_message_compacts compact
-    ON compact.id = locked.compact_id
-   AND compact.team_id = public.memoh_current_team_id()
-  JOIN bot_sessions session
-    ON session.id = locked.session_id
-   AND session.team_id = public.memoh_current_team_id()
-  WHERE locked.id IS DISTINCT FROM replacement_input.replacement_request_message_id
-    AND locked.id IS DISTINCT FROM replacement_input.replacement_assistant_message_id
-    AND compact.bot_id = locked.bot_id
-    AND compact.session_id = locked.session_id
-    AND compact.compaction_epoch = session.compaction_epoch
+  JOIN replacement_input input ON true
+  WHERE locked.id IS DISTINCT FROM input.replacement_request_message_id
+    AND locked.id IS DISTINCT FROM input.replacement_assistant_message_id
 ),
-session_update AS (
-  UPDATE bot_sessions s
-  SET compaction_epoch = compaction_epoch + CASE
-        WHEN EXISTS (
-          SELECT 1
-          FROM affected_compaction_sessions affected
-          WHERE affected.session_id = s.id
-        ) THEN 1
-        ELSE 0
-      END
-  FROM replacement_input
-  WHERE s.team_id = public.memoh_current_team_id() AND s.id = replacement_input.session_id
-  RETURNING s.id
+-- Every artifact that covers a locked row, including the rollups that
+-- superseded the artifact covering it.
+covering_artifacts AS MATERIALIZED (
+  SELECT chain.id
+  FROM covering_chain chain
+),
+invalidated_artifacts AS (
+  UPDATE bot_history_message_compacts compact
+  SET invalidated_at = now()
+  FROM replacement_input input
+  JOIN bot_sessions session
+    ON session.id = input.session_id
+   AND session.team_id = public.memoh_current_team_id()
+  CROSS JOIN hidden_cutoff cutoff
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.bot_id = input.bot_id
+    AND compact.session_id = input.session_id
+    AND compact.compaction_epoch = session.compaction_epoch
+    AND compact.invalidated_at IS NULL
+    AND compact.id IN (SELECT id FROM covering_artifacts)
+    AND NOT (
+      compact.anchor_start_ms > 0
+      AND compact.anchor_start_ms <= compact.anchor_end_ms
+      AND compact.anchor_end_ms < cutoff.before_ms
+    )
+  RETURNING compact.id
 ),
 replacement AS (
   SELECT
@@ -1264,7 +1282,6 @@ replacement AS (
     now()::timestamptz AS created_at,
     now()::timestamptz AS updated_at
   FROM replacement_input
-  CROSS JOIN session_update
   WHERE sqlc.arg(replacement_position)::bigint > 0
 ),
 updated AS (
@@ -1834,6 +1851,7 @@ FROM (
         AND c.bot_id = m.bot_id
         AND c.session_id = s.id
         AND c.compaction_epoch = s.compaction_epoch
+        AND c.invalidated_at IS NULL
         AND c.status = 'ok'
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
@@ -2879,7 +2897,8 @@ WITH expected_claims AS MATERIALIZED (
     compact.compaction_epoch,
     compact.status,
     compact.summary,
-    compact.started_at
+    compact.started_at,
+    compact.invalidated_at
   FROM bot_history_message_compacts compact
   JOIN artifact_locator locator ON locator.id = compact.id
   WHERE compact.team_id = public.memoh_current_team_id()
@@ -2903,6 +2922,7 @@ WITH expected_claims AS MATERIALIZED (
    AND owner.compaction_epoch = compact.compaction_epoch
   WHERE compact.id = sqlc.arg(compact_id)
     AND compact.status = 'pending'
+    AND compact.invalidated_at IS NULL
 ), foreign_pending_claims AS MATERIALIZED (
   SELECT current_claim.id
   FROM locked_artifacts current_claim
@@ -2924,6 +2944,7 @@ WITH expected_claims AS MATERIALIZED (
     AND current_claim.session_id IS NOT DISTINCT FROM target.session_id
     AND (
       current_claim.compaction_epoch IS DISTINCT FROM target.compaction_epoch
+      OR current_claim.invalidated_at IS NOT NULL
       OR current_claim.started_at <= now() - INTERVAL '15 minutes'
     )
   ORDER BY current_claim.id
@@ -2937,6 +2958,7 @@ WITH expected_claims AS MATERIALIZED (
       current_claim.bot_id IS DISTINCT FROM target.bot_id
       OR current_claim.session_id IS DISTINCT FROM target.session_id
       OR current_claim.compaction_epoch IS DISTINCT FROM target.compaction_epoch
+      OR current_claim.invalidated_at IS NOT NULL
       OR current_claim.status <> 'ok'
       OR NULLIF(BTRIM(current_claim.summary, E' \t\n\r\f\x0B'), '') IS NULL
     )
@@ -3053,6 +3075,7 @@ WITH candidate_rows AS MATERIALIZED (
         AND c.bot_id = m.bot_id
         AND c.session_id = candidate_session.id
         AND c.compaction_epoch = candidate_session.compaction_epoch
+      AND c.invalidated_at IS NULL
         AND (
           (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
           OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
@@ -3147,6 +3170,7 @@ WHERE m.team_id = public.memoh_current_team_id()
       AND c.bot_id = m.bot_id
       AND c.session_id = s.id
       AND c.compaction_epoch = s.compaction_epoch
+      AND c.invalidated_at IS NULL
       AND (
         (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
@@ -3203,6 +3227,7 @@ WHERE m.team_id = public.memoh_current_team_id()
       AND c.bot_id = m.bot_id
       AND c.session_id = s.id
       AND c.compaction_epoch = s.compaction_epoch
+      AND c.invalidated_at IS NULL
       AND (
         (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')

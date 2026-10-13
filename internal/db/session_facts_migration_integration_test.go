@@ -103,10 +103,11 @@ func TestSessionFactsMigrationBackfillsFromMode(t *testing.T) {
 		}
 	}
 
+	// 0167 sits above 0163, so stepping over 0163 takes two steps from head.
 	t.Run("chain steps over 0163 in both directions", func(t *testing.T) {
-		stepDown(t, dsn, 1)
+		stepDown(t, dsn, 2)
 		assertSessionFactColumns(t, ctx, pool, false)
-		stepUp(t, dsn, 1)
+		stepUp(t, dsn, 2)
 		assertSessionFactColumns(t, ctx, pool, true)
 	})
 
