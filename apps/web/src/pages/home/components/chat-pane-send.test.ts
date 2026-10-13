@@ -10,7 +10,13 @@ Object.defineProperty(globalThis, 'localStorage', {
     clear: () => pairDraftStorage.clear(),
   },
 })
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from 'typescript'
+import { ref } from 'vue'
+import { parse } from 'vue/compiler-sfc'
+import { describe, expect, it, vi } from 'vitest'
+import { createCommandEventRegistry } from '@/store/chat/command-events'
+import { composerLocalQuickActionID } from '@/utils/runtime-slash-commands'
 import {
   captureChatPaneSendContext,
   carriedPairForSource,
@@ -196,4 +202,72 @@ describe('welcome send consumes the draft', () => {
     // ...and neither does a failed welcome send (the pick was never persisted).
     expect(welcomeSendConsumedDraft({ sessionId: '' }, { ok: false })).toBe(false)
   })
+})
+
+it('clears a previous busy error only when the runtime operation is accepted', async () => {
+  const { descriptor } = parse(readFileSync(new URL('./chat-pane.vue', import.meta.url), 'utf8'))
+  const script = createSourceFile('chat-pane.ts', descriptor.scriptSetup!.content, ScriptTarget.Latest, true)
+  const names = ['handleSend', 'localQuickActionBlocked', 'localQuickActionIDForSlash', 'currentPaneCommandScope']
+  const handlers = script.statements.filter(node => isFunctionDeclaration(node) && names.includes(node.name?.text ?? ''))
+  if (handlers.length !== names.length) throw new Error('ChatPane runtime command handlers were not found')
+  const compiled = transpileModule(handlers.map(node => node.getText(script)).join('\n'), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText
+  const chatStore = createCommandEventRegistry({ currentBotId: ref('bot'), sessionId: ref('session') })
+  const pending = Promise.withResolvers<Record<string, never>>()
+  const execute = vi.fn(() => pending.promise)
+  const state = {
+    isActive: ref(true),
+    skillSlashEnabled: ref(true),
+    requestedSkills: ref([]),
+    inputText: ref('/compact'),
+    pendingFiles: ref<unknown[]>([]),
+    goalSubmissionBlocked: ref(false),
+    composerError: ref(''),
+    composerLocalQuickActionID,
+    activeIsPendingExternalAgent: ref(false),
+    activeIsExternalAgent: ref(true),
+    planModeSupported: ref(false),
+    goalCommandAvailable: ref(false),
+    composerRuntimeCommands: ref([{ name: 'compact', kind: 'operation', running_text: 'running', completed_text: 'done' }]),
+    activeChatReadOnly: ref(false),
+    loadingMessages: ref(false),
+    streaming: ref(true),
+    inputDraftKey: ref('draft'),
+    paneTarget: ref({ botId: 'bot', sessionId: 'session' }),
+    paneComposerScope: ref('chat'),
+    saveInputDraft: vi.fn(),
+    queryCache: { invalidateQueries: vi.fn() },
+    t: (key: string) => key,
+    runtimeControls: { execute },
+    chatStore,
+  }
+  const send = new Function(...Object.keys(state), `${compiled}; return handleSend`)(...Object.values(state)) as () => Promise<void>
+
+  await send()
+  expect(execute).not.toHaveBeenCalled()
+  expect(state.composerError.value).toBe('errors.session_runtime.session_busy')
+
+  state.streaming.value = false
+  const accepted = send()
+  expect(execute).toHaveBeenCalledTimes(1)
+  expect(state.composerError.value).toBe('')
+  expect(state.inputText.value).toBe('')
+  const invocation = chatStore.commandEvent.value?.invocation_id
+
+  state.inputText.value = '/compact'
+  state.pendingFiles.value = [{}]
+  await send()
+  expect(state.composerError.value).toBe('chat.slash.attachmentsUnsupported')
+  state.pendingFiles.value = []
+  await send()
+  expect(execute).toHaveBeenCalledTimes(1)
+  expect(state.inputText.value).toBe('/compact')
+  expect(state.composerError.value).toBe('chat.slash.attachmentsUnsupported')
+  expect(chatStore.commandEvent.value?.invocation_id).toBe(invocation)
+
+  pending.resolve({})
+  await accepted
+  expect(chatStore.commandEvent.value).toMatchObject({ invocation_id: invocation, type: 'command_result', terminal: true })
+  await send()
+  expect(execute).toHaveBeenCalledTimes(2)
+  expect(state.composerError.value).toBe('')
 })
