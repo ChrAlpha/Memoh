@@ -21,7 +21,8 @@ type SourceSpec struct {
 }
 
 type BudgetEnvelope struct {
-	MaxTokens int
+	OptionalImageFrags []string
+	MaxTokens          int
 	// Plan activates unified provider-envelope budgeting. Nil preserves the
 	// legacy unbudgeted provider selection path. Either Plan or
 	// EnforceProtectedBudget makes the budget a provider allowance, which

@@ -172,6 +172,7 @@ type RunConfig struct {
 	System                         string
 	ContextFrags                   []contextfrag.ContextFrag
 	ContextSourceFrags             []contextfrag.ContextFrag
+	ContextOptionalImageFrags      []string
 	ContextSourceWarnings          []contextfrag.ValidationWarning
 	ContextManifest                contextfrag.Manifest
 	ContextScope                   contextfrag.Scope

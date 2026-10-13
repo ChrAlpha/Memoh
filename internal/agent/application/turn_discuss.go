@@ -266,6 +266,12 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	}
 	runConfig.ContextSourceFrags = s.collectDiscussSourceFrags(ctx, runConfig, admitted, currentImages, sourceImages)
 	for _, frag := range runConfig.ContextSourceFrags {
+		if frag.Provenance.Collector == discussContextCollector && frag.Provenance.Index >= 0 && frag.Provenance.Index < len(admitted) && frag.Kind == contextfrag.KindConversationEvent {
+			source := admitted[frag.Provenance.Index].Source
+			if source != nil && source.Current && source.ID == frag.Provenance.SourceID {
+				runConfig.ContextOptionalImageFrags = append(runConfig.ContextOptionalImageFrags, frag.ID)
+			}
+		}
 		if frag.Provenance.Collector == discussContextCollector &&
 			(frag.Kind == contextfrag.KindCurrentUserMessage || len(sourceImages[frag.Provenance.SourceID]) > 0) {
 			if message := contextfrag.FragMessage(frag); message != nil {

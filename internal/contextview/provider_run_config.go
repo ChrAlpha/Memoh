@@ -374,6 +374,7 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		Sources: []SourceSpec{{Name: sourceFragsCollectorName}},
 		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
 		Budget: BudgetEnvelope{
+			OptionalImageFrags:  cfg.ContextOptionalImageFrags,
 			MaxTokens:           cfg.ContextBudgetMaxTokens,
 			Plan:                budgetPlan,
 			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
@@ -381,6 +382,22 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
+	if view != nil {
+		var sources []string
+		for _, edit := range view.Manifest.EditTrace {
+			if id, ok := strings.CutPrefix(edit.EditID, "images.budget_omit."); ok {
+				for _, frag := range frags {
+					if frag.ID == id {
+						sources = append(sources, frag.Provenance.SourceID)
+						break
+					}
+				}
+			}
+		}
+		if len(sources) > 0 {
+			recordMutationOnce(ledger, contextfrag.MutationCurrentInputImagesOmitted, "sources="+strings.Join(sources, ","))
+		}
+	}
 	if cfg.ObserveContextBudget != nil && budgetPlan != nil && ctx.Err() == nil {
 		observed := cfg
 		observed.ContextSourceFrags = frags

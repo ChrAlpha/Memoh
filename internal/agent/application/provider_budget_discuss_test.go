@@ -394,3 +394,28 @@ func TestDiscussFailedCompactionRunsOnceAfterShedding(t *testing.T) {
 		t.Fatalf("compactions=%d, want one attempt per run", len(compactor.configs))
 	}
 }
+
+func TestDiscussImageAdmissionDoesNotRequireRecovery(t *testing.T) {
+	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
+	configureDiscussLifecycle(service)
+	resolver.resolveResult.RunConfig.SupportsImageInput = true
+	service.turnHooks.inlineImages = echoDiscussImages
+	apply := contextview.ProviderRunConfigApplier(nil)
+	service.turnHooks.streamAgent = native.New(native.Deps{ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, error) {
+		cfg.RecoverContextBudget = nil
+		return apply(ctx, cfg)
+	}}).Stream
+	cmd.DiscussMessages = []turn.DiscussMessage{
+		{Role: "user", Content: "older-a " + strings.Repeat("a", 200), Source: &turn.ContextMessageSource{Kind: "external", ID: "older-a", Current: true}},
+		{Role: "user", Content: "newest continue", Source: &turn.ContextMessageSource{Kind: "external", ID: "newest", Current: true}},
+	}
+	cmd.DiscussImageRefs = []turn.DiscussImageRef{{ContentHash: "aGFzaA==", Mime: "image/png", MessageID: "older-a"}}
+	h, err := service.StartTurn(t.Context(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainDiscuss(t, h)
+	if provider.callCount() != 1 || countRecoveryText(provider.params.Messages, "older-a ") != 1 || len(compactor.configs) != 0 {
+		t.Fatalf("local admission lost text: provider=%d compactions=%d messages=%+v", provider.callCount(), len(compactor.configs), provider.params.Messages)
+	}
+}

@@ -64,6 +64,12 @@ func (*FragmentSelector) Select(frags []contextfrag.ContextFrag, profile IntentP
 		budget.MaxTokens = budget.Plan.HistoryBudget
 	}
 
+	if budget.Plan != nil && len(budget.OptionalImageFrags) > 0 {
+		var edits []fragBudgetEdit
+		frags, edits = shedOptionalHistoryImages(frags, budget.OptionalImageFrags, budget.MaxTokens)
+		fragBudgetEdits = append(fragBudgetEdits, edits...)
+	}
+
 	var exchangeDropped []contextfrag.ContextFrag
 	var exchangeEdits []contextfrag.ContextEditTrace
 	frags, exchangeDropped, exchangeEdits = applyToolExchangePolicy(frags, budget.ToolExchange)
