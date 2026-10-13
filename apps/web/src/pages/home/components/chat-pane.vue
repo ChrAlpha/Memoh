@@ -3999,6 +3999,7 @@ async function handleSend() {
       result: { kind: 'runtime_command', title, text: runtimeCommand.running_text, text_key: 'common.loading' },
     }, currentPaneCommandScope(), runtimeCommand.kind === 'operation')
     if (!complete) return
+    composerError.value = ''
     inputText.value = ''
     saveInputDraft(draftKey, '')
     try {
