@@ -254,42 +254,28 @@ type SessionHistoryAfterCompaction struct {
 	Messages  []Message
 }
 
-// ContextHistoryReader loads a session's context without a time window.
-type ContextHistoryReader interface {
-	// ListActiveAfterCompactionBySessionWithinBytes returns the live summaries
-	// and the rows after the latest compaction boundary, admitted newest-first
-	// within the content byte budget (CM-ADM-001; the crossing row is kept).
-	// Metadata is left undecoded, as in the other byte-budgeted loaders.
-	ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error)
-	// ListRecentUserBySession returns the newest limit user rows of a session
-	// in ascending order. Only ID, Role, Content and CreatedAt are populated.
-	ListRecentUserBySession(ctx context.Context, sessionID string, limit int) ([]Message, error)
-}
-
 // Service defines message read/write behavior.
 type Service interface {
 	Writer
 	List(ctx context.Context, botID string) ([]Message, error)
 	ListSince(ctx context.Context, botID string, since time.Time) ([]Message, error)
 	ListActiveSince(ctx context.Context, botID string, since time.Time) ([]Message, error)
-	// ListActiveSinceWithinBytes is the byte-budgeted variant of
-	// ListActiveSince (CM-ADM-001): rows are admitted newest-first until
-	// their content byte total crosses maxBytes. Only content is budgeted,
-	// so metadata is returned undecoded in RawMetadata (Metadata stays nil):
-	// callers decode one row at a time instead of holding every row's
-	// decoded metadata, which legacy lifecycle audits can inflate.
-	ListActiveSinceWithinBytes(ctx context.Context, botID string, since time.Time, maxBytes int64) ([]Message, error)
 	ListLatest(ctx context.Context, botID string, limit int32) ([]Message, error)
 	ListBefore(ctx context.Context, botID string, before time.Time, limit int32) ([]Message, error)
 	ListBySession(ctx context.Context, sessionID string) ([]Message, error)
 	ListSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
 	ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
-	// ListActiveSinceBySessionWithinBytes is the byte-budgeted variant of
-	// ListActiveSinceBySession (CM-ADM-001), same admission semantics and
-	// undecoded metadata as ListActiveSinceWithinBytes, scoped to one session.
-	ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)
-	// ListTurnResponseSourcesSinceBySessionWithinBytes is the same window as
-	// ListActiveSinceBySessionWithinBytes projected to what turn-response
+	// ListActiveAfterCompactionBySessionWithinBytes returns the live summaries
+	// and every active row they do not cover, with no time window. Rows are
+	// admitted newest-first within the content byte budget (CM-ADM-001; the
+	// crossing row is kept) and metadata is left undecoded, so callers decode
+	// one row at a time instead of holding every row's decoded metadata.
+	ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error)
+	// ListRecentUserBySession returns the newest limit user rows of a session
+	// in ascending order, with the same undecoded-metadata row shape.
+	ListRecentUserBySession(ctx context.Context, sessionID string, limit int) ([]Message, error)
+	// ListTurnResponseSourcesSinceBySessionWithinBytes is a byte-budgeted
+	// time window projected to what turn-response
 	// composition reads: ID, role, content, created_at, and Metadata holding
 	// only AgentStepInterruptedMetadataKey. Nothing else is loaded.
 	ListTurnResponseSourcesSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)

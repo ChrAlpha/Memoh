@@ -1123,47 +1123,9 @@ func (s *DBService) ListSinceBySession(ctx context.Context, sessionID string, si
 	return msgs, nil
 }
 
-// ListActiveSinceWithinBytes returns bot messages since a given time,
-// admitted newest-first within the content byte budget (CM-ADM-001).
-func (s *DBService) ListActiveSinceWithinBytes(ctx context.Context, botID string, since time.Time, maxBytes int64) ([]Message, error) {
-	pgBotID, err := dbpkg.ParseUUID(botID)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListActiveMessagesSinceWithinBytes(ctx, sqlc.ListActiveMessagesSinceWithinBytesParams{
-		BotID:     pgBotID,
-		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
-		MaxBytes:  maxBytes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	msgs := toMessagesFromActiveSinceWithinBytes(rows)
-	s.enrichAssets(ctx, msgs)
-	return msgs, nil
-}
-
-// ListActiveSinceBySessionWithinBytes returns session messages since a given
-// time, admitted newest-first within the content byte budget (CM-ADM-001).
-func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error) {
-	pgSessionID, err := dbpkg.ParseUUID(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.queries.ListActiveMessagesSinceBySessionWithinBytes(ctx, sqlc.ListActiveMessagesSinceBySessionWithinBytesParams{
-		SessionID: pgSessionID,
-		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
-		MaxBytes:  maxBytes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	msgs := toMessagesFromActiveSinceBySessionWithinBytes(rows)
-	s.enrichAssets(ctx, msgs)
-	return msgs, nil
-}
-
-// ListActiveAfterCompactionBySessionWithinBytes implements ContextHistoryReader.
+// ListActiveAfterCompactionBySessionWithinBytes returns the live summaries and
+// every active row they do not cover, admitted newest-first within the content
+// byte budget (CM-ADM-001).
 func (s *DBService) ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -1199,7 +1161,8 @@ func (s *DBService) ListActiveAfterCompactionBySessionWithinBytes(ctx context.Co
 	return SessionHistoryAfterCompaction{Summaries: summaries, Messages: msgs}, nil
 }
 
-// ListRecentUserBySession implements ContextHistoryReader.
+// ListRecentUserBySession returns the newest limit user rows of a session in
+// ascending order.
 func (s *DBService) ListRecentUserBySession(ctx context.Context, sessionID string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -1217,7 +1180,7 @@ func (s *DBService) ListRecentUserBySession(ctx context.Context, sessionID strin
 	}
 	msgs := make([]Message, 0, len(rows))
 	for _, row := range rows {
-		msgs = append(msgs, Message{ID: uuidString(row.ID), Role: row.Role, Content: row.Content, CreatedAt: row.CreatedAt.Time})
+		msgs = append(msgs, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
 	}
 	return msgs, nil
 }
@@ -2401,22 +2364,6 @@ func toMessagesFromActiveSinceBySession(rows []sqlc.ListActiveMessagesSinceBySes
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
 		messages = append(messages, toMessageFromActiveSinceBySessionRow(row))
-	}
-	return messages
-}
-
-func toMessagesFromActiveSinceWithinBytes(rows []sqlc.ListActiveMessagesSinceWithinBytesRow) []Message {
-	messages := make([]Message, 0, len(rows))
-	for _, row := range rows {
-		messages = append(messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
-	}
-	return messages
-}
-
-func toMessagesFromActiveSinceBySessionWithinBytes(rows []sqlc.ListActiveMessagesSinceBySessionWithinBytesRow) []Message {
-	messages := make([]Message, 0, len(rows))
-	for _, row := range rows {
-		messages = append(messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
 	}
 	return messages
 }

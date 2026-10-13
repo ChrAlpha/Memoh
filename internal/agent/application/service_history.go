@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
-	"time"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
@@ -113,40 +110,6 @@ func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req ChatRe
 	return &message
 }
 
-// loadHistoryRecords loads the recent history window. The load is
-// byte-budgeted on the database side (CM-ADM-001): rows are admitted
-// newest-first within contextTokenBudget (the absolute cap when the budget
-// is unset), so the time window alone never bounds process memory.
-func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.ScopeFallback, sessionID string, maxContextMinutes, contextTokenBudget int) ([]historyfrag.HistoryRecord, error) {
-	if s.messageService == nil {
-		return nil, nil
-	}
-	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
-	maxBytes := s.historyLoadMaxBytes(contextTokenBudget)
-	var msgs []messagepkg.Message
-	var err error
-	if strings.TrimSpace(sessionID) != "" {
-		msgs, err = s.messageService.ListActiveSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes)
-	} else {
-		msgs, err = s.messageService.ListActiveSinceWithinBytes(ctx, fallback.ChatID, since, maxBytes)
-	}
-	if err != nil {
-		return nil, err
-	}
-	// The budget covers content only; metadata arrives undecoded. Release each
-	// row once converted so at most one row's metadata is decoded at a time.
-	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
-	for i := range msgs {
-		record, err := historyfrag.FromDBMessageWithLogger(s.logger, msgs[i], fallback)
-		if err != nil {
-			return nil, err
-		}
-		msgs[i] = messagepkg.Message{}
-		result = append(result, record)
-	}
-	return result, nil
-}
-
 func historyScopeFallbackFromChatRequest(req ChatRequest) historyfrag.ScopeFallback {
 	return historyfrag.ScopeFallback{
 		ChatID:           strings.TrimSpace(req.ChatID),
@@ -194,7 +157,6 @@ func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []h
 		}
 		required = append(required, record)
 	}
-	required = pruneHistoryForGateway(required)
 	required = filterMessagesBeforeID(required, req.HistoryCutoffBeforeMessageID)
 	if !containsHistoryRecord(required, messageID) {
 		return nil, errors.New("required history message is not visible")
@@ -264,8 +226,19 @@ func compactionSummaryScope(botID, chatID, sessionID, conversationType, conversa
 	}
 }
 
+// dedupePersistedCurrentUserMessage removes the current user row from history
+// when the request already persisted it. The row id is authoritative; the
+// external message id only identifies rows of requests that carry no id.
 func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req ChatRequest) []historyfrag.HistoryRecord {
 	if !req.UserMessagePersisted || len(messages) == 0 {
+		return messages
+	}
+	if persistedID := strings.TrimSpace(req.PersistedUserMessageID); persistedID != "" {
+		for i := len(messages) - 1; i >= 0; i-- {
+			if strings.TrimSpace(messages[i].DBMessageID) == persistedID {
+				return append(messages[:i], messages[i+1:]...)
+			}
+		}
 		return messages
 	}
 
@@ -309,11 +282,6 @@ func estimateMessageTokens(msg ModelMessage) int {
 	return contextfrag.TokensFromBytes(len(text))
 }
 
-func trimMessagesByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, int) {
-	trimmed, _, totalTokens := trimMessagesAndRecordsByTokens(log, messages, maxTokens)
-	return trimmed, totalTokens
-}
-
 // totalCompactableHistoryTokens estimates the tokens held by raw history rows
 // only. Active summaries are excluded: compaction can never shrink them, so
 // counting them toward the compaction trigger would re-fire it on every
@@ -329,184 +297,10 @@ func totalCompactableHistoryTokens(records []historyfrag.HistoryRecord) int {
 	return total
 }
 
-func trimMessagesAndRecordsByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
-	if maxTokens == 0 || len(messages) == 0 {
-		return finalizeTrimmedHistory(messages, false, 0)
-	}
-
-	// Scan from newest to oldest, accumulating per-message estimated context
-	// token costs. Each message's cost represents the tokens it occupies in the
-	// context window (not the output tokens it generated). We use a character-
-	// based estimate for all messages since this measures context window impact.
-	scannedTokens := 0
-	cutoff := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		scannedTokens += estimateMessageTokens(messages[i].ModelMessage)
-		if scannedTokens > maxTokens {
-			cutoff = i + 1
-			break
-		}
-	}
-
-	// Keep provider-valid message order: a "tool" message must follow a
-	// preceding assistant tool call. When history is head-trimmed, a leading
-	// tool message may become orphaned and cause provider 400 errors.
-	for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
-		cutoff++
-	}
-	cutoff, totalTokens := fitRequiredMessagesWithinBudget(messages, cutoff, maxTokens)
-
-	if cutoff > 0 && log != nil {
-		log.Info("trimMessagesByTokens: context trimmed",
-			slog.Int("total_messages", len(messages)),
-			slog.Int("estimated_tokens", totalTokens),
-			slog.Int("max_tokens", maxTokens),
-			slog.Int("cutoff_index", cutoff),
-			slog.Int("kept_messages", len(messages)-cutoff),
-		)
-	}
-
-	requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
-	retained := make([]historyfrag.HistoryRecord, 0, len(messages)-cutoff+len(requiredPrefix))
-	retained = append(retained, requiredPrefix...)
-	retained = append(retained, messages[cutoff:]...)
-	return finalizeTrimmedHistory(retained, cutoff > 0, maxTokens)
-}
-
-// historyTrimNotice tells the LLM that earlier context was trimmed so it can
-// use tools (memory, search) to look up past information if needed.
-func historyTrimNotice() ModelMessage {
-	return ModelMessage{
-		Role: "system",
-		Content: newTextContent(
-			"[System Notice] Earlier conversation history has been trimmed to fit the context window. " +
-				"If you need information from earlier in the conversation, use the available tools " +
-				"(such as memory_read or web search) to retrieve it.",
-		),
-	}
-}
-
-// finalizeTrimmedHistory derives workspace-transition markers from the
-// records that survived trimming and charges markers and the truncation
-// notice against the same hard budget, dropping the oldest droppable
-// survivors until everything fits. Deriving from survivors means every kept
-// workspace run is governed by its marker no matter where the cut fell —
-// including messages pulled back as Required. When only protected records
-// remain, the terminal ladder keeps the budget a hard bound: the notice is
-// omitted first (meta text loses to content), then the oldest active
-// summaries are evicted; Required records are the only sanctioned overflow.
-func finalizeTrimmedHistory(retained []historyfrag.HistoryRecord, trimmed bool, maxTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
-	noticeDropped := false
-	for {
-		annotated := injectWorkspaceTransitionRecords(retained)
-		withNotice := trimmed && !noticeDropped
-		totalTokens := estimateMessagesTokens(annotated)
-		if withNotice {
-			totalTokens += estimateMessageTokens(historyTrimNotice())
-		}
-		if maxTokens <= 0 || totalTokens <= maxTokens {
-			return emitTrimmedHistory(annotated, withNotice, totalTokens)
-		}
-		// Active summaries are shielded from this first rung: evicting the
-		// compressed carrier of already-trimmed history before plain rows
-		// would be self-defeating, and summaries stay small by the engine's
-		// ineffective-summary gate.
-		if dropIndex := trimDropIndex(retained, false); dropIndex >= 0 {
-			retained = dropRetainedRecord(retained, dropIndex)
-			trimmed = true
-			continue
-		}
-		if withNotice {
-			noticeDropped = true
-			continue
-		}
-		if dropIndex := trimDropIndex(retained, true); dropIndex >= 0 {
-			retained = dropRetainedRecord(retained, dropIndex)
-			trimmed = true
-			continue
-		}
-		return emitTrimmedHistory(annotated, withNotice, totalTokens)
-	}
-}
-
-func trimDropIndex(retained []historyfrag.HistoryRecord, allowActiveSummaries bool) int {
-	for index, record := range retained {
-		if record.Required {
-			continue
-		}
-		if !allowActiveSummaries && record.Lifecycle == historyfrag.LifecycleActiveSummary {
-			continue
-		}
-		return index
-	}
-	return -1
-}
-
-func dropRetainedRecord(retained []historyfrag.HistoryRecord, dropIndex int) []historyfrag.HistoryRecord {
-	retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
-	// Dropping a call can orphan its tool results; drop those too.
-	for dropIndex < len(retained) &&
-		!retained[dropIndex].Required &&
-		strings.EqualFold(strings.TrimSpace(retained[dropIndex].ModelMessage.Role), "tool") {
-		retained = append(retained[:dropIndex], retained[dropIndex+1:]...)
-	}
-	return retained
-}
-
-func emitTrimmedHistory(annotated []historyfrag.HistoryRecord, withNotice bool, totalTokens int) ([]ModelMessage, []historyfrag.HistoryRecord, int) {
-	result := make([]ModelMessage, 0, len(annotated)+1)
-	if withNotice {
-		result = append(result, historyTrimNotice())
-	}
-	for _, record := range annotated {
-		result = append(result, record.ModelMessage)
-	}
-	return result, annotated, totalTokens
-}
-
-func fitRequiredMessagesWithinBudget(messages []historyfrag.HistoryRecord, cutoff int, maxTokens int) (int, int) {
-	if maxTokens <= 0 || len(messages) == 0 {
-		return cutoff, estimateMessagesTokens(messages)
-	}
-	if cutoff < 0 {
-		cutoff = 0
-	}
-	if cutoff > len(messages) {
-		cutoff = len(messages)
-	}
-	for {
-		requiredPrefix := requiredMessagesBeforeCutoff(messages, cutoff)
-		totalTokens := estimateMessagesTokens(requiredPrefix) + estimateMessagesTokens(messages[cutoff:])
-		if totalTokens <= maxTokens || cutoff >= len(messages) {
-			return cutoff, totalTokens
-		}
-		cutoff++
-		for cutoff < len(messages) && strings.EqualFold(strings.TrimSpace(messages[cutoff].ModelMessage.Role), "tool") {
-			cutoff++
-		}
-	}
-}
-
 func estimateMessagesTokens(messages []historyfrag.HistoryRecord) int {
 	total := 0
 	for _, m := range messages {
 		total += estimateMessageTokens(m.ModelMessage)
 	}
 	return total
-}
-
-func requiredMessagesBeforeCutoff(messages []historyfrag.HistoryRecord, cutoff int) []historyfrag.HistoryRecord {
-	if cutoff <= 0 {
-		return nil
-	}
-	if cutoff > len(messages) {
-		cutoff = len(messages)
-	}
-	var required []historyfrag.HistoryRecord
-	for _, m := range messages[:cutoff] {
-		if m.Required {
-			required = append(required, m)
-		}
-	}
-	return required
 }

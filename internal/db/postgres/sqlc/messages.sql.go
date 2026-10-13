@@ -5266,12 +5266,52 @@ func (q *Queries) ListObservedConversationsByChannelType(ctx context.Context, ar
 const listRecentUserMessagesBySession = `-- name: ListRecentUserMessagesBySession :many
 SELECT
   recent.id,
+  recent.bot_id,
+  recent.session_id,
+  recent.sender_channel_identity_id,
+  recent.sender_user_id,
+  recent.external_message_id,
+  recent.source_reply_to_message_id,
   recent.role,
   recent.content,
-  recent.created_at
+  recent.metadata,
+  recent.usage,
+  recent.session_mode,
+  recent.runtime_type,
+  recent.event_id,
+  recent.display_text,
+  recent.compact_id,
+  recent.created_at,
+  recent.sender_display_name,
+  recent.sender_avatar_url,
+  recent.platform
 FROM (
-  SELECT m.id, m.role, m.content, m.created_at, m.turn_position, m.turn_message_seq
+  SELECT
+    m.id,
+    m.bot_id,
+    m.session_id,
+    m.sender_channel_identity_id,
+    m.sender_account_user_id AS sender_user_id,
+    m.source_message_id AS external_message_id,
+    m.source_reply_to_message_id,
+    m.role,
+    m.content,
+    m.metadata,
+    m.usage,
+    m.session_mode,
+    m.runtime_type,
+    m.event_id,
+    m.display_text,
+    m.compact_id,
+    m.created_at,
+    m.turn_position,
+    m.turn_message_seq,
+    ci.display_name AS sender_display_name,
+    ci.avatar_url AS sender_avatar_url,
+    s.channel_type AS platform
   FROM bot_visible_history_messages m
+  JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND m.role = 'user'
@@ -5288,14 +5328,32 @@ type ListRecentUserMessagesBySessionParams struct {
 }
 
 type ListRecentUserMessagesBySessionRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Role      string             `json:"role"`
-	Content   []byte             `json:"content"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	CompactID               pgtype.UUID        `json:"compact_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
 }
 
 // The newest N user rows of a session in ascending order, for callers that
-// need recent user text only and must not load the history.
+// need recent user text only and must not load the history. Rows carry the
+// same columns as the byte-budgeted loaders so the preflight-failure and
+// current-row filters see the metadata and source ids they read there.
 func (q *Queries) ListRecentUserMessagesBySession(ctx context.Context, arg ListRecentUserMessagesBySessionParams) ([]ListRecentUserMessagesBySessionRow, error) {
 	rows, err := q.db.Query(ctx, listRecentUserMessagesBySession, arg.SessionID, arg.RowLimit)
 	if err != nil {
@@ -5307,9 +5365,25 @@ func (q *Queries) ListRecentUserMessagesBySession(ctx context.Context, arg ListR
 		var i ListRecentUserMessagesBySessionRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
 			&i.Role,
 			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.SessionMode,
+			&i.RuntimeType,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CompactID,
 			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
 		); err != nil {
 			return nil, err
 		}

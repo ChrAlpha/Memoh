@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -15,42 +14,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-type turnResponseSourceMessageService struct {
-	recordingMessageService
-	full      []messagepkg.Message
-	projected []messagepkg.Message
-	sessionID string
-	maxBytes  int64
-}
-
-func (s *turnResponseSourceMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return s.full, nil
-}
-
-func (s *turnResponseSourceMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(_ context.Context, sessionID string, _ time.Time, maxBytes int64) ([]messagepkg.Message, error) {
-	s.sessionID, s.maxBytes = sessionID, maxBytes
-	return s.projected, nil
-}
-
-func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
-	t.Parallel()
-
-	source := &turnResponseSourceMessageService{
-		full:      []messagepkg.Message{persistedHistoryMessage(t, "full", "assistant", "full row")},
-		projected: []messagepkg.Message{persistedHistoryMessage(t, "projected", "assistant", "projected row")},
-	}
-	svc := &Service{messageService: source, logger: slog.New(slog.DiscardHandler)}
-	entries := svc.loadTurnResponses(context.Background(), "session-1", 1000)
-
-	if source.sessionID != "session-1" || source.maxBytes != 1000*contextfrag.EstimateBytesPerToken {
-		t.Fatalf("projected load got session=%q maxBytes=%d", source.sessionID, source.maxBytes)
-	}
-	if len(entries) != 1 || entries[0].SourceMessageID != "projected" {
-		t.Fatalf("turn responses = %#v, want the projected source only", entries)
-	}
-}
-
-func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
+func TestAssembleContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 	t.Parallel()
 
 	lifecycle := map[string]any{"version": 2, "selection_decisions": []any{map[string]any{"id": "history:1", "decision": "kept"}}}
@@ -72,17 +36,17 @@ func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	prepared, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: "bot-1", ThreadID: "session-1"}, historyfrag.ScopeFallback{}, 100000)
+	prepared, err := svc.assembleContext(context.Background(), chatContextRequest(contextPurposeRun, ChatRequest{BotID: "bot-1", ThreadID: "session-1"}, 100000))
 	if err != nil {
-		t.Fatalf("prepareHistoryContext failed: %v", err)
+		t.Fatalf("assembleContext failed: %v", err)
 	}
-	if len(prepared.messages) != 2 || len(prepared.records) != 2 {
-		t.Fatalf("prepared %d messages, %d records; want the timeout marker dropped", len(prepared.messages), len(prepared.records))
+	if len(prepared.Messages) != 2 || len(prepared.Records) != 2 {
+		t.Fatalf("assembled %d messages, %d records; want the timeout marker dropped", len(prepared.Messages), len(prepared.Records))
 	}
-	if got := prepared.messages[1].TextContent(); !strings.Contains(got, messagepkg.AgentStepInterruptedReasoningPrefix+"partial reasoning") {
+	if got := prepared.Messages[1].TextContent(); !strings.Contains(got, messagepkg.AgentStepInterruptedReasoningPrefix+"partial reasoning") {
 		t.Fatalf("interrupted checkpoint was not projected: %q", got)
 	}
-	record := prepared.records[1]
+	record := prepared.Records[1]
 	if _, ok := record.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
 		t.Fatal("history record kept the lifecycle audit")
 	}

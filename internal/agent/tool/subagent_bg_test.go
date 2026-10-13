@@ -300,11 +300,11 @@ func (*fakeAgentMessageService) ListActiveSinceBySession(context.Context, string
 	return nil, nil
 }
 
-func (*fakeAgentMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return nil, nil
+func (*fakeAgentMessageService) ListActiveAfterCompactionBySessionWithinBytes(context.Context, string, int64) (messagepkg.SessionHistoryAfterCompaction, error) {
+	return messagepkg.SessionHistoryAfterCompaction{}, nil
 }
 
-func (*fakeAgentMessageService) ListActiveSinceWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
+func (*fakeAgentMessageService) ListRecentUserBySession(context.Context, string, int) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 

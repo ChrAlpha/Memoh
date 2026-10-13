@@ -11,7 +11,6 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/hooks"
@@ -177,84 +176,6 @@ func TestPrepareRunConfigClearsStaleContextHookText(t *testing.T) {
 		if frag.Kind == contextfrag.KindHookContext {
 			t.Fatalf("stale hook fragment survived prepareRunConfig: %#v", frag)
 		}
-	}
-}
-
-func TestNormalizeContextMessagesRemapsCurrentAndMemory(t *testing.T) {
-	t.Parallel()
-
-	webCall := sdkMessagesToModelMessages([]sdk.Message{{
-		Role: sdk.MessageRoleAssistant,
-		Content: []sdk.MessagePart{sdk.ToolCallPart{
-			ToolCallID: "web-call", ToolName: "web_fetch",
-		}},
-	}})[0]
-	webResult := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
-		ToolCallID: "web-call", ToolName: "web_fetch", Result: toolexec.OutputFromValue("discarded"),
-	})})[0]
-	askCall := sdkMessagesToModelMessages([]sdk.Message{{
-		Role: sdk.MessageRoleAssistant,
-		Content: []sdk.MessagePart{sdk.ToolCallPart{
-			ToolCallID: "ask-call", ToolName: "ask_user",
-		}},
-	}})[0]
-	messages := []ModelMessage{
-		{Content: newTextContent("missing role")},
-		{Role: "user", Content: newTextContent("history 0")},
-		{Role: "assistant", Content: newTextContent("answer 0")},
-		{Role: "user", Content: newTextContent("history 1")},
-		webCall,
-		webResult,
-		{Role: "assistant", Content: newTextContent("answer 1")},
-		{Role: "user", Content: newTextContent("history 2")},
-		{Role: "assistant", Content: newTextContent("answer 2")},
-		{Role: "user", Content: newTextContent("history 3")},
-		askCall,
-		{Role: "user", Content: newTextContent("pipeline current")},
-		{Role: "user", Content: newTextContent("memory recall")},
-	}
-	currentIndex := 11
-	memoryIndex := 12
-
-	want := sanitizeMessages(messages)
-	if len(want) <= 10 {
-		t.Fatalf("fixture did not activate tool stripping: %d messages", len(want))
-	}
-	want = stripToolMessages(want)
-	want = repairToolCallClosures(want, syntheticToolClosureError)
-	got, gotCurrent, gotMemory := normalizeContextMessages(messages, &currentIndex, &memoryIndex)
-
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("normalized messages changed: got %#v want %#v", got, want)
-	}
-	if gotCurrent == nil || *gotCurrent != 9 || got[*gotCurrent].TextContent() != "pipeline current" {
-		t.Fatalf("current index = %#v in %#v, want pipeline current at 9", gotCurrent, got)
-	}
-	if gotMemory == nil || *gotMemory != 10 || got[*gotMemory].TextContent() != "memory recall" {
-		t.Fatalf("memory index = %#v in %#v, want memory recall at 10", gotMemory, got)
-	}
-}
-
-func TestPrependContextMessagesShiftsTrackedCurrentUser(t *testing.T) {
-	t.Parallel()
-
-	prefix := []ModelMessage{
-		{Role: "user", Content: newTextContent("parent fork context")},
-		{Role: "assistant", Content: newTextContent("parent answer")},
-	}
-	messages := []ModelMessage{
-		{Role: "assistant", Content: newTextContent("thread history")},
-		{Role: "user", Content: newTextContent("pipeline current")},
-	}
-	currentIndex := 1
-
-	got, gotCurrent := prependContextMessages(prefix, messages, &currentIndex)
-
-	if gotCurrent == nil || *gotCurrent != 3 {
-		t.Fatalf("current index = %#v, want shifted index 3", gotCurrent)
-	}
-	if got[*gotCurrent].TextContent() != "pipeline current" {
-		t.Fatalf("tracked message = %q, want pipeline current", got[*gotCurrent].TextContent())
 	}
 }
 

@@ -74,7 +74,12 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 		SourceChannelIdentityID: "sender-1",
 	})
 	records = replaceCompactedHistoryRecords(records, map[string]string{"compact-ok": "condensed"}, contextfrag.Scope{})
-	got, tokens := trimMessagesByTokens(nil, records, 0)
+	annotated := injectWorkspaceTransitionRecords(records)
+	got := make([]ModelMessage, 0, len(annotated))
+	for _, record := range annotated {
+		got = append(got, record.ModelMessage)
+	}
+	tokens := estimateMessagesTokens(annotated)
 
 	want := []ModelMessage{
 		{Role: "user", Content: newTextContent("<summary>\ncondensed\n</summary>")},

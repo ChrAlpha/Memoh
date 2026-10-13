@@ -224,3 +224,5 @@ func TestBuildCompactionConfigUsesTurnModelWhenNoOverride(t *testing.T) {
 		t.Fatalf("ModelID = %q, want the turn model slug", cfg.ModelID)
 	}
 }
+
+func intPtr(v int) *int { return &v }

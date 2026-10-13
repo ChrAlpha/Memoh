@@ -1911,15 +1911,57 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 
 -- name: ListRecentUserMessagesBySession :many
 -- The newest N user rows of a session in ascending order, for callers that
--- need recent user text only and must not load the history.
+-- need recent user text only and must not load the history. Rows carry the
+-- same columns as the byte-budgeted loaders so the preflight-failure and
+-- current-row filters see the metadata and source ids they read there.
 SELECT
   recent.id,
+  recent.bot_id,
+  recent.session_id,
+  recent.sender_channel_identity_id,
+  recent.sender_user_id,
+  recent.external_message_id,
+  recent.source_reply_to_message_id,
   recent.role,
   recent.content,
-  recent.created_at
+  recent.metadata,
+  recent.usage,
+  recent.session_mode,
+  recent.runtime_type,
+  recent.event_id,
+  recent.display_text,
+  recent.compact_id,
+  recent.created_at,
+  recent.sender_display_name,
+  recent.sender_avatar_url,
+  recent.platform
 FROM (
-  SELECT m.id, m.role, m.content, m.created_at, m.turn_position, m.turn_message_seq
+  SELECT
+    m.id,
+    m.bot_id,
+    m.session_id,
+    m.sender_channel_identity_id,
+    m.sender_account_user_id AS sender_user_id,
+    m.source_message_id AS external_message_id,
+    m.source_reply_to_message_id,
+    m.role,
+    m.content,
+    m.metadata,
+    m.usage,
+    m.session_mode,
+    m.runtime_type,
+    m.event_id,
+    m.display_text,
+    m.compact_id,
+    m.created_at,
+    m.turn_position,
+    m.turn_message_seq,
+    ci.display_name AS sender_display_name,
+    ci.avatar_url AS sender_avatar_url,
+    s.channel_type AS platform
   FROM bot_visible_history_messages m
+  JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.role = 'user'

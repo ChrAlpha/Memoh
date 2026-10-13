@@ -129,6 +129,34 @@ func (s *Service) enterSessionCompactionForRun(botID, sessionID, runID string) f
 	}
 }
 
+// awaitSessionCompaction blocks while a compaction pass holds the session's
+// barrier and reports whether it had to wait. The run's own readers step aside
+// for the wait, as they do for its own compaction, so a pass queued behind
+// them cannot deadlock against this call.
+func (s *Service) awaitSessionCompaction(botID, sessionID, runID string) bool {
+	gate, key := s.acquireSessionCompactionGate(botID, sessionID)
+	if gate == nil {
+		return false
+	}
+	defer s.releaseSessionCompactionGate(key, gate)
+	readers := s.sessionCompactionReaders(gate, runID)
+	suspended := make([]*sessionCompactionReader, 0, len(readers))
+	for _, reader := range readers {
+		if reader.suspend() {
+			suspended = append(suspended, reader)
+		}
+	}
+	waited := !gate.lock.TryLock()
+	if waited {
+		gate.lock.Lock()
+	}
+	gate.lock.Unlock()
+	for _, reader := range suspended {
+		reader.resume()
+	}
+	return waited
+}
+
 func (s *Service) sessionCompactionReaders(gate *sessionCompactionGate, runID string) []*sessionCompactionReader {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {

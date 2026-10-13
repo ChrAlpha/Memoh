@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/errlog"
@@ -30,8 +31,7 @@ const (
 // AutoCompactionThreshold is the async trigger level, exported so read-side
 // surfaces label the same level the turn path acts on. A zero return leaves
 // automatic compaction off when no usable model window is available. The
-// synchronous backstop is deliberately not exposed: it only runs on the history
-// path, which a reader cannot observe.
+// synchronous backstop is deliberately not exposed: a reader cannot observe it.
 func AutoCompactionThreshold(userThreshold, contextTokenBudget int) int {
 	if contextTokenBudget <= 0 {
 		return 0
@@ -70,6 +70,31 @@ func syncBackstopTargetTokens(targetPercent *int, contextTokenBudget int) int {
 func syncCompactionShouldRun(pressure, contextTokenBudget int) bool {
 	threshold := hardCompactionThreshold(contextTokenBudget)
 	return threshold > 0 && pressure >= threshold
+}
+
+// compactionLevel is how urgently a context needs compacting.
+type compactionLevel int
+
+const (
+	compactionNone compactionLevel = iota
+	// compactionAsync starts a background compaction; the turn proceeds.
+	compactionAsync
+	// compactionSync blocks the turn until compaction has run.
+	compactionSync
+)
+
+// compactionNeed is the one place that turns context pressure into a
+// compaction decision. userThreshold, when positive, replaces the soft share
+// that triggers the background run; it never exceeds the hard share.
+func compactionNeed(pressure, contextTokenBudget, userThreshold int) compactionLevel {
+	switch {
+	case syncCompactionShouldRun(pressure, contextTokenBudget):
+		return compactionSync
+	case compaction.ShouldCompact(pressure, AutoCompactionThreshold(userThreshold, contextTokenBudget)):
+		return compactionAsync
+	default:
+		return compactionNone
+	}
 }
 
 func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int {
@@ -131,7 +156,7 @@ func (s *Service) planCompaction(ctx context.Context, req ChatRequest, rc resolv
 		)
 		return compactionPlan{}, false
 	}
-	if !compaction.ShouldCompact(inputTokens, threshold) {
+	if compactionNeed(inputTokens, rc.contextTokenBudget, botSettings.CompactionThreshold) == compactionNone {
 		s.logger.InfoContext(ctx, "compaction: skipped, below threshold",
 			slog.Int("input_tokens", inputTokens),
 			slog.Int("threshold", threshold),
@@ -191,10 +216,9 @@ func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerC
 
 // runCompactionSync runs compaction synchronously when context reaches the
 // blocking share of the model's context window and reports the session-scoped
-// result.
-// A noop (failure cooldown, another compaction in flight, or nothing to
-// compact) leaves this turn's context untouched: the request proceeds as-is,
-// possibly still above the threshold, and the next turn re-evaluates.
+// result. A compaction already in flight for the session is waited for and
+// its outcome reused; a noop (failure cooldown or nothing to compact) means
+// the caller proceeds with the context it has.
 func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string) compaction.Result {
 	if s.compactionService == nil || s.settingsService == nil {
 		s.logger.WarnContext(ctx, "compaction sync: skipped, service or settings nil")
@@ -243,6 +267,61 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 		slog.String("status", res.Status),
 	)
 	return res
+}
+
+// compactBeforeTurn is the pre-turn compaction backstop. Context at or over
+// the hard share of the window, or a load that stopped short of the oldest
+// row, is compacted before the model call and reassembled once from the
+// summary. A compaction already running is waited for and the context is
+// judged again, since it may have made this pass unnecessary. Failure,
+// cooldown, or a context that still does not fit send the request as it is;
+// the provider's own limit error is the outcome.
+func (s *Service) compactBeforeTurn(ctx context.Context, req ChatRequest, turnModelID string, contextTokenBudget int, assembled assembledContext) (assembledContext, error) {
+	if !needsSyncCompaction(assembled, contextTokenBudget) {
+		return assembled, nil
+	}
+	assembleAgain := func() (assembledContext, error) {
+		return s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, contextTokenBudget))
+	}
+	if s.awaitSessionCompaction(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID)) {
+		var err error
+		if assembled, err = assembleAgain(); err != nil {
+			return assembledContext{}, err
+		}
+		if !needsSyncCompaction(assembled, contextTokenBudget) {
+			return assembled, nil
+		}
+	}
+	threshold := hardCompactionThreshold(contextTokenBudget)
+	start := time.Now()
+	res := s.runCompactionSync(ctx, req, assembled.CompactableTokens, contextTokenBudget, turnModelID)
+	s.logger.InfoContext(ctx, "sync_compaction_backstop",
+		slog.String("status", res.Status),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+		slog.String("bot_id", req.BotID),
+		slog.String("session_id", req.ThreadID),
+		slog.Bool("history_truncated", assembled.Truncated),
+		slog.Int("pressure_tokens", assembled.CompactableTokens),
+		slog.Int("threshold_tokens", threshold))
+	if res.Status != compaction.StatusOK {
+		return assembled, nil
+	}
+	compacted, err := assembleAgain()
+	if err != nil {
+		return assembledContext{}, err
+	}
+	if needsSyncCompaction(compacted, contextTokenBudget) {
+		s.logger.WarnContext(ctx, "sync_compaction_insufficient",
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.ThreadID),
+			slog.Int("pressure_tokens", compacted.CompactableTokens),
+			slog.Int("threshold_tokens", threshold))
+	}
+	return compacted, nil
+}
+
+func needsSyncCompaction(assembled assembledContext, contextTokenBudget int) bool {
+	return assembled.Truncated || compactionNeed(assembled.CompactableTokens, contextTokenBudget, 0) == compactionSync
 }
 
 // buildCompactionConfig resolves the summarizer through the shared model

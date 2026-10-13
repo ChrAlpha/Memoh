@@ -20,12 +20,21 @@ func (s *memoryQueryMessageService) ListActiveSinceBySession(context.Context, st
 	return append([]messagepkg.Message(nil), s.messages...), nil
 }
 
-func (s *memoryQueryMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return append([]messagepkg.Message(nil), s.messages...), nil
+func (s *memoryQueryMessageService) ListActiveAfterCompactionBySessionWithinBytes(context.Context, string, int64) (messagepkg.SessionHistoryAfterCompaction, error) {
+	return messagepkg.SessionHistoryAfterCompaction{Messages: append([]messagepkg.Message(nil), s.messages...)}, nil
 }
 
-func (s *memoryQueryMessageService) ListActiveSinceWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return append([]messagepkg.Message(nil), s.messages...), nil
+func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, _ string, limit int) ([]messagepkg.Message, error) {
+	var users []messagepkg.Message
+	for _, message := range s.messages {
+		if message.Role == "user" {
+			users = append(users, message)
+		}
+	}
+	if limit < len(users) {
+		users = users[len(users)-limit:]
+	}
+	return users, nil
 }
 
 func (s *memoryQueryMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {

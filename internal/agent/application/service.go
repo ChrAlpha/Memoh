@@ -27,7 +27,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -52,10 +51,6 @@ import (
 	"github.com/felinics/memoh/internal/sessionfacts"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/workspace"
-)
-
-const (
-	defaultMaxContextMinutes = 24 * 60
 )
 
 // SkillEntry represents a skill loaded from the container.
@@ -132,7 +127,6 @@ type Service struct {
 	botPermissions          botPermissionChecker
 	workspaceTargets        workspaceTargetResolver
 	workdirs                sessionWorkdirResolver
-	pipeline                *timeline.Pipeline
 	streamHTTPClient        *http.Client
 	nonStreamingHTTPClient  *http.Client
 	compactionHTTPClient    *http.Client
@@ -364,18 +358,6 @@ func (s *Service) SetUserInputService(service *userinput.Service) {
 	s.userInput = service
 }
 
-// SetPipeline configures the DCP pipeline for RC-based context assembly.
-// When set, resolve() will use RC from the pipeline instead of loading
-// history from bot_history_messages for sessions that have pipeline data.
-func (s *Service) SetPipeline(p *timeline.Pipeline) {
-	s.pipeline = p
-}
-
-// Pipeline returns the configured pipeline, or nil.
-func (s *Service) Pipeline() *timeline.Pipeline {
-	return s.pipeline
-}
-
 // InlineImageAttachments resolves image content hashes to sdk.ImagePart values
 // using the configured asset loader. Intended for the discuss driver to inline
 // images from new RC segments before calling the LLM.
@@ -408,16 +390,15 @@ func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs
 }
 
 type resolvedContext struct {
-	runConfig                   native.RunConfig
-	model                       models.GetResponse
-	provider                    sqlc.Provider
-	query                       string // headerified persistable query
-	userMessageAlreadyInContext bool
-	injectedRecords             *[]InjectedMessageRecord
-	estimatedTokens             int // estimated input token count for compaction
-	compactableTokens           int // raw history eligible for compaction
-	compactableTokensKnown      bool
-	contextTokenBudget          int // token budget used to clamp compaction triggers
+	runConfig              native.RunConfig
+	model                  models.GetResponse
+	provider               sqlc.Provider
+	query                  string // headerified persistable query
+	injectedRecords        *[]InjectedMessageRecord
+	estimatedTokens        int // estimated input token count for compaction
+	compactableTokens      int // raw history eligible for compaction
+	compactableTokensKnown bool
+	contextTokenBudget     int // token budget used to clamp compaction triggers
 }
 
 func runIDForChatRequest(admittedRunID string) string {
@@ -548,130 +529,40 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		runCfg.ContextLifecycle.SetMemoryRecall(*memoryContext.Trace)
 	}
 	memoryMsg := memoryContext.Message
-	reqMessages := pruneMessagesForGateway(nonNilModelMessages(req.Messages))
-	if memoryMsg != nil {
-		pruned, _ := pruneMessageForGateway(*memoryMsg)
-		memoryMsg = &pruned
-	}
-
-	// When the DCP pipeline has data for this session, build context from
-	// the rendered event stream (RC) + bot turn responses (TR) instead of
-	// loading raw history from bot_history_messages. The current inbound
-	// message is already in the RC, so it must not be appended again.
-	usePipeline := !req.ShutdownResume && s.pipeline != nil &&
-		strings.TrimSpace(req.ThreadID) != "" &&
-		strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" &&
-		len(req.RequestedSkills) == 0
-	if usePipeline {
-		if !s.pipeline.HasSession(strings.TrimSpace(req.ThreadID)) {
-			usePipeline = false
-		}
-	}
+	reqMessages := nonNilModelMessages(req.Messages)
 
 	contextTokenBudget := s.effectiveContextTokenBudget(chatModel)
 	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
-	var messages []ModelMessage
-	var historyRecords []historyfrag.HistoryRecord
-	var estimatedTokens int
-	var compactableTokens int
-	var compactableTokensKnown bool
-	var currentMessageIndex *int
-	if usePipeline {
-		messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
-		compactableTokensKnown = true
-		// Pre-turn synchronous compaction backstop (CM-CMP-001), gated per
-		// CM-CMP-003. Mirrors the legacy path below: only a pass that
-		// actually produced a summary triggers recomposition; a noop keeps
-		// this turn's (already trimmed) context untouched.
-		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
-			threshold := hardCompactionThreshold(contextTokenBudget)
-			if mode == syncCompactionModeShadow {
-				s.logger.InfoContext(ctx, "sync_compaction_backstop",
-					slog.String("path", "pipeline_chat"),
-					slog.String("mode", "shadow"),
-					slog.Bool("would_fire", true),
-					slog.String("bot_id", req.BotID),
-					slog.String("session_id", req.ThreadID),
-					slog.Int("pressure_tokens", compactableTokens),
-					slog.Int("threshold_tokens", threshold))
-			} else {
-				start := time.Now()
-				res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID)
-				s.logger.InfoContext(ctx, "sync_compaction_backstop",
-					slog.String("path", "pipeline_chat"),
-					slog.String("mode", "active"),
-					slog.String("status", res.Status),
-					slog.Int64("duration_ms", time.Since(start).Milliseconds()),
-					slog.String("bot_id", req.BotID),
-					slog.String("session_id", req.ThreadID),
-					slog.Int("pressure_tokens", compactableTokens),
-					slog.Int("threshold_tokens", threshold))
-				if res.Status == compaction.StatusOK {
-					messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
-				}
-			}
-		}
-		currentMessageIndex = latestModelUserMessageIndex(messages)
-	} else {
-		historyFallback := historyScopeFallbackFromChatRequest(req)
-		prepared, loadErr := s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
-		if loadErr != nil {
-			s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
-				slog.String("bot_id", req.BotID),
-				slog.String("stage", "initial"),
-				slog.Any("error", loadErr),
-			)
-			return resolvedContext{}, req, loadErr
-		}
-		messages = prepared.messages
-		historyRecords = prepared.records
-		estimatedTokens = prepared.estimatedTokens
-		compactableTokens = prepared.compactableTokens
-		compactableTokensKnown = true
-		// The trigger only counts raw (compactable) rows: active summaries can
-		// never be compacted away, so including them would make the trigger
-		// self-sustaining once accumulated summaries cross the threshold.
-		if syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
-			compactionThreshold := hardCompactionThreshold(contextTokenBudget)
-			s.logger.WarnContext(ctx, "resolve: context reached compaction threshold, running synchronous compaction",
-				slog.String("bot_id", req.BotID),
-				slog.Int("estimated_tokens", estimatedTokens),
-				slog.Int("compactable_tokens", compactableTokens),
-				slog.Int("context_token_budget", contextTokenBudget),
-				slog.Int("compaction_threshold", compactionThreshold),
-			)
-			// Reload and post-process only when this run actually produced a
-			// summary. A noop (cooldown, in-flight, nothing markable) keeps
-			// this turn's context untouched — possibly still above the
-			// threshold — and the next turn re-evaluates.
-			if res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
-				prepared, loadErr = s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
-				if loadErr != nil {
-					s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
-						slog.String("bot_id", req.BotID),
-						slog.String("stage", "post_compaction"),
-						slog.Any("error", loadErr),
-					)
-					return resolvedContext{}, req, loadErr
-				}
-				messages = prepared.messages
-				historyRecords = prepared.records
-				estimatedTokens = prepared.estimatedTokens
-				compactableTokens = prepared.compactableTokens
-				// Remove tool messages from the recent context — they are large
-				// and unnecessary when we already have a summary. Keep only
-				// user/assistant conversation turns.
-				messages = stripToolMessagesWhenCompactionSummaryIsActive(messages, historyRecords)
-			}
-		}
+	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, contextTokenBudget))
+	if err != nil {
+		s.logger.ErrorContext(ctx, "resolve: assemble context failed",
+			slog.String("bot_id", req.BotID),
+			slog.String("stage", "initial"),
+			slog.Any("error", err),
+		)
+		return resolvedContext{}, req, err
 	}
+	assembled, err = s.compactBeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "resolve: assemble context failed",
+			slog.String("bot_id", req.BotID),
+			slog.String("stage", "post_compaction"),
+			slog.Any("error", err),
+		)
+		return resolvedContext{}, req, err
+	}
+	messages := assembled.Messages
+	historyRecords := assembled.Records
+	estimatedTokens := assembled.EstimatedTokens
+	compactableTokens := assembled.CompactableTokens
 	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
 		// The inherited parent snapshot precedes the thread's own transcript,
 		// exactly as parent-driven subagent tasks assemble it.
-		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
+		messages = append(forkContext, messages...)
 	}
-	historyMessageCount := len(messages)
+	messages = normalizeContextMessages(messages)
+	trimmableMessages := len(messages)
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
 		messages = append(messages, *notice)
 	}
@@ -683,20 +574,15 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	if requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills); requestedSkillMsg != nil {
 		messages = append(messages, *requestedSkillMsg)
 	}
-	if !usePipeline && !req.ReusePersistedUserMessage {
+	if !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
-	trimmableMessages := normalizedContextPrefixLength(messages, historyMessageCount)
-	messages, currentMessageIndex, memoryMessageIndex = normalizeContextMessages(
-		messages,
-		currentMessageIndex,
-		memoryMessageIndex,
-	)
+	messages = normalizeContextMessages(messages)
 	runCfg.ContextHistoryTokenEstimates = make([]int, len(messages))
 	for index := range messages {
 		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
 	}
-	runCfg.ContextTrimmableMessages = min(trimmableMessages, len(messages))
+	runCfg.ContextTrimmableMessages = trimmableMessages
 	if runCfg.ContextToolExchangePolicy == nil {
 		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
 	}
@@ -719,6 +605,10 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		AttachmentPaths:   extractAttachmentPaths(mergedAttachments),
 		Time:              time.Now().In(tz),
 		Timezone:          runCfg.Identity.Timezone,
+		ReplyToMessageID:  strings.TrimSpace(req.SourceReplyToMessageID),
+		ReplyToSender:     strings.TrimSpace(req.ReplySender),
+		MentionsMe:        req.MentionsBot,
+		RepliesToMe:       req.RepliesToBot,
 	}
 	headerifiedQuery := ""
 	if userQueryNeedsHeader(req, len(mergedAttachments)) {
@@ -733,15 +623,9 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
-	if usePipeline {
-		runCfg.ContextCurrentUserMessageIndex = currentMessageIndex
-	} else if req.ReusePersistedUserMessage {
+	if req.ReusePersistedUserMessage {
 		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
-	}
-	// When using the pipeline the user message is already in the RC;
-	// don't send it to the LLM again. headerifiedQuery is still kept
-	// for storeRound so the user message gets persisted.
-	if !usePipeline && !req.ReusePersistedUserMessage {
+	} else {
 		runCfg.Query = headerifiedModelQuery
 	}
 	runCfg.InlineImages = extractNativeImageParts(mergedAttachments)
@@ -783,16 +667,15 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	}
 
 	return resolvedContext{
-		runConfig:                   runCfg,
-		model:                       chatModel,
-		provider:                    provider,
-		query:                       headerifiedQuery,
-		userMessageAlreadyInContext: usePipeline,
-		injectedRecords:             injectedRecords,
-		estimatedTokens:             estimatedTokens,
-		compactableTokens:           compactableTokens,
-		compactableTokensKnown:      compactableTokensKnown,
-		contextTokenBudget:          contextTokenBudget,
+		runConfig:              runCfg,
+		model:                  chatModel,
+		provider:               provider,
+		query:                  headerifiedQuery,
+		injectedRecords:        injectedRecords,
+		estimatedTokens:        estimatedTokens,
+		compactableTokens:      compactableTokens,
+		compactableTokensKnown: true,
+		contextTokenBudget:     contextTokenBudget,
 	}, req, nil
 }
 
@@ -1590,70 +1473,8 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	return cfg.RefreshContextFrag()
 }
 
-func normalizeContextMessages(messages []ModelMessage, currentIndex, memoryIndex *int) ([]ModelMessage, *int, *int) {
-	cleaned := sanitizeMessages(messages)
-	stripTools := len(cleaned) > 10
-	if stripTools {
-		// Tool outputs are large and waste tokens; the LLM doesn't need raw
-		// tool results when summaries and memory tools are available for lookup.
-		cleaned = stripToolMessages(cleaned)
-	}
-	cleaned = repairToolCallClosures(cleaned, syntheticToolClosureError)
-	return cleaned,
-		remapContextMessageIndex(messages, currentIndex, stripTools),
-		remapContextMessageIndex(messages, memoryIndex, stripTools)
-}
-
-func prependContextMessages(prefix, messages []ModelMessage, trackedIndex *int) ([]ModelMessage, *int) {
-	if len(prefix) == 0 {
-		return messages, trackedIndex
-	}
-	if trackedIndex != nil {
-		if *trackedIndex < 0 || *trackedIndex >= len(messages) {
-			trackedIndex = nil
-		} else {
-			trackedIndex = intPointer(*trackedIndex + len(prefix))
-		}
-	}
-	return append(prefix, messages...), trackedIndex
-}
-
-func normalizedContextPrefixLength(messages []ModelMessage, rawPrefixLength int) int {
-	if rawPrefixLength <= 0 || len(messages) == 0 {
-		return 0
-	}
-	rawPrefixLength = min(rawPrefixLength, len(messages))
-	stripTools := len(sanitizeMessages(messages)) > 10
-	prefix := sanitizeMessages(messages[:rawPrefixLength])
-	if stripTools {
-		prefix = stripToolMessages(prefix)
-	}
-	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
-	return len(prefix)
-}
-
-func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bool) *int {
-	if index == nil || *index < 0 || *index >= len(messages) || !strings.EqualFold(strings.TrimSpace(messages[*index].Role), "user") {
-		return nil
-	}
-	prefix := sanitizeMessages(messages[:*index+1])
-	if stripTools {
-		prefix = stripToolMessages(prefix)
-	}
-	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
-	if len(prefix) == 0 || !strings.EqualFold(strings.TrimSpace(prefix[len(prefix)-1].Role), "user") {
-		return nil
-	}
-	return intPointer(len(prefix) - 1)
-}
-
-func latestModelUserMessageIndex(messages []ModelMessage) *int {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
-			return intPointer(i)
-		}
-	}
-	return nil
+func normalizeContextMessages(messages []ModelMessage) []ModelMessage {
+	return repairToolCallClosures(sanitizeMessages(messages), syntheticToolClosureError)
 }
 
 func validCurrentUserMessageIndex(messages []sdk.Message, currentIndex, memoryIndex *int) *int {

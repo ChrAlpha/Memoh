@@ -285,8 +285,8 @@ type driveHistoryMessages struct {
 	latest  messagepkg.HistoryTurn
 }
 
-func (m *driveHistoryMessages) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return append([]messagepkg.Message(nil), m.history...), nil
+func (m *driveHistoryMessages) ListActiveAfterCompactionBySessionWithinBytes(context.Context, string, int64) (messagepkg.SessionHistoryAfterCompaction, error) {
+	return messagepkg.SessionHistoryAfterCompaction{Messages: append([]messagepkg.Message(nil), m.history...)}, nil
 }
 
 func (m *driveHistoryMessages) GetLatestVisibleTurnBySession(context.Context, string) (messagepkg.HistoryTurn, error) {

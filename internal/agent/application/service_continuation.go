@@ -33,18 +33,16 @@ func (s *Service) prepareContinuationRunConfig(
 	summaryScope contextfrag.Scope,
 	live bool,
 ) (native.RunConfig, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, defaultMaxContextMinutes, 0)
+	assembled, err := s.assembleContext(ctx, contextRequest{
+		Purpose:  contextPurposeContinuation,
+		Fallback: fallback,
+		Scope:    summaryScope,
+	})
 	if err != nil {
 		return native.RunConfig{}, err
 	}
-	loaded = pruneHistoryForGateway(loaded)
-	loaded, err = s.replaceCompactedMessages(ctx, summaryScope.SessionID, summaryScope, loaded, compactionArtifactBoundary{})
-	if err != nil {
-		return native.RunConfig{}, err
-	}
-	loaded = projectInterruptedHistoryReasoning(loaded)
-	messages, retained, _ := trimMessagesAndRecordsByTokens(s.logger, loaded, 0)
-	messages = sanitizeMessages(messages)
+	messages := sanitizeMessages(assembled.Messages)
+	retained := assembled.Records
 	historyEstimates := make([]int, len(messages))
 	for i := range messages {
 		historyEstimates[i] = estimateMessageTokens(messages[i])

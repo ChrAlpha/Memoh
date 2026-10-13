@@ -212,11 +212,11 @@ func (*recordingMessageService) ListActiveSinceBySession(context.Context, string
 	return nil, nil
 }
 
-func (*recordingMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return nil, nil
+func (*recordingMessageService) ListActiveAfterCompactionBySessionWithinBytes(context.Context, string, int64) (messagepkg.SessionHistoryAfterCompaction, error) {
+	return messagepkg.SessionHistoryAfterCompaction{}, nil
 }
 
-func (*recordingMessageService) ListActiveSinceWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
+func (*recordingMessageService) ListRecentUserBySession(context.Context, string, int) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 
@@ -656,9 +656,7 @@ func TestPersistTerminalSnapshotPersistsUserWhenPipelineContextContainsCurrentMe
 			ThreadID: "session-1",
 			Query:    "---\nmessage-id: tg-1\nchannel: telegram\n---\n@memoh1bot ping",
 		},
-		resolvedContext{
-			userMessageAlreadyInContext: true,
-		},
+		resolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.AssistantMessage("pong")},
 		},

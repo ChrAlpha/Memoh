@@ -99,20 +99,6 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 				if since.Equal(time.Unix(0, 0)) && budget == 1<<20 && len(got) != len(flags) {
 					t.Fatalf("loaded %d rows, want %d active rows", len(got), len(flags))
 				}
-				// Full-row admission keeps the same window but hands metadata
-				// over undecoded, for history records to decode row by row.
-				full, err := svc.ListActiveSinceBySessionWithinBytes(ctx, postgresMessageTestSessionID, since, budget)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(full) != len(old) {
-					t.Fatalf("full window length=%d, want %d", len(full), len(old))
-				}
-				for i, m := range full {
-					if m.ID != old[i].ID.String() || m.Metadata != nil || !bytes.Equal(m.RawMetadata, old[i].Metadata) {
-						t.Fatalf("full row %d decoded or lost its metadata", i)
-					}
-				}
 			})
 		}
 	}
