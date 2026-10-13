@@ -90,6 +90,9 @@ func (q *Queries) SupersedeHistoryTurn(ctx context.Context, arg dbsqlc.Supersede
 	if err != nil {
 		return dbstore.HistoryTurn{}, err
 	}
+	if err := q.ReleaseParentsOfInvalidatedRollups(ctx); err != nil {
+		return dbstore.HistoryTurn{}, err
+	}
 	return historyTurnFromFields(row.ID, row.BotID, row.SessionID, row.Position, row.RequestMessageID, row.AssistantMessageID, row.SupersededByTurnID, row.SupersededAt, row.SupersededReason, row.CreatedAt, row.UpdatedAt), nil
 }
 

@@ -1922,7 +1922,7 @@ func (q *Queries) CreateToolTailRound(ctx context.Context, arg CreateToolTailRou
 }
 
 const deleteMessagesByIDs = `-- name: DeleteMessagesByIDs :exec
-WITH session_locator AS MATERIALIZED (
+WITH RECURSIVE session_locator AS MATERIALIZED (
   SELECT DISTINCT message.session_id
   FROM bot_history_messages message
   WHERE message.team_id = public.memoh_current_team_id()
@@ -1953,26 +1953,38 @@ deleted AS (
     AND message.id = target.id
   RETURNING message.session_id, message.compact_id
 ),
-compaction_epoch_bump AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  WHERE session.team_id = public.memoh_current_team_id()
+covering_chain(id) AS (
+  SELECT deleted.compact_id
+  FROM deleted
+  WHERE deleted.compact_id IS NOT NULL
+  UNION
+  SELECT rollup.id
+  FROM covering_chain chain
+  JOIN bot_history_message_compacts rollup
+    ON chain.id = ANY(rollup.parent_ids)
+  WHERE rollup.team_id = public.memoh_current_team_id()
+),
+invalidated_artifacts AS (
+  UPDATE bot_history_message_compacts compact
+  SET invalidated_at = now()
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.id IN (SELECT id FROM covering_chain)
+    AND compact.invalidated_at IS NULL
     AND EXISTS (
-    SELECT 1
-    FROM deleted changed
-    JOIN bot_history_message_compacts compact
-      ON compact.id = changed.compact_id
-     AND compact.team_id = public.memoh_current_team_id()
-    WHERE changed.session_id = session.id
-      AND compact.bot_id = session.bot_id
-      AND compact.session_id = session.id
-      AND compact.compaction_epoch = session.compaction_epoch
-  )
-  RETURNING session.id
+      SELECT 1
+      FROM bot_sessions session
+      WHERE session.team_id = public.memoh_current_team_id()
+        AND session.id = compact.session_id
+        AND session.compaction_epoch = compact.compaction_epoch
+    )
+  RETURNING compact.id
 )
-SELECT (SELECT count(*) FROM deleted) + (SELECT count(*) * 0 FROM compaction_epoch_bump)
+SELECT (SELECT count(*) FROM deleted)
 `
 
+// The deleted rows' summaries still hold their content: invalidate every
+// artifact covering them, each rollup above one, and release the parents of
+// an invalidated rollup. The epoch stays put.
 func (q *Queries) DeleteMessagesByIDs(ctx context.Context, ids []pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteMessagesByIDs, ids)
 	return err
@@ -2555,7 +2567,7 @@ func (q *Queries) GetVisibleMessageCursorByIDBySession(ctx context.Context, arg 
 }
 
 const hideMessagesByHistoryTurn = `-- name: HideMessagesByHistoryTurn :exec
-WITH session_locator AS MATERIALIZED (
+WITH RECURSIVE session_locator AS MATERIALIZED (
   SELECT DISTINCT message.session_id
   FROM bot_history_messages message
   WHERE message.team_id = public.memoh_current_team_id()
@@ -2580,26 +2592,38 @@ hidden AS (
     AND (SELECT count(*) FROM owner_sessions) >= 0
   RETURNING session_id, compact_id
 ),
-compaction_epoch_bump AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  WHERE session.team_id = public.memoh_current_team_id()
+covering_chain(id) AS (
+  SELECT hidden.compact_id
+  FROM hidden
+  WHERE hidden.compact_id IS NOT NULL
+  UNION
+  SELECT rollup.id
+  FROM covering_chain chain
+  JOIN bot_history_message_compacts rollup
+    ON chain.id = ANY(rollup.parent_ids)
+  WHERE rollup.team_id = public.memoh_current_team_id()
+),
+invalidated_artifacts AS (
+  UPDATE bot_history_message_compacts compact
+  SET invalidated_at = now()
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.id IN (SELECT id FROM covering_chain)
+    AND compact.invalidated_at IS NULL
     AND EXISTS (
-    SELECT 1
-    FROM hidden changed
-    JOIN bot_history_message_compacts compact
-      ON compact.id = changed.compact_id
-     AND compact.team_id = public.memoh_current_team_id()
-    WHERE changed.session_id = session.id
-      AND compact.bot_id = session.bot_id
-      AND compact.session_id = session.id
-      AND compact.compaction_epoch = session.compaction_epoch
-  )
-  RETURNING session.id
+      SELECT 1
+      FROM bot_sessions session
+      WHERE session.team_id = public.memoh_current_team_id()
+        AND session.id = compact.session_id
+        AND session.compaction_epoch = compact.compaction_epoch
+    )
+  RETURNING compact.id
 )
-SELECT (SELECT count(*) FROM hidden) + (SELECT count(*) * 0 FROM compaction_epoch_bump)
+SELECT (SELECT count(*) FROM hidden)
 `
 
+// A hidden row's summary still holds its content, so every artifact covering
+// it goes, and so does each rollup above one (parent_ids points up the chain).
+// The epoch stays put: artifacts that cover no hidden row keep standing.
 func (q *Queries) HideMessagesByHistoryTurn(ctx context.Context, turnID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, hideMessagesByHistoryTurn, turnID)
 	return err
@@ -6541,7 +6565,7 @@ func (q *Queries) SetRoundAgentTurnID(ctx context.Context, arg SetRoundAgentTurn
 }
 
 const supersedeHistoryTurn = `-- name: SupersedeHistoryTurn :one
-WITH owner_session AS MATERIALIZED (
+WITH RECURSIVE owner_session AS MATERIALIZED (
   SELECT session.id
   FROM bot_sessions session
   WHERE session.team_id = public.memoh_current_team_id()
@@ -6573,25 +6597,31 @@ updated AS (
     m.compact_id,
     m.created_at
 ),
-compaction_epoch_bump AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND EXISTS (
-    SELECT 1
-    FROM updated changed
-    JOIN bot_history_message_compacts compact
-      ON compact.id = changed.compact_id
-     AND compact.team_id = public.memoh_current_team_id()
-    WHERE changed.session_id = session.id
-      AND compact.bot_id = changed.bot_id
-      AND compact.session_id = session.id
-      AND compact.compaction_epoch = session.compaction_epoch
-  )
-  RETURNING session.id
+covering_chain(id) AS (
+  SELECT updated.compact_id
+  FROM updated
+  WHERE updated.compact_id IS NOT NULL
+  UNION
+  SELECT rollup.id
+  FROM covering_chain chain
+  JOIN bot_history_message_compacts rollup
+    ON chain.id = ANY(rollup.parent_ids)
+  WHERE rollup.team_id = public.memoh_current_team_id()
 ),
-compaction_epoch_done AS (
-  SELECT COUNT(*) AS count FROM compaction_epoch_bump
+invalidated_artifacts AS (
+  UPDATE bot_history_message_compacts compact
+  SET invalidated_at = now()
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.id IN (SELECT id FROM covering_chain)
+    AND compact.invalidated_at IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM bot_sessions session
+      WHERE session.team_id = public.memoh_current_team_id()
+        AND session.id = compact.session_id
+        AND session.compaction_epoch = compact.compaction_epoch
+    )
+  RETURNING compact.id
 )
 SELECT
   updated.turn_id AS id,
@@ -6606,7 +6636,6 @@ SELECT
   MIN(updated.created_at)::timestamptz AS created_at,
   COALESCE(MAX(updated.turn_superseded_at), MAX(updated.created_at))::timestamptz AS updated_at
 FROM updated
-CROSS JOIN compaction_epoch_done
 GROUP BY updated.turn_id, updated.session_id, updated.turn_position
 `
 
@@ -6632,6 +6661,9 @@ type SupersedeHistoryTurnRow struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
+// The superseded rows' summaries still hold their content: invalidate every
+// artifact covering them, each rollup above one, and release the parents of an
+// invalidated rollup. Same rule as HideMessagesByHistoryTurn; the epoch stays put.
 func (q *Queries) SupersedeHistoryTurn(ctx context.Context, arg SupersedeHistoryTurnParams) (SupersedeHistoryTurnRow, error) {
 	row := q.db.QueryRow(ctx, supersedeHistoryTurn,
 		arg.SessionID,

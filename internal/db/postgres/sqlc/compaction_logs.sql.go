@@ -725,3 +725,28 @@ func (q *Queries) ListCompactionLogsByBot(ctx context.Context, arg ListCompactio
 	}
 	return items, nil
 }
+
+const releaseParentsOfInvalidatedRollups = `-- name: ReleaseParentsOfInvalidatedRollups :exec
+UPDATE bot_history_message_compacts parent
+SET superseded_by = NULL,
+    superseded_at = NULL
+WHERE parent.team_id = public.memoh_current_team_id()
+  AND parent.invalidated_at IS NULL
+  AND parent.superseded_by IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM bot_history_message_compacts rollup
+    WHERE rollup.id = parent.superseded_by
+      AND rollup.team_id = parent.team_id
+      AND rollup.invalidated_at IS NOT NULL
+  )
+`
+
+// An invalidated rollup no longer stands for its parents, so each valid parent
+// it superseded becomes a live summary again. Run in the same transaction as
+// the write that invalidated the rollup; parents covered by that write are
+// already invalidated and are skipped.
+func (q *Queries) ReleaseParentsOfInvalidatedRollups(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, releaseParentsOfInvalidatedRollups)
+	return err
+}
