@@ -1,6 +1,7 @@
 package application
 
 import (
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -8,8 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
+
+func (f progressFixture) scanThrough(id string) {
+	f.t.Helper()
+	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_sessions
+		SET compaction_scan_after=$2, compaction_scan_epoch=compaction_epoch, compaction_scan_at=clock_timestamp()
+		WHERE id=$1`, f.sessionID, id); err != nil {
+		f.t.Fatal(err)
+	}
+}
 
 func (f progressFixture) pending(id string) pgtype.UUID {
 	f.t.Helper()
@@ -29,6 +41,61 @@ func (f progressFixture) pending(id string) pgtype.UUID {
 		f.t.Fatalf("pending claim: %d, %v", n, err)
 	}
 	return claim.ID
+}
+
+func TestPostgresCompactionNeverSummarizesProtectedInput(t *testing.T) {
+	for _, placement := range []string{"before_scan", "all_before_scan", "pending", "oversized"} {
+		t.Run(placement, func(t *testing.T) {
+			f, store := newProgressFixture(t)
+			model := &countingSummarizer{summary: strings.Repeat("s", 8000)}
+			f.text("assistant", strings.Repeat("archived detail. ", 3000))
+			f.reasoning()
+			svc := compaction.NewService(slog.New(slog.DiscardHandler), store)
+			if res, err := svc.RunCompactionSync(f.ctx, f.config(model)); err != nil || res.Status != compaction.StatusOK {
+				t.Fatalf("seed summary: %+v, %v", res, err)
+			}
+			barriers := f.exchange("ask_user", "guard", "continue?")
+			size := 6000
+			if placement == "oversized" {
+				size = 9 << 20
+			}
+			raw, _ := json.Marshal(map[string]any{"role": "user", "content": strings.Repeat("I", size)})
+			input, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{
+				BotID: f.botID, SessionID: f.sessionID, Role: "user", Content: raw, ExternalMessageID: "current-input",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.reasoning()
+			later := f.text("assistant", strings.Repeat("later ", 40))
+			end := f.text("user", "later question")
+			switch placement {
+			case "before_scan":
+				f.scanThrough(input.ID)
+			case "all_before_scan":
+				f.scanThrough(end.ID)
+			case "pending":
+				f.pending(input.ID)
+				f.scanThrough(barriers[len(barriers)-1].ID)
+			case "oversized":
+				f.scanThrough(barriers[len(barriers)-1].ID)
+			}
+			model.summary, model.calls = "short replacement", 0
+			cfg := f.config(model)
+			cfg.TargetTokens, cfg.SummaryWindowTokens = 600, 128000
+			cfg.AllowFrontierFusion = true
+			cfg.ProtectedSources = []turn.ContextMessageSource{{Kind: "external", ID: "current-input", Current: true}}
+			res, err := compaction.NewService(slog.New(slog.DiscardHandler), store).RunCompactionSync(f.ctx, cfg)
+			if err != nil || model.calls != 1 || res.MessageCount != 0 {
+				t.Fatalf("pass: %+v, %v calls=%d; want only the summary frontier replaced", res, err, model.calls)
+			}
+			for _, row := range []messagepkg.Message{input, later, end} {
+				if _, status := f.claim(row.ID); status == "ok" {
+					t.Fatal("protected input or its suffix was summarized")
+				}
+			}
+		})
+	}
 }
 
 func TestPostgresCompactionRevisitsAnExpiredPendingClaim(t *testing.T) {
