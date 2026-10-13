@@ -1,0 +1,81 @@
+{
+  "scenario": "32k-context model, history grown past the final allowance with compaction disabled, then compaction enabled and the scripted summarizer held for 30s; turn A sent, turn B sent right after A's reply, turn C after the summary landed",
+  "head": {
+    "commit": "5f022f7b5",
+    "A_provider_after_send_s": 0.054,
+    "B_provider_after_send_s": 0.054,
+    "timeline_rel_A": [
+      {
+        "kind": "chat",
+        "stream": true,
+        "start_rel_A": 0.05,
+        "end_rel_A": 0.06,
+        "prompt_chars": 69662
+      },
+      {
+        "kind": "chat",
+        "stream": true,
+        "start_rel_A": 1.74,
+        "end_rel_A": 1.74,
+        "prompt_chars": 70208
+      },
+      {
+        "kind": "summarizer",
+        "stream": false,
+        "start_rel_A": 0.1,
+        "end_rel_A": 30.1,
+        "prompt_chars": 99255
+      }
+    ],
+    "summarizer_max_tokens": [
+      3200
+    ],
+    "compaction_rows": [
+      {
+        "status": "ok",
+        "message_count": 16,
+        "started_at": "2026-10-13 16:28:38.377+00",
+        "completed_at": "2026-10-13 16:29:08.390+00"
+      }
+    ],
+    "turn_C": {
+      "provider_after_send_s": 0.056,
+      "prompt_chars": 34830,
+      "before_compaction_prompt_chars": 70208
+    }
+  },
+  "base": {
+    "commit": "e048cf678",
+    "A_provider_after_send_s": 30.156,
+    "B_provider_after_send_s": 0.052,
+    "timeline_rel_A": [
+      {
+        "kind": "summarizer",
+        "stream": false,
+        "start_rel_A": 0.14,
+        "end_rel_A": 30.14,
+        "prompt_chars": 99255
+      },
+      {
+        "kind": "chat",
+        "stream": true,
+        "start_rel_A": 30.16,
+        "end_rel_A": 30.16,
+        "prompt_chars": 33728
+      },
+      {
+        "kind": "chat",
+        "stream": true,
+        "start_rel_A": 31.87,
+        "end_rel_A": 31.87,
+        "prompt_chars": 34274
+      }
+    ]
+  },
+  "assertions": {
+    "head_A_waits_for_summarizer": false,
+    "base_A_waits_for_summarizer": true,
+    "head_summarizer_starts_after_A_reply": true,
+    "head_single_summarizer_for_A_and_B": true
+  }
+}
