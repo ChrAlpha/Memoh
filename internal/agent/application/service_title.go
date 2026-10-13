@@ -268,13 +268,29 @@ func (s *Service) generateTitle(ctx context.Context, userID string, model models
 		return "", nil
 	}
 
-	prompt := titleGenerationPrompt + userSnippet
+	text, err := s.generateWithTitleModel(ctx, "agent.title", userID, model, provider, titleGenerationPrompt+userSnippet)
+	if err != nil {
+		return "", errs.Wrap(err, "generate title")
+	}
 
+	title := strings.TrimSpace(text)
+	title = strings.Trim(title, "\"'`")
+	title = strings.TrimSpace(title)
+	return title, nil
+}
+
+// generateWithTitleModel runs one short, non-streaming completion on the
+// account's title model: the cheap auxiliary model behind session titles and
+// starter prompts. The output budget and timeout are the title's, which is
+// sized for reasoning models answering briefly (see titleGenerateMaxTokens).
+// userID resolves OAuth-backed provider credentials; scope names the call in
+// retry logs.
+func (s *Service) generateWithTitleModel(ctx context.Context, scope, userID string, model models.GetResponse, provider sqlc.Provider, prompt string) (string, error) {
 	authService := providers.NewService(nil, s.queries, "")
 	authCtx := oauthctx.WithUserID(ctx, userID)
 	creds, err := authService.ResolveModelCredentials(authCtx, provider)
 	if err != nil {
-		return "", errs.Wrap(err, "resolve title provider credentials")
+		return "", errs.Wrap(err, "resolve provider credentials")
 	}
 
 	modelCfg := models.SDKModelConfig{
@@ -301,16 +317,12 @@ func (s *Service) generateTitle(ctx context.Context, userID string, model models
 		Messages:  messages,
 		MaxTokens: &maxTokens,
 	}
-	result, err := modelretry.Do(genCtx, s.logger, "agent.title", modelretry.Config{}, modelretry.Retryable,
+	result, err := modelretry.Do(genCtx, s.logger, scope, modelretry.Config{}, modelretry.Retryable,
 		func(ctx context.Context) (sdk.ModelResult, error) { return sdkModel.Generate(ctx, request) })
 	if err != nil {
-		return "", errs.WrapDependency(err, "generate title")
+		return "", errs.WrapDependency(err, "generate")
 	}
-
-	title := strings.TrimSpace(result.Text)
-	title = strings.Trim(title, "\"'`")
-	title = strings.TrimSpace(title)
-	return title, nil
+	return result.Text, nil
 }
 
 func (s *Service) publishSessionTitleUpdated(botID, sessionID, title string) {

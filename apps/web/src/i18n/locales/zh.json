@@ -1844,7 +1844,9 @@
     "sidebarEntry": "看看 Memoh 能做什么",
     "galleryTitle": "看看 Memoh 能做什么",
     "galleryDescription": "选一个示例填进输入框，发送前可以修改。",
-    "viewAll": "查看更多",
+    "refresh": "换一批",
+    "refreshFailed": "没能换一批，请稍后再试。",
+    "fillIn": "填入",
     "dismiss": "隐藏推荐",
     "replaceDraft": {
       "title": "替换输入框里的内容？",

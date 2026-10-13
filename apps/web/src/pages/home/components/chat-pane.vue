@@ -633,13 +633,28 @@
                   ref="textareaEl"
                   v-model="inputText"
                   rows="1"
-                  :placeholder="composerPlaceholder"
+                  :placeholder="composerPreviewShown ? '' : composerPlaceholder"
                   :disabled="!currentBotId || activeChatReadOnly || loadingMessages || firstSendAwaiting"
-                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
-                  :class="isWelcome ? 'min-h-12' : 'min-h-10'"
+                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  :class="[isWelcome ? 'min-h-12' : 'min-h-10', composerPreviewShown ? 'text-transparent' : 'text-foreground']"
                   @keydown="handleComposerKeydown"
                   @paste="handlePaste"
                 />
+                <!-- The suggestion preview: laid exactly over the textarea's
+                     text box (same padding, size and leading), so it wraps line
+                     for line like the text it becomes. Out of flow, so the
+                     composer never resizes while a row is hovered. -->
+                <div
+                  v-if="composerPreviewShown && composerPreviewBox"
+                  :key="composerPreview?.text"
+                  data-composer-preview
+                  :data-landing="composerPreview?.landing || undefined"
+                  aria-hidden="true"
+                  class="pointer-events-none absolute line-clamp-2 break-words pl-2 pr-1 pt-2 text-base leading-[var(--chat-leading)] max-md:line-clamp-1"
+                  :style="composerPreviewBox"
+                >
+                  {{ composerPreview?.text }}
+                </div>
 
                 <!-- max-md size bumps on the composer controls (the ＋ and voice
                      buttons, the model trigger, and the send ring below) grow the
@@ -1231,7 +1246,9 @@
                when the pane is short (style.css welcome tiers). -->
           <ChatExampleSuggestions
             v-if="isWelcome && currentBotId"
+            v-model:preview="composerPreview"
             :bot-id="currentBotId"
+            :composer-replaceable="composerReplaceable"
           />
         </div>
       </div>
@@ -1322,6 +1339,7 @@ import { useComposerDrafts } from '../composables/useComposerDrafts'
 import ChatExampleSuggestions from './chat-example-suggestions.vue'
 import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
 import { useComposerPrefillConsumer } from '../composables/useComposerPrefillConsumer'
+import { useComposerPreviewBox, type ComposerPreview } from '../composables/useComposerPreview'
 import { useAsyncConfirm } from '@/composables/useAsyncConfirm'
 import { useUnfocusedComposerInput } from '../composables/useUnfocusedComposerInput'
 import { useComposerKeyboardFocus } from '../composables/useComposerKeyboardFocus'
@@ -3677,7 +3695,7 @@ const { inputDraftKey, saveInputDraft, clearAllDrafts } = useComposerDrafts({
 // Registered after useComposerDrafts so its draft restore runs first and
 // cannot overwrite a prefilled prompt (usage examples, App "Try it").
 const replaceDraftConfirm = useAsyncConfirm()
-useComposerPrefillConsumer({
+const { lastPrefilled } = useComposerPrefillConsumer({
   botId: () => paneTarget.value.botId,
   active: () => isActive.value,
   writable: () => !activeChatReadOnly.value,
@@ -3695,6 +3713,19 @@ useComposerPrefillConsumer({
     void nextTick(focusTextarea)
   },
 })
+
+// The welcome composer holds no text of the user's own: it is empty, or still
+// exactly what a prefill last wrote. Only then may a suggestion preview into it
+// and Enter pick one, since replacing it loses nothing. A first send in flight
+// keeps its text locked in the composer, so nothing may replace it then.
+const composerReplaceable = computed(() =>
+  isWelcome.value && voiceInputState.value === 'idle' && !firstSendAwaiting.value
+  && (inputText.value === '' || inputText.value === lastPrefilled.value))
+// A welcome suggestion previews its prompt in the composer while it is hovered
+// or focused (chat-example-suggestions.vue owns the value).
+const composerPreview = ref<ComposerPreview | null>(null)
+const composerPreviewShown = computed(() => !!composerPreview.value && composerReplaceable.value)
+const composerPreviewBox = useComposerPreviewBox(textareaEl, () => composerPreviewShown.value)
 
 // The dock owns ALL geometry/visibility orchestration (box-slot mutex,
 // backdrop-mask height) — the pane only needs two readings back from it: the
