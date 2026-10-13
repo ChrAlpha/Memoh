@@ -18976,6 +18976,10 @@ const docTemplate = `{
                 "media": {
                     "type": "boolean"
                 },
+                "native_approval": {
+                    "description": "NativeApproval means the adapter renders tool-approval requests itself;\nwithout it the outbound layer sends the prompt as a plain message.",
+                    "type": "boolean"
+                },
                 "native_commands": {
                     "type": "boolean"
                 },
@@ -20560,7 +20564,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/conversation.UIToolApproval"
                 },
                 "args": {
-                    "description": "Args are the machine-readable parameters of a notice block: the string\nvalues of the runtime_notice event metadata (dep_id and install_task_id\nfor a workspace dependency notice, for instance). The client renders\nactions from them instead of parsing Content.",
+                    "description": "Args are the machine-readable parameters of a notice or error block: the\nstring values of the runtime_notice event metadata (dep_id and\ninstall_task_id for a workspace dependency notice, for instance), or the\ncatalog args stored with a failure's code. The client renders text and\nactions from them instead of parsing Content.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -26617,9 +26621,6 @@ const docTemplate = `{
                 "command_ui_language": {
                     "type": "string"
                 },
-                "compaction_enabled": {
-                    "type": "boolean"
-                },
                 "compaction_model_id": {
                     "type": "string"
                 },
@@ -26793,9 +26794,6 @@ const docTemplate = `{
                 },
                 "command_ui_language": {
                     "type": "string"
-                },
-                "compaction_enabled": {
-                    "type": "boolean"
                 },
                 "compaction_model_id": {
                     "type": "string"

@@ -34,6 +34,10 @@ func (q *providerCollisionQueries) GetModelByID(_ context.Context, id pgtype.UUI
 	return sqlc.Model{}, pgx.ErrNoRows
 }
 
+func (*providerCollisionQueries) GetProviderByID(context.Context, pgtype.UUID) (sqlc.Provider, error) {
+	return sqlc.Provider{}, pgx.ErrNoRows
+}
+
 // A pane override to a same-named model on another provider must not keep
 // the plan the previous provider's wider window produced.
 func TestGetSessionInfoDropsThePlanWhenASameNamedModelHasASmallerWindow(t *testing.T) {

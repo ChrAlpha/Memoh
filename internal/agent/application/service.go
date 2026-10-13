@@ -240,34 +240,33 @@ func NewService(
 	return service
 }
 
-// SetContextAbsoluteMaxTokens sets the server-wide context admission cap
-// (CM-ADM-001). Zero keeps the shared default; the cap is never disabled.
+// SetContextAbsoluteMaxTokens sets the context budget used for models without
+// a configured window (CM-ADM-001). Zero keeps the shared default.
 func (s *Service) SetContextAbsoluteMaxTokens(v int) {
 	s.contextAbsoluteCapTokens = v
 }
 
-// contextAbsoluteMaxTokens resolves the effective admission cap.
+// contextAbsoluteMaxTokens resolves the budget for models without a window.
 func (s *Service) contextAbsoluteMaxTokens() int {
 	if s.contextAbsoluteCapTokens > 0 {
 		return s.contextAbsoluteCapTokens
 	}
-	return contextfrag.DefaultAbsoluteCapTokens
+	return contextfrag.DefaultContextFallbackTokens
 }
 
-// effectiveContextTokenBudget derives the per-turn context budget as
-// min(model context window, absolute cap), falling back to the cap alone
-// when the model has no configured window. A missing window therefore
-// degrades to a smaller bounded context, never to an unbounded one.
+// effectiveContextTokenBudget derives the per-turn context budget: the model
+// context window, or the configured fallback when the model has none, so a
+// missing window never leaves the context unbounded.
 func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int {
 	budget := contextBudgetFromChatModel(chatModel)
-	capTokens := s.contextAbsoluteMaxTokens()
-	if budget <= 0 {
-		s.logger.Warn("context budget: model context window missing, applying absolute cap",
-			slog.String("model_id", chatModel.ID),
-			slog.Int("absolute_cap_tokens", capTokens))
-		return capTokens
+	if budget > 0 {
+		return budget
 	}
-	return min(budget, capTokens)
+	fallback := s.contextAbsoluteMaxTokens()
+	s.logger.Warn("context budget: model context window missing, applying fallback",
+		slog.String("model_id", chatModel.ID),
+		slog.Int("fallback_tokens", fallback))
+	return fallback
 }
 
 // Pre-turn synchronous compaction backstop rollout modes (CM-CMP-003). The

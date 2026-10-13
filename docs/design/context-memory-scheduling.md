@@ -389,7 +389,9 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       Landed as `timeline.ComposeContextWithArtifactsBudgeted` (entry-metadata
       selection before materialization), `[agent] context_absolute_max_tokens`
       (default 200k, never disabled), and `Service.effectiveContextTokenBudget`
-      clamping every provider-bound budget.
+      clamping every provider-bound budget. The cap was later retired: the
+      budget is the model window, and `[agent] context_fallback_tokens`
+      (default 200k) applies only when the window is unknown.
 - [x] Metadata-only admission measures and byte-budgeted history loads —
       CM-ADM-001, CM-REP-002. Landed as `MeasureActiveMessagesBySession`
       (SQL-side `COUNT(*)` + `SUM(octet_length(content::text))`) plus the

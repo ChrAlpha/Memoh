@@ -144,10 +144,6 @@ func (s *Service) planCompaction(ctx context.Context, req ChatRequest, rc resolv
 		s.logger.LogAttrs(ctx, result.Level, "compaction: failed to load settings", result.Attrs()...)
 		return compactionPlan{}, false
 	}
-	if !botSettings.CompactionEnabled {
-		s.logger.InfoContext(ctx, "compaction: skipped, disabled")
-		return compactionPlan{}, false
-	}
 	threshold := AutoCompactionThreshold(botSettings.CompactionThreshold, rc.contextTokenBudget)
 	if threshold <= 0 {
 		s.logger.InfoContext(ctx, "compaction: skipped, no usable threshold",
@@ -227,10 +223,6 @@ func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputT
 	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction sync: failed to load settings", slog.Any("error", err))
-		return compaction.Result{}
-	}
-	if !botSettings.CompactionEnabled {
-		s.logger.WarnContext(ctx, "compaction sync: compaction disabled, skipping")
 		return compaction.Result{}
 	}
 	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)

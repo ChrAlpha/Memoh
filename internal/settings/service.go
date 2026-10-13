@@ -167,7 +167,7 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	if err != nil {
 		return Settings{}, err
 	}
-	current := normalizeBotSetting("", aclDefaultEffect, botRow.ReasoningEffort, botRow.CompactionEnabled, botRow.CompactionThreshold, botRow.CompactionTargetPercent)
+	current := normalizeBotSetting("", aclDefaultEffect, botRow.ReasoningEffort, botRow.CompactionThreshold, botRow.CompactionTargetPercent)
 	// A read error here must abort: falling through would leave `current` at the
 	// model defaults and silently overwrite a saved chat_runtime=acp_agent (and
 	// its agent id) on the next save. ErrNoRows is impossible because the bot
@@ -198,9 +198,6 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	}
 	if effect := strings.TrimSpace(req.AclDefaultEffect); effect != "" {
 		current.AclDefaultEffect = effect
-	}
-	if req.CompactionEnabled != nil {
-		current.CompactionEnabled = *req.CompactionEnabled
 	}
 	if req.CompactionThreshold != nil && *req.CompactionThreshold >= 0 {
 		current.CompactionThreshold = *req.CompactionThreshold
@@ -472,7 +469,6 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 		Timezone:                   timezoneValue,
 		CommandUiLanguage:          current.CommandUILanguage,
 		ReasoningEffort:            current.ReasoningEffort,
-		CompactionEnabled:          current.CompactionEnabled,
 		CompactionThreshold:        int32(current.CompactionThreshold), //nolint:gosec // bounded by non-negative setter above
 		CompactionTargetPercentSet: compactionTargetPercentSet,
 		CompactionTargetPercent:    nullableCompactionTargetPercent(current.CompactionTargetPercent),
@@ -582,12 +578,11 @@ func (s *Service) Delete(ctx context.Context, botID string) error {
 	return nil
 }
 
-func normalizeBotSetting(commandUILanguage string, aclDefaultEffect string, reasoningEffort string, compactionEnabled bool, compactionThreshold int32, compactionTargetPercent pgtype.Int4) Settings {
+func normalizeBotSetting(commandUILanguage string, aclDefaultEffect string, reasoningEffort string, compactionThreshold int32, compactionTargetPercent pgtype.Int4) Settings {
 	settings := Settings{
 		CommandUILanguage:       strings.TrimSpace(commandUILanguage),
 		AclDefaultEffect:        strings.TrimSpace(aclDefaultEffect),
 		ReasoningEffort:         strings.TrimSpace(reasoningEffort),
-		CompactionEnabled:       compactionEnabled,
 		CompactionThreshold:     int(compactionThreshold),
 		CompactionTargetPercent: normalizeCompactionTargetPercent(compactionTargetPercent),
 		ToolApprovalConfig:      DefaultToolApprovalConfig(),
@@ -713,7 +708,6 @@ func normalizeBotSettingsReadRow(row sqlc.GetSettingsByBotIDRow) Settings {
 	return normalizeBotSettingsFields(
 		row.CommandUiLanguage,
 		row.ReasoningEffort,
-		row.CompactionEnabled,
 		row.CompactionThreshold,
 		row.CompactionTargetPercent,
 		row.Timezone,
@@ -746,7 +740,6 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 	return normalizeBotSettingsFields(
 		row.CommandUiLanguage,
 		row.ReasoningEffort,
-		row.CompactionEnabled,
 		row.CompactionThreshold,
 		row.CompactionTargetPercent,
 		row.Timezone,
@@ -778,7 +771,6 @@ func normalizeBotSettingsWriteRow(row sqlc.UpsertBotSettingsRow) Settings {
 func normalizeBotSettingsFields(
 	commandUILanguage string,
 	reasoningEffort string,
-	compactionEnabled bool,
 	compactionThreshold int32,
 	compactionTargetPercent pgtype.Int4,
 	timezone pgtype.Text,
@@ -805,7 +797,7 @@ func normalizeBotSettingsFields(
 	overlayEnabled bool,
 	overlayConfig []byte,
 ) Settings {
-	settings := normalizeBotSetting(commandUILanguage, "", reasoningEffort, compactionEnabled, compactionThreshold, compactionTargetPercent)
+	settings := normalizeBotSetting(commandUILanguage, "", reasoningEffort, compactionThreshold, compactionTargetPercent)
 	if timezone.Valid {
 		settings.Timezone = timezone.String
 	}

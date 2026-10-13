@@ -808,7 +808,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 		}
 		return nil
 	})
-	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextAbsoluteMaxTokens())
+	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextFallbackTokens())
 	syncCompactionMode, recognized := cfg.Agent.EffectiveSyncCompactionMode()
 	if !recognized {
 		log.Warn("unrecognized agent.sync_compaction value; defaulting to shadow", slog.String("value", cfg.Agent.SyncCompaction))

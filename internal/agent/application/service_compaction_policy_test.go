@@ -178,7 +178,6 @@ func newControllerPolicyService(t *testing.T, targetPercent *int) (*Service, *re
 		settings: sqlc.GetSettingsByBotIDRow{
 			BotID:                   compactionConfigUUID(t, botUUID),
 			ReasoningEffort:         "medium",
-			CompactionEnabled:       true,
 			CompactionTargetPercent: target,
 			CompactionModelID:       compactionConfigUUID(t, modelUUID),
 		},

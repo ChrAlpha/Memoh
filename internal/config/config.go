@@ -368,12 +368,11 @@ type AgentConfig struct {
 	ToolOutputMaxLines  int    `toml:"tool_output_max_lines"`
 	SystemFilesMaxBytes int    `toml:"system_files_max_bytes"`
 	ContextLoopReselect string `toml:"context_loop_reselect"`
-	// ContextAbsoluteMaxTokens is the server-wide context admission cap
-	// (CM-ADM-001): the effective per-turn budget is
-	// min(model context window − reserve, this cap), and the cap alone when
-	// the model has no configured window. Zero or negative selects the
-	// built-in default; the cap can be raised but never disabled.
-	ContextAbsoluteMaxTokens int `toml:"context_absolute_max_tokens"`
+	// ContextFallbackTokens is the per-turn context budget for a model that
+	// has no configured context window (CM-ADM-001); a model with a known
+	// window uses that window instead. Zero or negative selects the built-in
+	// default.
+	ContextFallbackTokens int `toml:"context_fallback_tokens"`
 	// SyncCompaction gates the pre-turn synchronous compaction backstop on
 	// the discuss and pipeline-chat paths (CM-CMP-001/003): "shadow"
 	// (default) logs would-have-fired decisions without blocking, "active"
@@ -383,13 +382,13 @@ type AgentConfig struct {
 	SyncCompaction string `toml:"sync_compaction"`
 }
 
-// EffectiveContextAbsoluteMaxTokens resolves the server-wide context
-// admission cap, falling back to the shared default when unset.
-func (c AgentConfig) EffectiveContextAbsoluteMaxTokens() int {
-	if c.ContextAbsoluteMaxTokens > 0 {
-		return c.ContextAbsoluteMaxTokens
+// EffectiveContextFallbackTokens resolves the context budget for models
+// without a configured window, using the shared default when unset.
+func (c AgentConfig) EffectiveContextFallbackTokens() int {
+	if c.ContextFallbackTokens > 0 {
+		return c.ContextFallbackTokens
 	}
-	return contextfrag.DefaultAbsoluteCapTokens
+	return contextfrag.DefaultContextFallbackTokens
 }
 
 const (

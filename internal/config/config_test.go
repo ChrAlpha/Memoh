@@ -683,15 +683,15 @@ func TestAgentConfigEffectiveSyncCompactionMode(t *testing.T) {
 	}
 }
 
-func TestAgentConfigEffectiveContextAbsoluteMaxTokens(t *testing.T) {
-	if got := (AgentConfig{}).EffectiveContextAbsoluteMaxTokens(); got != contextfrag.DefaultAbsoluteCapTokens {
-		t.Fatalf("unset cap = %d, want default %d", got, contextfrag.DefaultAbsoluteCapTokens)
+func TestAgentConfigEffectiveContextFallbackTokens(t *testing.T) {
+	if got := (AgentConfig{}).EffectiveContextFallbackTokens(); got != contextfrag.DefaultContextFallbackTokens {
+		t.Fatalf("unset fallback = %d, want default %d", got, contextfrag.DefaultContextFallbackTokens)
 	}
-	if got := (AgentConfig{ContextAbsoluteMaxTokens: -5}).EffectiveContextAbsoluteMaxTokens(); got != contextfrag.DefaultAbsoluteCapTokens {
-		t.Fatalf("negative cap = %d, want default %d", got, contextfrag.DefaultAbsoluteCapTokens)
+	if got := (AgentConfig{ContextFallbackTokens: -5}).EffectiveContextFallbackTokens(); got != contextfrag.DefaultContextFallbackTokens {
+		t.Fatalf("negative fallback = %d, want default %d", got, contextfrag.DefaultContextFallbackTokens)
 	}
-	if got := (AgentConfig{ContextAbsoluteMaxTokens: 500_000}).EffectiveContextAbsoluteMaxTokens(); got != 500_000 {
-		t.Fatalf("explicit cap = %d, want 500000", got)
+	if got := (AgentConfig{ContextFallbackTokens: 500_000}).EffectiveContextFallbackTokens(); got != 500_000 {
+		t.Fatalf("explicit fallback = %d, want 500000", got)
 	}
 }
 

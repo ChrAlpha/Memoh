@@ -14,9 +14,9 @@ import (
 const (
 	// ContextBytesPerToken is the shared byte-per-token heuristic.
 	ContextBytesPerToken = contextfrag.EstimateBytesPerToken
-	// DefaultContextCapTokens is the fail-closed admission cap used when no
-	// explicit configuration reaches a consumer (CM-ADM-001).
-	DefaultContextCapTokens = contextfrag.DefaultAbsoluteCapTokens
+	// DefaultContextCapTokens is the budget used when a model has no known
+	// window and no explicit configuration reaches a consumer (CM-ADM-001).
+	DefaultContextCapTokens = contextfrag.DefaultContextFallbackTokens
 )
 
 // EstimateTokensFromBytes converts a byte count to the shared token estimate.

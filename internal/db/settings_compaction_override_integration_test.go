@@ -204,10 +204,11 @@ func settingsIntPointer(value int) *int {
 	return &value
 }
 
-// TestNewBotDefaultsToCompactionEnabled pins the zero-config default: a
-// freshly created bot compacts out of the box, and resetting settings
-// returns to that default rather than to the legacy opt-in.
-func TestNewBotDefaultsToCompactionEnabled(t *testing.T) {
+// TestNewBotCompactionDefaults pins the zero-config defaults: a new bot uses
+// the automatic trigger and target, and resetting settings returns to them.
+// Compaction itself is always on, so the legacy compaction_enabled column is
+// neither read nor written.
+func TestNewBotCompactionDefaults(t *testing.T) {
 	ctx := context.Background()
 	tx := settingsTestTx(t, ctx)
 
@@ -224,27 +225,26 @@ VALUES ($1, 'default-on-bot', 'personal', 'ready', '{}') RETURNING id
 		t.Fatalf("insert bot: %v", err)
 	}
 
-	var enabled bool
 	var threshold int
 	var target *int
-	if err := tx.QueryRow(ctx, `SELECT compaction_enabled, compaction_threshold, compaction_target_percent FROM bots WHERE id = $1`, botID).Scan(&enabled, &threshold, &target); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT compaction_threshold, compaction_target_percent FROM bots WHERE id = $1`, botID).Scan(&threshold, &target); err != nil {
 		t.Fatalf("read defaults: %v", err)
 	}
-	if !enabled || threshold != 0 || target != nil {
-		t.Fatalf("new bot defaults = enabled %t threshold %d target %v, want automatic 50%% trigger and 40%% target defaults", enabled, threshold, target)
+	if threshold != 0 || target != nil {
+		t.Fatalf("new bot defaults = threshold %d target %v, want automatic 50%% trigger and 40%% target defaults", threshold, target)
 	}
 
-	if _, err := tx.Exec(ctx, `UPDATE bots SET compaction_enabled = false, compaction_target_percent = 70 WHERE id = $1`, botID); err != nil {
-		t.Fatalf("disable compaction: %v", err)
+	if _, err := tx.Exec(ctx, `UPDATE bots SET compaction_threshold = 1000, compaction_target_percent = 70 WHERE id = $1`, botID); err != nil {
+		t.Fatalf("override compaction: %v", err)
 	}
 	queries := sqlc.New(tx)
 	if err := queries.DeleteSettingsByBotID(ctx, pgtype.UUID{Bytes: botID, Valid: true}); err != nil {
 		t.Fatalf("reset settings: %v", err)
 	}
-	if err := tx.QueryRow(ctx, `SELECT compaction_enabled, compaction_threshold, compaction_target_percent FROM bots WHERE id = $1`, botID).Scan(&enabled, &threshold, &target); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT compaction_threshold, compaction_target_percent FROM bots WHERE id = $1`, botID).Scan(&threshold, &target); err != nil {
 		t.Fatalf("read reset values: %v", err)
 	}
-	if !enabled || threshold != 0 || target != nil {
-		t.Fatalf("reset settings = enabled %t threshold %d target %v, want the same defaults a new bot gets", enabled, threshold, target)
+	if threshold != 0 || target != nil {
+		t.Fatalf("reset settings = threshold %d target %v, want the same defaults a new bot gets", threshold, target)
 	}
 }

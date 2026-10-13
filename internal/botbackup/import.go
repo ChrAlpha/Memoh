@@ -344,11 +344,6 @@ func settingsLabels(raw []byte) []string {
 		out = append(out, "acl default: "+v)
 	}
 	out = append(out, "reasoning: "+reasoningStr())
-	compaction := "off"
-	if enabled, ok := m["compaction_enabled"].(bool); ok && enabled {
-		compaction = "on"
-	}
-	out = append(out, "compaction: "+compaction)
 	return out
 }
 
@@ -887,7 +882,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.ChatACPProjectPath = current.ChatACPProjectPath
 				eff.ChatACPProjectMode = current.ChatACPProjectMode
 				eff.ReasoningEffort = current.ReasoningEffort
-				eff.CompactionEnabled = current.CompactionEnabled
 				eff.CompactionThreshold = current.CompactionThreshold
 				eff.CompactionTargetPercent = current.CompactionTargetPercent
 				eff.PersistFullToolResults = current.PersistFullToolResults
@@ -912,7 +906,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 
 	timezone := eff.Timezone
 	reasoningEffort := eff.ReasoningEffort
-	compactionEnabled := eff.CompactionEnabled
 	compactionThreshold := eff.CompactionThreshold
 	compactionTargetPercent := 0
 	if eff.CompactionTargetPercent != nil {
@@ -941,7 +934,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 		AclDefaultEffect:        eff.AclDefaultEffect,
 		Timezone:                &timezone,
 		ReasoningEffort:         &reasoningEffort,
-		CompactionEnabled:       &compactionEnabled,
 		CompactionThreshold:     &compactionThreshold,
 		CompactionTargetPercent: &compactionTargetPercent,
 		CompactionModelID:       ptrString(modelID(eff.CompactionModelID, deps.models)),

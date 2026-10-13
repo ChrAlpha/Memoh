@@ -812,6 +812,11 @@ export type ChannelChannelCapabilities = {
     edit?: boolean;
     markdown?: boolean;
     media?: boolean;
+    /**
+     * NativeApproval means the adapter renders tool-approval requests itself;
+     * without it the outbound layer sends the prompt as a plain message.
+     */
+    native_approval?: boolean;
     native_commands?: boolean;
     native_user_input?: boolean;
     polls?: boolean;
@@ -1371,9 +1376,10 @@ export type ConversationUiForwardRef = {
 export type ConversationUiMessage = {
     approval?: ConversationUiToolApproval;
     /**
-     * Args are the machine-readable parameters of a notice block: the string
-     * values of the runtime_notice event metadata (dep_id and install_task_id
-     * for a workspace dependency notice, for instance). The client renders
+     * Args are the machine-readable parameters of a notice or error block: the
+     * string values of the runtime_notice event metadata (dep_id and
+     * install_task_id for a workspace dependency notice, for instance), or the
+     * catalog args stored with a failure's code. The client renders text and
      * actions from them instead of parsing Content.
      */
     args?: {
@@ -3956,7 +3962,6 @@ export type SettingsSettings = {
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
     compaction_model_id?: string;
     compaction_target_percent?: number | null;
     compaction_threshold?: number;
@@ -4033,7 +4038,6 @@ export type SettingsUpsertRequest = {
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
     compaction_model_id?: string;
     compaction_target_percent?: number;
     compaction_threshold?: number;

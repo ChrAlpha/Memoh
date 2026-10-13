@@ -171,9 +171,8 @@ func TestGetSessionInfoOmitsCompactionForACPRuntime(t *testing.T) {
 			}),
 		}},
 		settingsRow: sqlc.GetSettingsByBotIDRow{
-			BotID:             testUUID(lifecycleTestBotID),
-			ReasoningEffort:   "medium",
-			CompactionEnabled: true,
+			BotID:           testUUID(lifecycleTestBotID),
+			ReasoningEffort: "medium",
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)
@@ -228,6 +227,10 @@ func (q *sessionInfoQueryStub) GetBotByID(_ context.Context, _ pgtype.UUID) (sql
 
 func (q *sessionInfoQueryStub) GetSessionByID(_ context.Context, _ pgtype.UUID) (sqlc.BotSession, error) {
 	return q.session, nil
+}
+
+func (*sessionInfoQueryStub) GetLatestSessionModelID(_ context.Context, _ pgtype.UUID) (pgtype.UUID, error) {
+	return pgtype.UUID{}, pgx.ErrNoRows
 }
 
 func (*sessionInfoQueryStub) CountMessagesBySession(_ context.Context, _ pgtype.UUID) (int64, error) {
@@ -290,7 +293,6 @@ func TestGetSessionInfoReportsBudgetPlanAndCompactionMarks(t *testing.T) {
 		settingsRow: sqlc.GetSettingsByBotIDRow{
 			BotID:               testUUID(lifecycleTestBotID),
 			ReasoningEffort:     "medium",
-			CompactionEnabled:   true,
 			CompactionThreshold: 90000,
 		},
 	}
@@ -365,9 +367,8 @@ func TestGetSessionInfoFallsBackToLegacyLifecycleMetadata(t *testing.T) {
 			CreatedAt: pgtype.Timestamptz{Valid: true},
 		}},
 		settingsRow: sqlc.GetSettingsByBotIDRow{
-			BotID:             testUUID(lifecycleTestBotID),
-			ReasoningEffort:   "medium",
-			CompactionEnabled: true,
+			BotID:           testUUID(lifecycleTestBotID),
+			ReasoningEffort: "medium",
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)

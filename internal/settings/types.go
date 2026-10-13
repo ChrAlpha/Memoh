@@ -41,7 +41,6 @@ type Settings struct {
 	// ReasoningEffort is the single on/off source for reasoning:
 	// models.ReasoningEffortDisable means no reasoning, any other value is a tier.
 	ReasoningEffort         string `json:"reasoning_effort"`
-	CompactionEnabled       bool   `json:"compaction_enabled"`
 	CompactionThreshold     int    `json:"compaction_threshold"`
 	CompactionTargetPercent *int   `json:"compaction_target_percent" extensions:"x-nullable"`
 	CompactionModelID       string `json:"compaction_model_id,omitempty"`
@@ -82,7 +81,6 @@ type UpsertRequest struct {
 	AclDefaultEffect        string              `json:"acl_default_effect,omitempty"`
 	Timezone                *string             `json:"timezone,omitempty"`
 	ReasoningEffort         *string             `json:"reasoning_effort,omitempty"`
-	CompactionEnabled       *bool               `json:"compaction_enabled,omitempty"`
 	CompactionThreshold     *int                `json:"compaction_threshold,omitempty"`
 	CompactionTargetPercent *int                `json:"compaction_target_percent,omitempty"`
 	CompactionModelID       *string             `json:"compaction_model_id,omitempty"`

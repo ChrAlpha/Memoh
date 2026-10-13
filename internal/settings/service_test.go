@@ -220,7 +220,6 @@ func (q *reasoningPolicyQueries) GetSettingsByBotID(context.Context, pgtype.UUID
 		ChatAcpProjectMode:     DefaultACPProjectMode,
 		ToolApprovalConfig:     []byte(`{}`),
 		CompactionThreshold:    0,
-		CompactionEnabled:      false,
 		PersistFullToolResults: false,
 	}, nil
 }
@@ -249,7 +248,6 @@ func (q *reasoningPolicyQueries) UpsertBotSettings(_ context.Context, arg sqlc.U
 		BotID:               q.botID,
 		CommandUiLanguage:   arg.CommandUiLanguage,
 		ReasoningEffort:     arg.ReasoningEffort,
-		CompactionEnabled:   arg.CompactionEnabled,
 		CompactionThreshold: arg.CompactionThreshold,
 		ChatModelID:         modelID,
 		DefaultBotAgentID:   defaultAgentID,
@@ -537,7 +535,6 @@ func TestNormalizeBotSettingsReadRow_ShowToolCallsInIMDefault(t *testing.T) {
 
 	row := sqlc.GetSettingsByBotIDRow{
 		ReasoningEffort:     "medium",
-		CompactionEnabled:   false,
 		CompactionThreshold: 0,
 		ShowToolCallsInIm:   false,
 	}
@@ -784,7 +781,7 @@ func TestReasoningEffortAllowsFullModelLadder(t *testing.T) {
 		if !hasReasoningEffortValue(effort) {
 			t.Fatalf("hasReasoningEffortValue(%q) = false, want true", effort)
 		}
-		got := normalizeBotSetting("auto", "allow", effort, false, 0, pgtype.Int4{})
+		got := normalizeBotSetting("auto", "allow", effort, 0, pgtype.Int4{})
 		if got.ReasoningEffort != effort {
 			t.Fatalf("normalizeBotSetting effort = %q, want %q", got.ReasoningEffort, effort)
 		}

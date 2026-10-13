@@ -87,7 +87,7 @@ func provideDiscussDriver(log *slog.Logger, eventStore *timeline.EventStore, msg
 		Events:             eventStore,
 		Artifacts:          compaction.NewTimelineArtifactSource(queries),
 		Logger:             log,
-		AdmissionMaxTokens: cfg.Agent.EffectiveContextAbsoluteMaxTokens(),
+		AdmissionMaxTokens: cfg.Agent.EffectiveContextFallbackTokens(),
 	})
 }
 

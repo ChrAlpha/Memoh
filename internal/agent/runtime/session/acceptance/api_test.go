@@ -175,7 +175,6 @@ func (c *apiClient) configureBot(botID, modelID string) error {
 	return c.request(http.MethodPut, "/bots/"+url.PathEscape(botID)+"/settings", map[string]any{
 		"chat_model_id":      modelID,
 		"chat_runtime":       "model",
-		"compaction_enabled": false,
 		"reasoning_enabled":  false,
 		"tool_approval_config": map[string]any{
 			"enabled": false,

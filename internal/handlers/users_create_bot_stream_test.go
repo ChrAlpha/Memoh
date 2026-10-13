@@ -669,13 +669,12 @@ func (d *createBotStreamDB) botRow(status string) pgx.Row {
 			*dest[14].(*pgtype.Timestamptz) = pgtype.Timestamptz{Valid: false}
 			return nil
 		}
-		*dest[12].(*bool) = false
-		*dest[13].(*int32) = 200
-		*dest[14].(*pgtype.Int4) = pgtype.Int4{Int32: 50, Valid: true}
-		*dest[15].(*pgtype.UUID) = pgtype.UUID{}
-		*dest[16].(*[]byte) = append([]byte(nil), metadata...)
+		*dest[12].(*int32) = 200
+		*dest[13].(*pgtype.Int4) = pgtype.Int4{Int32: 50, Valid: true}
+		*dest[14].(*pgtype.UUID) = pgtype.UUID{}
+		*dest[15].(*[]byte) = append([]byte(nil), metadata...)
+		*dest[16].(*pgtype.Timestamptz) = pgtype.Timestamptz{Valid: false}
 		*dest[17].(*pgtype.Timestamptz) = pgtype.Timestamptz{Valid: false}
-		*dest[18].(*pgtype.Timestamptz) = pgtype.Timestamptz{Valid: false}
 		return nil
 	}}
 }

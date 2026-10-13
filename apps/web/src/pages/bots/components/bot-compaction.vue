@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { ConfirmPopover, InlineLoadingRow, SectionGroup, SettingsRow, SettingsSection, toast } from '@felinic/ui'
 import {
   Button, Badge, Dialog, DialogBody, DialogHeader, DialogPanel, DialogTitle,
-  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, NumberField,
+  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, NumberField,
   Pagination, PaginationContent, PaginationEllipsis,
   PaginationFirst, PaginationItem, PaginationLast,
   PaginationNext, PaginationPrevious,
@@ -74,14 +74,12 @@ const compactionModels = computed(() => filterCompactionModels(models.value, pro
 // A type alias (not interface) so the record satisfies the queue's
 // Record<string, unknown> constraint.
 type CompactionForm = {
-  compaction_enabled: boolean
   compaction_threshold: number
   compaction_target_percent: number | null
   compaction_model_id: string
 }
 
 const form = reactive<CompactionForm>({
-  compaction_enabled: false,
   compaction_threshold: 0,
   compaction_target_percent: null,
   compaction_model_id: '',
@@ -95,7 +93,6 @@ const synced = reactive<CompactionForm>({ ...form })
 watch(settings, (val: SettingsSettings | undefined) => {
   if (!val) return
   const next: CompactionForm = {
-    compaction_enabled: val.compaction_enabled ?? false,
     compaction_threshold: val.compaction_threshold ?? 0,
     compaction_target_percent: val.compaction_target_percent ?? null,
     compaction_model_id: val.compaction_model_id ?? '',
@@ -106,10 +103,6 @@ watch(settings, (val: SettingsSettings | undefined) => {
     synced[key] = next[key] as never
   }
 }, { immediate: true })
-
-// Logs context follows the SAVED state, not an in-flight edit: the panel must
-// describe what is actually running.
-const savedEnabled = computed(() => synced.compaction_enabled)
 
 function buildJobs(changed: (keyof CompactionForm)[]): AutosaveJob<CompactionForm>[] {
   const payload: SettingsUpsertRequest = {}
@@ -225,18 +218,18 @@ async function fetchLogs(silent = false) {
 }
 
 // Logs stream in on their own cadence, so the panel refreshes itself instead of
-// asking the user to hit a button: poll quietly while enabled, pause when the tab
+// asking the user to hit a button: poll quietly, pause when the tab
 // is hidden, and catch up the moment it's visible again.
 const POLL_INTERVAL = 15_000
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
 function tickPoll() {
-  if (document.hidden || !savedEnabled.value) return
+  if (document.hidden) return
   void fetchLogs(true)
 }
 
 function onVisibilityChange() {
-  if (logsOpen.value && !document.hidden && savedEnabled.value) void fetchLogs(true)
+  if (logsOpen.value && !document.hidden) void fetchLogs(true)
 }
 
 async function handleClear() {
@@ -274,80 +267,67 @@ onBeforeUnmount(() => {
   >
     <div class="space-y-8">
       <SettingsSection>
-        <SettingsRow
-          :label="$t('bots.settings.compactionEnabled')"
-          :description="$t('bots.settings.compactionDescription')"
-        >
-          <Switch
-            :model-value="form.compaction_enabled"
-            @update:model-value="(value) => form.compaction_enabled = value"
+        <SettingsRow stack="sm">
+          <template #content>
+            <label
+              for="compaction-threshold"
+              class="text-control font-medium text-foreground"
+            >
+              {{ $t('bots.settings.compactionThreshold') }}
+            </label>
+            <p
+              id="compaction-threshold-description"
+              class="mt-0.5 text-body text-muted-foreground"
+            >
+              {{ $t('bots.settings.compactionThresholdDescription') }}
+            </p>
+          </template>
+          <NumberField
+            id="compaction-threshold"
+            aria-describedby="compaction-threshold-description"
+            :model-value="form.compaction_threshold"
+            :min="0"
+            :step="1"
+            placeholder="0"
+            disable-wheel-change
+            class="w-32"
+            @update:model-value="(value) => form.compaction_threshold = value ?? 0"
           />
         </SettingsRow>
 
-        <template v-if="form.compaction_enabled">
-          <SettingsRow stack="sm">
-            <template #content>
-              <label
-                for="compaction-threshold"
-                class="text-control font-medium text-foreground"
-              >
-                {{ $t('bots.settings.compactionThreshold') }}
-              </label>
-              <p
-                id="compaction-threshold-description"
-                class="mt-0.5 text-body text-muted-foreground"
-              >
-                {{ $t('bots.settings.compactionThresholdDescription') }}
-              </p>
-            </template>
-            <NumberField
-              id="compaction-threshold"
-              aria-describedby="compaction-threshold-description"
-              :model-value="form.compaction_threshold"
-              :min="0"
-              :step="1"
-              placeholder="0"
-              disable-wheel-change
-              class="w-32"
-              @update:model-value="(value) => form.compaction_threshold = value ?? 0"
-            />
-          </SettingsRow>
-
-          <SettingsRow
-            stack="sm"
-          >
-            <template #content>
-              <label
-                for="compaction-target-percent"
-                class="text-control font-medium text-foreground"
-              >
-                {{ $t('bots.settings.compactionTargetPercent') }}
-              </label>
-              <p
-                id="compaction-target-percent-description"
-                class="mt-0.5 text-body text-muted-foreground"
-              >
-                {{ $t('bots.settings.compactionTargetPercentDescription') }}
-              </p>
-            </template>
-            <!-- Empty means "use the default" (null → backend clears the
-                 override); reka commits undefined for an empty field. -->
-            <NumberField
-              id="compaction-target-percent"
-              aria-describedby="compaction-target-percent-description"
-              :model-value="form.compaction_target_percent"
-              :min="1"
-              :max="99"
-              :step="1"
-              placeholder="40"
-              disable-wheel-change
-              class="w-32"
-              @update:model-value="(value) => form.compaction_target_percent = value ?? null"
-            />
-          </SettingsRow>
-        </template>
         <SettingsRow
-          v-if="form.compaction_enabled"
+          stack="sm"
+        >
+          <template #content>
+            <label
+              for="compaction-target-percent"
+              class="text-control font-medium text-foreground"
+            >
+              {{ $t('bots.settings.compactionTargetPercent') }}
+            </label>
+            <p
+              id="compaction-target-percent-description"
+              class="mt-0.5 text-body text-muted-foreground"
+            >
+              {{ $t('bots.settings.compactionTargetPercentDescription') }}
+            </p>
+          </template>
+          <!-- Empty means "use the default" (null → backend clears the
+               override); reka commits undefined for an empty field. -->
+          <NumberField
+            id="compaction-target-percent"
+            aria-describedby="compaction-target-percent-description"
+            :model-value="form.compaction_target_percent"
+            :min="1"
+            :max="99"
+            :step="1"
+            placeholder="40"
+            disable-wheel-change
+            class="w-32"
+            @update:model-value="(value) => form.compaction_target_percent = value ?? null"
+          />
+        </SettingsRow>
+        <SettingsRow
           stack="sm"
           :label="$t('bots.settings.compactionModel')"
           :description="$t('bots.settings.compactionModelDescription')"
@@ -412,16 +392,6 @@ onBeforeUnmount(() => {
                 >
                   {{ $t('common.loading') }}
                 </InlineLoadingRow>
-
-                <Empty
-                  v-else-if="!isLoading && totalCount === 0 && !savedEnabled"
-                  class="py-12"
-                >
-                  <EmptyHeader>
-                    <EmptyTitle>{{ $t('bots.compaction.logsDisabledTitle') }}</EmptyTitle>
-                    <EmptyDescription>{{ $t('bots.compaction.logsDisabledHint') }}</EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
 
                 <Empty
                   v-else-if="!isLoading && totalCount === 0"
