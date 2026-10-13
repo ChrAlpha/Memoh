@@ -13,7 +13,7 @@
       },
       {
         "role": "user",
-        "content": "\u003cmessage id=\"m2\" sender=\"Bob\" t=\"<time>\" channel=\"telegram\" conversation=\"Release crew\" type=\"group\" target=\"im-group-1\"\u003e\n\u003cin-reply-to id=\"m1\" sender=\"Alice\"\u003e\u003c/in-reply-to\u003e\nI did, it passed\n\u003c/message\u003e"
+        "content": "\u003cmessage id=\"m2\" sender=\"Bob\" t=\"<time>\" channel=\"telegram\" conversation=\"Release crew\" type=\"group\" target=\"im-group-1\"\u003e\n\u003cin-reply-to id=\"m1\" sender=\"Alice\"\u003edid anyone check the deploy?\u003c/in-reply-to\u003e\nI did, it passed\n\u003c/message\u003e"
       },
       {
         "role": "user",
@@ -25,7 +25,7 @@
       },
       {
         "role": "user",
-        "content": "\u003cmessage id=\"m4\" sender=\"Bob\" mentions_me=\"true\" t=\"<time>\" channel=\"telegram\" conversation=\"Release crew\" type=\"group\" target=\"im-group-1\"\u003e\n\u003cin-reply-to id=\"m3\" sender=\"Carol\"\u003e\u003c/in-reply-to\u003e\n@memoh and who signs it off?\n\u003c/message\u003e"
+        "content": "\u003cmessage id=\"m4\" sender=\"Bob\" mentions_me=\"true\" t=\"<time>\" channel=\"telegram\" conversation=\"Release crew\" type=\"group\" target=\"im-group-1\"\u003e\n\u003cin-reply-to id=\"m3\" sender=\"Carol\"\u003e@memoh when is the freeze?\u003c/in-reply-to\u003e\n@memoh and who signs it off?\n\u003c/message\u003e"
       }
     ],
     "tools": [

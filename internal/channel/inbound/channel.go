@@ -2026,6 +2026,7 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		Time:              time.Now().UTC(),
 		ReplyToMessageID:  inboundReplyMessageID(msg.Message.Reply),
 		ReplyToSender:     inboundReplySender(msg.Message.Reply),
+		ReplyToPreview:    inboundReplyPreview(msg.Message.Reply),
 		MentionsMe:        metadataBool(msg.Metadata, "is_mentioned"),
 		RepliesToMe:       metadataBool(msg.Metadata, "is_reply_to_bot"),
 	}, trimmedText)

@@ -20,6 +20,7 @@ type UserMessageMeta struct {
 	AttachmentPaths   []string `json:"attachments"`
 	ReplyToMessageID  string   `json:"reply-to-message-id,omitempty"`
 	ReplyToSender     string   `json:"reply-to-sender,omitempty"`
+	ReplyToPreview    string   `json:"reply-to-preview,omitempty"`
 	MentionsMe        bool     `json:"mentions-me,omitempty"`
 	RepliesToMe       bool     `json:"replies-to-me,omitempty"`
 }
@@ -43,6 +44,7 @@ type UserMessageHeaderInput struct {
 	// Zero values add nothing to the header.
 	ReplyToMessageID string
 	ReplyToSender    string
+	ReplyToPreview   string
 	MentionsMe       bool
 	RepliesToMe      bool
 }
@@ -66,6 +68,7 @@ func BuildUserMessageMetaFromInput(input UserMessageHeaderInput) UserMessageMeta
 		AttachmentPaths:   attachmentPaths,
 		ReplyToMessageID:  strings.TrimSpace(input.ReplyToMessageID),
 		ReplyToSender:     strings.TrimSpace(input.ReplyToSender),
+		ReplyToPreview:    normalizeReplyPreview(input.ReplyToPreview),
 		MentionsMe:        input.MentionsMe,
 		RepliesToMe:       input.RepliesToMe,
 	}
@@ -125,6 +128,9 @@ func (m UserMessageMeta) ToMap() map[string]any {
 	if m.ReplyToSender != "" {
 		result["reply-to-sender"] = m.ReplyToSender
 	}
+	if m.ReplyToPreview != "" {
+		result["reply-to-preview"] = m.ReplyToPreview
+	}
 	if m.MentionsMe {
 		result["mentions-me"] = true
 	}
@@ -178,7 +184,9 @@ func FormatUserHeaderFromMeta(meta UserMessageMeta, query string) string {
 		if meta.ReplyToSender != "" {
 			writeXMLAttr(&sb, "sender", meta.ReplyToSender)
 		}
-		sb.WriteString("></in-reply-to>\n")
+		sb.WriteByte('>')
+		sb.WriteString(escapeXMLText(meta.ReplyToPreview))
+		sb.WriteString("</in-reply-to>\n")
 	}
 
 	if len(meta.AttachmentPaths) > 0 {
@@ -241,6 +249,33 @@ func isUserEnvelopeStructuralLine(line string) bool {
 		return true
 	}
 	return strings.HasPrefix(line, "<in-reply-to ") && strings.HasSuffix(line, "</in-reply-to>")
+}
+
+// replyPreviewMaxRunes matches the event timeline's reply preview limit
+// (chat/timeline replyPreviewMax), so a quoted message reads the same whether
+// the row came from the timeline or from this header.
+const replyPreviewMaxRunes = 100
+
+// normalizeReplyPreview folds the preview onto one line, because
+// UnwrapUserMessageEnvelope only strips an <in-reply-to> that fits on a single
+// line, then truncates it the way the timeline does.
+func normalizeReplyPreview(preview string) string {
+	preview = strings.Join(strings.Fields(preview), " ")
+	runes := []rune(preview)
+	if len(runes) <= replyPreviewMaxRunes {
+		return preview
+	}
+	return string(runes[:replyPreviewMaxRunes]) + "…"
+}
+
+// escapeXMLText escapes a string for use as XML element text.
+func escapeXMLText(s string) string {
+	r := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return r.Replace(s)
 }
 
 // escapeXMLAttr escapes a string for use inside an XML attribute value.

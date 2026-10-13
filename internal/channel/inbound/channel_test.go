@@ -4588,7 +4588,7 @@ func TestChannelInboundProcessorPassiveRowCarriesReplyAndMention(t *testing.T) {
 	msg := channel.InboundMessage{
 		BotID:        "bot-1",
 		Channel:      channel.ChannelType("telegram"),
-		Message:      channel.Message{ID: "m-hdr", Text: "agreed", Reply: &channel.ReplyRef{MessageID: "m-prev", Sender: "Bob"}},
+		Message:      channel.Message{ID: "m-hdr", Text: "agreed", Reply: &channel.ReplyRef{MessageID: "m-prev", Sender: "Bob", Preview: "ship <it> now?"}},
 		ReplyTarget:  "group-target",
 		Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "Alice"},
 		Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
@@ -4605,7 +4605,7 @@ func TestChannelInboundProcessorPassiveRowCarriesReplyAndMention(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := model.TextContent()
-	if !strings.Contains(text, `<in-reply-to id="m-prev" sender="Bob"></in-reply-to>`) {
+	if !strings.Contains(text, `<in-reply-to id="m-prev" sender="Bob">ship &lt;it&gt; now?</in-reply-to>`) {
 		t.Fatalf("passive header lacks the reply: %s", text)
 	}
 }

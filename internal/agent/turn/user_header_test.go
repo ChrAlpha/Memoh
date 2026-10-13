@@ -120,3 +120,49 @@ func TestFormatUserHeaderRendersReplyAndMention(t *testing.T) {
 		t.Fatalf("unwrap = %q, want hello", unwrapped)
 	}
 }
+
+func TestFormatUserHeaderRendersReplyPreview(t *testing.T) {
+	t.Parallel()
+
+	input := UserMessageHeaderInput{
+		MessageID:        "msg_2",
+		DisplayName:      "Alice",
+		Channel:          "telegram",
+		Time:             time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+		ReplyToMessageID: "msg_1",
+		ReplyToSender:    "Bob",
+		ReplyToPreview:   "  is a < b && c > d?\n\tyes  ",
+	}
+	want := "<message id=\"msg_2\" sender=\"Alice\" t=\"2026-04-06T10:00:00Z\" channel=\"telegram\">\n" +
+		"<in-reply-to id=\"msg_1\" sender=\"Bob\">is a &lt; b &amp;&amp; c &gt; d? yes</in-reply-to>\nhello\n</message>"
+	got := FormatUserHeader(input, "hello")
+	if got != want {
+		t.Fatalf("header\ngot:  %q\nwant: %q", got, want)
+	}
+	if unwrapped := UnwrapUserMessageEnvelope(got); unwrapped != "hello" {
+		t.Fatalf("unwrap = %q, want hello", unwrapped)
+	}
+}
+
+func TestFormatUserHeaderTruncatesLongReplyPreview(t *testing.T) {
+	t.Parallel()
+
+	// Truncation counts runes of the raw text, before escaping, so an entity
+	// is never cut in half.
+	preview := strings.Repeat("界", replyPreviewMaxRunes-1) + "<" + "tail"
+	input := UserMessageHeaderInput{
+		DisplayName:      "Alice",
+		Channel:          "telegram",
+		Time:             time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC),
+		ReplyToMessageID: "msg_1",
+		ReplyToPreview:   preview,
+	}
+	wantBody := strings.Repeat("界", replyPreviewMaxRunes-1) + "&lt;…"
+	got := FormatUserHeader(input, "hello")
+	if !strings.Contains(got, "<in-reply-to id=\"msg_1\">"+wantBody+"</in-reply-to>\n") {
+		t.Fatalf("preview not truncated to %d runes: %q", replyPreviewMaxRunes, got)
+	}
+	if strings.Contains(got, "tail") {
+		t.Fatalf("text past the limit leaked: %q", got)
+	}
+}

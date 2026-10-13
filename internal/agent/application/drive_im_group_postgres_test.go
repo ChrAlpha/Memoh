@@ -102,7 +102,7 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 	persist("user", "m1", "", "deploy", sdk.UserMessage(imGroupHeader(imAlice, "m1", "did anyone check the deploy?", at, nil)), at)
 	// Passive reply to another member.
 	persist("user", "m2", "m1", "passed", sdk.UserMessage(imGroupHeader(imBob, "m2", "I did, it passed", at.Add(time.Minute), func(in *turn.UserMessageHeaderInput) {
-		in.ReplyToMessageID, in.ReplyToSender = "m1", "Alice"
+		in.ReplyToMessageID, in.ReplyToSender, in.ReplyToPreview = "m1", "Alice", "did anyone check the deploy?"
 	})), at.Add(time.Minute))
 	// A message that addressed the bot, and the bot's answer to it.
 	persist("user", "m3", "", "ask", sdk.UserMessage(imGroupHeader(imCarol, "m3", "@memoh when is the freeze?", at.Add(2*time.Minute), func(in *turn.UserMessageHeaderInput) {
@@ -125,6 +125,7 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 		ExternalMessageID:       "m4",
 		SourceReplyToMessageID:  "m3",
 		ReplySender:             "Carol",
+		ReplyPreview:            "@memoh when is the freeze?",
 		MentionsBot:             true,
 		SourceChannelIdentityID: imBob.identityID,
 		DisplayName:             imBob.name,

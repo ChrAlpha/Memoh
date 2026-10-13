@@ -599,6 +599,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		Timezone:          runCfg.Identity.Timezone,
 		ReplyToMessageID:  strings.TrimSpace(req.SourceReplyToMessageID),
 		ReplyToSender:     strings.TrimSpace(req.ReplySender),
+		ReplyToPreview:    req.ReplyPreview,
 		MentionsMe:        req.MentionsBot,
 		RepliesToMe:       req.RepliesToBot,
 	}
