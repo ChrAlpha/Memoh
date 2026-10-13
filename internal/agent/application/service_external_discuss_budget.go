@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/felinics/memoh/internal/agent/context/compaction"
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -19,17 +17,7 @@ func (s *Service) prepareExternalDiscussContext(ctx context.Context, req ChatReq
 	}
 	admitted, admission := admitDiscussAgentContext(req.discussMessages, s.contextAbsoluteMaxTokens(), len(markdown)+len(req.discussPromptPrefix)+len(req.discussPromptSuffix), imageCount)
 	if admission.ProtectedOverflow || admission.DroppedMessages > 0 || len(req.discussOmittedSources) > 0 || max(0, req.discussContextTokens-admission.ProtectedTokens) > admission.RecoveryBudgetTokens {
-		if !req.discussRecoveryExhausted && admission.RecoveryBudgetTokens > 0 && s.compactionService != nil && s.settingsService != nil {
-			recovery := req
-			recovery.discussCurrentSources = admission.ProtectedSources
-			result := s.runBudgetCompactionSync(ctx, recovery, max(req.discussContextTokens, admission.EstimatedTokens), admission.RecoveryBudgetTokens, "")
-			if err := ctx.Err(); err != nil {
-				return req, err
-			}
-			if result.Status == compaction.StatusOK || result.Status == compaction.StatusProgress {
-				return req, native.ErrContextRecompose
-			}
-		}
+		s.scheduleCompaction(ctx, req, max(req.discussContextTokens, admission.EstimatedTokens), admission.RecoveryBudgetTokens, "")
 	}
 	if admission.ProtectedOverflow {
 		return req, apperror.New(apperror.CodeContextProtectedOverflow, nil)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -102,30 +103,38 @@ func TestExternalDiscussDriverReceivesBoundedFinalEnvelope(t *testing.T) {
 	}
 }
 
-func TestExternalDiscussOversizedBatchCompactsOlderInputOrRecordsOmission(t *testing.T) {
+func TestExternalDiscussOversizedBatchProceedsAndDefersCompaction(t *testing.T) {
 	var messages []turn.DiscussMessage
+	var sources []turn.ContextMessageSource
 	for _, id := range []string{"a", "b", "c", "d"} {
-		messages = append(messages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("x", 1200), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
+		source := turn.ContextMessageSource{Kind: "external", ID: id, Current: true}
+		sources = append(sources, source)
+		messages = append(messages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("x", 1200), Source: &source})
 	}
 	for _, enabled := range []bool{true, false} {
-		service, compactor := newControllerPolicyService(t, nil)
+		service, _ := newControllerPolicyService(t, nil)
+		runner := newGatedCompactionRunner()
+		service.compactionService = runner
 		service.SetContextAbsoluteMaxTokens(1000)
 		service.queries.(*controllerQueries).settings.CompactionEnabled = enabled
-		got, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussMessages: messages}, "", 0)
-		if enabled {
-			if !errors.Is(err, native.ErrContextRecompose) || len(compactor.configs) != 1 {
-				t.Fatalf("older input must be compacted: err=%v compactions=%d", err, len(compactor.configs))
-			}
-			for _, source := range compactor.configs[0].ProtectedSources {
-				if source.ID == "a" {
-					t.Fatalf("the oldest input was protected from compaction: %+v", compactor.configs[0].ProtectedSources)
-				}
-			}
-			continue
-		}
+		ctx, endRun := WithRunEnd(t.Context())
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		got, err := service.prepareExternalDiscussContext(ctx, ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussMessages: messages, discussCurrentSources: sources}, "", 0)
 		if err != nil || len(got.discussOmittedSources) == 0 || got.discussOmittedSources[0].ID != "a" || !strings.Contains(got.Query, "d"+strings.Repeat("x", 1200)) {
-			t.Fatalf("without recovery the newest input must proceed and the omission must be recorded: err=%v omitted=%+v", err, got.discussOmittedSources)
+			t.Fatalf("enabled=%v: the newest input must proceed and the omission must be recorded: err=%v omitted=%+v", enabled, err, got.discussOmittedSources)
 		}
+		runner.assertNoPass(t)
+		endRun()
+		if enabled {
+			pass := runner.awaitPass(t)
+			if len(pass.ProtectedSources) != len(sources) {
+				t.Fatalf("the unconsumed batch must stay raw until Channel consumes it: %+v", pass.ProtectedSources)
+			}
+		} else {
+			runner.assertNoPass(t)
+		}
+		close(runner.release)
+		cancel()
 		ledger := contextfrag.NewMutationLedger()
 		recordOmittedCurrentInput(ledger, got.discussOmittedSources)
 		if records := ledger.Records(); len(records) != 1 || records[0].Kind != contextfrag.MutationCurrentInputOmitted || !strings.HasPrefix(records[0].Detail, "sources=a") {
@@ -276,7 +285,8 @@ func TestExternalDiscussFinalAdmissionRejectsIrreducibleContext(t *testing.T) {
 	for _, images := range []int{0, 1} {
 		service, compactor := newControllerPolicyService(t, nil)
 		service.SetContextAbsoluteMaxTokens(1000)
-		_, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{
+		ctx, _ := WithRunEnd(t.Context())
+		_, err := service.prepareExternalDiscussContext(ctx, ChatRequest{
 			BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
 			discussMessages: []turn.DiscussMessage{{Role: "user", Content: strings.Repeat("c", 3300)}},
 		}, strings.Repeat("r", 665), images)
@@ -301,11 +311,13 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 			service.SetACPSessionPool(pool)
 			service.turnHooks.streamChat = nil
 			service.SetContextAbsoluteMaxTokens(1000)
-			policy, compactor := newControllerPolicyService(t, nil)
+			policy, _ := newControllerPolicyService(t, nil)
 			policy.queries.(*controllerQueries).settings.CompactionEnabled = mode == "enabled"
 			service.settingsService, service.modelsService = policy.settingsService, policy.modelsService
 			service.queries = &externalDiscussQueries{recoveryHistoryQueries: &recoveryHistoryQueries{controllerQueries: policy.queries.(*controllerQueries)}}
-			service.compactionService = compactor
+			runner := newGatedCompactionRunner()
+			defer close(runner.release)
+			service.compactionService = runner
 			configureDiscussLifecycle(service)
 			published := 0
 			service.publishTurnEvent = func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error { published++; return nil }
@@ -332,11 +344,8 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 					t.Fatalf("unexpected failure: %v", err)
 				}
 			}
-			if mode == "enabled" && (!recomposed || failures != 0 || len(compactor.configs) != 1) {
-				t.Fatalf("recovery outcome: recompose=%v failures=%d compactions=%d", recomposed, failures, len(compactor.configs))
-			}
-			if mode == "disabled" && (recomposed || failures != 1 || len(compactor.configs) != 0) {
-				t.Fatal("disabled compaction did not fail closed")
+			if recomposed || failures != 1 {
+				t.Fatalf("irreducible context must fail closed without waiting: recompose=%v failures=%d", recomposed, failures)
 			}
 			if pool.calls != 0 || published != 0 || len(messages.persisted) != 0 || len(messages.roundOptions) != 0 || len(messages.deleted) != 0 {
 				t.Fatalf("rejected context had side effects: driver=%d public=%d history=%d rounds=%d deletes=%d", pool.calls, published, len(messages.persisted), len(messages.roundOptions), len(messages.deleted))
@@ -345,22 +354,34 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 	}
 }
 
-func TestExternalDiscussRecoversPretrimmedHistoryPressure(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
-	service.SetContextAbsoluteMaxTokens(1000)
-	req := ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussContextTokens: 20000, discussMessages: []turn.DiscussMessage{{Role: "user", Content: "current"}}}
-	_, err := service.prepareExternalDiscussContext(t.Context(), req, "runtime context", 0)
-	if !errors.Is(err, native.ErrContextRecompose) || len(runner.configs) != 1 {
-		t.Fatalf("lost pretrim pressure: err=%v calls=%d", err, len(runner.configs))
-	}
-}
-
-func TestExternalDiscussOriginalPressureUsesFinalHistoryAllowance(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
-	service.SetContextAbsoluteMaxTokens(1000)
-	req := ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussContextTokens: 900, discussMessages: []turn.DiscussMessage{{Role: "user", Content: "current"}}}
-	_, err := service.prepareExternalDiscussContext(t.Context(), req, strings.Repeat("m", 2800), 0)
-	if !errors.Is(err, native.ErrContextRecompose) || len(runner.configs) != 1 {
-		t.Fatalf("ignored final fixed overhead: err=%v calls=%d", err, len(runner.configs))
+func TestExternalDiscussPretrimmedPressureDefersCompaction(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		pressure int
+		markdown string
+	}{
+		{name: "pretrimmed history", pressure: 20000, markdown: "runtime context"},
+		{name: "final fixed overhead", pressure: 900, markdown: strings.Repeat("m", 2800)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := newControllerPolicyService(t, nil)
+			runner := newGatedCompactionRunner()
+			defer close(runner.release)
+			service.compactionService = runner
+			service.SetContextAbsoluteMaxTokens(1000)
+			ctx, endRun := WithRunEnd(t.Context())
+			ctx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			req := ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussContextTokens: tc.pressure, discussMessages: []turn.DiscussMessage{{Role: "user", Content: "current"}}}
+			got, err := service.prepareExternalDiscussContext(ctx, req, tc.markdown, 0)
+			if err != nil || !strings.Contains(got.Query, "current") {
+				t.Fatalf("admission must proceed without waiting: err=%v", err)
+			}
+			runner.assertNoPass(t)
+			endRun()
+			if pass := runner.awaitPass(t); pass.TotalInputTokens != tc.pressure {
+				t.Fatalf("background demand lost the original pressure: %+v", pass)
+			}
+		})
 	}
 }

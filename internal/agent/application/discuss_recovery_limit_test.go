@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,20 +36,5 @@ func TestDiscussIrreducibleContextDoesNotWaitForCompaction(t *testing.T) {
 				t.Fatalf("failed=%v timeout=%v provider=%d", failed, ctx.Err(), provider.callCount())
 			}
 		})
-	}
-}
-
-func TestExternalDiscussExhaustedRecoveryOnlyAttemptsAdmission(t *testing.T) {
-	service, compactor := newControllerPolicyService(t, nil)
-	service.SetContextAbsoluteMaxTokens(1000)
-	_, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{
-		BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussRecoveryExhausted: true,
-		discussMessages: []turn.DiscussMessage{
-			{Role: "assistant", Content: strings.Repeat("s", 8000), CompactionArtifactID: "summary"},
-			{Role: "user", Content: "current"},
-		},
-	}, "", 0)
-	if err == nil || len(compactor.configs) != 0 {
-		t.Fatalf("err=%v compactions=%d", err, len(compactor.configs))
 	}
 }

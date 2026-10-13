@@ -414,7 +414,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		req.Query += req.discussPromptSuffix
 	}
 	if data.Version == 2 {
-		req.discussMessages, req.discussOmittedSources, req.discussRecoveryExhausted = data.DiscussMessages, data.DiscussOmittedSources, true
+		req.discussMessages, req.discussOmittedSources = data.DiscussMessages, data.DiscussOmittedSources
 		req.discussPromptPrefix = resumeInstruction
 		req.Query = resumeInstruction + discussAgentFullContextPrompt(data.DiscussMessages) + req.discussPromptSuffix
 	}
