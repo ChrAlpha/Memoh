@@ -640,7 +640,7 @@ func TestEditMode_ResetEditsSameMessageFromEmpty(t *testing.T) {
 	s.buf.WriteString("Hello from the ")
 	ctx := context.Background()
 
-	// Answers the typing action the preview refresh sends.
+	// Answers any Telegram API call the stream makes.
 	bot := newTestTelegramBot(telegramRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -678,7 +678,6 @@ func TestEditMode_ResetEditsSameMessageFromEmpty(t *testing.T) {
 	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hello "})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	s.wg.Wait()
 
 	if sends != 0 {
 		t.Fatalf("reset must not open a new preview message, got %d sends", sends)
@@ -1357,7 +1356,7 @@ func TestStreamFinal_RichSendFallbackPreservesParseMode(t *testing.T) {
 	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
 		return bot, nil
 	}
-	defer func() { s.wg.Wait(); getOrCreateBotForTest = origGetBot }()
+	defer func() { getOrCreateBotForTest = origGetBot }()
 
 	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
@@ -1914,7 +1913,6 @@ func TestEditMode_SegmentEndKeepsPreToolText(t *testing.T) {
 			t.Fatalf("push %s: %v", event.Type, err)
 		}
 	}
-	s.wg.Wait()
 
 	if want := []string{"Let me check.", "Here is the answer."}; !reflect.DeepEqual(sent, want) {
 		t.Fatalf("sent = %q, want two separate stream messages %q", sent, want)

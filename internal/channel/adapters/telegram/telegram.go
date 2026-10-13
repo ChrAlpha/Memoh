@@ -2425,17 +2425,19 @@ func truncateTelegramText(text string) string {
 	return textutil.TruncateRunesWithSuffix(text, telegramMaxMessageLength, "...")
 }
 
+// telegramTypingRefreshInterval re-sends the typing action before Telegram
+// clears it, about five seconds after it was sent.
+const telegramTypingRefreshInterval = 4 * time.Second
+
+var _ channel.ProcessingStatusRefresher = (*TelegramAdapter)(nil)
+
 // ProcessingStarted sends a "typing" chat action to indicate processing.
 func (a *TelegramAdapter) ProcessingStarted(ctx context.Context, cfg channel.ChannelConfig, _ channel.InboundMessage, info channel.ProcessingStatusInfo) (channel.ProcessingStatusHandle, error) {
 	chatID := strings.TrimSpace(info.ReplyTarget)
 	if chatID == "" {
 		return channel.ProcessingStatusHandle{}, nil
 	}
-	telegramCfg, err := parseConfig(cfg.Credentials)
-	if err != nil {
-		return channel.ProcessingStatusHandle{}, err
-	}
-	bot, err := a.getOrCreateBot(ctx, telegramCfg, cfg.ID)
+	bot, err := a.processingBot(ctx, cfg)
 	if err != nil {
 		return channel.ProcessingStatusHandle{}, err
 	}
@@ -2443,6 +2445,33 @@ func (a *TelegramAdapter) ProcessingStarted(ctx context.Context, cfg channel.Cha
 		a.logger.WarnContext(ctx, "send typing action failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
 	}
 	return channel.ProcessingStatusHandle{}, nil
+}
+
+// ProcessingRefreshInterval implements channel.ProcessingStatusRefresher.
+func (*TelegramAdapter) ProcessingRefreshInterval() time.Duration {
+	return telegramTypingRefreshInterval
+}
+
+// ProcessingRefresh re-sends the "typing" chat action so it stays visible
+// for the whole turn: model latency, reasoning and tool calls included.
+func (a *TelegramAdapter) ProcessingRefresh(ctx context.Context, cfg channel.ChannelConfig, _ channel.InboundMessage, info channel.ProcessingStatusInfo, _ channel.ProcessingStatusHandle) error {
+	chatID := strings.TrimSpace(info.ReplyTarget)
+	if chatID == "" {
+		return nil
+	}
+	bot, err := a.processingBot(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return sendTelegramTyping(bot, chatID)
+}
+
+func (a *TelegramAdapter) processingBot(ctx context.Context, cfg channel.ChannelConfig) (*tele.Bot, error) {
+	telegramCfg, err := parseConfig(cfg.Credentials)
+	if err != nil {
+		return nil, err
+	}
+	return a.getOrCreateBot(ctx, telegramCfg, cfg.ID)
 }
 
 // ProcessingCompleted is a no-op for Telegram (typing indicator clears automatically).
