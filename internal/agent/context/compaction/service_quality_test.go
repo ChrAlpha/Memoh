@@ -40,26 +40,26 @@ func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
-	stub := &stubModel{summary: "SUMMARY"}
-	cfg := machineryConfig(stub, 200)
-	cfg.SummaryWindowTokens = 20000
-
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if stub.maxTokens != 2000 {
-		t.Fatalf("summary max tokens = %d, want window/10 = 2000", stub.maxTokens)
-	}
-
-	wide := &stubModel{summary: "SUMMARY"}
-	cfgWide := machineryConfig(wide, 200)
-	cfgWide.SummaryWindowTokens = 200000
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgWide); err != nil {
-		t.Fatalf("RunCompactionSync wide: %v", err)
-	}
-	if wide.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("summary max tokens = %d, want the %d cap", wide.maxTokens, maxCompactionSummaryTokens)
+	for _, tc := range []struct{ window, target, want int }{
+		{window: 20000, target: 5000, want: 2000},
+		{window: 200000, target: 5000, want: maxCompactionSummaryTokens},
+		{window: 200000, target: 399, want: 399},
+	} {
+		stub := &stubModel{summary: "SUMMARY"}
+		cfg := machineryConfig(stub, tc.target)
+		cfg.SummaryWindowTokens = tc.window
+		rows := []sqlc.ListUncompactedMessagesBySessionRow{
+			mkRow(t, "user", jsonStr(strings.Repeat("old question ", 2000)), 0),
+			mkRow(t, "assistant", jsonStr(strings.Repeat("old answer ", 2000)), 0),
+			mkRow(t, "user", `"current question"`, 100),
+			mkRow(t, "assistant", `"current answer"`, 100),
+		}
+		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(context.Background(), cfg); err != nil {
+			t.Fatalf("window=%d target=%d: %v", tc.window, tc.target, err)
+		}
+		if stub.maxTokens != tc.want {
+			t.Fatalf("window=%d target=%d: summary max tokens = %d, want %d: never above window/10, the absolute cap, or the target the summary must fit", tc.window, tc.target, stub.maxTokens, tc.want)
+		}
 	}
 }
 
