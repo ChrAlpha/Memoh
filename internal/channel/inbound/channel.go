@@ -30,7 +30,9 @@ import (
 	"github.com/felinics/memoh/internal/channel/route"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/command"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/i18n"
@@ -211,6 +213,8 @@ type ChannelInboundProcessor struct {
 	sessionEnsurer      SessionEnsurer
 	eventStore          EventPersister
 	discussDriver       *discuss.DiscussDriver
+	passiveRows         PassiveRowWriter
+	discussWaker        DiscussWaker
 	imDisplayOptions    IMDisplayOptionsReader
 	defaultChatRuntime  DefaultChatRuntimeReader
 	acpAgentSetup       ACPAgentSetupReader
@@ -348,13 +352,25 @@ func (p *ChannelInboundProcessor) SetRequestedSkillResolver(resolver RequestedSk
 	p.skillResolver = resolver
 }
 
-// SetPipeline configures the event store and discuss driver.
-func (p *ChannelInboundProcessor) SetPipeline(store EventPersister, driver *discuss.DiscussDriver) {
+// SetPipeline configures the event store, the passive row writer, and the
+// discuss driver. Passive rows are written on the same transaction as their
+// event, so the row writer and the event store must share one database.
+func (p *ChannelInboundProcessor) SetPipeline(store EventPersister, rows PassiveRowWriter, driver *discuss.DiscussDriver) {
 	if p == nil {
 		return
 	}
 	p.eventStore = store
+	p.passiveRows = rows
 	p.discussDriver = driver
+}
+
+// SetDiscussWaker configures the hook that tells the discuss side a new
+// passive event was committed. Nil means no hook.
+func (p *ChannelInboundProcessor) SetDiscussWaker(waker DiscussWaker) {
+	if p == nil {
+		return
+	}
+	p.discussWaker = waker
 }
 
 // SetIMDisplayOptions configures the reader used to gate IM-facing stream
@@ -688,7 +704,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			}
 			return nil
 		}
-		p.persistPassiveMessage(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, "")
+		p.persistPassiveRow(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, messagepkg.AdmissionRejectedACL)
 		if p.logger != nil {
 			p.logger.InfoContext(ctx,
 				"inbound denied by acl — event not ingested",
@@ -838,7 +854,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			err = requireExternalRuntimeActor(identity, ownerPrincipal)
 		}
 		if err != nil {
-			p.persistPassiveMessage(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, "")
+			p.persistPassiveRow(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, messagepkg.AdmissionRejectedRuntimeDriver)
 			if shouldTrigger || isDirectedAtBot(msg) {
 				return p.replyFailure(ctx, sender, msg, identity, err, "")
 			}
@@ -867,8 +883,11 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		}
 	}
 
-	// Persist the event. The discuss driver renders its context from the
-	// event store, so it is signalled below only after this commit succeeded.
+	// Passive rows (discuss routing and non-triggering messages) commit with
+	// their event in one transaction. A triggering message gets its row from the
+	// turn, which carries the event id itself.
+	discussRoute := sessionType == sessionpkg.TypeDiscuss && p.discussDriver != nil && slashDecision.AgentCommand == ""
+	passive := discussRoute || !shouldTrigger
 	var eventID string
 	var eventPersisted bool
 	if sessionID != "" && pendingSkillIntent == nil {
@@ -876,12 +895,26 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		pipelineMsg.Message = msg.Message
 		pipelineMsg.Message.Attachments = resolvedAttachments
 		event := AdaptInbound(pipelineMsg, sessionID, identity.ChannelIdentityID, identity.DisplayName)
-		eventID, eventPersisted = persistInboundEvent(ctx, p.eventStore, p.logger, identity.BotID, sessionID, event)
+		if passive {
+			var inserted bool
+			var err error
+			eventPersisted, inserted, err = p.recordPassiveInbound(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, event)
+			if err != nil {
+				return err
+			}
+			// The wake runs after the commit. Only a newly inserted event changes
+			// what the discuss session has to answer.
+			if discussRoute && inserted && p.discussWaker != nil {
+				p.discussWaker.Wake(ctx, identity.BotID, sessionID)
+			}
+		} else {
+			eventID, eventPersisted = persistInboundEvent(ctx, p.eventStore, p.logger, identity.BotID, sessionID, event)
+		}
 	}
 
 	// Discuss mode: dispatch to the discuss driver and return.
 	// The discuss driver autonomously decides whether to call the LLM.
-	if sessionType == sessionpkg.TypeDiscuss && p.discussDriver != nil && eventPersisted && slashDecision.AgentCommand == "" {
+	if discussRoute && eventPersisted {
 		chatToken := p.issueChatToken(identity, resolved.RouteID, msg)
 		sessionToken := p.issueSessionBearerToken(ctx, identity, runtimeSession, sessionRuntimeOwner, chatToken)
 		p.discussDriver.Notify(sessionID, discuss.DiscussSessionConfig{ //nolint:contextcheck // the discuss worker outlives the inbound request by design
@@ -898,7 +931,6 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			ChatToken:         chatToken,
 			ToolHTTPURL:       acpMCPToolsURLFromEnv(identity.BotID),
 		})
-		p.persistPassiveMessage(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, eventID)
 		return nil
 	}
 
@@ -910,7 +942,9 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	}
 
 	if !shouldTrigger {
-		p.persistPassiveMessage(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, eventID)
+		if !eventPersisted {
+			p.persistPassiveRow(ctx, identity, msg, text, attachments, resolved.RouteID, sessionID, "")
+		}
 		if p.logger != nil {
 			p.logger.InfoContext(ctx,
 				"inbound not triggering assistant (group trigger condition not met)",
@@ -1930,6 +1964,27 @@ func channelAttachmentMetadata(attachments []channel.Attachment) []map[string]an
 	return result
 }
 
+// inboundForwardHeader returns the forwarded_from and forwarded_message_id
+// header values for a forwarded message. The fallback order matches the event
+// timeline's forward rendering, minus contact-name lookup, which the inbound
+// path does not have.
+func inboundForwardHeader(forward *channel.ForwardRef) (from, messageID string) {
+	if forward == nil {
+		return "", ""
+	}
+	switch {
+	case strings.TrimSpace(forward.Sender) != "":
+		from = strings.TrimSpace(forward.Sender)
+	case strings.TrimSpace(forward.FromUserID) != "":
+		from = "user:" + strings.TrimSpace(forward.FromUserID)
+	case strings.TrimSpace(forward.FromConversationID) != "":
+		from = "conversation:" + strings.TrimSpace(forward.FromConversationID)
+	default:
+		from = "unknown"
+	}
+	return from, strings.TrimSpace(forward.MessageID)
+}
+
 func messageForwardMetadata(forward *channel.ForwardRef) map[string]any {
 	if forward == nil {
 		return nil
@@ -1987,24 +2042,91 @@ func metadataBool(metadata map[string]any, key string) bool {
 // for group conversations where the bot was not @mentioned. This replaces the
 // old inbox system — the message is stored in the route's active session so it
 // becomes part of the conversation history the next time the agent is triggered.
-func (p *ChannelInboundProcessor) persistPassiveMessage(
+// persistPassiveRow writes a passive user row that has no session event. Rows
+// refused at admission never reach the event store, so they are written here.
+func (p *ChannelInboundProcessor) persistPassiveRow(
 	ctx context.Context,
 	ident InboundIdentity,
 	msg channel.InboundMessage,
 	text string,
 	attachments []turn.Attachment,
-	routeID, sessionID, eventID string,
+	routeID, sessionID string,
+	admission messagepkg.Admission,
 ) {
 	if p.message == nil {
 		return
 	}
+	row, ok := p.buildPassiveRow(ctx, ident, msg, text, attachments, routeID, sessionID, admission)
+	if !ok {
+		return
+	}
+	if _, err := p.message.Persist(ctx, row); err != nil && p.logger != nil {
+		p.logger.WarnContext(ctx, "persist passive message failed", slog.Any("error", err), slog.String("bot_id", row.BotID))
+	}
+}
+
+// recordPassiveInbound commits a passive inbound event and its history row in
+// one transaction. A platform message that is already recorded writes no row.
+// committed reports that the event is durable, whether inserted now or earlier.
+func (p *ChannelInboundProcessor) recordPassiveInbound(
+	ctx context.Context,
+	ident InboundIdentity,
+	msg channel.InboundMessage,
+	text string,
+	attachments []turn.Attachment,
+	routeID, sessionID string,
+	event timeline.CanonicalEvent,
+) (committed, inserted bool, err error) {
+	if p.eventStore == nil || p.passiveRows == nil {
+		return false, false, nil
+	}
+	row, hasRow := p.buildPassiveRow(ctx, ident, msg, text, attachments, routeID, sessionID, "")
+	const maxAttempts = 3
+	var written messagepkg.Message
+	for attempt := 1; ; attempt++ {
+		_, inserted, err = p.eventStore.PersistEventInTx(ctx, ident.BotID, sessionID, event, func(queries dbstore.Queries, eventID string) error {
+			if !hasRow {
+				return nil
+			}
+			input := row
+			input.EventID = eventID
+			var writeErr error
+			written, writeErr = p.passiveRows.PersistWithin(ctx, queries, input)
+			return writeErr
+		})
+		// A turn-position collision aborts the transaction, so the whole
+		// transaction is retried rather than the statement.
+		if err == nil || !messagepkg.IsTurnSequenceConflict(err) || attempt == maxAttempts {
+			break
+		}
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if inserted && hasRow {
+		p.passiveRows.PublishCreated(written)
+	}
+	return true, inserted, nil
+}
+
+// buildPassiveRow shapes a passive user row. It reports false when there is
+// nothing to write: no bot, or neither text nor attachments.
+func (p *ChannelInboundProcessor) buildPassiveRow(
+	ctx context.Context,
+	ident InboundIdentity,
+	msg channel.InboundMessage,
+	text string,
+	attachments []turn.Attachment,
+	routeID, sessionID string,
+	admission messagepkg.Admission,
+) (messagepkg.PersistInput, bool) {
 	botID := strings.TrimSpace(ident.BotID)
 	if botID == "" {
-		return
+		return messagepkg.PersistInput{}, false
 	}
 	trimmedText := strings.TrimSpace(text)
 	if trimmedText == "" && len(attachments) == 0 {
-		return
+		return messagepkg.PersistInput{}, false
 	}
 
 	var attachmentPaths []string
@@ -2014,21 +2136,24 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		}
 	}
 
+	forwardedFrom, forwardedMessageID := inboundForwardHeader(msg.Message.Forward)
 	headerifiedText := turn.FormatUserHeader(turn.UserMessageHeaderInput{
-		MessageID:         strings.TrimSpace(msg.Message.ID),
-		ChannelIdentityID: strings.TrimSpace(ident.ChannelIdentityID),
-		DisplayName:       strings.TrimSpace(ident.DisplayName),
-		Channel:           msg.Channel.String(),
-		ConversationType:  strings.TrimSpace(msg.Conversation.Type),
-		ConversationName:  strings.TrimSpace(msg.Conversation.Name),
-		Target:            strings.TrimSpace(msg.ReplyTarget),
-		AttachmentPaths:   attachmentPaths,
-		Time:              time.Now().UTC(),
-		ReplyToMessageID:  inboundReplyMessageID(msg.Message.Reply),
-		ReplyToSender:     inboundReplySender(msg.Message.Reply),
-		ReplyToPreview:    inboundReplyPreview(msg.Message.Reply),
-		MentionsMe:        metadataBool(msg.Metadata, "is_mentioned"),
-		RepliesToMe:       metadataBool(msg.Metadata, "is_reply_to_bot"),
+		MessageID:          strings.TrimSpace(msg.Message.ID),
+		ChannelIdentityID:  strings.TrimSpace(ident.ChannelIdentityID),
+		DisplayName:        strings.TrimSpace(ident.DisplayName),
+		Channel:            msg.Channel.String(),
+		ConversationType:   strings.TrimSpace(msg.Conversation.Type),
+		ConversationName:   strings.TrimSpace(msg.Conversation.Name),
+		Target:             strings.TrimSpace(msg.ReplyTarget),
+		AttachmentPaths:    attachmentPaths,
+		Time:               msg.ReceivedAt.UTC(),
+		ForwardedFrom:      forwardedFrom,
+		ForwardedMessageID: forwardedMessageID,
+		ReplyToMessageID:   inboundReplyMessageID(msg.Message.Reply),
+		ReplyToSender:      inboundReplySender(msg.Message.Reply),
+		ReplyToPreview:     inboundReplyPreview(msg.Message.Reply),
+		MentionsMe:         metadataBool(msg.Metadata, "is_mentioned"),
+		RepliesToMe:        metadataBool(msg.Metadata, "is_reply_to_bot"),
 	}, trimmedText)
 
 	modelMsg := turn.ModelMessage{Role: "user", Content: turn.NewTextContent(headerifiedText)}
@@ -2037,7 +2162,7 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		if p.logger != nil {
 			p.logger.WarnContext(ctx, "marshal passive message failed", slog.Any("error", err))
 		}
-		return
+		return messagepkg.PersistInput{}, false
 	}
 
 	meta := map[string]any{
@@ -2049,6 +2174,9 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 	}
 	if forward := messageForwardMetadata(msg.Message.Forward); forward != nil {
 		meta["forward"] = forward
+	}
+	if admission != "" {
+		messagepkg.SetAdmission(meta, admission)
 	}
 
 	var assets []messagepkg.AssetRef
@@ -2074,7 +2202,7 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		assets = append(assets, ref)
 	}
 
-	if _, err := p.message.Persist(ctx, messagepkg.PersistInput{
+	return messagepkg.PersistInput{
 		BotID:                   botID,
 		SessionID:               sessionID,
 		SenderChannelIdentityID: strings.TrimSpace(ident.ChannelIdentityID),
@@ -2085,11 +2213,8 @@ func (p *ChannelInboundProcessor) persistPassiveMessage(
 		Content:                 serialized,
 		Metadata:                meta,
 		Assets:                  assets,
-		EventID:                 eventID,
 		DisplayText:             trimmedText,
-	}); err != nil && p.logger != nil {
-		p.logger.WarnContext(ctx, "persist passive message failed", slog.Any("error", err), slog.String("bot_id", botID))
-	}
+	}, true
 }
 
 func buildChannelMessage(output turn.AssistantOutput, capabilities channel.ChannelCapabilities) channel.Message {

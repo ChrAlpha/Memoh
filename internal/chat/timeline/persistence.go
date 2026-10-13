@@ -117,6 +117,38 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 	return "", original, nil
 }
 
+type transactionalQueries interface {
+	InTx(ctx context.Context, fn func(dbstore.Queries) error) error
+}
+
+// PersistEventInTx inserts the event and, in the same transaction, runs
+// withEvent with the transaction-bound queries and the new event id. An event
+// that already exists (same external message id) is not inserted and withEvent
+// is not called, so inserted is false and the caller writes nothing for it.
+func (s *EventStore) PersistEventInTx(ctx context.Context, botID, sessionID string, event CanonicalEvent, withEvent func(queries dbstore.Queries, eventID string) error) (eventID string, inserted bool, err error) {
+	txer, ok := s.queries.(transactionalQueries)
+	if !ok {
+		return "", false, errors.New("timeline event store queries do not support transactions")
+	}
+	err = txer.InTx(ctx, func(queries dbstore.Queries) error {
+		txStore := *s
+		txStore.queries = queries
+		id, _, persistErr := txStore.PersistEvent(ctx, botID, sessionID, event)
+		if persistErr != nil {
+			return persistErr
+		}
+		if id == "" {
+			return nil
+		}
+		eventID, inserted = id, true
+		return withEvent(queries, id)
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return eventID, inserted, nil
+}
+
 // LoadEvents is the compatibility surface for callers without a bot identity.
 // It is still keyset/byte bounded, but cannot apply a compaction frontier.
 func (s *EventStore) LoadEvents(ctx context.Context, sessionID string) ([]CanonicalEvent, error) {

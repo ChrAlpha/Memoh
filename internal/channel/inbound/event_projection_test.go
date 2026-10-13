@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/chat/timeline"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 type stampingEventStore struct {
@@ -24,6 +25,14 @@ func (s stampingEventStore) PersistEvent(_ context.Context, _, _ string, event t
 	}
 	msg.EventCursor = s.cursor
 	return s.id, msg, s.err
+}
+
+func (s stampingEventStore) PersistEventInTx(ctx context.Context, botID, sessionID string, event timeline.CanonicalEvent, withEvent func(dbstore.Queries, string) error) (string, bool, error) {
+	id, _, err := s.PersistEvent(ctx, botID, sessionID, event)
+	if err != nil || id == "" {
+		return "", false, err
+	}
+	return id, true, withEvent(nil, id)
 }
 
 func inboundTestEvent() timeline.MessageEvent {

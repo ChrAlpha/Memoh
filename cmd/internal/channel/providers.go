@@ -222,7 +222,7 @@ func provideChannelRouter(
 	threadCoordinator := route.NewThreadCoordinator(log, routeService, sessionService)
 	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, turnService, identityService, policyService, cfg.Auth.JWTSecret, 5*time.Minute)
 	processor.SetSessionEnsurer(&sessionEnsurerAdapter{coordinator: threadCoordinator})
-	processor.SetPipeline(eventStore, discussDriver)
+	processor.SetPipeline(eventStore, msgService, discussDriver)
 	discussDriver.SetTurnService(turnService)
 	discussDriver.SetBroadcaster(hub)
 	processor.SetACLService(aclService)

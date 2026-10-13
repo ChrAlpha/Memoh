@@ -32,6 +32,7 @@ import (
 	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/command"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/i18n"
 	"github.com/felinics/memoh/internal/media"
@@ -1609,7 +1610,7 @@ func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntim
 	eventStore := &memEventStore{}
 	discussDriver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
 	t.Cleanup(discussDriver.StopAll)
-	processor.SetPipeline(eventStore, discussDriver)
+	processor.SetPipeline(eventStore, &memPassiveRows{}, discussDriver)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("feishu")}
 	msg := channel.InboundMessage{
@@ -3095,7 +3096,7 @@ func TestChannelInboundProcessorPipelineUsesResolvedAttachments(t *testing.T) {
 	processor.SetMediaService(mediaSvc)
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-pipeline-asset", Type: "chat"}})
 	eventStore := &memEventStore{}
-	processor.SetPipeline(eventStore, nil)
+	processor.SetPipeline(eventStore, &memPassiveRows{}, nil)
 	sender := &fakeReplySender{}
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-pipeline-asset", BotID: "bot-1", ChannelType: channel.ChannelTypeTelegram}
@@ -4454,7 +4455,7 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	eventStore := &memEventStore{}
 	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
 	defer driver.StopAll()
-	processor.SetPipeline(eventStore, driver)
+	processor.SetPipeline(eventStore, &memPassiveRows{}, driver)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4486,7 +4487,7 @@ func TestChannelInboundProcessorPassiveChatVoiceNotTranscribed(t *testing.T) {
 	processor.SetMediaService(&fakeMediaIngestor{})
 	processor.SetTranscriptionService(&fakeTranscriber{text: "hello from voice"}, fakeSTTResolver{})
 	eventStore := &memEventStore{}
-	processor.SetPipeline(eventStore, nil)
+	processor.SetPipeline(eventStore, &memPassiveRows{}, nil)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4525,6 +4526,29 @@ func (s *memEventStore) PersistEvent(_ context.Context, _, _ string, event timel
 	return "event-" + strconv.Itoa(len(s.events)), event, nil
 }
 
+func (s *memEventStore) PersistEventInTx(ctx context.Context, botID, sessionID string, event timeline.CanonicalEvent, withEvent func(dbstore.Queries, string) error) (string, bool, error) {
+	id, _, err := s.PersistEvent(ctx, botID, sessionID, event)
+	if err != nil || id == "" {
+		return "", false, err
+	}
+	return id, true, withEvent(nil, id)
+}
+
+// memPassiveRows records passive rows written on the event transaction.
+type memPassiveRows struct {
+	mu   sync.Mutex
+	rows []messagepkg.PersistInput
+}
+
+func (w *memPassiveRows) PersistWithin(_ context.Context, _ dbstore.Queries, input messagepkg.PersistInput) (messagepkg.Message, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.rows = append(w.rows, input)
+	return messagepkg.Message{}, nil
+}
+
+func (*memPassiveRows) PublishCreated(messagepkg.Message) {}
+
 func (s *memEventStore) LoadEventsForReplay(context.Context, string, string) ([]timeline.CanonicalEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -4539,7 +4563,7 @@ func newDiscussSignalFixture(t *testing.T, store *memEventStore) (*ChannelInboun
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-signal", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}})
 	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: store})
 	t.Cleanup(driver.StopAll)
-	processor.SetPipeline(store, driver)
+	processor.SetPipeline(store, &memPassiveRows{}, driver)
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
 		BotID:        "bot-1",
@@ -4571,8 +4595,8 @@ func TestChannelInboundProcessorDiscussNotSignalledWhenEventPersistFails(t *test
 	store := &memEventStore{persistErr: errors.New("insert unavailable")}
 	processor, driver, cfg, msg := newDiscussSignalFixture(t, store)
 
-	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err == nil {
+		t.Fatal("inbound must fail when the event and its row cannot be committed")
 	}
 	if driver.HasSession("discuss-signal") {
 		t.Fatal("discuss driver must not be signalled when the event was not committed")
@@ -4607,5 +4631,37 @@ func TestChannelInboundProcessorPassiveRowCarriesReplyAndMention(t *testing.T) {
 	text := model.TextContent()
 	if !strings.Contains(text, `<in-reply-to id="m-prev" sender="Bob">ship &lt;it&gt; now?</in-reply-to>`) {
 		t.Fatalf("passive header lacks the reply: %s", text)
+	}
+}
+
+func TestChannelInboundProcessorPassiveRowCarriesForward(t *testing.T) {
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-passive-fwd", RouteID: "route-passive-fwd"}}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, &fakeChatGateway{},
+		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-fwd", DisplayName: "Alice"}}, &fakePolicyService{}, "", 0)
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "chat-passive-fwd", Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel}})
+	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
+	msg := channel.InboundMessage{
+		BotID:        "bot-1",
+		Channel:      channel.ChannelType("telegram"),
+		Message:      channel.Message{ID: "m-fwd", Text: "see this", Forward: &channel.ForwardRef{MessageID: "orig-9", Sender: "Carol"}},
+		ReplyTarget:  "group-target",
+		Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "Alice"},
+		Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
+	}
+	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chatSvc.persistedIn) != 1 {
+		t.Fatalf("expected one passive row, got %d", len(chatSvc.persistedIn))
+	}
+	var model turn.ModelMessage
+	if err := json.Unmarshal(chatSvc.persistedIn[0].Content, &model); err != nil {
+		t.Fatal(err)
+	}
+	text := model.TextContent()
+	for _, want := range []string{`forwarded_from="Carol"`, `forwarded_message_id="orig-9"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("passive header lacks %s: %s", want, text)
+		}
 	}
 }

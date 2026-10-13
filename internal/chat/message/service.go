@@ -151,6 +151,26 @@ func (s *DBService) persistOnce(ctx context.Context, input PersistInput) (Messag
 	return result, nil
 }
 
+// IsTurnSequenceConflict reports whether err is a turn-position collision. A
+// transaction that hit it is aborted, so the caller must retry the whole
+// transaction rather than the statement.
+func IsTurnSequenceConflict(err error) bool {
+	return isTurnSequenceUniqueViolation(err)
+}
+
+// PersistWithin writes one message on the caller's transaction. It does not
+// publish; call PublishCreated after the transaction commits.
+func (s *DBService) PersistWithin(ctx context.Context, queries dbstore.Queries, input PersistInput) (Message, error) {
+	txService := *s
+	txService.queries = queries
+	return txService.persist(ctx, input)
+}
+
+// PublishCreated announces a message whose transaction has committed.
+func (s *DBService) PublishCreated(message Message) {
+	s.publishMessageCreated(message)
+}
+
 func isTurnSequenceUniqueViolation(err error) bool {
 	if !dbpkg.IsUniqueViolation(err) {
 		return false
