@@ -80,10 +80,20 @@ func compactionUnderHardPressure(pressure, contextTokenBudget int) bool {
 // more than one budget starts one pass for it, for the demand furthest over
 // its budget.
 func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, pressure, contextTokenBudget int, turnModelID string) {
-	if s.compactionService == nil || s.settingsService == nil || pressure <= 0 {
+	s.scheduleDemand(ctx, &compactionDemand{req: req, pressure: pressure, contextTokenBudget: contextTokenBudget, turnModelID: turnModelID})
+}
+
+// scheduleAllowanceCompaction reports history over the allowance a final
+// request left it. Its pass keeps the summary within its target, so the
+// summary fits the history it replaces.
+func (s *Service) scheduleAllowanceCompaction(ctx context.Context, req ChatRequest, pressure, allowance int, turnModelID string) {
+	s.scheduleDemand(ctx, &compactionDemand{req: req, pressure: pressure, contextTokenBudget: allowance, turnModelID: turnModelID, allowance: true})
+}
+
+func (s *Service) scheduleDemand(ctx context.Context, demand *compactionDemand) {
+	if s.compactionService == nil || s.settingsService == nil || demand.pressure <= 0 {
 		return
 	}
-	demand := &compactionDemand{req: req, pressure: pressure, contextTokenBudget: contextTokenBudget, turnModelID: turnModelID}
 	if end, ok := ctx.Value(runEndKey{}).(*runEnd); ok && !end.recordCompaction(demand) {
 		return
 	}
@@ -96,6 +106,7 @@ func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, press
 		if !ok {
 			return
 		}
+		plan.allowance = demand.allowance
 		_ = job.Run(ctx, s.logger, "agent.compaction", job.Options{}, func(ctx context.Context) error {
 			return s.runCompaction(ctx, plan)
 		},
@@ -113,6 +124,7 @@ type compactionDemand struct {
 	pressure           int
 	contextTokenBudget int
 	turnModelID        string
+	allowance          bool
 }
 
 func (d compactionDemand) exceeds(other compactionDemand) bool {
@@ -222,6 +234,7 @@ type compactionPlan struct {
 	threshold          int
 	contextTokenBudget int
 	turnModelID        string
+	allowance          bool
 }
 
 // planCompaction reports whether the pressure crosses the automatic trigger.
@@ -274,6 +287,9 @@ func (s *Service) runCompaction(ctx context.Context, plan compactionPlan) error 
 	cfg.HardPressure = compactionUnderHardPressure(plan.pressure, plan.contextTokenBudget)
 	if cfg.HardPressure {
 		cfg.TargetTokens = hardPressureTargetTokens(plan.settings.CompactionTargetPercent, plan.contextTokenBudget)
+	}
+	if plan.allowance {
+		cfg.MaxSummaryTokens = cfg.TargetTokens
 	}
 	return s.drainCompactionBacklog(ctx, cfg)
 }

@@ -35,16 +35,15 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		baseMaxCompactTokens = 30000
 	}
 
-	// Bound the summary output, never above the context target it must fit,
-	// and derive the hard input budget: window minus output reserve minus the
-	// fixed system prompt and wrapper framing. A window that cannot hold even
-	// that fails closed before claiming rows.
+	// Bound the summary output and derive the hard input budget: window minus
+	// output reserve minus the fixed system prompt and wrapper framing. A
+	// window that cannot hold even that fails closed before claiming rows.
 	maxOutputTokens := maxCompactionSummaryTokens
 	if cfg.SummaryWindowTokens > 0 {
 		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
 	}
-	if cfg.TargetTokens > 0 {
-		maxOutputTokens = min(maxOutputTokens, cfg.TargetTokens)
+	if cfg.MaxSummaryTokens > 0 {
+		maxOutputTokens = min(maxOutputTokens, cfg.MaxSummaryTokens)
 	}
 	maxCompactTokens, err := boundedCompactionInputTokens(cfg, baseMaxCompactTokens, maxOutputTokens, systemPrompt)
 	if err != nil {

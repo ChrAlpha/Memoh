@@ -88,4 +88,7 @@ func TestDiscussBackgroundCompactionProtectsEveryPendingSource(t *testing.T) {
 	if len(cfg.ProtectedSources) != 2 || cfg.ProtectedSources[0].ID != "a" || cfg.ProtectedSources[1].ID != "b" {
 		t.Fatalf("background compaction lost pending input protection: %+v", cfg.ProtectedSources)
 	}
+	if cfg.MaxSummaryTokens != 0 {
+		t.Fatalf("whole-budget pass capped its summary at %d", cfg.MaxSummaryTokens)
+	}
 }

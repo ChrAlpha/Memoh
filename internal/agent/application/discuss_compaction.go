@@ -22,15 +22,15 @@ func discussContextPressure(cmd turn.StartTurnCommand) int {
 // pressure is taken before admission. The pass keeps the unconsumed batch raw:
 // Channel sends it again when the run fails.
 func (s *Service) scheduleDiscussCompaction(ctx context.Context, cmd turn.StartTurnCommand, resolved ResolveRunConfigResult) {
-	s.scheduleDiscussCompactionWithin(ctx, cmd, s.discussBudget(resolved), resolved.ModelID)
+	s.scheduleCompaction(ctx, discussCompactionRequest(cmd), discussContextPressure(cmd), s.discussBudget(resolved), resolved.ModelID)
 }
 
-// scheduleDiscussCompactionWithin reports the context's pressure against
-// budget. A context that cannot run passes what its budget leaves beside the
-// protected current input, so the pass shrinks history until that input fits.
-func (s *Service) scheduleDiscussCompactionWithin(ctx context.Context, cmd turn.StartTurnCommand, budget int, modelID string) {
-	if budget > 0 {
-		s.scheduleCompaction(ctx, discussCompactionRequest(cmd), discussContextPressure(cmd), budget, modelID)
+// scheduleDiscussAllowanceCompaction reports a context that cannot run against
+// what its budget leaves beside the protected current input, so the pass
+// shrinks history until that input fits.
+func (s *Service) scheduleDiscussAllowanceCompaction(ctx context.Context, cmd turn.StartTurnCommand, allowance int, modelID string) {
+	if allowance > 0 {
+		s.scheduleAllowanceCompaction(ctx, discussCompactionRequest(cmd), discussContextPressure(cmd), allowance, modelID)
 	}
 }
 
@@ -58,7 +58,7 @@ func (s *Service) discussBudgetObserver(cmd turn.StartTurnCommand, modelID strin
 		}
 		pressure = max(pressure, contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(max(0, cmd.DiscussContextTokens-newest)))))
 		if available > 0 && pressure > available {
-			s.scheduleCompaction(ctx, discussCompactionRequest(cmd), pressure, available, modelID)
+			s.scheduleAllowanceCompaction(ctx, discussCompactionRequest(cmd), pressure, available, modelID)
 		}
 	}
 }

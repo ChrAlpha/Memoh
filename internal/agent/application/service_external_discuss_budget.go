@@ -17,7 +17,7 @@ func (s *Service) prepareExternalDiscussContext(ctx context.Context, req ChatReq
 	}
 	admitted, admission := admitDiscussAgentContext(req.discussMessages, s.contextAbsoluteMaxTokens(), len(markdown)+len(req.discussPromptPrefix)+len(req.discussPromptSuffix), imageCount)
 	if admission.ProtectedOverflow || admission.DroppedMessages > 0 || len(req.discussOmittedSources) > 0 || max(0, req.discussContextTokens-admission.ProtectedTokens) > admission.HistoryBudgetTokens {
-		s.scheduleCompaction(ctx, req, max(req.discussContextTokens, admission.EstimatedTokens), admission.HistoryBudgetTokens, "")
+		s.scheduleAllowanceCompaction(ctx, req, max(req.discussContextTokens, admission.EstimatedTokens), admission.HistoryBudgetTokens, "")
 	}
 	if admission.ProtectedOverflow {
 		return req, apperror.New(apperror.CodeContextProtectedOverflow, nil)

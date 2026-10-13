@@ -40,14 +40,15 @@ func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct{ window, target, want int }{
+	for _, tc := range []struct{ window, target, max, want int }{
 		{window: 20000, target: 5000, want: 2000},
 		{window: 200000, target: 5000, want: maxCompactionSummaryTokens},
-		{window: 200000, target: 399, want: 399},
+		{window: 200000, target: 399, want: maxCompactionSummaryTokens},
+		{window: 200000, target: 399, max: 399, want: 399},
 	} {
 		stub := &stubModel{summary: "SUMMARY"}
 		cfg := machineryConfig(stub, tc.target)
-		cfg.SummaryWindowTokens = tc.window
+		cfg.SummaryWindowTokens, cfg.MaxSummaryTokens = tc.window, tc.max
 		rows := []sqlc.ListUncompactedMessagesBySessionRow{
 			mkRow(t, "user", jsonStr(strings.Repeat("old question ", 2000)), 0),
 			mkRow(t, "assistant", jsonStr(strings.Repeat("old answer ", 2000)), 0),
@@ -55,10 +56,10 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 			mkRow(t, "assistant", `"current answer"`, 100),
 		}
 		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(context.Background(), cfg); err != nil {
-			t.Fatalf("window=%d target=%d: %v", tc.window, tc.target, err)
+			t.Fatalf("window=%d target=%d max=%d: %v", tc.window, tc.target, tc.max, err)
 		}
 		if stub.maxTokens != tc.want {
-			t.Fatalf("window=%d target=%d: summary max tokens = %d, want %d: never above window/10, the absolute cap, or the target the summary must fit", tc.window, tc.target, stub.maxTokens, tc.want)
+			t.Fatalf("window=%d target=%d max=%d: summary max tokens = %d, want %d: window/10, the absolute cap, or the pass's own summary cap, never the target alone", tc.window, tc.target, tc.max, stub.maxTokens, tc.want)
 		}
 	}
 }

@@ -12,7 +12,7 @@ func (s *Service) chatBudgetObserver(req ChatRequest, layout chatHistoryLayout) 
 	return func(ctx context.Context, cfg native.RunConfig) {
 		budget, pressure := layout.availableHistoryBudget(cfg)
 		if budget > 0 {
-			s.scheduleCompaction(ctx, req, pressure, budget, cfg.CurrentModelUUID)
+			s.scheduleAllowanceCompaction(ctx, req, pressure, budget, cfg.CurrentModelUUID)
 		}
 	}
 }

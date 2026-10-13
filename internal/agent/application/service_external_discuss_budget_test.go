@@ -373,8 +373,8 @@ func TestExternalDiscussPretrimmedPressureDefersCompaction(t *testing.T) {
 			}
 			runner.assertNoPass(t)
 			endRun()
-			if pass := runner.awaitPass(t); pass.TotalInputTokens != tc.pressure {
-				t.Fatalf("background demand lost the original pressure: %+v", pass)
+			if pass := runner.awaitPass(t); pass.TotalInputTokens != tc.pressure || pass.MaxSummaryTokens <= 0 || pass.MaxSummaryTokens != pass.TargetTokens {
+				t.Fatalf("background demand lost the original pressure or the allowance summary cap: %+v", pass)
 			}
 		})
 	}

@@ -55,10 +55,15 @@ func TestDiscussIrreducibleContextDoesNotWaitForCompaction(t *testing.T) {
 			if !failed || ctx.Err() != nil || provider.callCount() != 0 {
 				t.Fatalf("failed=%v timeout=%v provider=%d", failed, ctx.Err(), provider.callCount())
 			}
-			window := runner.awaitPass(t).ContextWindowTokens
+			pass := runner.awaitPass(t)
+			window := pass.ContextWindowTokens
 			if tc.window == 0 && (window <= 0 || window >= 16000) || tc.window != 0 && window != tc.window {
 				t.Fatalf("pass window=%d, want the history allowance beside the protected input (%d)", window, tc.window)
 			}
+			if pass.MaxSummaryTokens <= 0 || pass.MaxSummaryTokens != pass.TargetTokens {
+				t.Fatalf("pass summary cap=%d, want its target %d so the summary fits the allowance", pass.MaxSummaryTokens, pass.TargetTokens)
+			}
+			runner.assertNoPassWithin(t, 200*time.Millisecond)
 		})
 	}
 }

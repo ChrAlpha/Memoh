@@ -351,16 +351,19 @@ func TestRunStartsOneCompactionForItsMostUrgentDemand(t *testing.T) {
 			service, runner := newScheduleService(t, nil)
 			req := ChatRequest{BotID: scheduleBotID, ChatID: scheduleBotID, ThreadID: scheduleSessionID}
 			ctx, endRun := WithRunEnd(t.Context())
-			demands := [][2]int{{9000, 16000}, {3125, 998}}
+			demands := []func(){
+				func() { service.scheduleCompaction(ctx, req, 9000, 16000, "") },
+				func() { service.scheduleAllowanceCompaction(ctx, req, 3125, 998, "") },
+			}
 			if allowanceFirst {
 				slices.Reverse(demands)
 			}
 			for _, demand := range demands {
-				service.scheduleCompaction(ctx, req, demand[0], demand[1], "")
+				demand()
 			}
 			endRun()
-			if pass := runner.awaitPass(t); pass.TotalInputTokens != 3125 || pass.ContextWindowTokens != 998 {
-				t.Fatalf("pass = pressure %d over %d, want the final-allowance demand", pass.TotalInputTokens, pass.ContextWindowTokens)
+			if pass := runner.awaitPass(t); pass.TotalInputTokens != 3125 || pass.ContextWindowTokens != 998 || pass.MaxSummaryTokens != pass.TargetTokens {
+				t.Fatalf("pass = pressure %d over %d with summary cap %d, want the final-allowance demand capped at its target %d", pass.TotalInputTokens, pass.ContextWindowTokens, pass.MaxSummaryTokens, pass.TargetTokens)
 			}
 			runner.assertNoPassWithin(t, 100*time.Millisecond)
 		})
@@ -379,7 +382,11 @@ func TestRunKeepsOneCompactionPerSession(t *testing.T) {
 	endRun()
 	sessions := map[string]bool{}
 	for range 2 {
-		sessions[runner.awaitPass(t).SessionID] = true
+		pass := runner.awaitPass(t)
+		if pass.MaxSummaryTokens != 0 {
+			t.Fatalf("threshold pass capped its summary at %d; only a final allowance bounds it", pass.MaxSummaryTokens)
+		}
+		sessions[pass.SessionID] = true
 	}
 	if !sessions[scheduleSessionID] || !sessions[other] {
 		t.Fatalf("passes covered %v, want both sessions", sessions)

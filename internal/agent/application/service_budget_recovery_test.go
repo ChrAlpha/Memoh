@@ -130,7 +130,9 @@ func TestOverBudgetChatDoesNotWaitForCompaction(t *testing.T) {
 			}
 			runner.assertNoPass(t)
 			endRun()
-			runner.awaitPass(t)
+			if pass := runner.awaitPass(t); pass.MaxSummaryTokens <= 0 || pass.MaxSummaryTokens != pass.TargetTokens {
+				t.Fatalf("over-budget pass summary cap = %d, want its target %d so the summary fits the allowance", pass.MaxSummaryTokens, pass.TargetTokens)
+			}
 		})
 	}
 }
