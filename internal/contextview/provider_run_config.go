@@ -381,6 +381,12 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
+	if cfg.ObserveContextBudget != nil && budgetPlan != nil && ctx.Err() == nil {
+		observed := cfg
+		observed.ContextSourceFrags = frags
+		observed.ContextManifest.BudgetPlan = budgetPlan
+		cfg.ObserveContextBudget(ctx, observed)
+	}
 	if (recoveryAttempts == 0 || (budgetPlan != nil && providerHistoryCost(cfg.ContextSourceFrags) > budgetPlan.HistoryBudget)) && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
 		recoveryAttempts < 3 && cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
 		budgetPlan.ActualSystemCost <= budgetPlan.SystemBudget && ctx.Err() == nil {

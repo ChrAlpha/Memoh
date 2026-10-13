@@ -640,11 +640,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()
-	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens, usePipeline: usePipeline}
+	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens}
 	if index := runCfg.ContextCurrentUserMessageIndex; index != nil && *index >= historyLayout.forkCount && *index < historyLayout.historyCount {
 		historyLayout.pressureTokens = max(0, historyLayout.pressureTokens-estimateMessageTokens(messages[*index]))
 	}
-	runCfg.RecoverContextBudget = s.chatBudgetRecovery(req, historyLayout)
+	runCfg.ObserveContextBudget = s.chatBudgetObserver(req, historyLayout)
 
 	var injectedRecords *[]InjectedMessageRecord
 	if req.InjectCh != nil {
