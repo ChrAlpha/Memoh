@@ -366,3 +366,22 @@ func TestRunStartsOneCompactionForItsMostUrgentDemand(t *testing.T) {
 		})
 	}
 }
+
+// A stream that joins an enclosing run reports its own session's demand; each
+// session keeps its pass.
+func TestRunKeepsOneCompactionPerSession(t *testing.T) {
+	service, runner := newScheduleService(t, nil)
+	ctx, endRun := WithRunEnd(t.Context())
+	other := "00000000-0000-0000-0000-000000000455"
+	for _, thread := range []string{scheduleSessionID, other} {
+		service.scheduleCompaction(ctx, ChatRequest{BotID: scheduleBotID, ChatID: scheduleBotID, ThreadID: thread}, 9000, 16000, "")
+	}
+	endRun()
+	sessions := map[string]bool{}
+	for range 2 {
+		sessions[runner.awaitPass(t).SessionID] = true
+	}
+	if !sessions[scheduleSessionID] || !sessions[other] {
+		t.Fatalf("passes covered %v, want both sessions", sessions)
+	}
+}

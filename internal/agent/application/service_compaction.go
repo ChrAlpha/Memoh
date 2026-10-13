@@ -76,8 +76,9 @@ func compactionUnderHardPressure(pressure, contextTokenBudget int) bool {
 // scheduleCompaction is the only automatic compaction path. It never delays
 // the turn that measured the pressure: the turn keeps the context it already
 // assembled, and the pass starts once the turn's run ends, so a summary that
-// lands serves later turns. A run that reports pressure against more than one
-// budget starts one pass, for the demand furthest over its budget.
+// lands serves later turns. A run that reports a session's pressure against
+// more than one budget starts one pass for it, for the demand furthest over
+// its budget.
 func (s *Service) scheduleCompaction(ctx context.Context, req ChatRequest, pressure, contextTokenBudget int, turnModelID string) {
 	if s.compactionService == nil || s.settingsService == nil || pressure <= 0 {
 		return
@@ -128,7 +129,7 @@ type runEnd struct {
 	ended      bool
 	bound      bool
 	work       []func()
-	compaction *compactionDemand
+	compaction map[string]*compactionDemand
 }
 
 // WithRunEnd marks ctx as one run's and returns what the run calls when it
@@ -169,18 +170,22 @@ func (end *runEnd) finish(terminal bool) {
 	}
 }
 
-// recordCompaction keeps the most urgent compaction demand of a run that has
-// not ended and reports whether demand is its first, which the caller then
-// schedules.
+// recordCompaction keeps the most urgent compaction demand per session of a
+// run that has not ended and reports whether demand is the session's first,
+// which the caller then schedules.
 func (end *runEnd) recordCompaction(demand *compactionDemand) bool {
 	end.mu.Lock()
 	defer end.mu.Unlock()
-	if end.ended || end.compaction == nil {
-		end.compaction = demand
+	pending := end.compaction[demand.req.ThreadID]
+	if end.ended || pending == nil {
+		if end.compaction == nil {
+			end.compaction = map[string]*compactionDemand{}
+		}
+		end.compaction[demand.req.ThreadID] = demand
 		return true
 	}
-	if demand.exceeds(*end.compaction) {
-		*end.compaction = *demand
+	if demand.exceeds(*pending) {
+		*pending = *demand
 	}
 	return false
 }
