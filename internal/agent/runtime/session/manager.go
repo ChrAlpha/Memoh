@@ -144,6 +144,8 @@ type runControl struct {
 	abortFinalizing        bool
 	durableFinishRetryOnce sync.Once
 	finishRetryOnce        sync.Once
+	terminalOnce           sync.Once
+	onTerminal             func()
 	ownershipCancel        context.CancelCauseFunc
 	ownershipOnce          sync.Once
 	// ownershipLost records that ownership was revoked *with cause*, as opposed
@@ -1026,6 +1028,7 @@ type runStart struct {
 	abortCh         chan<- struct{}
 	cancel          context.CancelFunc
 	injectCh        chan<- turn.InjectMessage
+	onTerminal      func()
 }
 
 // startRun reserves the session's single live slot and returns the cursor the
@@ -1099,6 +1102,7 @@ func (m *Manager) startRun(ctx context.Context, start runStart) (RunHandle, Curs
 		lifecycleCtx:    lifecycleCtx,
 		lifecycleCancel: lifecycleCancel,
 		injectCh:        injectCh,
+		onTerminal:      start.onTerminal,
 		converter:       chatview.NewUIMessageStreamConverter(),
 		leaseChanged:    make(chan struct{}, 1),
 		ready:           make(chan struct{}),
@@ -1491,6 +1495,13 @@ func (m *Manager) finishRun(ctx context.Context, handle RunHandle, status, error
 	if terminal.RunID != "" {
 		terminal.Cause = cause
 		defer m.observeTerminalRun(ctx, terminal)
+		if err == nil && ctrl != nil && ctrl.onTerminal != nil {
+			defer func() {
+				if !ctrl.ownershipWasLost() {
+					ctrl.terminalOnce.Do(ctrl.onTerminal)
+				}
+			}()
+		}
 	}
 	if err != nil {
 		if errors.Is(err, ErrRunOwnershipLost) && terminal.RunID != "" {

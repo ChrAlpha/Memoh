@@ -112,6 +112,9 @@ type Execution struct {
 	// lost, so a superseded owner stops producing output rather than racing the
 	// fence it can no longer pass.
 	OwnershipCancel context.CancelCauseFunc
+	// OnTerminal runs at most once after this owner's durable terminal is
+	// confirmed. Parking and failed writes retain it; losing ownership drops it.
+	OnTerminal func()
 }
 
 func (in AdmitInput) normalized() AdmitInput {
@@ -351,6 +354,7 @@ func (m *Manager) claimAndStart(ctx context.Context, in AdmitInput, admission Ad
 		abortCh:           in.Execution.AbortCh,
 		cancel:            in.Execution.Cancel,
 		injectCh:          in.Execution.InjectCh,
+		onTerminal:        in.Execution.OnTerminal,
 	})
 	switch {
 	case err != nil:
