@@ -337,6 +337,9 @@ type discussE2E struct {
 	// codex is the External Agent runtime the session drives, when it drives
 	// one.
 	codex *e2eCodex
+	// registry is what the processor knows of the platform, when a test needs
+	// more than the bare platform name.
+	registry *channel.Registry
 }
 
 func openDiscussE2EPostgres(t *testing.T) *pgxpool.Pool {
@@ -463,7 +466,7 @@ func (e *discussE2E) newProcessor(turnSvc turn.Service) *ChannelInboundProcessor
 		// A runtime command is found by looking the route up first.
 		routes = route.NewService(e.logger, e.queries)
 	}
-	processor := NewChannelInboundProcessor(e.logger, nil, routes, messagepkg.NewService(e.logger, e.queries), turnSvc, e.identities,
+	processor := NewChannelInboundProcessor(e.logger, e.registry, routes, messagepkg.NewService(e.logger, e.queries), turnSvc, e.identities,
 		&fakePolicyService{ownerUserID: e.ownerID}, e2eSigningKey, 0)
 	if e.codex != nil {
 		processor.SetBotPermissionChecker(e2ePermissions{})

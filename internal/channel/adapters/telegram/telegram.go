@@ -304,6 +304,7 @@ func (*TelegramAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
 		RefreshOnCredentialsChange: true,
 		RequireDiscoveryOnEnable:   true,
 		RequiredSelfIdentityKey:    "user_id",
+		SenderSubjectKey:           "user_id",
 		DiscoveryErrorMessage:      "telegram bot identity discovery failed",
 		MissingIdentityMessage:     "telegram bot identity discovery returned no user id",
 	}

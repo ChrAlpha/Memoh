@@ -392,7 +392,7 @@ func TestDiscussReplyStaysBesideTheMessageItAnswers(t *testing.T) {
 			if iResult < 0 || iB < 0 {
 				t.Fatalf("send result at %d, B at %d:\n%s", iResult, iB, dumpOrder(second))
 			}
-			if !(cursor < iA && iA < iReply && iReply < iResult && iResult < iB) {
+			if cursor >= iA || iA >= iReply || iReply >= iResult || iResult >= iB {
 				t.Fatalf("order is cursor=%d A=%d reply=%d result=%d B=%d, want strictly increasing:\n%s", cursor, iA, iReply, iResult, iB, dumpOrder(second))
 			}
 			lastUser := -1
