@@ -17,9 +17,17 @@ import (
 // at admission: an ordinary passive row carrying the admission metadata.
 func (s *stage4Session) persistRefused(admission messagepkg.Admission, label string) string {
 	s.t.Helper()
+	return s.persistRefusedPadded(admission, label, 0)
+}
+
+// persistRefusedPadded is persistRefused with words filler words after the
+// label, for a refused row that takes a noticeable share of a read budget.
+func (s *stage4Session) persistRefusedPadded(admission messagepkg.Admission, label string, words int) string {
+	s.t.Helper()
 	metadata := map[string]any{}
 	messagepkg.SetAdmission(metadata, admission)
-	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage(label)})[0])
+	text := label + " " + strings.Repeat("padding ", words)
+	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage(text)})[0])
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -84,16 +92,10 @@ func TestPostgresContextOmitsRefusedRowsOnEveryReadPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The newest user rows are read first and then filtered, so refused rows
-		// can use up part of the read; only what is left is asserted.
-		got := recordLabels(assembled.Records)
-		if !slices.Contains(got, "last") {
-			t.Fatalf("memory query rows = %v, want the newest admitted row", got)
-		}
-		for _, label := range got {
-			if strings.HasPrefix(label, "refused") {
-				t.Fatalf("memory query rows = %v, want no refused row", got)
-			}
+		// Refused rows are left out before the read's row limit, so the two
+		// refused rows between "ask" and "last" take none of its places.
+		if got, want := recordLabels(assembled.Records), []string{"q0", "ask", "last"}; !slices.Equal(got, want) {
+			t.Fatalf("memory query rows = %v, want %v", got, want)
 		}
 	})
 	t.Run("retry window re-read", func(t *testing.T) {

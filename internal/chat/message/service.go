@@ -1192,8 +1192,9 @@ func (s *DBService) ListRecentUserBySession(ctx context.Context, sessionID strin
 		return nil, err
 	}
 	rows, err := s.queries.ListRecentUserMessagesBySession(ctx, sqlc.ListRecentUserMessagesBySessionParams{
-		SessionID: pgSessionID,
-		RowLimit:  int32(min(limit, math.MaxInt32)), //nolint:gosec // clamped to MaxInt32 above
+		SessionID:         pgSessionID,
+		IncludeUnadmitted: ContextIncludesUnadmittedPassive,
+		RowLimit:          int32(min(limit, math.MaxInt32)), //nolint:gosec // clamped to MaxInt32 above
 	})
 	if err != nil {
 		return nil, err

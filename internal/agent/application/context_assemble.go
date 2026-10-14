@@ -10,12 +10,6 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-// contextIncludesUnadmittedPassive decides whether rows refused at admission
-// (sender not allowed by ACL, or refused by the external runtime driver gate)
-// are shown to the model. Default false, so chat and discuss agree. Changing it
-// is a product decision, not a per-call switch. recordsFromMessages applies it.
-const contextIncludesUnadmittedPassive = false
-
 // contextPurpose names what an assembled context is for. The steps are the
 // same for every purpose; the purpose only picks the source and which steps
 // have anything to act on.
@@ -164,7 +158,7 @@ func (s *Service) loadContextRecords(ctx context.Context, r contextRequest) ([]h
 func (s *Service) recordsFromMessages(msgs []messagepkg.Message, fallback historyfrag.ScopeFallback) ([]historyfrag.HistoryRecord, error) {
 	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for i := range msgs {
-		if !contextIncludesUnadmittedPassive && msgs[i].Admission() != "" {
+		if !messagepkg.ContextIncludesUnadmittedPassive && msgs[i].Admission() != "" {
 			msgs[i] = messagepkg.Message{}
 			continue
 		}

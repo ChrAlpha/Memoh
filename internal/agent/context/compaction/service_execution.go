@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
@@ -20,7 +21,10 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if cfg.SummaryWindowTokens <= 0 && s.fallbackWindowTokens > 0 {
 		cfg = cfg.withSummaryWindow(s.fallbackWindowTokens)
 	}
-	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
+	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
+		SessionID:         sessionUUID,
+		IncludeUnadmitted: messagepkg.ContextIncludesUnadmittedPassive,
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -29,8 +33,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	readMaxBytes := compactionReadMaxBytes(cfg)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
-		SessionID: sessionUUID,
-		MaxBytes:  readMaxBytes,
+		SessionID:         sessionUUID,
+		IncludeUnadmitted: messagepkg.ContextIncludesUnadmittedPassive,
+		MaxBytes:          readMaxBytes,
 	})
 	if err != nil {
 		return Result{}, err

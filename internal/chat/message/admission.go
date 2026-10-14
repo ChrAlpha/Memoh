@@ -17,6 +17,15 @@ const (
 
 const metadataKeyAdmission = "admission"
 
+// ContextIncludesUnadmittedPassive decides whether rows refused at admission
+// (sender not allowed by ACL, or refused by the external runtime driver gate)
+// reach a model: as context, as memory-query text, or as compaction input.
+// Default false, so chat and discuss agree. Changing it is a product decision,
+// not a per-call switch. Row-level readers test Message.Admission against it;
+// SQL readers receive it as the include_unadmitted argument and match the same
+// metadata key.
+const ContextIncludesUnadmittedPassive = false
+
 // SetAdmission stores the admission outcome in a metadata map for a row being
 // written.
 func SetAdmission(metadata map[string]any, admission Admission) {

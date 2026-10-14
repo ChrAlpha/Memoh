@@ -30,7 +30,7 @@ func (f *pairingQueries) ListUncompactedMessagesBySession(context.Context, pgtyp
 	return f.uncompacted, nil
 }
 
-func (f *pairingQueries) MeasureUncompactedMessagesBySession(context.Context, pgtype.UUID) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
+func (f *pairingQueries) MeasureUncompactedMessagesBySession(context.Context, sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: int64(len(f.uncompacted)), CandidateBytes: 1}, nil
 }
 

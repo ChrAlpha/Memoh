@@ -5072,15 +5072,17 @@ FROM (
     AND m.session_id = $1
     AND m.role = 'user'
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-  LIMIT $2::INT
+  LIMIT $3::INT
 ) recent
 ORDER BY recent.turn_position ASC, recent.turn_message_seq ASC, recent.created_at ASC, recent.id ASC
 `
 
 type ListRecentUserMessagesBySessionParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	RowLimit  int32       `json:"row_limit"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+	RowLimit          int32       `json:"row_limit"`
 }
 
 type ListRecentUserMessagesBySessionRow struct {
@@ -5110,8 +5112,11 @@ type ListRecentUserMessagesBySessionRow struct {
 // need recent user text only and must not load the history. Rows carry the
 // same columns as the byte-budgeted loaders so the preflight-failure and
 // current-row filters see the metadata and source ids they read there.
+// Rows refused at admission are excluded before the LIMIT, so they cannot take
+// up one of the N places; message.ContextIncludesUnadmittedPassive is passed as
+// include_unadmitted.
 func (q *Queries) ListRecentUserMessagesBySession(ctx context.Context, arg ListRecentUserMessagesBySessionParams) ([]ListRecentUserMessagesBySessionRow, error) {
-	rows, err := q.db.Query(ctx, listRecentUserMessagesBySession, arg.SessionID, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listRecentUserMessagesBySession, arg.SessionID, arg.IncludeUnadmitted, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -5384,6 +5389,7 @@ WITH candidate_rows AS MATERIALIZED (
         )
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
     candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes,
@@ -5396,7 +5402,7 @@ WITH candidate_rows AS MATERIALIZED (
 ), admitted_candidates AS MATERIALIZED (
   SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $2::BIGINT
+  WHERE cumulative_bytes <= $3::BIGINT
 )
 SELECT
   m.id,
@@ -5444,8 +5450,9 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
 type ListUncompactedMessagesBySessionWithinBytesParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MaxBytes  int64       `json:"max_bytes"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+	MaxBytes          int64       `json:"max_bytes"`
 }
 
 type ListUncompactedMessagesBySessionWithinBytesRow struct {
@@ -5481,8 +5488,12 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 // so an oversized leading row returns no payload instead of crossing the
 // process-memory boundary. CandidateCount reports whether the prefix was
 // truncated and lets the service choose a progress-preserving selection.
+// Rows refused at admission are never summary input and are never claimed, so
+// they must not count against this budget either: left in, they would pile up
+// at the oldest end and eventually fill the whole read.
+// message.ContextIncludesUnadmittedPassive is passed as include_unadmitted.
 func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg ListUncompactedMessagesBySessionWithinBytesParams) ([]ListUncompactedMessagesBySessionWithinBytesRow, error) {
-	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes, arg.SessionID, arg.MaxBytes)
+	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes, arg.SessionID, arg.IncludeUnadmitted, arg.MaxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -6092,7 +6103,13 @@ WHERE m.team_id = public.memoh_current_team_id()
       )
   ))
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 `
+
+type MeasureUncompactedMessagesBySessionParams struct {
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+}
 
 type MeasureUncompactedMessagesBySessionRow struct {
 	CandidateCount        int64 `json:"candidate_count"`
@@ -6102,8 +6119,9 @@ type MeasureUncompactedMessagesBySessionRow struct {
 
 // Metadata-only companion for the bounded compaction read. It never returns
 // message payloads and exposes the oversized-head degradation explicitly.
-func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) (MeasureUncompactedMessagesBySessionRow, error) {
-	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, sessionID)
+// It counts the same rows as ListUncompactedMessagesBySessionWithinBytes.
+func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg MeasureUncompactedMessagesBySessionParams) (MeasureUncompactedMessagesBySessionRow, error) {
+	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, arg.SessionID, arg.IncludeUnadmitted)
 	var i MeasureUncompactedMessagesBySessionRow
 	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)
 	return i, err

@@ -29,16 +29,20 @@ type stage4Summarizer struct {
 	mu       sync.Mutex
 	calls    int
 	failWith int
+	// requests holds the body of every request received.
+	requests []string
 }
 
 func (s *stage4Summarizer) RoundTrip(req *http.Request) (*http.Response, error) {
+	var body []byte
 	if req.Body != nil {
-		_, _ = io.Copy(io.Discard, req.Body)
+		body, _ = io.ReadAll(req.Body)
 		_ = req.Body.Close()
 	}
 	s.mu.Lock()
 	s.calls++
 	n, failWith := s.calls, s.failWith
+	s.requests = append(s.requests, string(body))
 	s.mu.Unlock()
 	header := http.Header{"Content-Type": []string{"application/json"}}
 	if failWith != 0 {
@@ -47,20 +51,27 @@ func (s *stage4Summarizer) RoundTrip(req *http.Request) (*http.Response, error) 
 			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"summarizer refused"}}`)),
 		}, nil
 	}
-	body, _ := json.Marshal(map[string]any{
+	respBody, _ := json.Marshal(map[string]any{
 		"id": "chatcmpl-stage4", "object": "chat.completion", "model": "stage4-summarizer",
 		"choices": []map[string]any{{
 			"index": 0, "finish_reason": "stop",
 			"message": map[string]any{"role": "assistant", "content": fmt.Sprintf("SUMMARY-%d %s", n, strings.Repeat("recap ", 200))},
 		}},
 	})
-	return &http.Response{StatusCode: http.StatusOK, Header: header, Request: req, Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	return &http.Response{StatusCode: http.StatusOK, Header: header, Request: req, Body: io.NopCloser(strings.NewReader(string(respBody)))}, nil
 }
 
 func (s *stage4Summarizer) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+// requestText returns everything the summarizer was sent.
+func (s *stage4Summarizer) requestText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.requests, "\n")
 }
 
 func (s *stage4Summarizer) refuseWith(status int) {

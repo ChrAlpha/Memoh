@@ -231,3 +231,90 @@ func TestPostgresListRecentUserBySession(t *testing.T) {
 		t.Fatalf("limit above row count = %d rows, first %q, want 3 rows starting at %s", len(msgs), msgs[0].ID, u1)
 	}
 }
+
+func persistRefusedContextHistoryRow(t *testing.T, ctx context.Context, svc *DBService, sessionID, role, text string) string {
+	t.Helper()
+	metadata := map[string]any{}
+	SetAdmission(metadata, AdmissionRejectedACL)
+	msg, err := svc.Persist(ctx, PersistInput{
+		BotID: postgresMessageTestBotID, SessionID: sessionID, Role: role,
+		Content:  []byte(`{"role":"` + role + `","content":"` + text + `"}`),
+		Metadata: metadata,
+	})
+	if err != nil {
+		t.Fatalf("persist refused %s row: %v", text, err)
+	}
+	return msg.ID
+}
+
+// Rows refused at admission are left out before the limit, so the newest N
+// admitted rows come back even when the newest rows of all are refused.
+func TestPostgresListRecentUserBySessionKeepsItsPlacesForAdmittedRows(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+
+	persistContextHistoryRow(t, ctx, svc, sid, "user", "u1")
+	u2 := persistContextHistoryRow(t, ctx, svc, sid, "user", "u2")
+	u3 := persistContextHistoryRow(t, ctx, svc, sid, "user", "u3")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused-1")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused-2")
+
+	msgs, err := svc.ListRecentUserBySession(ctx, sid, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		got = append(got, m.ID)
+	}
+	assertContextHistoryIDs(t, got, u2, u3)
+}
+
+// The bounded compaction read and the measure beside it leave refused rows out
+// together, so neither their count nor their bytes use up the read budget.
+// The include_unadmitted argument turns the exclusion off.
+func TestPostgresCompactionCandidatesExcludeRefusedRows(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+
+	u1 := persistContextHistoryRow(t, ctx, svc, sid, "user", "u1")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused-1")
+	a1 := persistContextHistoryRow(t, ctx, svc, sid, "assistant", "a1")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused-2")
+
+	queries := dbsqlc.New(tx)
+	sessionID := mustTestUUID(t, sid)
+	for _, c := range []struct {
+		name    string
+		include bool
+		want    int
+	}{
+		{"excluded", false, 2},
+		{"included", true, 4},
+	} {
+		rows, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, dbsqlc.ListUncompactedMessagesBySessionWithinBytesParams{
+			SessionID: sessionID, IncludeUnadmitted: c.include, MaxBytes: 1 << 30,
+		})
+		if err != nil {
+			t.Fatalf("%s: list candidates: %v", c.name, err)
+		}
+		measure, err := queries.MeasureUncompactedMessagesBySession(ctx, dbsqlc.MeasureUncompactedMessagesBySessionParams{
+			SessionID: sessionID, IncludeUnadmitted: c.include,
+		})
+		if err != nil {
+			t.Fatalf("%s: measure candidates: %v", c.name, err)
+		}
+		if len(rows) != c.want || measure.CandidateCount != int64(c.want) {
+			t.Fatalf("%s: listed %d rows, measured %d, want %d", c.name, len(rows), measure.CandidateCount, c.want)
+		}
+		if !c.include {
+			assertContextHistoryIDs(t, []string{uuidString(rows[0].ID), uuidString(rows[1].ID)}, u1, a1)
+		}
+	}
+}

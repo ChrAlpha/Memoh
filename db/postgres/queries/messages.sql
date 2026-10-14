@@ -1885,6 +1885,9 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 -- need recent user text only and must not load the history. Rows carry the
 -- same columns as the byte-budgeted loaders so the preflight-failure and
 -- current-row filters see the metadata and source ids they read there.
+-- Rows refused at admission are excluded before the LIMIT, so they cannot take
+-- up one of the N places; message.ContextIncludesUnadmittedPassive is passed as
+-- include_unadmitted.
 SELECT
   recent.id,
   recent.bot_id,
@@ -1937,6 +1940,7 @@ FROM (
     AND m.session_id = sqlc.arg(session_id)
     AND m.role = 'user'
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT sqlc.arg(row_limit)::INT
 ) recent
@@ -3082,6 +3086,10 @@ WHERE message.team_id = public.memoh_current_team_id()
 -- so an oversized leading row returns no payload instead of crossing the
 -- process-memory boundary. CandidateCount reports whether the prefix was
 -- truncated and lets the service choose a progress-preserving selection.
+-- Rows refused at admission are never summary input and are never claimed, so
+-- they must not count against this budget either: left in, they would pile up
+-- at the oldest end and eventually fill the whole read.
+-- message.ContextIncludesUnadmittedPassive is passed as include_unadmitted.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -3114,6 +3122,7 @@ WITH candidate_rows AS MATERIALIZED (
         )
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
     candidate_rows.*,
@@ -3175,6 +3184,7 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 -- name: MeasureUncompactedMessagesBySession :one
 -- Metadata-only companion for the bounded compaction read. It never returns
 -- message payloads and exposes the oversized-head degradation explicitly.
+-- It counts the same rows as ListUncompactedMessagesBySessionWithinBytes.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(SUM(
@@ -3208,7 +3218,8 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '');
 
 -- name: ListUncompactedMessagesBySession :many
 -- Compatibility query retained for diagnostics and integration tests. Runtime
