@@ -70,6 +70,9 @@ type e2eStep struct {
 	// plain text. Both empty is a call that stays silent.
 	send string
 	text string
+	// reasoning, when set, is thought that comes before a send answer, in the
+	// dialect DeepSeek's thinking mode replays.
+	reasoning string
 	// reached closes when the call arrives, and gate, when set, holds the
 	// answer until the test closes it.
 	reached chan struct{}
@@ -113,11 +116,16 @@ func (m *e2eModel) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.St
 			return nil, ctx.Err()
 		}
 	}
-	ch := make(chan sdk.StreamPart, 8)
+	ch := make(chan sdk.StreamPart, 16)
 	ch <- &sdk.StartPart{}
 	ch <- &sdk.StartStepPart{}
 	switch {
 	case step.send != "":
+		if step.reasoning != "" {
+			ch <- &sdk.ReasoningStartPart{ID: "think", Model: "deepseek-reasoner", Format: sdk.ReasoningFormatOpenAIChat}
+			ch <- &sdk.ReasoningDeltaPart{ID: "think", Model: "deepseek-reasoner", Format: sdk.ReasoningFormatOpenAIChat, Text: step.reasoning}
+			ch <- &sdk.ReasoningEndPart{ID: "think", Model: "deepseek-reasoner", Format: sdk.ReasoningFormatOpenAIChat}
+		}
 		ch <- &sdk.StreamToolCallPart{
 			ToolCallID: "call-send-" + uuid.NewString(),
 			ToolName:   tools.ToolSend().String(),
