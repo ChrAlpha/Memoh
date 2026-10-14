@@ -40,6 +40,9 @@ describe('App error presentation', () => {
     const actions: string[] = []
     await mount(BotAppCard, { app_id: 'bun', installation_id: 'bun-install', status, last_error: diagnostic }, action => actions.push(action))
     expect(root.textContent).not.toContain(diagnostic)
+    // The primary action carries the state; an extra status line would make
+    // these cards taller than their neighbours in the grid.
+    expect(root.textContent).not.toContain(en.apps.diagnostics[status])
     const details = Array.from(root.querySelectorAll('button')).find(button => button.textContent?.trim() === 'View details')
     expect(details).toBeUndefined()
     root.querySelector<HTMLElement>('[role="button"]')!.click()
