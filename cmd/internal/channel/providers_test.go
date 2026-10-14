@@ -48,6 +48,21 @@ func TestInboundSessionResultCarriesRecordedRuntimeDriver(t *testing.T) {
 	}
 }
 
+// What the inbound path routes a message by is the recorded trigger scope, so
+// the adapter has to carry it from the session to the processor.
+func TestInboundSessionResultCarriesRecordedTriggerScope(t *testing.T) {
+	for _, scope := range []sessionfacts.TriggerScope{sessionfacts.TriggerAddressedMessage, sessionfacts.TriggerUncoveredEvents} {
+		got := inboundSessionResult(sessionpkg.Thread{
+			ID:    "session-1",
+			Type:  sessionpkg.TypeChat,
+			Facts: sessionfacts.Facts{TriggerScope: scope},
+		})
+		if got.TriggerScope != scope {
+			t.Fatalf("trigger scope = %q, want the recorded %q", got.TriggerScope, scope)
+		}
+	}
+}
+
 func TestWebhookTunnelAnswersAnUnknownRouteWithAProblemAndOneRecord(t *testing.T) {
 	var logs bytes.Buffer
 	e := newWebhookTunnelEcho(logger.New(&logs, "debug", "json"))

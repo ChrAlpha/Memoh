@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/discuss"
 	"github.com/felinics/memoh/internal/channel/identities"
 	"github.com/felinics/memoh/internal/channel/route"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -39,6 +39,7 @@ import (
 	"github.com/felinics/memoh/internal/sessionfacts"
 	skillset "github.com/felinics/memoh/internal/skills"
 	"github.com/felinics/memoh/internal/slash"
+	"github.com/felinics/memoh/internal/testutil/routecredentials"
 )
 
 type fakeChatGateway struct {
@@ -1123,7 +1124,7 @@ func TestChannelInboundProcessorQueueCommandsRejectDiscussSession(t *testing.T) 
 	gateway := &fakeChatGateway{}
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
 	processor.SetACLService(&fakeChatACL{allowed: true})
-	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeDiscuss}})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-1", Type: sessionpkg.TypeDiscuss, TriggerScope: sessionfacts.TriggerUncoveredEvents}})
 	queueHandler := &fakeQueueCommandHandler{}
 	processor.SetQueueCommandHandler(queueHandler)
 	cfg := channel.ChannelConfig{TeamID: "team-test", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
@@ -1582,7 +1583,7 @@ func TestChannelInboundProcessorActiveACPRequiresCurrentActorOwnerOrManage(t *te
 // newDiscussACPMemberFixture is a group member who is not the runtime owner
 // addressing an ACP session labelled discuss; driver says who may drive the
 // owner's runtime from it.
-func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntimeDriver) (*ChannelInboundProcessor, *discuss.DiscussDriver, *fakeChatGateway, *fakeReplySender, channel.ChannelConfig, channel.InboundMessage) {
+func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntimeDriver) (*ChannelInboundProcessor, *recordingDiscussWaker, *fakeChatGateway, *fakeReplySender, channel.ChannelConfig, channel.InboundMessage) {
 	t.Helper()
 	const (
 		ownerID = "account-owner"
@@ -1600,6 +1601,7 @@ func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntim
 		Runtime:               sessionpkg.RuntimeACPAgent,
 		RuntimeOwnerAccountID: ownerID,
 		ExternalRuntimeDriver: driver,
+		TriggerScope:          sessionfacts.TriggerUncoveredEvents,
 	}}
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, &fakePolicyService{}, "", 0)
 	processor.SetSessionEnsurer(ensurer)
@@ -1607,10 +1609,9 @@ func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntim
 		"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec: true,
 		"bot-1:" + actorID + ":" + bots.PermissionWorkspaceExec: true,
 	}})
-	eventStore := &memEventStore{}
-	discussDriver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
-	t.Cleanup(discussDriver.StopAll)
-	processor.SetPipeline(eventStore, &memPassiveRows{}, discussDriver)
+	waker := &recordingDiscussWaker{}
+	processor.SetPipeline(&memEventStore{}, &memPassiveRows{})
+	processor.SetDiscussWaker(waker)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("feishu")}
 	msg := channel.InboundMessage{
@@ -1628,11 +1629,11 @@ func newDiscussACPMemberFixture(t *testing.T, driver sessionfacts.ExternalRuntim
 			"is_mentioned": true,
 		},
 	}
-	return processor, discussDriver, gateway, &fakeReplySender{}, cfg, msg
+	return processor, waker, gateway, &fakeReplySender{}, cfg, msg
 }
 
 func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *testing.T) {
-	processor, driver, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverParticipants)
+	processor, waker, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverParticipants)
 
 	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1640,8 +1641,8 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 	if len(sender.sent) != 0 {
 		t.Fatalf("non-owner group member should not receive ACP owner feedback in discuss mode, got %+v", sender.sent)
 	}
-	if !driver.HasSession("active-discuss-acp-session") {
-		t.Fatalf("discuss driver did not receive the ACP discuss session")
+	if got := waker.woken(); len(got) != 1 || got[0].sessionID != "active-discuss-acp-session" {
+		t.Fatalf("wakes = %+v, want one for the ACP discuss session", got)
 	}
 	if gateway.gotReq.Query != "" {
 		t.Fatalf("discuss mode should not run the regular chat gateway, got query %q", gateway.gotReq.Query)
@@ -1651,13 +1652,13 @@ func TestChannelInboundProcessorDiscussACPAllowsNonOwnerMemberThroughACL(t *test
 // The discuss label alone grants nothing: without the owner's grant recorded
 // on the session, a member cannot drive the owner's runtime.
 func TestChannelInboundProcessorDiscussLabelWithoutGrantKeepsRuntimeOwnerOnly(t *testing.T) {
-	processor, driver, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverOwnerOnly)
+	processor, waker, gateway, sender, cfg, msg := newDiscussACPMemberFixture(t, sessionfacts.RuntimeDriverOwnerOnly)
 
 	if err := processor.HandleInbound(context.Background(), cfg, msg, sender); err == nil {
 		t.Fatal("the failure is not returned for the result record")
 	}
-	if driver.HasSession("active-discuss-acp-session") {
-		t.Fatal("a member drove the owner's runtime through a session without the grant")
+	if got := waker.woken(); len(got) != 0 {
+		t.Fatalf("a member drove the owner's runtime through a session without the grant: wakes = %+v", got)
 	}
 	if gateway.gotReq.Query != "" {
 		t.Fatalf("chat should not run for a non-owner member, got query %q", gateway.gotReq.Query)
@@ -1667,39 +1668,68 @@ func TestChannelInboundProcessorDiscussLabelWithoutGrantKeepsRuntimeOwnerOnly(t 
 	}
 }
 
-func TestChannelInboundProcessorIssueRuntimeBearerTokenUsesRuntimeOwner(t *testing.T) {
+// The credentials a turn answering a group message carries name the same
+// identities the discuss admission signs for the same participant: the
+// scenarios here are the ones the application's admission test is held to.
+func TestChannelInboundProcessorRouteCredentialsMatchScenario(t *testing.T) {
 	const secret = "runtime-token-secret"
-	processor := NewChannelInboundProcessor(
-		slog.Default(),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		&fakePolicyService{ownerUserID: "bot-owner"},
-		secret,
-		0,
-	)
-	identity := InboundIdentity{BotID: "bot-1", UserID: "caller-user"}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil,
+		&fakePolicyService{ownerUserID: "bot-owner"}, secret, 0)
+	msg := channel.InboundMessage{ReplyTarget: "group-1"}
+	base := routecredentials.Scenario{
+		BotID: "bot-1", RouteID: "route-1", ChannelIdentityID: "identity-1",
+		ParticipantUserID: "caller-user", BotOwnerUserID: "bot-owner", RuntimeOwnerUserID: "runtime-owner",
+	}
+	cases := []struct {
+		name     string
+		scenario routecredentials.Scenario
+		session  SessionResult
+	}{
+		{"model session acts for the bot owner", base, SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}},
+		{"external runtime acts for the runtime owner", withExternalRuntime(base), SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeACPAgent}},
+		{"unbound participant", withoutParticipantUser(base), SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			identity := InboundIdentity{BotID: "bot-1", UserID: tc.scenario.ParticipantUserID, ChannelIdentityID: "identity-1"}
+			chat, session := processor.issueRouteCredentials(context.Background(), identity, identity.BotID, "route-1", msg, tc.session, tc.scenario.RuntimeOwnerUserID)
+			wantChat, wantSession := tc.scenario.Want()
+			if got := routecredentials.Claims(t, secret, chat); !reflect.DeepEqual(got, wantChat) {
+				t.Fatalf("chat token claims = %v, want %v", got, wantChat)
+			}
+			if got := routecredentials.Claims(t, secret, session); !reflect.DeepEqual(got, wantSession) {
+				t.Fatalf("session bearer claims = %v, want %v", got, wantSession)
+			}
+		})
+	}
+}
 
-	channelToken := processor.issueChannelBearerToken(context.Background(), identity, "")
-	if got := jwtBearerSubject(t, channelToken, secret); got != "bot-owner" {
-		t.Fatalf("channel token subject = %q, want bot-owner", got)
+func withExternalRuntime(s routecredentials.Scenario) routecredentials.Scenario {
+	s.ExternalRuntime = true
+	return s
+}
+
+func withoutParticipantUser(s routecredentials.Scenario) routecredentials.Scenario {
+	s.ParticipantUserID = ""
+	return s
+}
+
+// Without a reply target a turn has nowhere to reply, so it carries no chat
+// token; without a secret it carries neither credential.
+func TestChannelInboundProcessorRouteCredentialsNeedTargetAndSecret(t *testing.T) {
+	identity := InboundIdentity{BotID: "bot-1", UserID: "caller-user", ChannelIdentityID: "identity-1"}
+	sess := SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}
+
+	withSecret := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, &fakePolicyService{ownerUserID: "bot-owner"}, "secret", 0)
+	chat, session := withSecret.issueRouteCredentials(context.Background(), identity, "bot-1", "route-1", channel.InboundMessage{}, sess, "")
+	if chat != "" || jwtBearerSubject(t, session, "secret") != "bot-owner" {
+		t.Fatalf("no reply target: chat = %q, session subject = %q", chat, session)
 	}
 
-	runtimeToken := processor.issueRuntimeBearerToken(context.Background(), identity, "runtime-owner", "")
-	if got := jwtBearerSubject(t, runtimeToken, secret); got != "runtime-owner" {
-		t.Fatalf("runtime token subject = %q, want runtime-owner", got)
-	}
-
-	modelSessionToken := processor.issueSessionBearerToken(context.Background(), identity, SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}, "", "")
-	if got := jwtBearerSubject(t, modelSessionToken, secret); got != "bot-owner" {
-		t.Fatalf("model discuss session token subject = %q, want bot-owner", got)
-	}
-
-	acpSessionToken := processor.issueSessionBearerToken(context.Background(), identity, SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeACPAgent}, "runtime-owner", "")
-	if got := jwtBearerSubject(t, acpSessionToken, secret); got != "runtime-owner" {
-		t.Fatalf("ACP discuss session token subject = %q, want runtime-owner", got)
+	withoutSecret := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, &fakePolicyService{ownerUserID: "bot-owner"}, "", 0)
+	chat, session = withoutSecret.issueRouteCredentials(context.Background(), identity, "bot-1", "route-1", channel.InboundMessage{ReplyTarget: "group-1"}, sess, "")
+	if chat != "" || session != "" {
+		t.Fatalf("no secret: chat = %q, session = %q", chat, session)
 	}
 }
 
@@ -3096,7 +3126,7 @@ func TestChannelInboundProcessorPipelineUsesResolvedAttachments(t *testing.T) {
 	processor.SetMediaService(mediaSvc)
 	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "session-pipeline-asset", Type: "chat"}})
 	eventStore := &memEventStore{}
-	processor.SetPipeline(eventStore, &memPassiveRows{}, nil)
+	processor.SetPipeline(eventStore, &memPassiveRows{})
 	sender := &fakeReplySender{}
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-pipeline-asset", BotID: "bot-1", ChannelType: channel.ChannelTypeTelegram}
@@ -4449,13 +4479,13 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	gateway := &fakeChatGateway{}
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway,
 		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-voice"}}, &fakePolicyService{}, "", 0)
-	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-voice", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}})
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-voice", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel, TriggerScope: sessionfacts.TriggerUncoveredEvents}})
 	processor.SetMediaService(&fakeMediaIngestor{})
 	processor.SetTranscriptionService(&fakeTranscriber{text: "hello from voice"}, fakeSTTResolver{})
 	eventStore := &memEventStore{}
-	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: eventStore})
-	defer driver.StopAll()
-	processor.SetPipeline(eventStore, &memPassiveRows{}, driver)
+	waker := &recordingDiscussWaker{}
+	processor.SetPipeline(eventStore, &memPassiveRows{})
+	processor.SetDiscussWaker(waker)
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4471,8 +4501,8 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !driver.HasSession("discuss-voice") {
-		t.Fatal("discuss driver did not receive the session")
+	if got := waker.woken(); len(got) != 1 || got[0].sessionID != "discuss-voice" {
+		t.Fatalf("wakes = %+v, want one for the discuss session", got)
 	}
 	if got := timeline.RCToXML(timeline.BuildRC(eventStore.events, timeline.RenderParams{})); !strings.Contains(got, "hello from voice") {
 		t.Fatalf("timeline lacks transcript: %s", got)
@@ -4487,7 +4517,7 @@ func TestChannelInboundProcessorPassiveChatVoiceNotTranscribed(t *testing.T) {
 	processor.SetMediaService(&fakeMediaIngestor{})
 	processor.SetTranscriptionService(&fakeTranscriber{text: "hello from voice"}, fakeSTTResolver{})
 	eventStore := &memEventStore{}
-	processor.SetPipeline(eventStore, &memPassiveRows{}, nil)
+	processor.SetPipeline(eventStore, &memPassiveRows{})
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
 	msg := channel.InboundMessage{
@@ -4555,52 +4585,187 @@ func (s *memEventStore) LoadEventsForReplay(context.Context, string, string) ([]
 	return append([]timeline.CanonicalEvent(nil), s.events...), nil
 }
 
-func newDiscussSignalFixture(t *testing.T, store *memEventStore) (*ChannelInboundProcessor, *discuss.DiscussDriver, channel.ChannelConfig, channel.InboundMessage) {
-	t.Helper()
-	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-discuss", RouteID: "route-discuss"}}
-	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, &fakeChatGateway{},
-		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-signal"}}, &fakePolicyService{}, "", 0)
-	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: SessionResult{ID: "discuss-signal", Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel}})
-	driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Events: store})
-	t.Cleanup(driver.StopAll)
-	processor.SetPipeline(store, &memPassiveRows{}, driver)
-	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")}
-	msg := channel.InboundMessage{
-		BotID:        "bot-1",
-		Channel:      channel.ChannelType("telegram"),
-		Message:      channel.Message{ID: "m-signal", Text: "ping from group"},
-		ReplyTarget:  "group-target",
-		Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "A"},
-		Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
-	}
-	return processor, driver, cfg, msg
+// recordingDiscussWaker stands in for the server side of the wake: it records
+// which discuss session was told about new input.
+type recordingDiscussWaker struct {
+	mu    sync.Mutex
+	wakes []discussWake
 }
 
-func TestChannelInboundProcessorDiscussSignalsAfterEventCommit(t *testing.T) {
-	store := &memEventStore{}
-	processor, driver, cfg, msg := newDiscussSignalFixture(t, store)
+type discussWake struct{ teamID, botID, sessionID string }
 
-	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
+func (w *recordingDiscussWaker) Wake(_ context.Context, teamID, botID, sessionID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.wakes = append(w.wakes, discussWake{teamID: teamID, botID: botID, sessionID: sessionID})
+}
+
+func (w *recordingDiscussWaker) woken() []discussWake {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]discussWake(nil), w.wakes...)
+}
+
+// discussSignalFixture is a group message arriving in a session whose runs
+// start from every uncovered event, with the inbound pipeline recorded in
+// memory.
+type discussSignalFixture struct {
+	processor *ChannelInboundProcessor
+	gateway   *fakeChatGateway
+	store     *memEventStore
+	rows      *memPassiveRows
+	cfg       channel.ChannelConfig
+	msg       channel.InboundMessage
+}
+
+func newDiscussSignalFixture(t *testing.T, session SessionResult) discussSignalFixture {
+	t.Helper()
+	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-discuss", RouteID: "route-discuss"}}
+	gateway := &fakeChatGateway{}
+	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway,
+		&fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-signal"}}, &fakePolicyService{}, "", 0)
+	session.ID = "discuss-signal"
+	processor.SetSessionEnsurer(&fakeSessionEnsurer{activeSession: session})
+	store := &memEventStore{}
+	rows := &memPassiveRows{}
+	processor.SetPipeline(store, rows)
+	return discussSignalFixture{
+		processor: processor, gateway: gateway, store: store, rows: rows,
+		cfg: channel.ChannelConfig{TeamID: "team-test", ID: "cfg-1", BotID: "bot-1", ChannelType: channel.ChannelType("telegram")},
+		msg: channel.InboundMessage{
+			BotID:        "bot-1",
+			Channel:      channel.ChannelType("telegram"),
+			Message:      channel.Message{ID: "m-signal", Text: "ping from group"},
+			ReplyTarget:  "group-target",
+			Sender:       channel.Identity{SubjectID: "ext-1", DisplayName: "A"},
+			Conversation: channel.Conversation{ID: "g", Type: channel.ConversationTypeGroup},
+		},
+	}
+}
+
+func (f discussSignalFixture) handle(t *testing.T) error {
+	t.Helper()
+	return f.processor.HandleInbound(context.Background(), f.cfg, f.msg, &fakeReplySender{})
+}
+
+var discussScoped = SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel, TriggerScope: sessionfacts.TriggerUncoveredEvents}
+
+func TestChannelInboundProcessorDiscussSignalsAfterEventCommit(t *testing.T) {
+	fixture := newDiscussSignalFixture(t, discussScoped)
+	waker := &recordingDiscussWaker{}
+	fixture.processor.SetDiscussWaker(waker)
+
+	if err := fixture.handle(t); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !driver.HasSession("discuss-signal") {
-		t.Fatal("discuss driver was not signalled after the event commit")
+	if got := waker.woken(); len(got) != 1 || got[0] != (discussWake{teamID: "team-test", botID: "bot-1", sessionID: "discuss-signal"}) {
+		t.Fatalf("wakes = %+v, want one for the discuss session", got)
 	}
-	if got := timeline.RCToXML(timeline.BuildRC(store.events, timeline.RenderParams{})); !strings.Contains(got, "ping from group") {
-		t.Fatalf("committed events lack the message the driver reads: %s", got)
+	if got := timeline.RCToXML(timeline.BuildRC(fixture.store.events, timeline.RenderParams{})); !strings.Contains(got, "ping from group") {
+		t.Fatalf("committed events lack the message: %s", got)
+	}
+	if len(fixture.rows.rows) != 1 {
+		t.Fatalf("passive rows = %d, want the message's row", len(fixture.rows.rows))
+	}
+	if fixture.gateway.gotReq.Query != "" {
+		t.Fatalf("discuss input started a turn: %q", fixture.gateway.gotReq.Query)
 	}
 }
 
 func TestChannelInboundProcessorDiscussNotSignalledWhenEventPersistFails(t *testing.T) {
-	store := &memEventStore{persistErr: errors.New("insert unavailable")}
-	processor, driver, cfg, msg := newDiscussSignalFixture(t, store)
+	fixture := newDiscussSignalFixture(t, discussScoped)
+	waker := &recordingDiscussWaker{}
+	fixture.processor.SetDiscussWaker(waker)
+	fixture.store.persistErr = errors.New("insert unavailable")
 
-	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err == nil {
+	if err := fixture.handle(t); err == nil {
 		t.Fatal("inbound must fail when the event and its row cannot be committed")
 	}
-	if driver.HasSession("discuss-signal") {
-		t.Fatal("discuss driver must not be signalled when the event was not committed")
+	if got := waker.woken(); len(got) != 0 {
+		t.Fatalf("wakes = %+v, want none when the event was not committed", got)
 	}
+}
+
+// What routes a message to the discuss admission is the session's trigger
+// scope. A session called chat that answers uncovered events is routed the same
+// way; one called discuss that answers an addressed message starts a turn.
+func TestChannelInboundProcessorDiscussRoutingReadsTriggerScope(t *testing.T) {
+	t.Run("scope without the type", func(t *testing.T) {
+		fixture := newDiscussSignalFixture(t, SessionResult{Type: sessionpkg.TypeChat, Runtime: sessionpkg.RuntimeModel, TriggerScope: sessionfacts.TriggerUncoveredEvents})
+		waker := &recordingDiscussWaker{}
+		fixture.processor.SetDiscussWaker(waker)
+		if err := fixture.handle(t); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(waker.woken()) != 1 || fixture.gateway.gotReq.Query != "" {
+			t.Fatalf("wakes = %+v, turn query = %q; want one wake and no turn", waker.woken(), fixture.gateway.gotReq.Query)
+		}
+	})
+	t.Run("type without the scope", func(t *testing.T) {
+		fixture := newDiscussSignalFixture(t, SessionResult{Type: sessionpkg.TypeDiscuss, Runtime: sessionpkg.RuntimeModel, TriggerScope: sessionfacts.TriggerAddressedMessage})
+		waker := &recordingDiscussWaker{}
+		fixture.processor.SetDiscussWaker(waker)
+		fixture.msg.Metadata = map[string]any{"is_mentioned": true}
+		if err := fixture.handle(t); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(waker.woken()) != 0 || fixture.gateway.gotReq.Query == "" {
+			t.Fatalf("wakes = %+v, turn query = %q; want a turn and no wake", waker.woken(), fixture.gateway.gotReq.Query)
+		}
+	})
+}
+
+// A deployment whose waker is missing must not turn discuss input into chat
+// turns: the input is recorded, and the sweep answers it.
+func TestChannelInboundProcessorDiscussWithoutWakerNeverStartsTurn(t *testing.T) {
+	fixture := newDiscussSignalFixture(t, discussScoped)
+	fixture.msg.Metadata = map[string]any{"is_mentioned": true}
+
+	if err := fixture.handle(t); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fixture.gateway.gotReq.Query != "" {
+		t.Fatalf("discuss input without a waker started a turn: %q", fixture.gateway.gotReq.Query)
+	}
+	if len(fixture.store.events) != 1 || len(fixture.rows.rows) != 1 {
+		t.Fatalf("events = %d, rows = %d; want the input recorded", len(fixture.store.events), len(fixture.rows.rows))
+	}
+}
+
+// Without the pipeline there is nowhere to record the input; the message is
+// refused instead of answered by a turn.
+func TestChannelInboundProcessorDiscussWithoutPipelineRefusesInput(t *testing.T) {
+	fixture := newDiscussSignalFixture(t, discussScoped)
+	fixture.processor.SetPipeline(nil, nil)
+	fixture.msg.Metadata = map[string]any{"is_mentioned": true}
+
+	if err := fixture.handle(t); err == nil {
+		t.Fatal("discuss input without the event pipeline was accepted")
+	}
+	if fixture.gateway.gotReq.Query != "" {
+		t.Fatalf("discuss input without the pipeline started a turn: %q", fixture.gateway.gotReq.Query)
+	}
+}
+
+// A replayed platform message commits nothing new, so it wakes nothing.
+func TestChannelInboundProcessorDiscussReplayDoesNotWake(t *testing.T) {
+	fixture := newDiscussSignalFixture(t, discussScoped)
+	waker := &recordingDiscussWaker{}
+	fixture.processor.SetDiscussWaker(waker)
+	fixture.processor.SetPipeline(replayEventStore{fixture.store}, fixture.rows)
+	if err := fixture.handle(t); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := waker.woken(); len(got) != 0 {
+		t.Fatalf("wakes = %+v, want none for a replayed message", got)
+	}
+}
+
+// replayEventStore reports every event as already recorded.
+type replayEventStore struct{ *memEventStore }
+
+func (replayEventStore) PersistEventInTx(context.Context, string, string, timeline.CanonicalEvent, func(dbstore.Queries, string) error) (string, bool, error) {
+	return "event-replayed", false, nil
 }
 
 func TestChannelInboundProcessorPassiveRowCarriesReplyAndMention(t *testing.T) {

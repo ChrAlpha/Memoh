@@ -289,3 +289,25 @@ func (s *Server) StopTurn(ctx context.Context, req *turnpb.JsonRequest) (*turnpb
 	}
 	return &turnpb.JsonResponse{Json: data}, nil
 }
+
+func (s *Server) AdmitDiscuss(ctx context.Context, req *turnpb.JsonRequest) (*turnpb.JsonResponse, error) {
+	var cmd turn.DiscussAdmitCommand
+	if err := json.Unmarshal(req.GetJson(), &cmd); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid admit discuss payload")
+	}
+	admitter, ok := s.service.(turn.DiscussAdmitter)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "admit discuss unavailable")
+	}
+	outcome, err := admitter.AdmitDiscuss(ctx, cmd)
+	if err != nil {
+		return nil, s.mapError(ctx, "admit discuss", err)
+	}
+	data, err := json.Marshal(struct {
+		Outcome turn.DiscussOutcome `json:"outcome"`
+	}{Outcome: outcome})
+	if err != nil {
+		return nil, s.mapError(ctx, "encode admit discuss", err)
+	}
+	return &turnpb.JsonResponse{Json: data}, nil
+}

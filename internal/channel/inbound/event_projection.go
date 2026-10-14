@@ -27,7 +27,7 @@ type PassiveRowWriter interface {
 // the discuss side can admit a run for them. Wake must not block the inbound
 // path.
 type DiscussWaker interface {
-	Wake(ctx context.Context, botID, sessionID string)
+	Wake(ctx context.Context, teamID, botID, sessionID string)
 }
 
 // persistInboundEvent durably stores the event and reports whether the commit

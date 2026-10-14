@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,7 +22,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
-	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -34,6 +33,7 @@ import (
 	"github.com/felinics/memoh/internal/messaging"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/sessionfacts"
+	"github.com/felinics/memoh/internal/testutil/routecredentials"
 )
 
 // These tests drive discuss admission against the real PostgreSQL ledger and
@@ -52,6 +52,8 @@ type discussStep struct {
 	gate    chan struct{}
 	// send makes the call answer with a send tool call carrying this text.
 	send string
+	// text makes the call answer with this plain text.
+	text string
 	// fail makes the call fail.
 	fail bool
 }
@@ -111,6 +113,10 @@ func (p *discussProvider) DoStream(ctx context.Context, req sdk.Request) (<-chan
 		ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonToolCalls}
 		ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonToolCalls}
 	} else {
+		if step.text != "" {
+			ch <- &sdk.TextStartPart{ID: "answer"}
+			ch <- &sdk.TextDeltaPart{ID: "answer", Text: step.text}
+		}
 		ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
 		ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
 	}
@@ -179,6 +185,10 @@ func (s discussStore) GetDiscussPendingAddressed(ctx context.Context, p dbsqlc.G
 	return s.pg.GetDiscussPendingAddressed(ctx, p)
 }
 
+func (s discussStore) ListDiscussSweepCandidates(ctx context.Context, p dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error) {
+	return s.pg.ListDiscussSweepCandidates(ctx, p)
+}
+
 func (s discussStore) GetDiscussSession(ctx context.Context, p dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error) {
 	return s.pg.GetDiscussSession(ctx, p)
 }
@@ -223,6 +233,7 @@ func newDiscussEnv(t *testing.T, conversationType string) discussEnv {
 	ctx := context.Background()
 	pool := openTurnAdmissionPostgres(t, ctx)
 	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	seedDirectLifecycleModel(t, ctx, pool)
 	env := discussEnv{pool: pool, botID: botID, sessionID: sessionID, routeID: uuid.NewString()}
 	if err := pool.QueryRow(ctx, `SELECT owner_user_id::text FROM bots WHERE id = $1`, botID).Scan(&env.ownerID); err != nil {
 		t.Fatal(err)
@@ -234,7 +245,10 @@ func newDiscussEnv(t *testing.T, conversationType string) discussEnv {
 		t.Fatalf("create route: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		UPDATE bot_sessions SET type = 'discuss', session_mode = 'discuss', route_id = $2 WHERE id = $1
+		UPDATE bot_sessions
+		SET type = 'discuss', session_mode = 'discuss', route_id = $2,
+		    reply_delivery = 'explicit', trigger_scope = 'uncovered_events'
+		WHERE id = $1
 	`, sessionID, env.routeID); err != nil {
 		t.Fatalf("make the session a discuss session: %v", err)
 	}
@@ -548,44 +562,21 @@ func TestDiscussAnswersPendingInputThroughSend(t *testing.T) {
 
 	// The credentials name the participant who wrote the input and the route
 	// it came in on; the session acts for the bot's owner. They are recorded
-	// for a later resume like any other run's.
+	// for a later resume like any other run's, and are what the inbound path
+	// signs for the same participant: its tests hold it to the same scenario.
 	var resume resumeContext
 	if err := json.Unmarshal(run.input["resume"], &resume); err != nil {
 		t.Fatalf("resume context: %v (%s)", err, run.input["resume"])
 	}
-	for key, want := range map[string]string{
-		"typ": "chat_route", "bot_id": env.botID, "chat_id": env.botID, "route_id": env.routeID,
-		"channel_identity_id": alice.identityID, "user_id": alice.userID,
-	} {
-		if resume.ChatClaims[key] != want {
-			t.Fatalf("chat claims %s = %q, want %q (%v)", key, resume.ChatClaims[key], want, resume.ChatClaims)
-		}
-	}
-	if resume.TokenClaims["user_id"] != env.ownerID {
-		t.Fatalf("session acts for %q, want the bot owner %q", resume.TokenClaims["user_id"], env.ownerID)
+	wantChat, wantSession := routecredentials.Scenario{
+		BotID: env.botID, RouteID: env.routeID, ChannelIdentityID: alice.identityID,
+		ParticipantUserID: alice.userID, BotOwnerUserID: env.ownerID,
+	}.Want()
+	if !reflect.DeepEqual(resume.ChatClaims, wantChat) || !reflect.DeepEqual(resume.TokenClaims, wantSession) {
+		t.Fatalf("run credentials\nchat    %v\nsession %v\nwant\nchat    %v\nsession %v", resume.ChatClaims, resume.TokenClaims, wantChat, wantSession)
 	}
 	if resume.ChannelIdentityID != alice.identityID || resume.ReplyTarget != discussTestTarget || resume.CurrentChannel != discussTestPlatform {
 		t.Fatalf("resume context = %+v", resume)
-	}
-
-	// The inbound path issues the same credentials for the same participant.
-	chatToken, sessionBearer, err := auth.IssueRouteCredentials(auth.RouteCredentials{
-		BotID: env.botID, ChatID: env.botID, RouteID: env.routeID, ReplyTarget: discussTestTarget,
-		ChannelIdentityID: alice.identityID, UserID: alice.userID, BotOwnerUserID: env.ownerID,
-	}, discussTestSecret, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inboundChat, err := proc.svc.resumeClaims(chatToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inboundSession, err := proc.svc.resumeClaims(sessionBearer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fmt.Sprint(inboundChat) != fmt.Sprint(resume.ChatClaims) || fmt.Sprint(inboundSession) != fmt.Sprint(resume.TokenClaims) {
-		t.Fatalf("inbound credentials %v / %v differ from the discuss run's %v / %v", inboundChat, inboundSession, resume.ChatClaims, resume.TokenClaims)
 	}
 
 	if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
@@ -593,24 +584,45 @@ func TestDiscussAnswersPendingInputThroughSend(t *testing.T) {
 	}
 }
 
-// A session that is not a discuss session is never answered this way, even
-// though its inbound rows carry events too.
-func TestDiscussSkipsOtherSessionTypes(t *testing.T) {
+// Which sessions are answered this way is the session's trigger scope. A
+// session named discuss whose runs start from an addressed message is not, and
+// one named chat whose runs answer every uncovered event is.
+func TestDiscussAdmissionReadsTriggerScope(t *testing.T) {
 	if testing.Short() {
 		t.Skip("PostgreSQL integration")
 	}
-	env := newDiscussEnv(t, "group")
-	if _, err := env.pool.Exec(context.Background(), `UPDATE bot_sessions SET type = 'chat', session_mode = 'chat' WHERE id = $1`, env.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	proc := newDiscussProcess(t, env)
-	env.write(t, passiveInput{from: env.participant(t, false), externalID: "m1", text: "a chat message"})
-	if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
-		t.Fatalf("chat session outcome = %v, want skipped", outcome)
-	}
-	if got := len(env.runs(t)); got != 0 {
-		t.Fatalf("runs = %d, want 0", got)
-	}
+	t.Run("addressed message", func(t *testing.T) {
+		env := newDiscussEnv(t, "group")
+		if _, err := env.pool.Exec(context.Background(), `
+			UPDATE bot_sessions SET reply_delivery = 'stream', trigger_scope = 'addressed_message' WHERE id = $1
+		`, env.sessionID); err != nil {
+			t.Fatal(err)
+		}
+		proc := newDiscussProcess(t, env)
+		env.write(t, passiveInput{from: env.participant(t, false), externalID: "m1", text: "a message"})
+		if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+			t.Fatalf("outcome = %v, want skipped", outcome)
+		}
+		if got := len(env.runs(t)); got != 0 {
+			t.Fatalf("runs = %d, want 0", got)
+		}
+	})
+	t.Run("uncovered events", func(t *testing.T) {
+		env := newDiscussEnv(t, "group")
+		if _, err := env.pool.Exec(context.Background(), `
+			UPDATE bot_sessions SET type = 'chat', session_mode = 'chat' WHERE id = $1
+		`, env.sessionID); err != nil {
+			t.Fatal(err)
+		}
+		proc := newDiscussProcess(t, env)
+		hw := env.write(t, passiveInput{from: env.participant(t, false), externalID: "m1", text: "a message"})
+		outcome, done := proc.admit(t, env)
+		if outcome != DiscussAdmitted {
+			t.Fatalf("outcome = %v, want admitted", outcome)
+		}
+		waitDiscussRun(t, done)
+		env.waitRunState(t, env.invocation(hw), "completed")
+	})
 }
 
 // A participant bound to more than one account names no account, as on the

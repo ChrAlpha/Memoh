@@ -136,7 +136,7 @@ func newPassiveRecordProcessor(t *testing.T, pool *pgxpool.Pool) (*ChannelInboun
 	events := timeline.NewEventStore(log, queries)
 	msgSvc := message.NewService(nil, queries)
 	processor := NewChannelInboundProcessor(log, nil, nil, nil, nil, nil, nil, "", 0)
-	processor.SetPipeline(events, msgSvc, nil)
+	processor.SetPipeline(events, msgSvc)
 	return processor, msgSvc
 }
 

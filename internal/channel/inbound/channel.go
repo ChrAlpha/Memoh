@@ -9,8 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -26,7 +24,6 @@ import (
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/discuss"
 	"github.com/felinics/memoh/internal/channel/route"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -175,6 +172,10 @@ type SessionResult struct {
 	Runtime               string
 	RuntimeOwnerAccountID string
 	ExternalRuntimeDriver sessionfacts.ExternalRuntimeDriver
+	// TriggerScope says what starts the session's runs. A session that answers
+	// every uncovered external event takes its input as passive rows, whatever
+	// its type is called.
+	TriggerScope sessionfacts.TriggerScope
 }
 
 type NewSessionSpec struct {
@@ -212,7 +213,6 @@ type ChannelInboundProcessor struct {
 	sttModelResolver    transcriptionModelResolver
 	sessionEnsurer      SessionEnsurer
 	eventStore          EventPersister
-	discussDriver       *discuss.DiscussDriver
 	passiveRows         PassiveRowWriter
 	discussWaker        DiscussWaker
 	imDisplayOptions    IMDisplayOptionsReader
@@ -352,20 +352,20 @@ func (p *ChannelInboundProcessor) SetRequestedSkillResolver(resolver RequestedSk
 	p.skillResolver = resolver
 }
 
-// SetPipeline configures the event store, the passive row writer, and the
-// discuss driver. Passive rows are written on the same transaction as their
-// event, so the row writer and the event store must share one database.
-func (p *ChannelInboundProcessor) SetPipeline(store EventPersister, rows PassiveRowWriter, driver *discuss.DiscussDriver) {
+// SetPipeline configures the event store and the passive row writer. Passive
+// rows are written on the same transaction as their event, so the row writer
+// and the event store must share one database.
+func (p *ChannelInboundProcessor) SetPipeline(store EventPersister, rows PassiveRowWriter) {
 	if p == nil {
 		return
 	}
 	p.eventStore = store
 	p.passiveRows = rows
-	p.discussDriver = driver
 }
 
 // SetDiscussWaker configures the hook that tells the discuss side a new
-// passive event was committed. Nil means no hook.
+// passive event was committed. Without one the input is still recorded, and
+// the periodic sweep is what answers it.
 func (p *ChannelInboundProcessor) SetDiscussWaker(waker DiscussWaker) {
 	if p == nil {
 		return
@@ -661,6 +661,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	sessionRuntime := ""
 	sessionRuntimeOwner := ""
 	var sessionRuntimeDriver sessionfacts.ExternalRuntimeDriver
+	var sessionTriggerScope sessionfacts.TriggerScope
 	if p.sessionEnsurer != nil {
 		sess, sessErr := p.sessionEnsurer.GetActiveSession(ctx, resolved.RouteID)
 		if sessErr == nil {
@@ -669,6 +670,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			sessionRuntime = sess.Runtime
 			sessionRuntimeOwner = sess.RuntimeOwnerAccountID
 			sessionRuntimeDriver = sess.ExternalRuntimeDriver
+			sessionTriggerScope = sess.TriggerScope
 		} else if p.logger != nil {
 			p.logger.DebugContext(ctx, "no active session for route; will create after gates if needed",
 				slog.String("route_id", strings.TrimSpace(resolved.RouteID)),
@@ -743,7 +745,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return p.handleUserInputResponseCommand(ctx, msg, sender, identity, resolved.RouteID, sessionID, *invocation)
 	}
 	if isQueueCommand && invocation != nil && (isDirectedAtBot(msg) || slashDirected) {
-		return p.handleQueueCommand(ctx, cfg, msg, sender, identity, resolved.RouteID, sessionID, sessionType, *invocation)
+		return p.handleQueueCommand(ctx, cfg, msg, sender, identity, resolved.RouteID, sessionID, sessionTriggerScope, *invocation)
 	}
 	// Skill commands remain control-plane messages even while an ask_user
 	// request is pending; they must not become text-question answers.
@@ -838,10 +840,11 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			sessionRuntime = sess.Runtime
 			sessionRuntimeOwner = sess.RuntimeOwnerAccountID
 			sessionRuntimeDriver = sess.ExternalRuntimeDriver
+			sessionTriggerScope = sess.TriggerScope
 		}
 	}
 
-	runtimeSession := SessionResult{Type: sessionType, Runtime: sessionRuntime, ExternalRuntimeDriver: sessionRuntimeDriver}
+	runtimeSession := SessionResult{Type: sessionType, Runtime: sessionRuntime, ExternalRuntimeDriver: sessionRuntimeDriver, TriggerScope: sessionTriggerScope}
 	if sessionUsesExternalRuntime(runtimeSession) {
 		ownerPrincipal := strings.TrimSpace(sessionRuntimeOwner)
 		var err error
@@ -863,9 +866,10 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	}
 
 	// Preprocess before the event is persisted so the timeline and the discuss
-	// driver see the transcribed message. Passive chat messages skip
+	// admission see the transcribed message. Passive chat messages skip
 	// transcription to avoid the cost.
-	if sessionType == sessionpkg.TypeDiscuss || shouldTrigger {
+	answersUncovered := sessionTriggerScope == sessionfacts.TriggerUncoveredEvents
+	if answersUncovered || shouldTrigger {
 		if transcript := p.transcribeInboundAttachments(ctx, strings.TrimSpace(identity.BotID), resolvedAttachments); transcript != "" {
 			if msg.Message.Metadata == nil {
 				msg.Message.Metadata = make(map[string]any)
@@ -886,7 +890,11 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	// Passive rows (discuss routing and non-triggering messages) commit with
 	// their event in one transaction. A triggering message gets its row from the
 	// turn, which carries the event id itself.
-	discussRoute := sessionType == sessionpkg.TypeDiscuss && p.discussDriver != nil && slashDecision.AgentCommand == ""
+	//
+	// A session that answers every uncovered event never answers a message from
+	// here: its input is recorded and the discuss admission takes it from there.
+	// Only a message that names a runtime command or a skill becomes a turn.
+	discussRoute := answersUncovered && slashDecision.AgentCommand == "" && pendingSkillIntent == nil
 	passive := discussRoute || !shouldTrigger
 	var eventID string
 	var eventPersisted bool
@@ -904,33 +912,26 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			}
 			// The wake runs after the commit. Only a newly inserted event changes
 			// what the discuss session has to answer.
-			if discussRoute && inserted && p.discussWaker != nil {
-				p.discussWaker.Wake(ctx, identity.BotID, sessionID)
+			if discussRoute && inserted {
+				switch {
+				case p.discussWaker != nil:
+					p.discussWaker.Wake(ctx, cfg.TeamID, identity.BotID, sessionID)
+				case p.logger != nil:
+					p.logger.WarnContext(ctx, "discuss waker not configured; the sweep answers this input",
+						slog.String("bot_id", identity.BotID), slog.String("session_id", sessionID))
+				}
 			}
 		} else {
 			eventID, eventPersisted = persistInboundEvent(ctx, p.eventStore, p.logger, identity.BotID, sessionID, event)
 		}
 	}
 
-	// Discuss mode: dispatch to the discuss driver and return.
-	// The discuss driver autonomously decides whether to call the LLM.
-	if discussRoute && eventPersisted {
-		chatToken := p.issueChatToken(identity, resolved.RouteID, msg)
-		sessionToken := p.issueSessionBearerToken(ctx, identity, runtimeSession, sessionRuntimeOwner, chatToken)
-		p.discussDriver.Notify(sessionID, discuss.DiscussSessionConfig{ //nolint:contextcheck // the discuss worker outlives the inbound request by design
-			TeamID:            cfg.TeamID,
-			BotID:             identity.BotID,
-			ThreadID:          sessionID,
-			RouteID:           resolved.RouteID,
-			ChannelIdentityID: identity.ChannelIdentityID,
-			ReplyTarget:       strings.TrimSpace(msg.ReplyTarget),
-			CurrentPlatform:   msg.Channel.String(),
-			ConversationType:  strings.TrimSpace(msg.Conversation.Type),
-			ConversationName:  strings.TrimSpace(msg.Conversation.Name),
-			SessionToken:      sessionToken,
-			ChatToken:         chatToken,
-			ToolHTTPURL:       acpMCPToolsURLFromEnv(identity.BotID),
-		})
+	if discussRoute {
+		// Without the event pipeline there is nowhere to record the input, and a
+		// turn started here would bypass the admission.
+		if !eventPersisted {
+			return errors.New("discuss input needs the event pipeline")
+		}
 		return nil
 	}
 
@@ -960,26 +961,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return nil
 	}
 
-	// Issue chat token for reply routing.
-	chatToken := ""
-	if p.jwtSecret != "" && strings.TrimSpace(msg.ReplyTarget) != "" {
-		signed, _, err := auth.GenerateChatToken(auth.ChatToken{
-			BotID:             identity.BotID,
-			ChatID:            activeChatID,
-			RouteID:           resolved.RouteID,
-			UserID:            identity.UserID,
-			ChannelIdentityID: identity.ChannelIdentityID,
-		}, p.jwtSecret, p.tokenTTL)
-		if err != nil {
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "issue chat token failed", slog.Any("error", err))
-			}
-		} else {
-			chatToken = signed
-		}
-	}
-
-	token := p.issueSessionBearerToken(ctx, identity, runtimeSession, sessionRuntimeOwner, chatToken)
+	chatToken, token := p.issueRouteCredentials(ctx, identity, activeChatID, resolved.RouteID, msg, runtimeSession, sessionRuntimeOwner)
 
 	var desc channel.Descriptor
 	if p.registry != nil {
@@ -1506,7 +1488,8 @@ func (p *ChannelInboundProcessor) handleQueueCommand(
 	msg channel.InboundMessage,
 	sender channel.StreamReplySender,
 	identity InboundIdentity,
-	routeID, sessionID, sessionType string,
+	routeID, sessionID string,
+	triggerScope sessionfacts.TriggerScope,
 	invocation command.Invocation,
 ) error {
 	resource := strings.ToLower(strings.TrimSpace(invocation.Parsed.Resource))
@@ -1516,7 +1499,10 @@ func (p *ChannelInboundProcessor) handleQueueCommand(
 	if strings.TrimSpace(sessionID) == "" {
 		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeNoActiveRun)
 	}
-	if strings.TrimSpace(sessionType) == sessionpkg.TypeDiscuss {
+	// What a run answers is every uncovered event, not one queued message, and
+	// nothing it says reaches the conversation through a stream a steer could
+	// join.
+	if triggerScope == sessionfacts.TriggerUncoveredEvents {
 		return p.sendSlashError(ctx, sender, msg, QueueCommandCodeUnsupported)
 	}
 	// A follow-up starts a run that the server owns; only local channels see
@@ -3778,7 +3764,7 @@ func (p *ChannelInboundProcessor) handleToolApprovalCommand(ctx context.Context,
 		ReplyExternalMessageID: replyExternalID,
 		Decision:               parsed.Resource,
 		Reason:                 reason,
-		ChatToken:              p.issueChatToken(identity, routeID, msg),
+		ChatToken:              p.routeChatToken(identity, routeID, msg),
 	})
 }
 
@@ -3820,7 +3806,7 @@ func (p *ChannelInboundProcessor) handleUserInputResponseCommand(ctx context.Con
 		Answers:                answers,
 		TextAnswer:             answerText,
 		UILanguage:             loc.Locale(),
-		ChatToken:              p.issueChatToken(identity, routeID, msg),
+		ChatToken:              p.routeChatToken(identity, routeID, msg),
 	})
 }
 
@@ -4109,104 +4095,57 @@ func hasUserInputAction(actions []channel.Action) bool {
 	return false
 }
 
-func (p *ChannelInboundProcessor) issueChatToken(identity InboundIdentity, routeID string, msg channel.InboundMessage) string {
-	if p.jwtSecret == "" || strings.TrimSpace(msg.ReplyTarget) == "" {
-		return ""
-	}
-	signed, _, err := auth.GenerateChatToken(auth.ChatToken{
+// routeCredentials names who a turn answering msg on a route answers, with the
+// accounts the session acts for left to the caller. The discuss admission signs
+// the same credentials from its own reads, through the same function.
+func routeCredentials(identity InboundIdentity, chatID, routeID string, msg channel.InboundMessage) auth.RouteCredentials {
+	return auth.RouteCredentials{
 		BotID:             identity.BotID,
-		ChatID:            identity.BotID,
-		RouteID:           strings.TrimSpace(routeID),
-		UserID:            identity.UserID,
+		ChatID:            chatID,
+		RouteID:           routeID,
+		ReplyTarget:       msg.ReplyTarget,
 		ChannelIdentityID: identity.ChannelIdentityID,
-	}, p.jwtSecret, p.tokenTTL)
+		UserID:            identity.UserID,
+	}
+}
+
+// issueRouteCredentials signs the chat token and the session bearer of a turn
+// answering msg. A session an External Agent runtime drives acts for its
+// runtime owner; any other acts for the bot's owner.
+func (p *ChannelInboundProcessor) issueRouteCredentials(ctx context.Context, identity InboundIdentity, chatID, routeID string, msg channel.InboundMessage, sess SessionResult, runtimeOwnerAccountID string) (chatToken, sessionBearer string) {
+	creds := routeCredentials(identity, chatID, routeID, msg)
+	if sessionUsesExternalRuntime(sess) {
+		creds.ExternalRuntime = true
+		creds.RuntimeOwnerUserID = runtimeOwnerAccountID
+	} else if p.policy != nil {
+		if ownerID, err := p.policy.BotOwnerUserID(ctx, identity.BotID); err == nil {
+			creds.BotOwnerUserID = ownerID
+		} else if p.logger != nil {
+			p.logger.WarnContext(ctx, "resolve bot owner for token failed, falling back to caller identity",
+				slog.String("bot_id", identity.BotID), slog.Any("error", err))
+		}
+	}
+	chatToken, sessionBearer, err := auth.IssueRouteCredentials(creds, p.jwtSecret, p.tokenTTL)
+	if err != nil {
+		if p.logger != nil {
+			p.logger.WarnContext(ctx, "issue route credentials failed", slog.Any("error", err))
+		}
+		return "", ""
+	}
+	return chatToken, sessionBearer
+}
+
+// routeChatToken is the chat token alone, for a reply that continues a turn
+// another run owns.
+func (p *ChannelInboundProcessor) routeChatToken(identity InboundIdentity, routeID string, msg channel.InboundMessage) string {
+	chatToken, _, err := auth.IssueRouteCredentials(routeCredentials(identity, identity.BotID, routeID, msg), p.jwtSecret, p.tokenTTL)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.Warn("issue approval chat token failed", slog.Any("error", err))
 		}
 		return ""
 	}
-	return signed
-}
-
-func (p *ChannelInboundProcessor) issueChannelBearerToken(ctx context.Context, identity InboundIdentity, fallbackChatToken string) string {
-	if p.jwtSecret == "" {
-		if strings.TrimSpace(fallbackChatToken) != "" {
-			return "Bearer " + strings.TrimSpace(fallbackChatToken)
-		}
-		return ""
-	}
-	tokenUserID := strings.TrimSpace(identity.UserID)
-	if p.policy != nil {
-		if ownerID, err := p.policy.BotOwnerUserID(ctx, identity.BotID); err == nil && strings.TrimSpace(ownerID) != "" {
-			tokenUserID = strings.TrimSpace(ownerID)
-		} else if p.logger != nil {
-			p.logger.WarnContext(ctx, "resolve bot owner for token failed, falling back to caller identity",
-				slog.String("bot_id", identity.BotID), slog.Any("error", err))
-		}
-	}
-	if tokenUserID != "" {
-		signed, _, err := auth.GenerateToken(tokenUserID, p.jwtSecret, p.tokenTTL)
-		if err != nil {
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "issue channel token failed", slog.Any("error", err))
-			}
-		} else {
-			return "Bearer " + signed
-		}
-	}
-	if strings.TrimSpace(fallbackChatToken) != "" {
-		return "Bearer " + strings.TrimSpace(fallbackChatToken)
-	}
-	return ""
-}
-
-func (p *ChannelInboundProcessor) issueSessionBearerToken(ctx context.Context, identity InboundIdentity, sess SessionResult, runtimeOwnerAccountID, fallbackChatToken string) string {
-	if sessionUsesExternalRuntime(sess) {
-		return p.issueRuntimeBearerToken(ctx, identity, runtimeOwnerAccountID, fallbackChatToken)
-	}
-	return p.issueChannelBearerToken(ctx, identity, fallbackChatToken)
-}
-
-func (p *ChannelInboundProcessor) issueRuntimeBearerToken(ctx context.Context, identity InboundIdentity, runtimeOwnerAccountID, fallbackChatToken string) string {
-	if p.jwtSecret == "" {
-		if strings.TrimSpace(fallbackChatToken) != "" {
-			return "Bearer " + strings.TrimSpace(fallbackChatToken)
-		}
-		return ""
-	}
-	tokenUserID := strings.TrimSpace(runtimeOwnerAccountID)
-	if tokenUserID == "" {
-		tokenUserID = strings.TrimSpace(identity.UserID)
-	}
-	if tokenUserID != "" {
-		signed, _, err := auth.GenerateToken(tokenUserID, p.jwtSecret, p.tokenTTL)
-		if err != nil {
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "issue ACP runtime token failed", slog.Any("error", err))
-			}
-		} else {
-			return "Bearer " + signed
-		}
-	}
-	if strings.TrimSpace(fallbackChatToken) != "" {
-		return "Bearer " + strings.TrimSpace(fallbackChatToken)
-	}
-	return ""
-}
-
-func acpMCPToolsURLFromEnv(botID string) string {
-	if raw := strings.TrimSpace(os.Getenv("MEMOH_ACP_MCP_HTTP_URL")); raw != "" {
-		if strings.Contains(raw, "{bot_id}") {
-			return strings.ReplaceAll(raw, "{bot_id}", url.PathEscape(strings.TrimSpace(botID)))
-		}
-		return raw
-	}
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("MEMOH_ACP_MCP_HTTP_BASE_URL")), "/")
-	if base == "" {
-		return ""
-	}
-	return base + "/bots/" + url.PathEscape(strings.TrimSpace(botID)) + "/tools"
+	return chatToken
 }
 
 func looksLikeApprovalID(value string) bool {

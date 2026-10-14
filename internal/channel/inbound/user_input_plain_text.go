@@ -69,7 +69,7 @@ func (p *ChannelInboundProcessor) handlePlainTextUserInput(
 		ActorUserID:            strings.TrimSpace(identity.UserID),
 		ExplicitID:             result.Request.ID,
 		Answers:                turnQuestionAnswers(result.Request.Interaction.Answers),
-		ChatToken:              p.issueChatToken(identity, routeID, msg),
+		ChatToken:              p.routeChatToken(identity, routeID, msg),
 	})
 	if err != nil {
 		return true, err

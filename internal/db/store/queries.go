@@ -30,6 +30,7 @@ type Queries interface {
 	GetDiscussPendingHead(context.Context, dbsqlc.GetDiscussPendingHeadParams) (dbsqlc.GetDiscussPendingHeadRow, error)
 	GetDiscussPendingAddressed(context.Context, dbsqlc.GetDiscussPendingAddressedParams) (bool, error)
 	GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error)
+	ListDiscussSweepCandidates(context.Context, dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error)
 	SaveSessionRunResumeContext(context.Context, dbsqlc.SaveSessionRunResumeContextParams) (int64, error)
 	AcceptSessionRunDecisionContinuation(context.Context, dbsqlc.AcceptSessionRunDecisionContinuationParams) (dbsqlc.SessionRun, error)
 	MarkSessionRunDecisionExecuting(context.Context, dbsqlc.MarkSessionRunDecisionExecutingParams) (int64, error)

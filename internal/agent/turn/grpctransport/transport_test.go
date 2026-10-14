@@ -316,6 +316,18 @@ type fakeService struct {
 	started    turn.StartTurnCommand
 	eventCount int
 	cancelled  chan struct{}
+	// admitted is the last discuss check the server asked for; the server
+	// answers it with admitOutcome, or fails it with admitErr.
+	admitted      turn.DiscussAdmitCommand
+	admitOutcome  turn.DiscussOutcome
+	admitErr      error
+	admitOutcomes int
+}
+
+func (f *fakeService) AdmitDiscuss(_ context.Context, cmd turn.DiscussAdmitCommand) (turn.DiscussOutcome, error) {
+	f.admitted = cmd
+	f.admitOutcomes++
+	return f.admitOutcome, f.admitErr
 }
 
 func (f *fakeService) StartTurn(_ context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
@@ -619,4 +631,62 @@ func TestInternalTurnErrorHasOneResultLine(t *testing.T) {
 	if record["error"] != "start turn: private diagnostic" {
 		t.Fatalf("error = %v", record["error"])
 	}
+}
+
+// The channel process learns what its wake did from the server's own
+// admission, whichever of the four answers it was.
+func TestAdmitDiscussRoundTrip(t *testing.T) {
+	for _, outcome := range []turn.DiscussOutcome{turn.DiscussAdmitted, turn.DiscussNothingPending, turn.DiscussBusy, turn.DiscussSkipped} {
+		t.Run(string(outcome), func(t *testing.T) {
+			fake := &fakeService{admitOutcome: outcome}
+			client, cleanup := newTestClient(t, fake, "secret")
+			defer cleanup()
+
+			cmd := turn.DiscussAdmitCommand{TeamID: "team-1", BotID: "bot-1", ThreadID: "session-1"}
+			got, err := client.AdmitDiscuss(context.Background(), cmd)
+			if err != nil {
+				t.Fatalf("AdmitDiscuss() error = %v", err)
+			}
+			if got != outcome {
+				t.Fatalf("outcome = %q, want %q", got, outcome)
+			}
+			if fake.admitted != cmd || fake.admitOutcomes != 1 {
+				t.Fatalf("server asked for %+v (%d times), want %+v once", fake.admitted, fake.admitOutcomes, cmd)
+			}
+		})
+	}
+}
+
+// A failure of the check, and a team the server does not serve, reach the
+// caller as errors it can tell apart.
+func TestAdmitDiscussErrors(t *testing.T) {
+	t.Run("team not served", func(t *testing.T) {
+		client, cleanup := newTestClient(t, &fakeService{admitErr: turn.ErrTeamNotServed}, "secret")
+		defer cleanup()
+		if _, err := client.AdmitDiscuss(context.Background(), turn.DiscussAdmitCommand{TeamID: "other", BotID: "bot-1", ThreadID: "session-1"}); !errors.Is(err, turn.ErrTeamNotServed) {
+			t.Fatalf("error = %v, want ErrTeamNotServed", err)
+		}
+	})
+	t.Run("check failed", func(t *testing.T) {
+		client, cleanup := newTestClient(t, &fakeService{admitErr: errors.New("read discuss session: connection refused")}, "secret")
+		defer cleanup()
+		if _, err := client.AdmitDiscuss(context.Background(), turn.DiscussAdmitCommand{TeamID: "team-1", BotID: "bot-1", ThreadID: "session-1"}); err == nil {
+			t.Fatal("a failed check was reported as an outcome")
+		}
+	})
+	t.Run("unknown outcome", func(t *testing.T) {
+		client, cleanup := newTestClient(t, &fakeService{admitOutcome: "answered"}, "secret")
+		defer cleanup()
+		if _, err := client.AdmitDiscuss(context.Background(), turn.DiscussAdmitCommand{TeamID: "team-1", BotID: "bot-1", ThreadID: "session-1"}); err == nil {
+			t.Fatal("an outcome this version does not know was accepted")
+		}
+	})
+	t.Run("service cannot admit", func(t *testing.T) {
+		client, cleanup := newTestClient(t, &scriptedService{}, "secret")
+		defer cleanup()
+		_, err := client.AdmitDiscuss(context.Background(), turn.DiscussAdmitCommand{TeamID: "team-1", BotID: "bot-1", ThreadID: "session-1"})
+		if status.Code(err) != codes.Unimplemented {
+			t.Fatalf("error = %v, want Unimplemented", err)
+		}
+	})
 }

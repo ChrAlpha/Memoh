@@ -2313,6 +2313,11 @@ CREATE INDEX IF NOT EXISTS bot_history_messages_discuss_pending
     ON public.bot_history_messages (team_id, session_id, turn_position)
     WHERE event_id IS NOT NULL AND role = 'user';
 
+-- The same rows by arrival time, for the discuss sweep's window.
+CREATE INDEX IF NOT EXISTS bot_history_messages_discuss_recent
+    ON public.bot_history_messages (team_id, created_at)
+    WHERE event_id IS NOT NULL AND role = 'user';
+
 -- Bot-scoped Connect-It bindings. Provider credentials and short-lived MCP
 -- session tokens remain in Connect-It; Memoh stores only the durable
 -- connection reference and whether the bot currently exposes it. A co-hosted

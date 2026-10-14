@@ -46,8 +46,8 @@ const (
 	// the session again.
 	DiscussBusy
 	// DiscussSkipped means the pending input is not answered now: the session
-	// is not a discuss session, its batch was already admitted once, or an
-	// External Agent runtime was not addressed.
+	// does not answer uncovered events, its batch was already admitted once, or
+	// an External Agent runtime was not addressed.
 	DiscussSkipped
 )
 
@@ -110,9 +110,6 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	}
 	if err != nil {
 		return 0, nil, fmt.Errorf("read discuss session: %w", err)
-	}
-	if sess.SessionType != sessionpkg.TypeDiscuss {
-		return DiscussSkipped, nil, nil
 	}
 	cover, err := s.discussCover(ctx, pgSessionID)
 	if err != nil {

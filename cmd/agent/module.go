@@ -38,9 +38,9 @@ func runServe() {
 // endpoints keep working with a single binary and an unchanged config.
 func optionsFor(cfg config.Config) fx.Option {
 	if cfg.SplitChannelRuntime() {
-		return fx.Options(commonOptions(), splitOptions(), fx.Invoke(startSessionResume))
+		return fx.Options(commonOptions(), splitOptions(), fx.Invoke(startSessionResume, startDiscussSweep))
 	}
-	return fx.Options(commonOptions(), embeddedOptions(), fx.Invoke(startSessionResume))
+	return fx.Options(commonOptions(), embeddedOptions(), fx.Invoke(startSessionResume, startDiscussSweep))
 }
 
 func splitOptions() fx.Option {
@@ -149,6 +149,21 @@ func startSessionResume(lc fx.Lifecycle, service *application.Service, manager *
 		OnStop: func(ctx context.Context) error {
 			service.StopSessionResume()
 			return manager.InterruptForShutdown(ctx)
+		},
+	})
+}
+
+// startDiscussSweep runs in the server process only, in either deployment
+// shape: it is the server that admits discuss runs, and several servers may
+// sweep at once. Registered after the session resume so that it stops first and
+// no new run is admitted while the manager interrupts the active ones.
+func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
+	sweep := application.NewDiscussSweep(service)
+	lc.Append(fx.Hook{
+		OnStart: sweep.Start,
+		OnStop: func(context.Context) error {
+			sweep.Stop()
+			return nil
 		},
 	})
 }

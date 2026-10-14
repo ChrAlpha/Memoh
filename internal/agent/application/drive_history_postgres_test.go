@@ -28,13 +28,10 @@ import (
 //
 // Each case is skipped unless TEST_POSTGRES_DSN names a database.
 
-// newDriveHistoryFixture seeds one bot and session and wires the application's
-// real stores over the test database.
-func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTurnFixture, *pgxpool.Pool, string, string) {
+// seedDirectLifecycleModel gives the real store the provider and model rows the
+// direct lifecycle fixture's runs persist their messages against.
+func seedDirectLifecycleModel(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO providers (id, name) VALUES ($1, 'drive-history-provider')
 		ON CONFLICT DO NOTHING
@@ -47,6 +44,16 @@ func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTu
 	`, directLifecycleModelID, directLifecycleProviderID); err != nil {
 		t.Fatalf("create model fixture: %v", err)
 	}
+}
+
+// newDriveHistoryFixture seeds one bot and session and wires the application's
+// real stores over the test database.
+func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTurnFixture, *pgxpool.Pool, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	pool := openTurnAdmissionPostgres(t, ctx)
+	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	seedDirectLifecycleModel(t, ctx, pool)
 	queries := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-drive-history",

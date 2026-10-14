@@ -16,6 +16,8 @@ import (
 	"github.com/felinics/memoh/internal/rpc"
 )
 
+var _ turn.DiscussAdmitter = (*Client)(nil)
+
 type Client struct {
 	client turnpb.TurnServiceClient
 	logger *slog.Logger
@@ -116,6 +118,27 @@ func (c *Client) AdvancePlainTextUserInput(ctx context.Context, input userinput.
 		return userinput.AdvanceTextResult{}, err
 	}
 	return result, nil
+}
+
+// AdmitDiscuss asks the server to answer a discuss session's uncovered
+// external input. It is the one admission the server owns for both deployment
+// shapes; the channel process only tells it when to look.
+func (c *Client) AdmitDiscuss(ctx context.Context, cmd turn.DiscussAdmitCommand) (turn.DiscussOutcome, error) {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.client.AdmitDiscuss(ctx, &turnpb.JsonRequest{Json: data})
+	if err != nil {
+		return "", mapClientError(err)
+	}
+	var out struct {
+		Outcome string `json:"outcome"`
+	}
+	if err := json.Unmarshal(resp.GetJson(), &out); err != nil {
+		return "", err
+	}
+	return turn.ParseDiscussOutcome(out.Outcome)
 }
 
 type continuationReceiver func() (*turnpb.EventResponse, error)

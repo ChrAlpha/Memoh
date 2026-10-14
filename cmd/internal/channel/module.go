@@ -13,7 +13,7 @@ import (
 )
 
 // Module assembles the shared Channel boundary providers: registry,
-// manager, lifecycle, inbound processing, discuss pipeline, and
+// manager, lifecycle, inbound processing, discuss wake, and
 // webhook tunnel. Turn execution is consumed through the injected
 // turn.Service; this module never touches the resolver or agent directly.
 func FoundationModule() fx.Option {
@@ -22,7 +22,7 @@ func FoundationModule() fx.Option {
 			identities.NewService,
 			provideRouteService,
 			provideEventStore,
-			provideDiscussDriver,
+			provideDiscussWaker,
 			local.NewRouteHub,
 			provideChannelRegistry,
 			channel.NewStore,

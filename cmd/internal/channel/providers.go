@@ -1,5 +1,5 @@
 // Package channel assembles the shared command-side Channel module:
-// registry/manager/processor, discuss pipeline, and webhook tunnel.
+// registry/manager/processor, discuss wake, and webhook tunnel.
 package channel
 
 import (
@@ -42,7 +42,6 @@ import (
 	"github.com/felinics/memoh/internal/channel/adapters/wechatoa"
 	"github.com/felinics/memoh/internal/channel/adapters/wecom"
 	"github.com/felinics/memoh/internal/channel/adapters/weixin"
-	"github.com/felinics/memoh/internal/channel/discuss"
 	"github.com/felinics/memoh/internal/channel/identities"
 	"github.com/felinics/memoh/internal/channel/inbound"
 	"github.com/felinics/memoh/internal/channel/publicmedia"
@@ -76,15 +75,17 @@ func provideEventStore(log *slog.Logger, queries dbstore.Queries) *timeline.Even
 	return store
 }
 
-func provideDiscussDriver(log *slog.Logger, eventStore *timeline.EventStore, msgService *message.DBService, queries dbstore.Queries, cfg config.Config) *discuss.DiscussDriver {
-	return discuss.NewDiscussDriver(discuss.DiscussDriverDeps{
-		MessageService:     msgService,
-		CursorStore:        eventStore,
-		Events:             eventStore,
-		Artifacts:          compaction.NewTimelineArtifactSource(queries),
-		Logger:             log,
-		AdmissionMaxTokens: cfg.Agent.EffectiveContextFallbackTokens(),
-	})
+// provideDiscussWaker tells the server a discuss session took input, through
+// the turn port of this deployment: the application service itself in the
+// server process, the turn RPC client in the channel process. Both must offer
+// the admission, since without it discuss input would only ever be answered by
+// the sweep.
+func provideDiscussWaker(log *slog.Logger, turnService turn.Service) (inbound.DiscussWaker, error) {
+	admitter, ok := turnService.(turn.DiscussAdmitter)
+	if !ok {
+		return nil, fmt.Errorf("turn service %T cannot admit discuss sessions", turnService)
+	}
+	return inbound.NewDiscussWaker(admitter, log), nil
 }
 
 func provideRouteService(log *slog.Logger, queries dbstore.Queries) *route.DBService {
@@ -201,7 +202,7 @@ func provideChannelRouter(
 	audioService channelAudio,
 	settingsService channelSettings,
 	eventStore *timeline.EventStore,
-	discussDriver *discuss.DiscussDriver,
+	discussWaker inbound.DiscussWaker,
 	cfg config.Config,
 	cmdHandler inbound.CommandHandler,
 	queueHandler inbound.QueueCommandHandler,
@@ -222,9 +223,8 @@ func provideChannelRouter(
 	threadCoordinator := route.NewThreadCoordinator(log, routeService, sessionService)
 	processor := inbound.NewChannelInboundProcessor(log, registry, routeService, msgService, turnService, identityService, policyService, cfg.Auth.JWTSecret, 5*time.Minute)
 	processor.SetSessionEnsurer(&sessionEnsurerAdapter{coordinator: threadCoordinator})
-	processor.SetPipeline(eventStore, msgService, discussDriver)
-	discussDriver.SetTurnService(turnService)
-	discussDriver.SetBroadcaster(hub)
+	processor.SetPipeline(eventStore, msgService)
+	processor.SetDiscussWaker(discussWaker)
 	processor.SetACLService(aclService)
 	if adapter, ok := registry.Get(telegram.Type); ok {
 		adapter.(*telegram.TelegramAdapter).SetUserInputAuthorizer(processor.AuthorizeUserInputInteraction)
@@ -434,6 +434,7 @@ func inboundSessionResult(sess sessionpkg.Thread) inbound.SessionResult {
 		Runtime:               sess.RuntimeType,
 		RuntimeOwnerAccountID: sessionRuntimeOwnerAccountID(sess),
 		ExternalRuntimeDriver: sess.Facts.ExternalRuntimeDriver,
+		TriggerScope:          sess.Facts.TriggerScope,
 	}
 }
 

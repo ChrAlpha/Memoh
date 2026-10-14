@@ -488,3 +488,24 @@ func TestStandaloneChannelDoesNotOwnStorageBackends(t *testing.T) {
 		}
 	}
 }
+
+// TestRouteCredentialsHaveOneIssuer keeps the identities a channel turn
+// carries signed in one place. The inbound path and the discuss admission
+// gather their inputs from their own reads and sign through
+// auth.IssueRouteCredentials; a second signing site would let a turn started by
+// one of them name someone else than the same turn started by the other.
+func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
+	root := repoRoot(t)
+	forbidden := regexp.MustCompile(`\bauth\.(GenerateChatToken|GenerateToken)\b`)
+	for _, dir := range []string{"internal/channel", "internal/agent/application"} {
+		for _, file := range goFiles(t, root, dir) {
+			data, err := os.ReadFile(filepath.Join(root, file)) //nolint:gosec // guard test walks repo-tracked files by design
+			if err != nil {
+				t.Fatalf("read %s: %v", file, err)
+			}
+			if found := forbidden.Find(data); found != nil {
+				t.Errorf("%s calls %s: sign a turn's credentials through auth.IssueRouteCredentials", file, found)
+			}
+		}
+	}
+}
