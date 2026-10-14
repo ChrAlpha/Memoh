@@ -1,0 +1,322 @@
+// Package delivery maps one run's turn events onto a platform reply. Plan is
+// the decision: a pure function from one event, the channel's capabilities and
+// the reply state to the actions to perform. Reply performs them in order on a
+// Surface.
+package delivery
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/channel"
+)
+
+// Surface is what a platform surface offers a reply. It does not decide what
+// an event means. channel's manager implements it without importing this
+// package, so the signatures use channel's own types.
+type Surface interface {
+	// Capabilities returns the capabilities as refined for target.
+	Capabilities(target string) channel.ChannelCapabilities
+	// Send delivers a whole message. Splitting it to the platform's size and
+	// downgrading its format and buttons happen here, once, for every caller.
+	Send(ctx context.Context, msg channel.OutboundMessage) error
+	// Attach sends one attachment to target as a message of its own.
+	Attach(ctx context.Context, target string, att channel.Attachment) error
+	// React adds or removes a reaction.
+	React(ctx context.Context, req channel.ReactRequest) error
+	// OpenPreview opens the preview of a reply on target.
+	OpenPreview(ctx context.Context, target string, opts channel.StreamOptions) (channel.Preview, error)
+}
+
+// Kind is the type of an Action.
+type Kind int
+
+const (
+	// KindUpdate forwards Event to the preview.
+	KindUpdate Kind = iota
+	// KindObserve shows Event to observers only.
+	KindObserve
+	// KindEndPreview ends the preview with Final so that a message sent next
+	// follows its text. KindOpenPreview opens the preview for what comes after.
+	KindEndPreview
+	// KindOpenPreview opens a preview that carries on a reply whose earlier
+	// text is already delivered.
+	KindOpenPreview
+	// KindFinish ends the reply with Final, or without a final when Final is nil.
+	KindFinish
+	// KindSend sends Message as a standalone message.
+	KindSend
+	// KindAttach sends Attachments, each as a message of its own.
+	KindAttach
+	// KindReact applies Reactions.
+	KindReact
+	// KindFail ends the run with Code: the reply window closed and the
+	// platform does not accept a proactive message.
+	KindFail
+)
+
+// Action is one step of a reply. Only the fields of its Kind are set, and
+// Event also names what observers see for the kinds that carry one.
+type Action struct {
+	Kind        Kind
+	Event       channel.StreamEvent
+	Final       *channel.StreamEvent
+	Message     channel.OutboundMessage
+	Attachments []channel.Attachment
+	Reactions   []channel.ReactRequest
+	Code        apperror.Code
+}
+
+// State is the reply state Plan carries from one event to the next.
+type State struct {
+	// Target and Reply address the standalone messages Plan sends.
+	Target string
+	Reply  *channel.ReplyRef
+	// SourceMessageID is the message a reaction is put on.
+	SourceMessageID string
+	// ReceivedAt is when the inbound message arrived. L3 passes the original
+	// time of a queued item here.
+	ReceivedAt time.Time
+	// Now is the time the decision is made.
+	Now time.Time
+	// HoldErrors keeps stream errors back until the run ends, for runs that
+	// report a run_terminal event.
+	HoldErrors bool
+	// HideToolCalls keeps ordinary tool events from the preview. Observers
+	// still see them.
+	HideToolCalls bool
+
+	held   []channel.StreamEvent
+	failed bool
+	// streamed says the open preview shows text. Before that, an error has no
+	// preview text to overwrite and goes through the preview.
+	streamed bool
+	// proactive is set once the reply window has closed and the platform
+	// accepts a message without a reply reference.
+	proactive bool
+	// failure is the terminal failure reply, rendered at the end of the run.
+	failure *channel.StreamEvent
+}
+
+// Plan returns the actions for one event and the state that follows it. It
+// does not perform them.
+//
+// Errors are never written over preview text. Before any text has shown, an
+// error is the preview's terminal state, so no empty placeholder is left
+// behind. Once the preview shows text, the error is a message of its own, so
+// the text stays and the error is not throttled with it. With HoldErrors set,
+// errors are kept until the run ends.
+//
+// A request for approval or an answer is handed to the preview when the
+// channel renders it natively. Otherwise it is sent as a plain message: the
+// preview that shows text ends first, so the prompt follows that text, and a
+// new preview carries what comes after.
+func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
+	if st.failed {
+		return nil, st
+	}
+	switch ev.Type {
+	case channel.StreamEventError:
+		if st.HoldErrors {
+			st.held = append(st.held, ev)
+			return nil, st
+		}
+		return sendError(ev, caps, st)
+	case channel.StreamEventReaction:
+		if len(ev.Reactions) == 0 {
+			return nil, st
+		}
+		return []Action{{Kind: KindReact, Reactions: st.reactions(ev.Reactions)}}, st
+	}
+	reach, next := windowOK(caps, st)
+	if !reach {
+		return []Action{{Kind: KindFail, Code: apperror.CodeChannelReplyWindowExpired}}, failed(next)
+	}
+	st = next
+	switch {
+	case ev.Type == channel.StreamEventToolCallStart && ev.ToolCall != nil && needsAnswer(ev.ToolCall):
+		return planPrompt(ev, caps, st)
+	case ev.Type == channel.StreamEventToolCallStart || ev.Type == channel.StreamEventToolCallEnd:
+		if st.HideToolCalls {
+			return observe(ev), st
+		}
+	case ev.Type == channel.StreamEventDelta:
+		if visibleText(ev) && caps.Preview != channel.PreviewNone {
+			st.streamed = true
+		}
+	case ev.Type == channel.StreamEventReset:
+		st.streamed = false
+	case ev.Type == channel.StreamEventAttachment && caps.Preview != channel.PreviewLegacy:
+		return []Action{{Kind: KindAttach, Event: ev, Attachments: ev.Attachments}}, st
+	}
+	if caps.Preview == channel.PreviewNone {
+		return observe(ev), st
+	}
+	return []Action{{Kind: KindUpdate, Event: ev}}, st
+}
+
+// PlanErrors returns the actions that deliver the errors a run ends with: the
+// held errors when no run_terminal event replaced them, then the failure reply.
+func PlanErrors(caps channel.ChannelCapabilities, st State) ([]Action, State) {
+	var actions []Action
+	if st.failed {
+		return nil, st
+	}
+	for _, held := range st.held {
+		acts, next := sendError(held, caps, st)
+		actions = append(actions, acts...)
+		st = next
+	}
+	st.held = nil
+	if st.failure != nil {
+		acts, next := sendError(*st.failure, caps, st)
+		actions = append(actions, acts...)
+		st = next
+	}
+	return actions, st
+}
+
+// PlanEnd returns the actions that close a run that succeeded: its errors, if
+// any, and the final messages. The first output is the preview's final; each
+// later output is a new message. suppress marks a run whose replies were sent
+// by a messaging tool: the text the preview shows is flushed, and no final is
+// sent.
+func PlanEnd(caps channel.ChannelCapabilities, st State, outputs []channel.Message, suppress bool) ([]Action, State) {
+	actions, st := PlanErrors(caps, st)
+	if st.failed {
+		return actions, st
+	}
+	if suppress {
+		if !st.streamed {
+			return append(actions, Action{Kind: KindFinish}), st
+		}
+		flush := channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}
+		return append(actions, Action{Kind: KindFinish, Final: &flush}), st
+	}
+	if len(outputs) == 0 {
+		return append(actions, Action{Kind: KindFinish}), st
+	}
+	reach, next := windowOK(caps, st)
+	if !reach {
+		return append(actions, Action{Kind: KindFail, Code: apperror.CodeChannelReplyWindowExpired}), failed(next)
+	}
+	st = next
+	rest := outputs
+	if caps.Preview != channel.PreviewNone {
+		first := finalEvent(st.outbound(outputs[0]))
+		actions = append(actions, Action{Kind: KindFinish, Final: &first})
+		rest = outputs[1:]
+	}
+	for _, out := range rest {
+		msg := st.outbound(out)
+		actions = append(actions, Action{Kind: KindSend, Message: msg, Event: finalEvent(msg)})
+	}
+	return actions, st
+}
+
+// SetFailure records the terminal failure reply, sent when the run ends.
+func SetFailure(st State, ev channel.StreamEvent) State {
+	st.failure = &ev
+	return st
+}
+
+// planPrompt places a request for approval or an answer.
+func planPrompt(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
+	tc := ev.ToolCall
+	native := (channel.HasUserInputAction(tc.Actions) && caps.NativeUserInput) ||
+		(!channel.HasUserInputAction(tc.Actions) && caps.NativeApproval)
+	if native && caps.Preview != channel.PreviewNone {
+		return []Action{{Kind: KindUpdate, Event: ev}}, st
+	}
+	text := strings.TrimSpace(channel.RenderToolCallMessage(channel.BuildToolCallStart(tc)))
+	var actions []Action
+	splits := st.streamed
+	if splits {
+		flush := channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}
+		actions = append(actions, Action{Kind: KindEndPreview, Final: &flush})
+	}
+	prompt := st.outbound(channel.Message{Format: channel.MessageFormatPlain, Text: text})
+	actions = append(actions, Action{Kind: KindSend, Message: prompt, Event: ev})
+	if splits {
+		actions = append(actions, Action{Kind: KindOpenPreview})
+		st.streamed = false
+	}
+	return actions, st
+}
+
+func needsAnswer(tc *channel.StreamToolCall) bool {
+	return tc.ApprovalID != "" || channel.HasUserInputAction(tc.Actions)
+}
+
+// visibleText reports whether a delta puts text in front of the user.
+func visibleText(ev channel.StreamEvent) bool {
+	return ev.Delta != "" && ev.Phase != channel.StreamPhaseReasoning
+}
+
+func observe(ev channel.StreamEvent) []Action {
+	return []Action{{Kind: KindObserve, Event: ev}}
+}
+
+func finalEvent(msg channel.OutboundMessage) channel.StreamEvent {
+	return channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{Message: msg.Message}}
+}
+
+// reactions addresses each reaction to the source message.
+func (st State) reactions(items []channel.ReactRequest) []channel.ReactRequest {
+	out := make([]channel.ReactRequest, 0, len(items))
+	for _, item := range items {
+		out = append(out, channel.ReactRequest{Target: st.Target, MessageID: st.SourceMessageID, Emoji: item.Emoji})
+	}
+	return out
+}
+
+// outbound addresses msg to the reply target. A message that names no reply
+// quotes the one the reply answers, unless the window has closed and the
+// platform accepts a message without one.
+func (st State) outbound(msg channel.Message) channel.OutboundMessage {
+	switch {
+	case st.proactive:
+		msg.Reply = nil
+	case msg.Reply == nil:
+		msg.Reply = st.Reply
+	}
+	return channel.OutboundMessage{Target: st.Target, Message: msg}
+}
+
+// sendError delivers an error. Before any text has shown, the error goes
+// through the preview, which holds nothing it could overwrite. After that, and
+// on a channel without a preview, the error is a message of its own.
+func sendError(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
+	if strings.TrimSpace(ev.Error) == "" {
+		return nil, st
+	}
+	if !st.streamed && caps.Preview != channel.PreviewNone {
+		return []Action{{Kind: KindUpdate, Event: ev}}, st
+	}
+	reach, next := windowOK(caps, st)
+	if !reach {
+		return []Action{{Kind: KindFail, Code: apperror.CodeChannelReplyWindowExpired}}, failed(next)
+	}
+	text := channel.ErrorReplyText(ev.ErrorCode, ev.Error)
+	return []Action{{Kind: KindSend, Message: next.outbound(channel.Message{Text: text}), Event: ev}}, next
+}
+
+// windowOK reports whether a reply can still be sent, and updates State when
+// the window has closed but the platform accepts a proactive message.
+func windowOK(caps channel.ChannelCapabilities, st State) (bool, State) {
+	if caps.ReplyWindow <= 0 || st.Now.Sub(st.ReceivedAt) <= caps.ReplyWindow {
+		return true, st
+	}
+	if caps.ProactiveSend {
+		st.proactive = true
+		return true, st
+	}
+	return false, st
+}
+
+func failed(st State) State {
+	st.failed = true
+	return st
+}

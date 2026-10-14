@@ -622,6 +622,7 @@
     "channel": {
       "binding_required": "The recipient has not linked this channel yet.",
       "enable_failed": "The channel could not be enabled. Check its credentials, then try again.",
+      "reply_window_expired": "The platform no longer accepts a reply to this message.",
       "runtime_unavailable": "The channel service could not be reached. Please try again shortly.",
       "verification_failed": "The channel configuration could not be verified. Check the credentials, then try again.",
       "webhook_endpoint_invalid": "Use a public HTTPS URL without a port, credentials, query or fragment. Its path must be the webhook path shown for this channel."
@@ -783,7 +784,8 @@
     },
     "session": {
       "model_preference_conflict": "The model selection changed elsewhere. Refresh or send your message to apply your selection.",
-      "not_found": "The conversation was not found."
+      "not_found": "The conversation was not found.",
+      "queue_full": "Too many messages are waiting in this conversation. Wait for them to finish before sending more."
     },
     "session_runtime": {
       "abort_failed": "The conversation was deleted, but its running task could not be stopped. Refresh and try again.",

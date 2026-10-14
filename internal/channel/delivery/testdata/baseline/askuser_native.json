@@ -1,0 +1,120 @@
+{
+  "name": "askuser_native",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "one question ",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "tool_call_start",
+        "tool": {
+          "name": "ask_user",
+          "call_id": "call-2",
+          "short_id": 4,
+          "actions": [
+            "user_input:respond:ui-1"
+          ],
+          "locale": "en",
+          "input": "{\"payload\":{\"questions\":[{\"id\":\"q1\",\"text\":\"Which one?\"}]},\"short_id\":4,\"status\":\"pending\",\"user_input_id\":\"ui-1\"}"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {
+          "text": "one question",
+          "format": "plain",
+          "reply_to": "src-1"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "one question ",
+      "phase": "text"
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "ask_user",
+        "call_id": "call-2",
+        "short_id": 4,
+        "actions": [
+          "user_input:respond:ui-1"
+        ],
+        "locale": "en",
+        "input": "{\"payload\":{\"questions\":[{\"id\":\"q1\",\"text\":\"Which one?\"}]},\"short_id\":4,\"status\":\"pending\",\"user_input_id\":\"ui-1\"}"
+      }
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "one question",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

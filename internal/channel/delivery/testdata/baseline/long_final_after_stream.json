@@ -1,0 +1,108 @@
+{
+  "name": "long_final_after_stream",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "first paragraph",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {
+          "text": "first paragraph line one\nfirst paragraph line two",
+          "format": "plain",
+          "reply_to": "src-1"
+        }
+      }
+    },
+    {
+      "op": "send",
+      "target": "target-id",
+      "message": {
+        "text": "second paragraph line one\nsecond paragraph line two",
+        "format": "plain",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "op": "send",
+      "target": "target-id",
+      "message": {
+        "text": "third paragraph line one",
+        "format": "plain",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "first paragraph",
+      "phase": "text"
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "first paragraph line one\nfirst paragraph line two\nsecond paragraph line one\nsecond paragraph line two\nthird paragraph line one",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

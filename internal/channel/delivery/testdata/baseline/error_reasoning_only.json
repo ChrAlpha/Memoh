@@ -1,0 +1,76 @@
+{
+  "name": "error_reasoning_only",
+  "err": "error",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "phase_start",
+        "phase": "reasoning"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "thinking",
+        "phase": "reasoning"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "error",
+        "error": "Something went wrong on the server. Please try again.",
+        "error_code": "internal"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "phase_start",
+      "phase": "reasoning"
+    },
+    {
+      "type": "delta",
+      "delta": "thinking",
+      "phase": "reasoning"
+    },
+    {
+      "type": "error",
+      "error": "Something went wrong on the server. Please try again.",
+      "error_code": "internal"
+    }
+  ]
+}

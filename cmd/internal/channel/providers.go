@@ -231,7 +231,6 @@ func provideChannelRouter(
 	}
 	processor.SetMediaService(mediaService)
 	processor.SetStreamObserver(local.NewRouteHubBroadcaster(hub))
-	processor.SetSpeechService(audioService, &settingsSpeechModelResolver{settings: settingsService})
 	processor.SetTranscriptionService(audioService, &settingsTranscriptionModelResolver{settings: settingsService})
 	processor.SetIMDisplayOptions(&settingsIMDisplayOptions{settings: settingsService})
 	processor.SetDefaultChatRuntime(&settingsDefaultChatRuntime{settings: settingsService})
@@ -451,18 +450,6 @@ func runtimeMetadataString(metadata map[string]any, key string) string {
 	}
 	value, _ := metadata[key].(string)
 	return strings.TrimSpace(value)
-}
-
-type settingsSpeechModelResolver struct {
-	settings channelSettings
-}
-
-func (r *settingsSpeechModelResolver) ResolveSpeechModelID(ctx context.Context, botID string) (string, error) {
-	s, err := r.settings.GetBot(ctx, botID)
-	if err != nil {
-		return "", err
-	}
-	return s.TtsModelID, nil
 }
 
 type settingsIMDisplayOptions struct {

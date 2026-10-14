@@ -217,6 +217,7 @@
     "channel": {
       "binding_required": "接收方尚未绑定该渠道。",
       "enable_failed": "渠道启用失败，请检查凭据后重试。",
+      "reply_window_expired": "平台已不再接受对这条消息的回复。",
       "runtime_unavailable": "暂时无法连接 Channel 服务，请稍后重试。",
       "verification_failed": "无法验证平台配置，请检查凭据后重试。",
       "webhook_endpoint_invalid": "请使用公网 HTTPS 地址，不带端口、凭据、查询串或片段，路径须为该渠道显示的 webhook 路径。"
@@ -378,7 +379,8 @@
     },
     "session": {
       "model_preference_conflict": "模型选择已在其他位置更新，请刷新，或发送消息以使用当前选择。",
-      "not_found": "会话不存在。"
+      "not_found": "会话不存在。",
+      "queue_full": "此会话中等待处理的消息过多，请等待处理完成后再发送。"
     },
     "session_runtime": {
       "abort_failed": "会话已删除，但运行中的任务未能停止，请刷新。",

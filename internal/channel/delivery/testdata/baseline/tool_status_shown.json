@@ -1,0 +1,132 @@
+{
+  "name": "tool_status_shown",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "tool_call_start",
+        "tool": {
+          "name": "search",
+          "call_id": "call-3",
+          "input": "{\"q\":\"memoh\"}"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "tool_call_end",
+        "tool": {
+          "name": "search",
+          "call_id": "call-3",
+          "input": "{\"q\":\"memoh\"}",
+          "result": "{\"hits\":2}"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "found",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {
+          "text": "found",
+          "format": "plain",
+          "reply_to": "src-1"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "search",
+        "call_id": "call-3",
+        "input": "{\"q\":\"memoh\"}"
+      }
+    },
+    {
+      "type": "tool_call_end",
+      "tool": {
+        "name": "search",
+        "call_id": "call-3",
+        "input": "{\"q\":\"memoh\"}",
+        "result": "{\"hits\":2}"
+      }
+    },
+    {
+      "type": "delta",
+      "delta": "found",
+      "phase": "text"
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "found",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

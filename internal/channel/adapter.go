@@ -14,11 +14,19 @@ var ErrStopNotSupported = errors.New("channel connection stop not supported")
 // InboundHandler is a callback invoked when a message arrives from a channel.
 type InboundHandler func(ctx context.Context, cfg ChannelConfig, msg InboundMessage) error
 
-// StreamReplySender sends replies within a single inbound-processing scope.
-// It supports both one-shot delivery and streaming sessions.
+// StreamReplySender sends replies within a single inbound-processing scope:
+// whole messages, attachments, reactions, and replies shown as they are
+// produced.
 type StreamReplySender interface {
 	Send(ctx context.Context, msg OutboundMessage) error
-	OpenStream(ctx context.Context, target string, opts StreamOptions) (OutboundStream, error)
+	// Capabilities returns the channel's capabilities as refined for target.
+	Capabilities(target string) ChannelCapabilities
+	// Attach sends one attachment to target as a message of its own.
+	Attach(ctx context.Context, target string, att Attachment) error
+	// React adds or removes a reaction.
+	React(ctx context.Context, req ReactRequest) error
+	// OpenPreview opens the preview of a reply on target.
+	OpenPreview(ctx context.Context, target string, opts StreamOptions) (Preview, error)
 }
 
 // PreparedOutboundStream is the adapter-facing stream session.

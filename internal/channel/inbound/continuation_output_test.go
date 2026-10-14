@@ -38,6 +38,30 @@ func TestContinuationForwardsReplyAndInteractiveFollowUp(t *testing.T) {
 	}
 }
 
+// A follow-up question that the channel cannot render natively reaches the
+// user as a message of its own, the same as in a reply to a message.
+func TestContinuationSendsPlainPromptWhenChannelHasNoNativeQuestion(t *testing.T) {
+	processor := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, nil, "", 0)
+	sender := &fakeReplySender{plainPrompts: true}
+	msg := channel.InboundMessage{Channel: channel.ChannelType("telegram"), ReplyTarget: "test-chat", Message: channel.Message{ID: "answer"}}
+	err := processor.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, func(_ context.Context, ch chan<- json.RawMessage) error {
+		ch <- json.RawMessage(`{"type":"user_input_request","toolName":"ask_user","toolCallId":"second-call","userInputId":"second-question","status":"pending","metadata":{"ui_payload":{"version":2,"questions":[{"id":"q1","kind":"text","text":"接下来做什么？"}]}}}`)
+		ch <- json.RawMessage(`{"type":"agent_end","userInputId":"second-question","status":"pending"}`)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0].Message.Text, "接下来做什么？") {
+		t.Fatalf("sent = %+v, want the question as one plain message", sender.sent)
+	}
+	for _, event := range sender.events {
+		if isUserInputEvent(&event) {
+			t.Fatalf("the question reached the stream as an event: %+v", event)
+		}
+	}
+}
+
 func TestAcceptanceReceiptPrecedesFailedContinuation(t *testing.T) {
 	p := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, nil, "", 0)
 	sink := &fakeReplySender{}

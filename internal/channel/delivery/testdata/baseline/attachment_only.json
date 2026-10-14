@@ -1,0 +1,82 @@
+{
+  "name": "attachment_only",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "attachment",
+        "attachments": [
+          {
+            "type": "image",
+            "kind": "public_url",
+            "ref": "https://example.test/a.png",
+            "name": "a.png"
+          }
+        ]
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "attachment",
+      "attachments": [
+        {
+          "type": "image",
+          "ref": "https://example.test/a.png",
+          "name": "a.png"
+        }
+      ]
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

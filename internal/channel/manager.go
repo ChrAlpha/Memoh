@@ -241,8 +241,7 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	if m.service == nil {
 		return errors.New("channel manager not configured")
 	}
-	sender, ok := m.registry.GetSender(channelType)
-	if !ok {
+	if _, ok := m.registry.GetSender(channelType); !ok {
 		return fmt.Errorf("unsupported channel type: %s", channelType)
 	}
 	config, err := m.service.ResolveEffectiveConfig(ctx, botID, channelType)
@@ -277,16 +276,8 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	if m.logger != nil {
 		m.logger.InfoContext(ctx, "send outbound", slog.String("channel", channelType.String()), slog.String("bot_id", botID))
 	}
-	policy := m.resolveOutboundPolicy(channelType)
-	caps, hasCaps := m.registry.GetOutboundCapabilities(channelType, config, target)
-	outbound, err := buildOutboundMessagesWithCaps(OutboundMessage{
-		Target:  target,
-		Message: req.Message,
-	}, policy, caps, hasCaps)
-	if err != nil {
-		return err
-	}
-	if err := m.sendAllWithConfig(ctx, sender, config, outbound, policy); err != nil {
+	surface := m.newSurface(config, channelType)
+	if err := surface.deliver(ctx, OutboundMessage{Target: target, Message: req.Message}); err != nil {
 		if m.logger != nil {
 			m.logger.ErrorContext(ctx, "send outbound failed", slog.String("channel", channelType.String()), slog.String("bot_id", botID), slog.Any("error", err))
 		}
@@ -324,6 +315,12 @@ func (m *Manager) React(ctx context.Context, botID string, channelType ChannelTy
 	if err != nil {
 		return err
 	}
+	return m.react(ctx, reactor, config, channelType, req)
+}
+
+// react validates req and applies it with reactor. It is the one path for the
+// reactions of Manager.React and of a reply's surface.
+func (m *Manager) react(ctx context.Context, reactor Reactor, config ChannelConfig, channelType ChannelType, req ReactRequest) error {
 	target := strings.TrimSpace(req.Target)
 	if target == "" {
 		return errors.New("target is required for reactions")
@@ -342,7 +339,7 @@ func (m *Manager) React(ctx context.Context, botID string, channelType ChannelTy
 	if m.logger != nil {
 		m.logger.InfoContext(ctx, "react outbound",
 			slog.String("channel", channelType.String()),
-			slog.String("bot_id", botID),
+			slog.String("bot_id", config.BotID),
 			slog.String("message_id", messageID),
 			slog.Bool("remove", req.Remove),
 		)

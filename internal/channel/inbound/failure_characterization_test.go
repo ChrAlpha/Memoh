@@ -78,6 +78,7 @@ func runIMFailure(t *testing.T, gateway *scriptedFailureGateway) imFailureResult
 	}
 	for _, sent := range sender.sent {
 		result.sent = append(result.sent, sent.Message.PlainText())
+		result.errorTexts = append(result.errorTexts, sent.Message.PlainText())
 	}
 	return result
 }
@@ -92,7 +93,9 @@ func assertIMFailure(t *testing.T, got imFailureResult, wantErrCode string, want
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("IM error texts = %s, want %s", gotJSON, wantJSON)
 	}
-	if len(got.sent) != 0 {
+	// An error that follows streamed text is a new message, so a reply is
+	// allowed only when an error is expected.
+	if len(wantTexts) == 0 && len(got.sent) != 0 {
 		t.Fatalf("IM sent messages = %q, want none", got.sent)
 	}
 }

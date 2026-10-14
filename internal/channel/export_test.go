@@ -4,5 +4,5 @@ package channel
 // contract tests, which import the adapter packages and so cannot live in
 // package channel.
 func NewReplySenderForTest(m *Manager, cfg ChannelConfig, channelType ChannelType) StreamReplySender {
-	return m.newReplySender(cfg, channelType)
+	return m.newSurface(cfg, channelType)
 }

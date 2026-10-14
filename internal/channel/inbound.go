@@ -64,7 +64,7 @@ func (m *Manager) handleInbound(ctx context.Context, cfg ChannelConfig, msg Inbo
 	if m.processor == nil {
 		return errors.New("inbound processor not configured")
 	}
-	sender := m.newReplySender(cfg, msg.Channel)
+	sender := m.newSurface(cfg, msg.Channel)
 	return m.processor.HandleInbound(ctx, cfg, msg, sender)
 }
 

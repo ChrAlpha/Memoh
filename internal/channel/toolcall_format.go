@@ -372,3 +372,13 @@ func renderCodeBlock(block ToolCallBlock, markdown bool) string {
 	b.WriteString("\n```")
 	return b.String()
 }
+
+// HasUserInputAction reports whether actions carry the ask_user marker.
+func HasUserInputAction(actions []Action) bool {
+	for _, action := range actions {
+		if action.Type == "user_input" {
+			return true
+		}
+	}
+	return false
+}

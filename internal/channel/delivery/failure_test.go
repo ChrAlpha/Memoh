@@ -1,4 +1,4 @@
-package inbound
+package delivery
 
 import (
 	"encoding/json"

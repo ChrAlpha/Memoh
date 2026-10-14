@@ -1,0 +1,164 @@
+{
+  "name": "long_stream",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "first paragraph line one.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    },
+    {
+      "op": "open",
+      "stream": 2,
+      "target": "target-id"
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "delta",
+        "delta": "first paragraph line two.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "close",
+      "stream": 2
+    },
+    {
+      "op": "open",
+      "stream": 3,
+      "target": "target-id"
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "delta",
+        "delta": "second paragraph line one.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 3
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "first paragraph line one.\n",
+      "phase": "text"
+    },
+    {
+      "type": "delta",
+      "delta": "first paragraph line two.\n",
+      "phase": "text"
+    },
+    {
+      "type": "delta",
+      "delta": "second paragraph line one.\n",
+      "phase": "text"
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "first paragraph line one.\nfirst paragraph line two.\nsecond paragraph line one.",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

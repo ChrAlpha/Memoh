@@ -1,0 +1,109 @@
+{
+  "name": "approval_text_only",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "checking ",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    },
+    {
+      "op": "open",
+      "stream": 2,
+      "target": "target-id"
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "send",
+      "target": "target-id",
+      "message": {
+        "text": "💻 exec · approval_required\nls\nApproval required. Use /approve 3 to allow, or /reject 3 [reason] to reject. You can also reply to this message with /approve or /reject.",
+        "format": "plain",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 2
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "checking ",
+      "phase": "text"
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "exec",
+        "call_id": "call-1",
+        "approval_id": "ap-1",
+        "short_id": 3,
+        "actions": [
+          "tool_approval:approve:ap-1",
+          "tool_approval:reject:ap-1"
+        ],
+        "input": "{\"command\":\"ls\"}"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

@@ -204,6 +204,9 @@ type StreamOptions struct {
 	Reply           *ReplyRef      `json:"reply,omitempty"`
 	SourceMessageID string         `json:"source_message_id,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
+	// Continuation marks a stream that carries on a reply whose earlier text is
+	// already delivered in other messages. Its final does not repeat that text.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 // MessageFormat indicates how the message text should be rendered.

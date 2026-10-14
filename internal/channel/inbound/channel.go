@@ -2,7 +2,6 @@ package inbound
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +23,7 @@ import (
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/channel/delivery"
 	"github.com/felinics/memoh/internal/channel/route"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -39,8 +39,6 @@ import (
 	skillset "github.com/felinics/memoh/internal/skills"
 	"github.com/felinics/memoh/internal/slash"
 )
-
-var base64Std = base64.StdEncoding
 
 const (
 	silentReplyToken        = "NO_REPLY"
@@ -69,16 +67,6 @@ type chatACL interface {
 type mediaIngestor interface {
 	channel.OutboundAttachmentStore
 	channel.ContainerAttachmentIngester
-}
-
-// speechSynthesizer synthesizes text to speech audio.
-type speechSynthesizer interface {
-	Synthesize(ctx context.Context, modelID string, text string, overrideCfg map[string]any) ([]byte, string, error)
-}
-
-// speechModelResolver looks up the speech model ID configured for a bot.
-type speechModelResolver interface {
-	ResolveSpeechModelID(ctx context.Context, botID string) (string, error)
 }
 
 // TranscriptionResult is the minimal speech-to-text response shape needed by inbound routing.
@@ -207,8 +195,6 @@ type ChannelInboundProcessor struct {
 	policy              PolicyService
 	acl                 chatACL
 	observer            channel.StreamObserver
-	speechService       speechSynthesizer
-	speechModelResolver speechModelResolver
 	transcriber         transcriptionRecognizer
 	sttModelResolver    transcriptionModelResolver
 	sessionEnsurer      SessionEnsurer
@@ -299,16 +285,6 @@ func (p *ChannelInboundProcessor) SetStreamObserver(observer channel.StreamObser
 		return
 	}
 	p.observer = observer
-}
-
-// SetSpeechService configures the speech synthesizer and settings reader for
-// handling <speech> tag events (speech_delta) that require server-side audio synthesis.
-func (p *ChannelInboundProcessor) SetSpeechService(synth speechSynthesizer, modelResolver speechModelResolver) {
-	if p == nil {
-		return
-	}
-	p.speechService = synth
-	p.speechModelResolver = modelResolver
 }
 
 // SetTranscriptionService configures speech-to-text processing for inbound audio attachments.
@@ -1002,12 +978,32 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	if sourceMessageID != "" {
 		replyRef.MessageID = sourceMessageID
 	}
-	stream, err := sender.OpenStream(ctx, target, channel.StreamOptions{
+	hideToolCalls := !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID)
+	// Non-local channels mirror what they show to the RouteHub, and through it
+	// to the Web UI and other local subscribers.
+	var observe func(context.Context, channel.StreamEvent)
+	if p.observer != nil && !isLocalChannelType(msg.Channel) {
+		observe = func(ctx context.Context, event channel.StreamEvent) {
+			p.observer.OnStreamEvent(ctx, strings.TrimSpace(identity.BotID), msg.Channel, event)
+		}
+	}
+	out, err := delivery.Open(ctx, delivery.Config{
+		Surface:         sender,
+		Target:          target,
 		Reply:           replyRef,
 		SourceMessageID: sourceMessageID,
 		Metadata: map[string]any{
 			"route_id":          resolved.RouteID,
 			"conversation_type": msg.Conversation.Type,
+		},
+		ReceivedAt:    msg.ReceivedAt,
+		HideToolCalls: hideToolCalls,
+		Observe:       observe,
+		Logger:        p.logger,
+		LogAttrs: []slog.Attr{
+			slog.String("channel", msg.Channel.String()),
+			slog.String("channel_identity_id", identity.ChannelIdentityID),
+			slog.String("user_id", identity.UserID),
 		},
 	})
 	if err != nil {
@@ -1018,19 +1014,8 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		}
 		return err
 	}
-	streamClosed := false
-	closeStream := func() error {
-		if streamClosed {
-			return nil
-		}
-		streamClosed = true
-		return stream.Close(context.WithoutCancel(ctx))
-	}
 	defer func() {
-		if streamClosed {
-			return
-		}
-		if closeErr := closeStream(); closeErr != nil {
+		if closeErr := out.Close(ctx); closeErr != nil {
 			if p.logger != nil {
 				p.logger.ErrorContext(ctx,
 					"reply stream close failed",
@@ -1046,18 +1031,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		}
 	}()
 
-	// For non-local channels (IM adapters), optionally drop tool_call events
-	// before they reach the adapter when the bot's show_tool_calls_in_im
-	// setting is off. The filter sits inside the TeeStream so WebUI
-	// observers still receive the full event stream.
-	if !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID) {
-		stream = channel.NewToolCallDroppingStream(stream)
-	}
-
-	// For non-local channels, wrap the stream so events are mirrored to the
-	// RouteHub (and thus to Web UI and other local subscribers).
-	if p.observer != nil && !isLocalChannelType(msg.Channel) {
-		stream = channel.NewTeeStream(stream, p.observer, strings.TrimSpace(identity.BotID), msg.Channel)
+	if observe != nil {
 		// Broadcast the inbound user message so WebUI can display it.
 		broadcastText := text
 		if pendingSkillIntent != nil {
@@ -1066,10 +1040,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		p.broadcastInboundMessage(ctx, strings.TrimSpace(identity.BotID), msg, broadcastText, identity, resolvedAttachments)
 	}
 
-	if err := stream.Push(ctx, channel.StreamEvent{
-		Type:   channel.StreamEventStatus,
-		Status: channel.StreamStatusStarted,
-	}); err != nil {
+	if err := out.Start(ctx); err != nil {
 		if statusNotifier != nil {
 			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
 				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
@@ -1196,7 +1167,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		// The stream's context is the turn's caller: /new and /stop end it,
 		// and a turn they ended gets no reply.
 		if event, ok := channel.ErrorEvent(streamCtx, p.localizer(ctx, identity.BotID), threadError(startErr)); ok {
-			_ = stream.Push(ctx, event)
+			out.Fail(ctx, event)
 		}
 		if statusNotifier != nil {
 			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, startErr); notifyErr != nil {
@@ -1212,152 +1183,56 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	// Ordinal bookkeeping plus forwarding of outbound asset refs into the
 	// running turn; the resolver attaches them at persist time.
 	assets := &assetTracker{run: handle}
-
-	chunkCh, streamErrCh := handle.Events(), handle.Errs()
-
-	// A run that ends with run_terminal is answered from it: error events are
-	// held back and the one failure reply carries the copy for the run's code.
-	failures := runFailureReply{reportsTerminal: turn.ReportsRunTerminal(handle)}
 	loc := p.localizer(ctx, identity.BotID)
-	var (
-		finalMessages []turn.ModelMessage
-		streamErr     error
-		pushBroken    bool
-	)
-	for chunkCh != nil || streamErrCh != nil {
-		select {
-		case turnEvent, ok := <-chunkCh:
-			if !ok {
-				chunkCh = nil
-				continue
-			}
-			if failures.observeTerminal(turnEvent) {
-				continue
-			}
-			events, messages, parseErr := mapStreamChunkToChannelEvents(turnEvent.Payload, loc)
-			if parseErr != nil {
-				if p.logger != nil {
-					p.logger.WarnContext(ctx,
-						"stream chunk parse failed",
-						slog.String("channel", msg.Channel.String()),
-						slog.String("channel_identity_id", identity.ChannelIdentityID),
-						slog.String("user_id", identity.UserID),
-						slog.Any("error", parseErr),
-					)
-				}
-				continue
-			}
-			for i, event := range events {
-				if isUserInputEvent(&events[i]) {
-					events[i].ToolCall.Locale = loc.Locale()
-				}
-				if event.Type == channel.StreamEventAttachment && len(event.Attachments) > 0 {
-					ingested := p.ingestOutboundAttachments(ctx, strings.TrimSpace(identity.BotID), msg.Channel, event.Attachments)
-					events[i].Attachments = ingested
-					assets.add(ingested)
-				}
-				if event.Type == channel.StreamEventReaction && len(event.Reactions) > 0 {
-					p.dispatchReactions(ctx, identity.BotID, msg.Channel, target, sourceMessageID, event.Reactions)
-					continue
-				}
-				if event.Type == channel.StreamEventSpeech && len(event.Speeches) > 0 {
-					p.synthesizeAndPushVoice(ctx, strings.TrimSpace(identity.BotID), msg.Channel, event.Speeches, stream, assets)
-					continue
-				}
-				if failures.hold(events[i]) {
-					continue
-				}
-				if pushErr := stream.Push(ctx, events[i]); pushErr != nil {
-					if streamErr == nil {
-						streamErr = pushErr
-					}
-					pushBroken = true
-					break
-				}
-			}
-			if len(messages) > 0 {
-				finalMessages = messages
-			}
-		case err, ok := <-streamErrCh:
-			if !ok {
-				streamErrCh = nil
-				continue
-			}
-			// A run error must not abandon events already produced before
-			// it (buffered text deltas, agent_end with the final
-			// messages): keep consuming until the event channel closes,
-			// matching the pre-split unbuffered ordering. Only a broken
-			// push transport stops consumption early.
-			if err != nil && streamErr == nil {
-				streamErr = err
-			}
-		}
-		if pushBroken {
-			break
-		}
-	}
-
-	if !pushBroken {
-		for _, held := range failures.release() {
-			if pushErr := stream.Push(ctx, held); pushErr != nil {
-				if streamErr == nil {
-					streamErr = pushErr
-				}
-				break
-			}
-		}
-	}
-	failureReply, hasFailureReply := failures.reply(loc, streamErr)
-	if streamErr != nil {
-		if !hasFailureReply {
-			failureReply, hasFailureReply = channel.ErrorEvent(streamCtx, loc, threadError(streamErr))
-		}
-		if hasFailureReply {
-			_ = stream.Push(ctx, failureReply)
-		}
+	runErr := out.Run(ctx, delivery.RunInput{
+		ReportsTerminal: turn.ReportsRunTerminal(handle),
+		Localizer:       loc,
+		IngestAttachments: func(ctx context.Context, attachments []channel.Attachment) []channel.Attachment {
+			ingested := p.ingestOutboundAttachments(ctx, strings.TrimSpace(identity.BotID), msg.Channel, attachments)
+			assets.add(ingested)
+			return ingested
+		},
+		Outputs: func(messages []turn.ModelMessage) ([]channel.Message, bool) {
+			return p.runReplyMessages(msg, desc.Capabilities, target, sourceMessageID, messages)
+		},
+		StreamFailure: func(err error) (channel.StreamEvent, bool) {
+			return channel.ErrorEvent(streamCtx, loc, threadError(err))
+		},
+	}, handle.Events(), handle.Errs())
+	if runErr != nil {
 		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, streamErr); notifyErr != nil {
+			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, runErr); notifyErr != nil {
 				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
 			}
 		}
 		if stoppedByCommand(ctx, streamCtx) {
 			return nil
 		}
-		return streamErr
+		return runErr
 	}
-	if hasFailureReply {
-		if err := stream.Push(ctx, failureReply); err != nil {
-			return err
+	if statusNotifier != nil {
+		if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
+			p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
 		}
 	}
+	return nil
+}
 
-	sentTexts, suppressReplies := collectMessageToolContext(p.registry, finalMessages, msg.Channel, target)
+// runReplyMessages selects the assistant outputs a run replies with. A run
+// whose replies a messaging tool already sent replies with none.
+func (p *ChannelInboundProcessor) runReplyMessages(
+	msg channel.InboundMessage,
+	caps channel.ChannelCapabilities,
+	target, sourceMessageID string,
+	messages []turn.ModelMessage,
+) ([]channel.Message, bool) {
+	sentTexts, suppressReplies := collectMessageToolContext(p.registry, messages, msg.Channel, target)
 	if suppressReplies {
-		if err := stream.Push(ctx, channel.StreamEvent{
-			Type:   channel.StreamEventStatus,
-			Status: channel.StreamStatusCompleted,
-		}); err != nil {
-			return err
-		}
-		if err := closeStream(); err != nil {
-			if statusNotifier != nil {
-				if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
-					p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-				}
-			}
-			return err
-		}
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-				p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-			}
-		}
-		return nil
+		return nil, true
 	}
-
-	outputs := turn.ExtractAssistantOutputs(finalMessages)
-	for _, output := range outputs {
-		outMessage := buildChannelMessage(output, desc.Capabilities)
+	var out []channel.Message
+	for _, output := range turn.ExtractAssistantOutputs(messages) {
+		outMessage := buildChannelMessage(output, caps)
 		if outMessage.IsEmpty() {
 			continue
 		}
@@ -1374,35 +1249,9 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 				MessageID: sourceMessageID,
 			}
 		}
-		if err := stream.Push(ctx, channel.StreamEvent{
-			Type: channel.StreamEventFinal,
-			Final: &channel.StreamFinalizePayload{
-				Message: outMessage,
-			},
-		}); err != nil {
-			return err
-		}
+		out = append(out, outMessage)
 	}
-	if err := stream.Push(ctx, channel.StreamEvent{
-		Type:   channel.StreamEventStatus,
-		Status: channel.StreamStatusCompleted,
-	}); err != nil {
-		return err
-	}
-	if err := closeStream(); err != nil {
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
-		return err
-	}
-	if statusNotifier != nil {
-		if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-			p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-		}
-	}
-	return nil
+	return out, false
 }
 
 // startTurnWithBusyRetry covers the race where a channel message arrives while
@@ -2301,251 +2150,6 @@ func contentPartText(part turn.ContentPart) string {
 	return ""
 }
 
-// agentStreamEnvelope is the JSON shape produced by internal/agent.StreamEvent.
-type agentStreamEnvelope struct {
-	Type     string              `json:"type"`
-	Delta    string              `json:"delta"`
-	Code     string              `json:"code"`
-	Error    string              `json:"error"`
-	Message  string              `json:"message"`
-	Data     json.RawMessage     `json:"data"`
-	Messages []turn.ModelMessage `json:"messages"`
-
-	ToolName    string          `json:"toolName"`
-	ToolCallID  string          `json:"toolCallId"`
-	ApprovalID  string          `json:"approvalId"`
-	UserInputID string          `json:"userInputId"`
-	ShortID     int             `json:"shortId"`
-	Status      string          `json:"status"`
-	Input       json.RawMessage `json:"input"`
-	Result      json.RawMessage `json:"result"`
-	Metadata    json.RawMessage `json:"metadata"`
-	Attachments json.RawMessage `json:"attachments"`
-	Reactions   json.RawMessage `json:"reactions"`
-	Speeches    json.RawMessage `json:"speeches"`
-}
-
-// mapStreamChunkToChannelEvents converts one agent stream chunk. An error
-// event whose code has copy in t is shown with that copy; any other error keeps
-// its own text.
-func mapStreamChunkToChannelEvents(chunk json.RawMessage, t *i18n.Localizer) ([]channel.StreamEvent, []turn.ModelMessage, error) {
-	if len(chunk) == 0 {
-		return nil, nil, nil
-	}
-	var envelope agentStreamEnvelope
-	if err := json.Unmarshal(chunk, &envelope); err != nil {
-		return nil, nil, err
-	}
-	finalMessages := make([]turn.ModelMessage, 0, len(envelope.Messages))
-	finalMessages = append(finalMessages, envelope.Messages...)
-	eventType := strings.ToLower(strings.TrimSpace(envelope.Type))
-	switch eventType {
-	case "text_delta":
-		if envelope.Delta == "" {
-			return nil, finalMessages, nil
-		}
-		return []channel.StreamEvent{
-			{
-				Type:  channel.StreamEventDelta,
-				Delta: envelope.Delta,
-				Phase: channel.StreamPhaseText,
-			},
-		}, finalMessages, nil
-	case "reasoning_delta":
-		if envelope.Delta == "" {
-			return nil, finalMessages, nil
-		}
-		return []channel.StreamEvent{
-			{
-				Type:  channel.StreamEventDelta,
-				Delta: envelope.Delta,
-				Phase: channel.StreamPhaseReasoning,
-			},
-		}, finalMessages, nil
-	case "tool_call_start":
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventToolCallStart,
-				ToolCall: &channel.StreamToolCall{
-					Name:   strings.TrimSpace(envelope.ToolName),
-					CallID: strings.TrimSpace(envelope.ToolCallID),
-					Input:  parseRawJSON(envelope.Input),
-				},
-			},
-		}, finalMessages, nil
-	case "tool_call_end":
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventToolCallEnd,
-				ToolCall: &channel.StreamToolCall{
-					Name:   strings.TrimSpace(envelope.ToolName),
-					CallID: strings.TrimSpace(envelope.ToolCallID),
-					Input:  parseRawJSON(envelope.Input),
-					Result: parseRawJSON(envelope.Result),
-				},
-			},
-		}, finalMessages, nil
-	case "tool_approval_request":
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventToolCallStart,
-				ToolCall: &channel.StreamToolCall{
-					Name:       strings.TrimSpace(envelope.ToolName),
-					CallID:     strings.TrimSpace(envelope.ToolCallID),
-					Input:      parseRawJSON(envelope.Input),
-					ApprovalID: strings.TrimSpace(envelope.ApprovalID),
-					ShortID:    envelope.ShortID,
-					Actions: []channel.Action{
-						{Type: "tool_approval", Label: "Approve", Value: "approve:" + strings.TrimSpace(envelope.ApprovalID)},
-						{Type: "tool_approval", Label: "Reject", Value: "reject:" + strings.TrimSpace(envelope.ApprovalID)},
-					},
-				},
-			},
-		}, finalMessages, nil
-	case "user_input_request":
-		userInputID := strings.TrimSpace(envelope.UserInputID)
-		if userInputID == "" {
-			userInputID = strings.TrimSpace(envelope.ApprovalID)
-		}
-		payload := canonicalUserInputPayload(envelope.Metadata, envelope.Input)
-		input := map[string]any{
-			"user_input_id": userInputID,
-			"short_id":      envelope.ShortID,
-			"status":        strings.TrimSpace(envelope.Status),
-			"payload":       parseRawJSON(payload),
-		}
-		actions := userInputActions(userInputID)
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventToolCallStart,
-				ToolCall: &channel.StreamToolCall{
-					Name:    strings.TrimSpace(envelope.ToolName),
-					CallID:  strings.TrimSpace(envelope.ToolCallID),
-					Input:   input,
-					ShortID: envelope.ShortID,
-					Actions: actions,
-				},
-			},
-		}, finalMessages, nil
-	case "reasoning_start":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventPhaseStart, Phase: channel.StreamPhaseReasoning},
-		}, finalMessages, nil
-	case "reasoning_end":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventPhaseEnd, Phase: channel.StreamPhaseReasoning},
-		}, finalMessages, nil
-	case "text_start":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventPhaseStart, Phase: channel.StreamPhaseText},
-		}, finalMessages, nil
-	case "text_end":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventPhaseEnd, Phase: channel.StreamPhaseText},
-		}, finalMessages, nil
-	case "attachment_delta":
-		attachments := parseAttachmentDelta(envelope.Attachments)
-		if len(attachments) == 0 {
-			return nil, finalMessages, nil
-		}
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventAttachment, Attachments: attachments},
-		}, finalMessages, nil
-	case "reaction_delta":
-		reactions := parseReactionDelta(envelope.Reactions)
-		if len(reactions) == 0 {
-			return nil, finalMessages, nil
-		}
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventReaction, Reactions: reactions},
-		}, finalMessages, nil
-	case "speech_delta":
-		speeches := parseSpeechDelta(envelope.Speeches)
-		if len(speeches) == 0 {
-			return nil, finalMessages, nil
-		}
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventSpeech, Speeches: speeches},
-		}, finalMessages, nil
-	case "agent_start":
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventAgentStart,
-				Metadata: map[string]any{
-					"input": parseRawJSON(envelope.Input),
-					"data":  parseRawJSON(envelope.Data),
-				},
-			},
-		}, finalMessages, nil
-	case "agent_end":
-		return []channel.StreamEvent{
-			{
-				Type: channel.StreamEventAgentEnd,
-				Metadata: map[string]any{
-					"result": parseRawJSON(envelope.Result),
-					"data":   parseRawJSON(envelope.Data),
-				},
-			},
-		}, finalMessages, nil
-	case "retry":
-		// The agent discards the failed attempt and regenerates the reply;
-		// the terminal messages carry only the surviving attempt.
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventReset},
-		}, finalMessages, nil
-	case "processing_started":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventProcessingStarted},
-		}, finalMessages, nil
-	case "processing_completed":
-		return []channel.StreamEvent{
-			{Type: channel.StreamEventProcessingCompleted},
-		}, finalMessages, nil
-	case "processing_failed":
-		streamError := strings.TrimSpace(envelope.Error)
-		if streamError == "" {
-			streamError = strings.TrimSpace(envelope.Message)
-		}
-		return []channel.StreamEvent{
-			{
-				Type:  channel.StreamEventProcessingFailed,
-				Error: streamError,
-			},
-		}, finalMessages, nil
-	case "error":
-		// Without a catalogued code the event is a failed run; its own text is
-		// never shown.
-		return []channel.StreamEvent{channel.CodeEvent(t, apperror.Code(envelope.Code), nil)}, finalMessages, nil
-	default:
-		return nil, finalMessages, nil
-	}
-}
-
-func canonicalUserInputPayload(metadata, fallback json.RawMessage) json.RawMessage {
-	var deferred struct {
-		UIPayload json.RawMessage `json:"ui_payload"`
-	}
-	if err := json.Unmarshal(metadata, &deferred); err == nil && len(deferred.UIPayload) > 0 && string(deferred.UIPayload) != "null" {
-		return deferred.UIPayload
-	}
-	return fallback
-}
-
-// userInputActions emits the single marker action for a pending ask_user
-// request. The marker's Type ("user_input") is what keeps the tool-call
-// filter from dropping the prompt; its Value is only ever consumed by the
-// Telegram legacy respond: parser as a silent no-op. Adapters with native
-// controls (Telegram) rebuild the real interactive UI from the payload —
-// the shared layer must not fabricate per-option keyboards here, because no
-// other adapter renders user_input buttons and Telegram replaces them anyway.
-func userInputActions(userInputID string) []channel.Action {
-	userInputID = strings.TrimSpace(userInputID)
-	if userInputID == "" {
-		return nil
-	}
-	return []channel.Action{{Type: "user_input", Label: "Reply", Value: "respond:" + userInputID}}
-}
-
 func normalizeContentPartType(raw string) channel.MessagePartType {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case "link":
@@ -2854,18 +2458,6 @@ func (p *ChannelInboundProcessor) logProcessingStatusError(
 		slog.String("user_id", identity.UserID),
 		slog.Any("error", err),
 	)
-}
-
-// parseRawJSON converts raw JSON bytes to a typed value for StreamToolCall fields.
-func parseRawJSON(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return string(raw)
-	}
-	return v
 }
 
 func (p *ChannelInboundProcessor) ingestInboundAttachments(
@@ -3308,25 +2900,6 @@ func mapChannelToChatAttachments(attachments []channel.Attachment) []turn.Attach
 	return result
 }
 
-// parseAttachmentDelta converts raw JSON attachment data to channel Attachments.
-func parseAttachmentDelta(raw json.RawMessage) []channel.Attachment {
-	if len(raw) == 0 {
-		return nil
-	}
-	var items []map[string]any
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil
-	}
-	attachments := make([]channel.Attachment, 0, len(items))
-	for _, item := range items {
-		bundle := attachment.BundleFromMap(item)
-		attachments = append(attachments, channel.AttachmentFromBundle(bundle))
-	}
-	return attachments
-}
-
-// synthesizeAndPushVoice handles speech_delta events by synthesizing audio
-// and pushing the resulting voice attachment into the outbound stream.
 // assetTracker keeps ordinal bookkeeping for outbound asset refs and
 // forwards each batch into the running turn so the resolver can attach
 // them at persist time.
@@ -3344,85 +2917,6 @@ func (t *assetTracker) add(attachments []channel.Attachment) {
 	if len(refs) > 0 && t.run != nil {
 		t.run.AddOutboundAssets(refs)
 	}
-}
-
-func (p *ChannelInboundProcessor) synthesizeAndPushVoice(
-	ctx context.Context,
-	botID string,
-	channelType channel.ChannelType,
-	speeches []channel.SpeechRequest,
-	stream channel.OutboundStream,
-	assets *assetTracker,
-) {
-	if p.speechService == nil || p.speechModelResolver == nil {
-		if p.logger != nil {
-			p.logger.WarnContext(ctx, "speech_delta received but TTS service not configured")
-		}
-		return
-	}
-	modelID, err := p.speechModelResolver.ResolveSpeechModelID(ctx, botID)
-	if err != nil || strings.TrimSpace(modelID) == "" {
-		if p.logger != nil {
-			p.logger.WarnContext(ctx, "speech_delta: bot has no TTS model configured", slog.String("bot_id", botID))
-		}
-		return
-	}
-	for _, speech := range speeches {
-		text := strings.TrimSpace(speech.Text)
-		if text == "" {
-			continue
-		}
-		audioData, contentType, synthErr := p.speechService.Synthesize(ctx, modelID, text, nil)
-		if synthErr != nil {
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "speech synthesis failed", slog.String("bot_id", botID), slog.Any("error", synthErr))
-			}
-			continue
-		}
-		dataURL := encodeDataURL(contentType, audioData)
-		voiceEvent := channel.StreamEvent{
-			Type: channel.StreamEventAttachment,
-			Attachments: []channel.Attachment{
-				{
-					Type: channel.AttachmentVoice,
-					URL:  dataURL,
-					Mime: contentType,
-					Size: int64(len(audioData)),
-				},
-			},
-		}
-		ingested := p.ingestOutboundAttachments(ctx, botID, channelType, voiceEvent.Attachments)
-		voiceEvent.Attachments = ingested
-		assets.add(ingested)
-		if pushErr := stream.Push(ctx, voiceEvent); pushErr != nil {
-			if p.logger != nil {
-				p.logger.WarnContext(ctx, "push voice attachment failed", slog.String("bot_id", botID), slog.Any("error", pushErr))
-			}
-			return
-		}
-	}
-}
-
-// parseSpeechDelta converts raw JSON speech data to SpeechRequest values.
-func parseSpeechDelta(raw json.RawMessage) []channel.SpeechRequest {
-	if len(raw) == 0 {
-		return nil
-	}
-	var items []struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil
-	}
-	speeches := make([]channel.SpeechRequest, 0, len(items))
-	for _, item := range items {
-		text := strings.TrimSpace(item.Text)
-		if text == "" {
-			continue
-		}
-		speeches = append(speeches, channel.SpeechRequest{Text: text})
-	}
-	return speeches
 }
 
 func buildAssetRefs(attachments []channel.Attachment, startOrdinal int) []turn.OutboundAssetRef {
@@ -3445,39 +2939,6 @@ func buildAssetRefs(attachments []channel.Attachment, startOrdinal int) []turn.O
 		refs = append(refs, ref)
 	}
 	return refs
-}
-
-func encodeDataURL(mime string, data []byte) string {
-	encoded := base64Encode(data)
-	return "data:" + mime + ";base64," + encoded
-}
-
-func base64Encode(data []byte) string {
-	return base64Std.EncodeToString(data)
-}
-
-// parseReactionDelta converts raw JSON reaction data to channel ReactRequests.
-func parseReactionDelta(raw json.RawMessage) []channel.ReactRequest {
-	if len(raw) == 0 {
-		return nil
-	}
-	var items []struct {
-		Emoji string `json:"emoji"`
-	}
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil
-	}
-	reactions := make([]channel.ReactRequest, 0, len(items))
-	for _, item := range items {
-		emoji := strings.TrimSpace(item.Emoji)
-		if emoji == "" {
-			continue
-		}
-		reactions = append(reactions, channel.ReactRequest{
-			Emoji: emoji,
-		})
-	}
-	return reactions
 }
 
 // dispatchReactions sends emoji reactions to the channel for the source message.
@@ -3947,12 +3408,16 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	if sourceMessageID != "" {
 		replyRef.MessageID = sourceMessageID
 	}
-	stream, err := sender.OpenStream(ctx, target, channel.StreamOptions{
+	stream, err := delivery.OpenStream(ctx, delivery.Config{
+		Surface:         sender,
+		Target:          target,
 		Reply:           replyRef,
 		SourceMessageID: sourceMessageID,
 		Metadata: map[string]any{
 			"conversation_type": msg.Conversation.Type,
 		},
+		ReceivedAt:    msg.ReceivedAt,
+		HideToolCalls: !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID),
 	})
 	if err != nil {
 		return err
@@ -3967,9 +3432,6 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	}
 	defer func() { _ = closeStream() }()
 
-	if !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID) {
-		stream = channel.NewToolCallDroppingStream(stream)
-	}
 	if err := stream.Push(ctx, channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusStarted}); err != nil {
 		return err
 	}
@@ -4004,7 +3466,7 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 				}
 				continue
 			}
-			events, messages, parseErr := mapStreamChunkToChannelEvents(chunk, loc)
+			events, messages, parseErr := delivery.Decode(chunk, loc)
 			if parseErr != nil {
 				if p.logger != nil {
 					p.logger.WarnContext(ctx, "approval stream chunk parse failed", slog.Any("error", parseErr))

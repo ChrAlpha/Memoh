@@ -1,0 +1,85 @@
+{
+  "name": "error_event_after_text",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "partial",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "error",
+        "error": "The model provider is unavailable or overloaded right now. Please try again in a moment.",
+        "error_code": "agent.provider_overloaded"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "partial",
+      "phase": "text"
+    },
+    {
+      "type": "error",
+      "error": "The model provider is unavailable or overloaded right now. Please try again in a moment.",
+      "error_code": "agent.provider_overloaded"
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

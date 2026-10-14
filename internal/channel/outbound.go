@@ -675,90 +675,6 @@ func validateStreamEvent(registry *Registry, channelType ChannelType, event Stre
 	return nil
 }
 
-func (m *Manager) newReplySender(cfg ChannelConfig, channelType ChannelType) StreamReplySender {
-	sender, _ := m.registry.GetSender(channelType)
-	streamSender, _ := m.registry.GetStreamSender(channelType)
-	return &managerReplySender{
-		manager:      m,
-		sender:       sender,
-		streamSender: streamSender,
-		channelType:  channelType,
-		config:       cfg,
-	}
-}
-
-type managerReplySender struct {
-	manager      *Manager
-	sender       Sender
-	streamSender StreamSender
-	channelType  ChannelType
-	config       ChannelConfig
-}
-
-func (s *managerReplySender) Send(ctx context.Context, msg OutboundMessage) error {
-	if s.manager == nil {
-		return errors.New("channel manager not configured")
-	}
-	target, err := s.manager.resolveOutboundTarget(ctx, s.channelType, s.config, msg.Target)
-	if err != nil {
-		return err
-	}
-	msg.Target = target
-	policy := s.manager.resolveOutboundPolicy(s.channelType)
-	caps, hasCaps := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, msg.Target)
-	outbound, err := buildOutboundMessagesWithCaps(msg, policy, caps, hasCaps)
-	if err != nil {
-		return err
-	}
-	return s.manager.sendAllWithConfig(ctx, s.sender, s.config, outbound, policy)
-}
-
-func (s *managerReplySender) OpenStream(ctx context.Context, target string, opts StreamOptions) (OutboundStream, error) {
-	if s.manager == nil {
-		return nil, errors.New("channel manager not configured")
-	}
-	if s.streamSender == nil {
-		return nil, errors.New("channel stream sender not configured")
-	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return nil, errors.New("target is required")
-	}
-	var err error
-	target, err = s.manager.resolveOutboundTarget(ctx, s.channelType, s.config, target)
-	if err != nil {
-		return nil, err
-	}
-	caps, _ := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, target)
-	if !caps.Streaming && !caps.BlockStreaming {
-		return nil, errors.New("channel does not support streaming")
-	}
-	stream, err := s.streamSender.OpenStream(ctx, s.config, target, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &managerOutboundStream{
-		manager:     s.manager,
-		config:      s.config,
-		stream:      stream,
-		channelType: s.channelType,
-		target:      target,
-		reply:       opts.Reply,
-		policy:      s.manager.resolveOutboundPolicy(s.channelType),
-		sender:      s.sender,
-		send: func(ctx context.Context, msg OutboundMessage) error {
-			msg.Target = target
-			return s.Send(ctx, msg)
-		},
-		reopen: func(ctx context.Context) (PreparedOutboundStream, error) {
-			return s.streamSender.OpenStream(ctx, s.config, target, StreamOptions{
-				SourceMessageID: opts.SourceMessageID,
-				Metadata:        opts.Metadata,
-			})
-		},
-	}, nil
-}
-
 // managerOutboundStream wraps a PreparedOutboundStream and adds text-chunking,
 // stream-splitting, and attachment fallback on top of the raw adapter stream.
 //
@@ -770,7 +686,6 @@ type managerOutboundStream struct {
 	stream      PreparedOutboundStream
 	channelType ChannelType
 	target      string
-	reply       *ReplyRef
 	policy      OutboundPolicy // cached at open time; immutable after creation
 	sender      Sender
 	send        func(ctx context.Context, msg OutboundMessage) error
@@ -797,18 +712,6 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) err
 			}
 		}
 	}
-	if event.Type == StreamEventToolCallStart && event.ToolCall != nil {
-		tc := event.ToolCall
-		isInput := hasUserInputAction(tc.Actions)
-		isApproval := tc.ApprovalID != ""
-		if isInput || isApproval {
-			caps, _ := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, s.target)
-			if (isInput && !caps.NativeUserInput) || (!isInput && !caps.NativeApproval) {
-				return s.pushPlainTextPrompt(ctx, tc)
-			}
-		}
-	}
-
 	// Downgrade the final's Format to what the channel can render, on a LOCAL
 	// copy, so the adapter actually receives the coerced payload. Done here (not
 	// in validateStreamEvent) so the shared event is never mutated — it may be
@@ -845,30 +748,6 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) err
 		return s.pushFinalWithChunking(ctx, event)
 	}
 	return s.pushPrepared(ctx, event)
-}
-
-// pushPlainTextPrompt closes any buffered assistant preamble, then sends the
-// pending question or approval request as a normal message. This keeps both
-// usable even when a block-streaming adapter ignores tool lifecycle events
-// entirely.
-func (s *managerOutboundStream) pushPlainTextPrompt(ctx context.Context, tc *StreamToolCall) error {
-	text := strings.TrimSpace(RenderToolCallMessage(BuildToolCallStart(tc)))
-	if text == "" {
-		return nil
-	}
-	if s.deltaRunes > 0 {
-		if err := s.splitStream(ctx); err != nil {
-			return err
-		}
-	}
-	if s.send == nil {
-		return errors.New("plain-text prompt sender is not configured")
-	}
-	return s.send(ctx, OutboundMessage{Message: Message{
-		Format: MessageFormatPlain,
-		Text:   text,
-		Reply:  s.reply,
-	}})
 }
 
 // streamSplitSoftRatio controls the soft-limit window. The soft limit is

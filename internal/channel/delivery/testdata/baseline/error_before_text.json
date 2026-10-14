@@ -1,0 +1,60 @@
+{
+  "name": "error_before_text",
+  "err": "error",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_start"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "error",
+        "error": "Something went wrong on the server. Please try again.",
+        "error_code": "internal"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "agent_start"
+    },
+    {
+      "type": "error",
+      "error": "Something went wrong on the server. Please try again.",
+      "error_code": "internal"
+    }
+  ]
+}

@@ -80,6 +80,7 @@ capability.operation_failed	502
 capability.request_invalid	400
 channel.binding_required	409
 channel.enable_failed	400
+channel.reply_window_expired	409
 channel.runtime_unavailable	503
 channel.verification_failed	502
 channel.webhook_endpoint_invalid	400
@@ -194,6 +195,7 @@ search_provider.invalid_provider	400
 search_provider.type_conflict	409
 session.model_preference_conflict	409
 session.not_found	404
+session.queue_full	429
 session_runtime.abort_failed	500
 session_runtime.history_inconsistent	500
 session_runtime.interrupted	503

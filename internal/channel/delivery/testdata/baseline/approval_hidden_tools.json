@@ -1,0 +1,125 @@
+{
+  "name": "approval_hidden_tools",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "tool_call_start",
+        "tool": {
+          "name": "exec",
+          "call_id": "call-1",
+          "approval_id": "ap-1",
+          "short_id": 3,
+          "actions": [
+            "tool_approval:approve:ap-1",
+            "tool_approval:reject:ap-1"
+          ],
+          "input": "{\"command\":\"ls\"}"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {
+          "text": "ok",
+          "format": "plain",
+          "reply_to": "src-1"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "search",
+        "call_id": "call-3",
+        "input": "{\"q\":\"memoh\"}"
+      }
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "exec",
+        "call_id": "call-1",
+        "approval_id": "ap-1",
+        "short_id": 3,
+        "actions": [
+          "tool_approval:approve:ap-1",
+          "tool_approval:reject:ap-1"
+        ],
+        "input": "{\"command\":\"ls\"}"
+      }
+    },
+    {
+      "type": "tool_call_end",
+      "tool": {
+        "name": "search",
+        "call_id": "call-3",
+        "input": "{\"q\":\"memoh\"}",
+        "result": "{\"hits\":2}"
+      }
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "ok",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

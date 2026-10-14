@@ -1,0 +1,136 @@
+{
+  "name": "approval_native",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "checking ",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "tool_call_start",
+        "tool": {
+          "name": "exec",
+          "call_id": "call-1",
+          "approval_id": "ap-1",
+          "short_id": 3,
+          "actions": [
+            "tool_approval:approve:ap-1",
+            "tool_approval:reject:ap-1"
+          ],
+          "input": "{\"command\":\"ls\"}"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "done",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "agent_end"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {
+          "text": "checking done",
+          "format": "plain",
+          "reply_to": "src-1"
+        }
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "completed"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "checking ",
+      "phase": "text"
+    },
+    {
+      "type": "tool_call_start",
+      "tool": {
+        "name": "exec",
+        "call_id": "call-1",
+        "approval_id": "ap-1",
+        "short_id": 3,
+        "actions": [
+          "tool_approval:approve:ap-1",
+          "tool_approval:reject:ap-1"
+        ],
+        "input": "{\"command\":\"ls\"}"
+      }
+    },
+    {
+      "type": "delta",
+      "delta": "done",
+      "phase": "text"
+    },
+    {
+      "type": "agent_end"
+    },
+    {
+      "type": "final",
+      "final": {
+        "text": "checking done",
+        "reply_to": "src-1"
+      }
+    },
+    {
+      "type": "status",
+      "status": "completed"
+    }
+  ]
+}

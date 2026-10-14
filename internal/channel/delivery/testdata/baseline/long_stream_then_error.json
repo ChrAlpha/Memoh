@@ -1,0 +1,142 @@
+{
+  "name": "long_stream_then_error",
+  "err": "error",
+  "calls": [
+    {
+      "op": "open",
+      "stream": 1,
+      "target": "target-id",
+      "reply_to": "src-1"
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "delta",
+        "delta": "first paragraph line one.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 1,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "close",
+      "stream": 1
+    },
+    {
+      "op": "open",
+      "stream": 2,
+      "target": "target-id"
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "delta",
+        "delta": "first paragraph line two.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 2,
+      "event": {
+        "type": "final",
+        "final": {}
+      }
+    },
+    {
+      "op": "close",
+      "stream": 2
+    },
+    {
+      "op": "open",
+      "stream": 3,
+      "target": "target-id"
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "status",
+        "status": "started"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "delta",
+        "delta": "second paragraph line one.\n",
+        "phase": "text"
+      }
+    },
+    {
+      "op": "push",
+      "stream": 3,
+      "event": {
+        "type": "error",
+        "error": "Something went wrong on the server. Please try again.",
+        "error_code": "internal"
+      }
+    },
+    {
+      "op": "close",
+      "stream": 3
+    }
+  ],
+  "observed": [
+    {
+      "type": "final",
+      "final": {
+        "text": "hello"
+      }
+    },
+    {
+      "type": "status",
+      "status": "started"
+    },
+    {
+      "type": "delta",
+      "delta": "first paragraph line one.\n",
+      "phase": "text"
+    },
+    {
+      "type": "delta",
+      "delta": "first paragraph line two.\n",
+      "phase": "text"
+    },
+    {
+      "type": "delta",
+      "delta": "second paragraph line one.\n",
+      "phase": "text"
+    },
+    {
+      "type": "error",
+      "error": "Something went wrong on the server. Please try again.",
+      "error_code": "internal"
+    }
+  ]
+}

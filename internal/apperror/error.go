@@ -34,6 +34,7 @@ const (
 	CodeChannelEnableFailed                      Code = "channel.enable_failed"
 	CodeChannelWebhookEndpointInvalid            Code = "channel.webhook_endpoint_invalid"
 	CodeChannelBindingRequired                   Code = "channel.binding_required"
+	CodeChannelReplyWindowExpired                Code = "channel.reply_window_expired"
 	CodeNetworkProviderNotConfigured             Code = "network.provider_not_configured"
 	CodeUserCannotRemoveSelf                     Code = "user.cannot_remove_self"
 	CodeCompactionModelUnavailable               Code = "compaction.model_unavailable"
@@ -234,7 +235,8 @@ const (
 	CodeRequestFieldRequired Code = "request.field_required"
 	CodeRequestFieldInvalid  Code = "request.field_invalid"
 
-	CodeSessionNotFound Code = "session.not_found"
+	CodeSessionNotFound  Code = "session.not_found"
+	CodeSessionQueueFull Code = "session.queue_full"
 
 	// MCP connection codes, and the OAuth state code that MCP shares with
 	// provider sign-in.
@@ -473,6 +475,10 @@ var catalog = map[Code]Definition{
 	CodeChannelWebhookEndpointInvalid: {
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "The webhook endpoint is invalid.",
+	},
+	CodeChannelReplyWindowExpired: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "The platform no longer accepts a reply to this message.",
 	},
 	CodeChannelBindingRequired: {
 		HTTPStatus: http.StatusConflict,
@@ -909,6 +915,7 @@ var catalog = map[Code]Definition{
 	// the same submission succeeds once the session frees up. It is the one
 	// conflict in this catalog that a client should retry unchanged.
 	CodeSessionModelPreferenceConflict: {HTTPStatus: http.StatusConflict, Detail: "The conversation model selection has changed. Refresh and try again."},
+	CodeSessionQueueFull:               {HTTPStatus: http.StatusTooManyRequests, Detail: "Too many messages are waiting in this conversation. Wait for them to finish before sending more."},
 	CodeSessionBusy: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "This conversation is still working on the previous message. Please try again shortly.",

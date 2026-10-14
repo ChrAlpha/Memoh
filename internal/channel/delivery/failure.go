@@ -1,4 +1,4 @@
-package inbound
+package delivery
 
 import (
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -15,7 +15,6 @@ import (
 type runFailureReply struct {
 	reportsTerminal bool
 	terminal        *turn.RunTerminal
-	held            []channel.StreamEvent
 }
 
 // observeTerminal records event when it is run_terminal and reports whether it
@@ -29,26 +28,6 @@ func (r *runFailureReply) observeTerminal(event turn.Event) bool {
 		r.terminal = &terminal
 	}
 	return true
-}
-
-// hold keeps a stream error event back and reports whether it did.
-func (r *runFailureReply) hold(event channel.StreamEvent) bool {
-	if !r.reportsTerminal || event.Type != channel.StreamEventError {
-		return false
-	}
-	r.held = append(r.held, event)
-	return true
-}
-
-// release returns the held events when no run_terminal arrived, and nothing
-// when one did.
-func (r *runFailureReply) release() []channel.StreamEvent {
-	held := r.held
-	r.held = nil
-	if r.terminal != nil {
-		return nil
-	}
-	return held
 }
 
 // reply is the failure reply the run_terminal event calls for, rendered from

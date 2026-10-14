@@ -84,25 +84,22 @@ func (f *fakeInboundProcessor) HandleInbound(ctx context.Context, cfg ChannelCon
 type fakeInboundStreamProcessor struct{}
 
 func (*fakeInboundStreamProcessor) HandleInbound(ctx context.Context, _ ChannelConfig, _ InboundMessage, sender StreamReplySender) error {
-	stream, err := sender.OpenStream(ctx, "stream-target", StreamOptions{})
+	preview, err := sender.OpenPreview(ctx, "stream-target", StreamOptions{})
 	if err != nil {
 		return err
 	}
-	if err := stream.Push(ctx, StreamEvent{
+	if err := preview.Update(ctx, StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: "partial",
 	}); err != nil {
 		return err
 	}
-	if err := stream.Push(ctx, StreamEvent{
+	return preview.Finish(ctx, &StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{
 			Message: Message{Text: "stream-final"},
 		},
-	}); err != nil {
-		return err
-	}
-	return stream.Close(ctx)
+	})
 }
 
 type inboundRequestContextKey struct{}

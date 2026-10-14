@@ -63,6 +63,7 @@ func runIMTerminal(t *testing.T, gateway *terminalFailureGateway) (imFailureResu
 	}
 	for _, sent := range sender.sent {
 		result.sent = append(result.sent, sent.Message.PlainText())
+		result.errorTexts = append(result.errorTexts, sent.Message.PlainText())
 	}
 	return result, failures
 }
