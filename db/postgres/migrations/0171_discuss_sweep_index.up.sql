@@ -1,4 +1,4 @@
--- 0170_discuss_sweep_index
+-- 0171_discuss_sweep_index
 -- Index the external inputs by arrival time. The discuss sweep looks for sessions
 -- that took external input within its window, once a minute, and must not walk
 -- a team's whole history to find them. The index keeps the same rows as
