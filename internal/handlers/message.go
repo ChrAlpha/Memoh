@@ -17,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/background"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -43,6 +44,7 @@ type MessageHandler struct {
 	botService                    *bots.Service
 	accountService                *accounts.Service
 	toolApproval                  *toolapproval.Service
+	toolApprovalDecider           toolApprovalDecider
 	userInput                     *userinput.Service
 	bgManager                     *background.Manager
 	compactionActivity            interface{ ActiveSessions(string) []string }
@@ -103,6 +105,17 @@ func (h *MessageHandler) SetSessionActivityInvalidationSupported(supported bool)
 
 func (h *MessageHandler) SetToolApprovalService(svc *toolapproval.Service) {
 	h.toolApproval = svc
+}
+
+// toolApprovalDecider is the decision authorization itself: history asks it
+// for viewer_can_decide so a viewer is offered exactly what a submitted
+// decision would be allowed to do.
+type toolApprovalDecider interface {
+	CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal application.ToolApprovalPrincipal) (bool, error)
+}
+
+func (h *MessageHandler) SetToolApprovalDecider(decider toolApprovalDecider) {
+	h.toolApprovalDecider = decider
 }
 
 func (h *MessageHandler) SetUserInputService(svc *userinput.Service) {
@@ -235,7 +248,7 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 		messages = h.extendToUITurnHead(c.Request().Context(), sessionID, messages, limit)
 	}
 	items := chatview.ConvertMessagesToUITurns(messages)
-	h.decorateUITurns(c.Request().Context(), botID, sessionID, sess, items)
+	h.decorateUITurns(c.Request().Context(), channelIdentityID, botID, sessionID, sess, items)
 	return c.JSON(http.StatusOK, UIMessageListResponse{Items: items})
 }
 
@@ -330,7 +343,7 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 	}
 
 	items := chatview.ConvertMessagesToUITurns(located.Messages)
-	h.decorateUITurns(c.Request().Context(), botID, sessionID, sess, items)
+	h.decorateUITurns(c.Request().Context(), channelIdentityID, botID, sessionID, sess, items)
 	return c.JSON(http.StatusOK, UILocateMessageResponse{
 		Items:                   items,
 		TargetID:                located.TargetID,
@@ -395,14 +408,31 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-func (h *MessageHandler) toolApprovalCanApproveFn(sess session.Thread) func(toolapproval.Request) bool {
-	defaultFn := func(req toolapproval.Request) bool {
-		return toolapproval.CanApprove(req.Status)
-	}
+func (h *MessageHandler) toolApprovalPendingAliveFn(sess session.Thread) func(toolapproval.Request) bool {
+	// nil keeps mergeToolApprovals' native default: a pending row is alive.
 	if h == nil || h.toolApproval == nil || !session.UsesDecisionWaiter(sess) {
-		return defaultFn
+		return nil
 	}
 	return h.toolApproval.CanRespond
+}
+
+// viewerCanDecideFn answers viewer_can_decide for the account reading the
+// page. A failed check renders the approval read-only; the decision itself is
+// authorized again when it is submitted.
+func (h *MessageHandler) viewerCanDecideFn(ctx context.Context, viewerID string) func(toolapproval.Request) bool {
+	if h == nil || h.toolApprovalDecider == nil {
+		return nil
+	}
+	viewer := application.ToolApprovalPrincipal{UserID: viewerID, ChannelIdentityID: viewerID}
+	return func(req toolapproval.Request) bool {
+		allowed, err := h.toolApprovalDecider.CanDecideToolApproval(ctx, req, viewer)
+		if err != nil {
+			h.logger.WarnContext(ctx, "resolve viewer tool approval authority failed",
+				slog.Any("error", err), slog.String("approval_id", req.ID))
+			return false
+		}
+		return allowed
+	}
 }
 
 func (h *MessageHandler) userInputCanRespondFn(sess session.Thread) func(userinput.Request) bool {
@@ -413,7 +443,7 @@ func (h *MessageHandler) userInputCanRespondFn(sess session.Thread) func(userinp
 	return h.userInput.CanRespond
 }
 
-func (h *MessageHandler) decorateUITurns(ctx context.Context, botID, sessionID string, sess session.Thread, items []chatview.UITurn) {
+func (h *MessageHandler) decorateUITurns(ctx context.Context, viewerID, botID, sessionID string, sess session.Thread, items []chatview.UITurn) {
 	if len(items) == 0 {
 		return
 	}
@@ -447,7 +477,7 @@ func (h *MessageHandler) decorateUITurns(ctx context.Context, botID, sessionID s
 	}
 	wg.Wait()
 	if len(approvals) > 0 {
-		mergeToolApprovals(items, approvals, h.toolApprovalCanApproveFn(sess))
+		mergeToolApprovals(items, approvals, h.toolApprovalPendingAliveFn(sess), h.viewerCanDecideFn(ctx, viewerID))
 	}
 	if len(requests) > 0 {
 		mergeUserInputs(items, requests, h.userInputCanRespondFn(sess))
@@ -479,13 +509,17 @@ func toolCallIDsFromUITurns(turns []chatview.UITurn) []string {
 	return ids
 }
 
-func mergeToolApprovals(turns []chatview.UITurn, approvals []toolapproval.Request, canApproveFn func(toolapproval.Request) bool) {
+// mergeToolApprovals overlays the durable approval rows on history.
+// pendingAliveFn decides whether a row still takes a decision (nil: a pending
+// row does); viewerCanDecideFn decides whether this viewer may give it (nil:
+// nobody may), and is asked only about live rows.
+func mergeToolApprovals(turns []chatview.UITurn, approvals []toolapproval.Request, pendingAliveFn, viewerCanDecideFn func(toolapproval.Request) bool) {
 	if len(turns) == 0 || len(approvals) == 0 {
 		return
 	}
-	if canApproveFn == nil {
-		canApproveFn = func(req toolapproval.Request) bool {
-			return toolapproval.CanApprove(req.Status)
+	if pendingAliveFn == nil {
+		pendingAliveFn = func(req toolapproval.Request) bool {
+			return toolapproval.AcceptsDecision(req.Status)
 		}
 	}
 	byCallID := make(map[string]toolapproval.Request, len(approvals))
@@ -509,12 +543,14 @@ func mergeToolApprovals(turns []chatview.UITurn, approvals []toolapproval.Reques
 			}
 			running := false
 			msg.Running = &running
+			alive := pendingAliveFn(approval)
 			msg.Approval = &chatview.UIToolApproval{
 				ApprovalID:       approval.ID,
 				ShortID:          approval.ShortID,
 				Status:           approval.Status,
 				DecisionReason:   approval.DecisionReason,
-				CanApprove:       canApproveFn(approval),
+				PendingAlive:     alive,
+				ViewerCanDecide:  alive && viewerCanDecideFn != nil && viewerCanDecideFn(approval),
 				Options:          uiToolApprovalOptions(approval.Options),
 				SelectedOptionID: approval.SelectedOptionID,
 			}

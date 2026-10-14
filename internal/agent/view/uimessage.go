@@ -106,7 +106,13 @@ type UIToolApproval struct {
 	ShortID        int    `json:"short_id,omitempty"`
 	Status         string `json:"status"`
 	DecisionReason string `json:"decision_reason,omitempty"`
-	CanApprove     bool   `json:"can_approve,omitempty"`
+	// PendingAlive reports whether the approval can still take a decision. It
+	// is the same for every viewer, so the shared live view carries it.
+	PendingAlive bool `json:"pending_alive,omitempty"`
+	// ViewerCanDecide reports whether the viewer this payload was rendered for
+	// may decide it. It is computed per WS connection and per HTTP request and
+	// never carried by the shared live view; absent means the viewer may not.
+	ViewerCanDecide bool `json:"viewer_can_decide,omitempty"`
 	// Options are the agent-provided permission options, verbatim; the client
 	// renders one action per option and answers with the chosen option id.
 	Options          []UIToolApprovalOption `json:"options,omitempty"`

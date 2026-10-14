@@ -426,6 +426,35 @@ describe('runtime projection', () => {
     ])
   })
 
+  // The run's own failure value is the one source of its error block: an error
+  // message the view happens to hold is not a second one, and the args travel
+  // with the code on both the snapshot and the run patch.
+  it('projects exactly one error block per run, with the run view args', () => {
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      status: 'errored',
+      error_code: 'agent_dependency_missing',
+      error_args: { dep_id: 'codex' },
+      messages: [
+        { id: 0, type: 'text', content: 'partial' },
+        { id: 1, type: 'error', code: 'agent.provider_auth_failed', content: 'stale copy' },
+      ],
+    })))
+    const errors = state.transcript.turns.flatMap(turn => turn.role === 'assistant' ? turn.messages : [])
+      .filter(message => message.type === 'error')
+    expect(errors).toEqual([{ id: 2, type: 'error', code: 'agent_dependency_missing', content: '', args: { dep_id: 'codex' } }])
+
+    const running = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+      messages: [{ id: 0, type: 'text', content: 'partial' }],
+    })))
+    const patched = reduceRuntimeProjection(running, delta(5, {
+      run: { run_id: 'run-1', status: 'errored', error_code: 'agent_dependency_missing', error_args: { dep_id: 'claude' } },
+    }))
+    expect(patched.transcript.turns.flatMap(turn => turn.role === 'assistant' ? turn.messages : [])
+      .filter(message => message.type === 'error')).toEqual([
+      { id: 1, type: 'error', code: 'agent_dependency_missing', content: '', args: { dep_id: 'claude' } },
+    ])
+  })
+
   it('keeps one stable tool block when a later upsert changes its local id', () => {
     const initial = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
       messages: [{
@@ -449,7 +478,7 @@ describe('runtime projection', () => {
           approval_id: 'approval-1',
           short_id: 1,
           status: 'pending',
-          can_approve: true,
+          pending_alive: true, viewer_can_decide: true,
         },
       }],
     }))

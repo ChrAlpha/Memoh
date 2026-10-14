@@ -260,6 +260,31 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	}
 }
 
+// The account a Web send was made under is recorded on the run, which is what
+// decides who may answer the run's approvals.
+func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
+	t.Parallel()
+
+	svc := newWebTestService()
+	_, runs := newWebTestRuntime(t, svc)
+	admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+		BotID:        webTestBotID,
+		SessionID:    webTestSessionID,
+		InvocationID: "invocation-1",
+		InitiatorID:  "account-1",
+		Payload:      []byte(`{"kind":"message","text":"hi"}`),
+	})
+	if err != nil {
+		t.Fatalf("AdmitWebRun() error = %v", err)
+	}
+	if got := ledgerRun(t, runs, admission.RunID).InitiatorID; got != "account-1" {
+		t.Fatalf("run initiator = %q, want account-1", got)
+	}
+	delivery := newWebTestDelivery()
+	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, &scriptedExecutor{terminal: ptrTo(scheduleTerminalEvent(t, "done"))}))
+	delivery.wait(t)
+}
+
 // A redelivered invocation names the run it already has and executes nothing.
 func TestAdmitWebRunRedeliveryIsADuplicate(t *testing.T) {
 	t.Parallel()

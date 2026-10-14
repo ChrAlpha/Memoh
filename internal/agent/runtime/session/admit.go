@@ -78,6 +78,10 @@ type AdmitInput struct {
 	// message id), because a fresh id per attempt turns a retry into a second
 	// run.
 	InvocationID string
+	// InitiatorID is the principal that requested the run: the account id
+	// when the requester has one, otherwise its channel identity id. Empty for
+	// a run nobody requested. It decides who may answer the run's approvals.
+	InitiatorID string
 	// Payload is the canonically encoded submission. Its fingerprint decides
 	// whether a repeated invocation_id is the same submit or a conflict, so the
 	// encoding must be stable for equal inputs — same key order, no timestamps,
@@ -118,6 +122,7 @@ func (in AdmitInput) normalized() AdmitInput {
 	in.BotID = strings.TrimSpace(in.BotID)
 	in.SessionID = strings.TrimSpace(in.SessionID)
 	in.InvocationID = strings.TrimSpace(in.InvocationID)
+	in.InitiatorID = strings.TrimSpace(in.InitiatorID)
 	return in
 }
 
@@ -218,6 +223,7 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 		Input:            in.Payload,
 		InputFingerprint: fingerprint,
 		ResumeRunID:      in.ResumeRunID,
+		InitiatorID:      in.InitiatorID,
 	})
 	switch {
 	case errors.Is(err, ledger.ErrHistoryResetInProgress):

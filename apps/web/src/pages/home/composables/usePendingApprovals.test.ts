@@ -31,7 +31,7 @@ function assistantTurn(id: string, blocks: ToolCallBlock[]): ChatMessage {
 }
 
 function pendingApproval(id: string, overrides: Partial<UIToolApproval> = {}): UIToolApproval {
-  return { approval_id: id, short_id: 1, status: 'pending', ...overrides }
+  return { approval_id: id, short_id: 1, status: 'pending', pending_alive: true, viewer_can_decide: true, ...overrides }
 }
 
 describe('usePendingApprovals', () => {
@@ -75,10 +75,10 @@ describe('usePendingApprovals', () => {
     ])
   })
 
-  it('excludes zombies (can_approve === false) and anything already decided', () => {
+  it('excludes zombies (pending_alive false) and anything already decided', () => {
     const messages = ref<ChatMessage[]>([
       assistantTurn('turn-1', [
-        toolBlock({ approval: pendingApproval('approval-zombie', { can_approve: false }) }),
+        toolBlock({ approval: pendingApproval('approval-zombie', { pending_alive: false }) }),
         toolBlock({ id: 2, toolCallId: 'call-2', approval: pendingApproval('approval-approved', { status: 'approved' }) }),
         toolBlock({ id: 3, toolCallId: 'call-3', approval: pendingApproval('approval-rejected', { status: 'rejected' }) }),
         toolBlock({ id: 4, toolCallId: 'call-4', approval: pendingApproval('approval-live') }),
@@ -88,6 +88,24 @@ describe('usePendingApprovals', () => {
     const { items } = usePendingApprovals(messages)
 
     expect(items.value.map(item => item.id)).toEqual(['approval-live'])
+  })
+
+  // viewer_can_decide is the server's answer for this viewer; an approval it
+  // did not answer yes for stays a read-only label in the flow.
+  it.each([
+    ['absent', { viewer_can_decide: undefined }],
+    ['false', { viewer_can_decide: false }],
+  ] as const)('excludes an approval whose viewer_can_decide is %s', (_input, overrides) => {
+    const messages = ref<ChatMessage[]>([
+      assistantTurn('turn-1', [
+        toolBlock({ approval: pendingApproval('approval-other', overrides) }),
+        toolBlock({ id: 2, toolCallId: 'call-2', approval: pendingApproval('approval-mine') }),
+      ]),
+    ])
+
+    const { items } = usePendingApprovals(messages)
+
+    expect(items.value.map(item => item.id)).toEqual(['approval-mine'])
   })
 
   it('ignores user turns, non-tool blocks, and tool calls without an approval', () => {

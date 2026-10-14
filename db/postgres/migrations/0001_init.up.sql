@@ -2217,6 +2217,7 @@ CREATE TABLE IF NOT EXISTS public.session_runs (
     error_message      TEXT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    initiator_id       TEXT,
     CONSTRAINT session_runs_team_run_key UNIQUE (team_id, run_id),
     CONSTRAINT session_runs_team_session_run_key UNIQUE (team_id, session_id, run_id),
     CONSTRAINT session_runs_state_check CHECK (state IN (

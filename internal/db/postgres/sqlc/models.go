@@ -832,6 +832,7 @@ type SessionRun struct {
 	ErrorMessage          pgtype.Text        `json:"error_message"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	InitiatorID           pgtype.Text        `json:"initiator_id"`
 }
 
 type Snapshot struct {

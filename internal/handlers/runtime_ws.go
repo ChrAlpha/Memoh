@@ -147,6 +147,12 @@ func (a *wsReplacementAdmission) preparedAttachments() []turn.Attachment {
 // last bullet).
 type runtimeSubscribeAuthorizer func(ctx context.Context, sessionID string) error
 
+// runtimeViewerDecider reports whether the account on this connection may
+// decide one approval. The live view is a single snapshot fanned out to every
+// subscriber, so it cannot carry a per-viewer answer; each connection sets
+// viewer_can_decide on its own copy of a frame instead.
+type runtimeViewerDecider func(ctx context.Context, approvalID string) bool
+
 // runtimeClientMessage is the inbound half of the subscription protocol.
 // Cursor is accepted and reported, but it does not select a replay position:
 // see runtimeSubscriptions.subscribe.
@@ -187,6 +193,7 @@ type runtimeSubscriptions struct {
 	source runtimeSubscriptionSource
 	writer *wsWriter
 	logger *slog.Logger
+	decide runtimeViewerDecider
 
 	mu     sync.Mutex
 	closed bool
@@ -217,7 +224,8 @@ func (s *runtimeSubscription) close() {
 	<-s.done
 }
 
-func newRuntimeSubscriptions(source runtimeSubscriptionSource, writer *wsWriter, logger *slog.Logger) *runtimeSubscriptions {
+// decide may be nil, in which case every approval renders read-only.
+func newRuntimeSubscriptions(source runtimeSubscriptionSource, writer *wsWriter, logger *slog.Logger, decide runtimeViewerDecider) *runtimeSubscriptions {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -225,6 +233,7 @@ func newRuntimeSubscriptions(source runtimeSubscriptionSource, writer *wsWriter,
 		source: source,
 		writer: writer,
 		logger: logger,
+		decide: decide,
 		active: make(map[string]*runtimeSubscription),
 	}
 }
@@ -306,7 +315,7 @@ func (r *runtimeSubscriptions) subscribe(ctx context.Context, botID string, msg 
 		previous.close()
 	}
 
-	go r.forward(entry, subscription)
+	go r.forward(subCtx, entry, subscription)
 }
 
 func (r *runtimeSubscriptions) unsubscribe(ctx context.Context, botID, sessionID string) {
@@ -347,14 +356,14 @@ func (r *runtimeSubscriptions) close() {
 // buffer drops rather than blocks on overflow and reports the gap as a dropped
 // event, so a slow client costs itself a re-subscribe and never applies back
 // pressure to the run or to another subscriber.
-func (r *runtimeSubscriptions) forward(entry *runtimeSubscription, subscription sessionruntime.Subscription) {
+func (r *runtimeSubscriptions) forward(ctx context.Context, entry *runtimeSubscription, subscription sessionruntime.Subscription) {
 	defer close(entry.done)
 	for event := range subscription.C {
 		outbound, ok := runtimeEventFrame(entry.sessionID, event)
 		if !ok {
 			continue
 		}
-		r.writer.SendJSON(outbound)
+		r.writer.SendJSON(withViewerDecisions(ctx, outbound, r.decide))
 	}
 	// A subscription that ends on its own — manager shutdown, backend loss —
 	// is a gap from the client's point of view, so it is reported as one
@@ -408,4 +417,60 @@ func runtimeEventFrame(sessionID string, event sessionruntime.Event) (runtimeOut
 	default:
 		return runtimeOutboundEvent{}, false
 	}
+}
+
+// withViewerDecisions returns frame with viewer_can_decide set on every live
+// approval it carries. The snapshot and delta inside frame are shared with the
+// other subscribers and are never written; only the parts that change are
+// copied.
+func withViewerDecisions(ctx context.Context, frame runtimeOutboundEvent, decide runtimeViewerDecider) runtimeOutboundEvent {
+	if frame.Snapshot != nil && frame.Snapshot.CurrentRunView != nil {
+		if messages, ok := decideApprovals(ctx, frame.Snapshot.CurrentRunView.Messages, decide); ok {
+			snapshot := *frame.Snapshot
+			run := *snapshot.CurrentRunView
+			run.Messages = messages
+			snapshot.CurrentRunView = &run
+			frame.Snapshot = &snapshot
+		}
+	}
+	if frame.Delta != nil {
+		delta := *frame.Delta
+		changed := false
+		if delta.CurrentRunView != nil {
+			if messages, ok := decideApprovals(ctx, delta.CurrentRunView.Messages, decide); ok {
+				run := *delta.CurrentRunView
+				run.Messages = messages
+				delta.CurrentRunView = &run
+				changed = true
+			}
+		}
+		if messages, ok := decideApprovals(ctx, delta.MessageUpserts, decide); ok {
+			delta.MessageUpserts = messages
+			changed = true
+		}
+		if changed {
+			frame.Delta = &delta
+		}
+	}
+	return frame
+}
+
+// decideApprovals copies messages and answers viewer_can_decide on each
+// approval that still takes a decision. It reports false, and allocates
+// nothing, when messages carries no such approval.
+func decideApprovals(ctx context.Context, messages []chatview.UIMessage, decide runtimeViewerDecider) ([]chatview.UIMessage, bool) {
+	var out []chatview.UIMessage
+	for i := range messages {
+		approval := messages[i].Approval
+		if approval == nil || !approval.PendingAlive {
+			continue
+		}
+		if out == nil {
+			out = append([]chatview.UIMessage(nil), messages...)
+		}
+		decided := *approval
+		decided.ViewerCanDecide = decide != nil && decide(ctx, approval.ApprovalID)
+		out[i].Approval = &decided
+	}
+	return out, out != nil
 }

@@ -156,6 +156,9 @@ type Run struct {
 	ErrorMessage         string
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// InitiatorID is the principal that requested the run, empty for a run
+	// nobody requested or one admitted before the ledger recorded it.
+	InitiatorID string
 }
 
 // AdmitParams is one durable admission. RunID and TurnID are minted by the
@@ -171,6 +174,9 @@ type AdmitParams struct {
 	TurnID           string
 	Input            []byte
 	InputFingerprint string
+	// InitiatorID is the principal the submission was made under. A resume
+	// that names none inherits the interrupted run's initiator.
+	InitiatorID string
 }
 
 // ClaimParams moves ownership of an accepted run to one owner.

@@ -78,7 +78,7 @@ describe('chat decisions', () => {
       approval_id: 'approval-1',
       short_id: 1,
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
 
     await expect(decisions.respondToolApproval(approval, 'approve', target)).resolves.toBe(true)
@@ -100,7 +100,7 @@ describe('chat decisions', () => {
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
     await decisions.respondToolApproval(approval, 'reject', target)
 
@@ -149,7 +149,7 @@ describe('chat decisions', () => {
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
     await decisions.respondToolApproval(approval, 'approve', target)
 
@@ -176,14 +176,14 @@ describe('chat decisions', () => {
       approval: {
         approval_id: 'approval-1',
         status: 'pending',
-        can_approve: true,
+        pending_alive: true, viewer_can_decide: true,
       },
     }])
     const { decisions, transcript } = setup(current)
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
     await decisions.respondToolApproval(approval, 'approve', target)
 
@@ -207,7 +207,7 @@ describe('chat decisions', () => {
       approval: {
         approval_id: 'approval-1',
         status: 'approved' as const,
-        can_approve: false,
+        pending_alive: false,
       },
     }
     decisions.observeRun('session-1', current)
@@ -223,7 +223,7 @@ describe('chat decisions', () => {
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
 
     await expect(decisions.respondToolApproval(approval, 'approve', target))
@@ -240,7 +240,7 @@ describe('chat decisions', () => {
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
 
     await expect(decisions.respondToolApproval(approval, 'approve', target))
@@ -325,12 +325,31 @@ describe('chat decisions', () => {
     expect(transcript.markUserInputDecision).toHaveBeenCalledWith('input-1', 'canceled', undefined)
   })
 
+  // The server says who may decide; without its yes the client sends nothing,
+  // whatever the approval's status says.
+  it.each([
+    ['absent', undefined],
+    ['false', false],
+  ] as const)('does not send a decision when viewer_can_decide is %s', async (_input, viewerCanDecide) => {
+    const { decisions, sent, transcript } = setup()
+    const approval: UIToolApproval = {
+      approval_id: 'approval-1',
+      status: 'pending',
+      pending_alive: true,
+      viewer_can_decide: viewerCanDecide,
+    }
+
+    await expect(decisions.respondToolApproval(approval, 'approve', target)).resolves.toBe(false)
+    expect(sent).toEqual([])
+    expect(transcript.markToolApprovalDecision).not.toHaveBeenCalled()
+  })
+
   it('does not create a decision command without an authoritative current run', async () => {
     const { decisions, sent } = setup(null)
     const approval: UIToolApproval = {
       approval_id: 'approval-1',
       status: 'pending',
-      can_approve: true,
+      pending_alive: true, viewer_can_decide: true,
     }
 
     await expect(decisions.respondToolApproval(approval, 'approve', target)).resolves.toBe(false)

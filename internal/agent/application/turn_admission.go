@@ -141,6 +141,7 @@ func (s *Service) admitTurnRun(
 		BotID:        cmd.BotID,
 		SessionID:    cmd.ThreadID,
 		InvocationID: invocationID,
+		InitiatorID:  firstNonEmpty(cmd.UserID, cmd.SourceChannelIdentityID),
 		Payload:      payload,
 		Execution: sessionruntime.Execution{
 			// Project the inbound user message so subscribers (an open web

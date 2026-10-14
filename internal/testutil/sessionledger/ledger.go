@@ -62,6 +62,9 @@ func (f *Store) Admit(_ context.Context, params ledger.AdmitParams) (ledger.Run,
 		if !ok || source.BotID != params.BotID || source.SessionID != params.SessionID || source.State != ledger.StateLost || source.ErrorCode != "session_runtime.interrupted" || !source.AbortRequestedAt.IsZero() || !ledger.HasResumeContext(source.Input) {
 			return ledger.Run{}, false, ledger.ErrResumeSuperseded
 		}
+		if params.InitiatorID == "" {
+			params.InitiatorID = source.InitiatorID
+		}
 		for _, run := range f.Runs {
 			if run.SessionID == params.SessionID && run.TurnPosition > source.TurnPosition {
 				return ledger.Run{}, false, ledger.ErrResumeSuperseded
@@ -84,6 +87,7 @@ func (f *Store) Admit(_ context.Context, params ledger.AdmitParams) (ledger.Run,
 		State:            ledger.StateAccepted,
 		Input:            params.Input,
 		InputFingerprint: params.InputFingerprint,
+		InitiatorID:      params.InitiatorID,
 		CreatedAt:        time.Now(),
 	}
 	f.Runs[run.RunID] = run

@@ -70,7 +70,7 @@
           "short_id": 7,
           "status": "pending",
           "decision_reason": "needs review",
-          "can_approve": true,
+          "pending_alive": true,
           "options": [
             {
               "id": "o1",

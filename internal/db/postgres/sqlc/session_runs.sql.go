@@ -23,7 +23,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $3 AND session_id = $4
   AND run_id = $5 AND fencing_token = $6
   AND state IN ('running', 'waiting_decision') AND abort_requested_at IS NULL
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type AcceptSessionRunDecisionContinuationParams struct {
@@ -71,6 +71,7 @@ func (q *Queries) AcceptSessionRunDecisionContinuation(ctx context.Context, arg 
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -81,7 +82,7 @@ WITH target_session AS MATERIALIZED (
   FROM bot_sessions AS s
   JOIN bots bot ON bot.team_id = s.team_id AND bot.id = s.bot_id
   WHERE s.team_id = public.memoh_current_team_id()
-    AND s.id = $7
+    AND s.id = $8
     AND s.bot_id = $2
     AND s.deleted_at IS NULL
     AND bot.status <> 'deleting'
@@ -98,7 +99,7 @@ existing AS (
   SELECT 1 AS present
   FROM session_runs AS prior
   WHERE prior.team_id = public.memoh_current_team_id()
-    AND prior.session_id = $7
+    AND prior.session_id = $8
     AND prior.invocation_id = $3
 ),
 allocated_position AS (
@@ -119,7 +120,8 @@ INSERT INTO session_runs (
   turn_position,
   state,
   input_json,
-  input_fingerprint
+  input_fingerprint,
+  initiator_id
 )
 SELECT
   $1,
@@ -130,11 +132,12 @@ SELECT
   allocated_position.turn_position,
   'accepted',
   $5,
-  $6
+  $6,
+  NULLIF($7::text, '')
 FROM target_session
 CROSS JOIN allocated_position
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type AdmitLockedSessionRunParams struct {
@@ -144,6 +147,7 @@ type AdmitLockedSessionRunParams struct {
 	TurnID           pgtype.UUID `json:"turn_id"`
 	InputJson        []byte      `json:"input_json"`
 	InputFingerprint string      `json:"input_fingerprint"`
+	InitiatorID      string      `json:"initiator_id"`
 	SessionID        pgtype.UUID `json:"session_id"`
 }
 
@@ -176,6 +180,7 @@ func (q *Queries) AdmitLockedSessionRun(ctx context.Context, arg AdmitLockedSess
 		arg.TurnID,
 		arg.InputJson,
 		arg.InputFingerprint,
+		arg.InitiatorID,
 		arg.SessionID,
 	)
 	var i SessionRun
@@ -203,6 +208,7 @@ func (q *Queries) AdmitLockedSessionRun(ctx context.Context, arg AdmitLockedSess
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -235,7 +241,7 @@ WHERE run.team_id = public.memoh_current_team_id()
   AND run.session_id = target.id
   AND run.state = 'accepted'
   AND run.fencing_token < $2
-RETURNING run.run_id, run.team_id, run.bot_id, run.session_id, run.invocation_id, run.turn_id, run.turn_position, run.state, run.input_json, run.input_fingerprint, run.owner_id, run.fencing_token, run.owner_since, run.live_generation, run.abort_requested_at, run.proposed_terminal_state, run.proposed_error_code, run.proposed_error_message, run.finish_proposed_at, run.error_code, run.error_message, run.created_at, run.updated_at
+RETURNING run.run_id, run.team_id, run.bot_id, run.session_id, run.invocation_id, run.turn_id, run.turn_position, run.state, run.input_json, run.input_fingerprint, run.owner_id, run.fencing_token, run.owner_since, run.live_generation, run.abort_requested_at, run.proposed_terminal_state, run.proposed_error_code, run.proposed_error_message, run.finish_proposed_at, run.error_code, run.error_message, run.created_at, run.updated_at, run.initiator_id
 `
 
 type ClaimLockedSessionRunParams struct {
@@ -286,6 +292,7 @@ func (q *Queries) ClaimLockedSessionRun(ctx context.Context, arg ClaimLockedSess
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -313,7 +320,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND fencing_token = $5
   AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
   AND ($6::text IS NULL OR state = $6::text)
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type FinalizeSessionRunParams struct {
@@ -362,12 +369,13 @@ func (q *Queries) FinalizeSessionRun(ctx context.Context, arg FinalizeSessionRun
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
 
 const getActiveSessionRun = `-- name: GetActiveSessionRun :one
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -401,12 +409,13 @@ func (q *Queries) GetActiveSessionRun(ctx context.Context, sessionID pgtype.UUID
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
 
 const getLatestSessionRun = `-- name: GetLatestSessionRun :one
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -441,12 +450,13 @@ func (q *Queries) GetLatestSessionRun(ctx context.Context, sessionID pgtype.UUID
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
 
 const getSessionRun = `-- name: GetSessionRun :one
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = $1
@@ -479,12 +489,13 @@ func (q *Queries) GetSessionRun(ctx context.Context, runID pgtype.UUID) (Session
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
 
 const getSessionRunByInvocation = `-- name: GetSessionRunByInvocation :one
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -523,6 +534,7 @@ func (q *Queries) GetSessionRunByInvocation(ctx context.Context, arg GetSessionR
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -548,7 +560,7 @@ func (q *Queries) IsInterruptedSessionRunLatest(ctx context.Context, runID pgtyp
 }
 
 const listActiveSessionRunsByBot = `-- name: ListActiveSessionRunsByBot :many
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $1
@@ -589,6 +601,7 @@ func (q *Queries) ListActiveSessionRunsByBot(ctx context.Context, botID pgtype.U
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InitiatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -601,7 +614,7 @@ func (q *Queries) ListActiveSessionRunsByBot(ctx context.Context, botID pgtype.U
 }
 
 const listClaimedSessionRuns = `-- name: ListClaimedSessionRuns :many
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND state = 'running'
@@ -667,6 +680,7 @@ func (q *Queries) ListClaimedSessionRuns(ctx context.Context, arg ListClaimedSes
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InitiatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -679,7 +693,7 @@ func (q *Queries) ListClaimedSessionRuns(ctx context.Context, arg ListClaimedSes
 }
 
 const listInterruptedSessionRuns = `-- name: ListInterruptedSessionRuns :many
-SELECT r.run_id, r.team_id, r.bot_id, r.session_id, r.invocation_id, r.turn_id, r.turn_position, r.state, r.input_json, r.input_fingerprint, r.owner_id, r.fencing_token, r.owner_since, r.live_generation, r.abort_requested_at, r.proposed_terminal_state, r.proposed_error_code, r.proposed_error_message, r.finish_proposed_at, r.error_code, r.error_message, r.created_at, r.updated_at FROM session_runs r
+SELECT r.run_id, r.team_id, r.bot_id, r.session_id, r.invocation_id, r.turn_id, r.turn_position, r.state, r.input_json, r.input_fingerprint, r.owner_id, r.fencing_token, r.owner_since, r.live_generation, r.abort_requested_at, r.proposed_terminal_state, r.proposed_error_code, r.proposed_error_message, r.finish_proposed_at, r.error_code, r.error_message, r.created_at, r.updated_at, r.initiator_id FROM session_runs r
 JOIN bot_sessions s ON s.team_id = r.team_id AND s.id = r.session_id
 JOIN bots b ON b.team_id = r.team_id AND b.id = r.bot_id
 WHERE r.team_id = public.memoh_current_team_id()
@@ -726,6 +740,7 @@ func (q *Queries) ListInterruptedSessionRuns(ctx context.Context, afterRunID pgt
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InitiatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -738,7 +753,7 @@ func (q *Queries) ListInterruptedSessionRuns(ctx context.Context, afterRunID pgt
 }
 
 const listOrphanedSessionRuns = `-- name: ListOrphanedSessionRuns :many
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND state = 'accepted'
@@ -790,6 +805,7 @@ func (q *Queries) ListOrphanedSessionRuns(ctx context.Context, arg ListOrphanedS
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InitiatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -802,7 +818,7 @@ func (q *Queries) ListOrphanedSessionRuns(ctx context.Context, arg ListOrphanedS
 }
 
 const listStaleGenerationSessionRuns = `-- name: ListStaleGenerationSessionRuns :many
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND state IN ('accepted', 'running', 'waiting_decision', 'finishing')
@@ -871,6 +887,7 @@ func (q *Queries) ListStaleGenerationSessionRuns(ctx context.Context, arg ListSt
 			&i.ErrorMessage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.InitiatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -883,7 +900,7 @@ func (q *Queries) ListStaleGenerationSessionRuns(ctx context.Context, arg ListSt
 }
 
 const lockActiveSessionRunForHistoryReset = `-- name: LockActiveSessionRunForHistoryReset :one
-SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = $1
@@ -936,6 +953,7 @@ func (q *Queries) LockActiveSessionRunForHistoryReset(ctx context.Context, arg L
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -1071,7 +1089,7 @@ WHERE team_id = public.memoh_current_team_id()
       state IN ('running', 'finishing')
       OR ($6::boolean AND state = 'waiting_decision')
   )
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type PrepareSessionRunFinishParams struct {
@@ -1120,6 +1138,7 @@ func (q *Queries) PrepareSessionRunFinish(ctx context.Context, arg PrepareSessio
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -1137,7 +1156,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND abort_requested_at IS NULL
   AND fencing_token = $5
   AND fencing_token < $2
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type ReclaimWaitingDecisionSessionRunParams struct {
@@ -1185,6 +1204,7 @@ func (q *Queries) ReclaimWaitingDecisionSessionRun(ctx context.Context, arg Recl
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -1196,7 +1216,7 @@ SET abort_requested_at = COALESCE(abort_requested_at, now()),
 WHERE team_id = public.memoh_current_team_id()
   AND run_id = $1
   AND state IN ('accepted', 'running', 'waiting_decision')
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 // Not fenced: abort is a user intent that may arrive at any instance, and the
@@ -1228,6 +1248,7 @@ func (q *Queries) RequestSessionRunAbort(ctx context.Context, runID pgtype.UUID)
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -1240,7 +1261,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND run_id = $1
   AND fencing_token = $2
   AND state IN ('running', 'waiting_decision')
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type ResumeSessionRunParams struct {
@@ -1275,6 +1296,7 @@ func (q *Queries) ResumeSessionRun(ctx context.Context, arg ResumeSessionRunPara
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }
@@ -1345,7 +1367,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND run_id = $1
   AND fencing_token = $2
   AND state IN ('running', 'waiting_decision')
-RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at
+RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
 
 type SetSessionRunWaitingDecisionParams struct {
@@ -1380,6 +1402,7 @@ func (q *Queries) SetSessionRunWaitingDecision(ctx context.Context, arg SetSessi
 		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.InitiatorID,
 	)
 	return i, err
 }

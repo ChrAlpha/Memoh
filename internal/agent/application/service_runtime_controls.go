@@ -252,7 +252,7 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 		return err
 	}
 	admission, err := s.sessionRuntime.Admit(runCtx, sessionruntime.AdmitInput{
-		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), Payload: payload,
+		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), InitiatorID: request.ActorID, Payload: payload,
 		Execution: sessionruntime.Execution{
 			ConfigurationOnly: request.ModeID != "",
 			Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {

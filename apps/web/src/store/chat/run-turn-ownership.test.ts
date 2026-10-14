@@ -168,10 +168,10 @@ describe('a terminal run view is not a source of new turns', () => {
     expect(transcript.messages.map(turn => turn.turnId)).toEqual(['turn-9', 'turn-9'])
   })
 
-  // A run that fails never persists its error: the reason lives only in the
-  // terminal frame. History returns the question alone, so a window test keyed
-  // on position alone dropped the assistant carrying the reason — reopening a
-  // failed session showed the question and nothing to explain it.
+  // Until history has the failure row, the reason lives only in the run
+  // view. A window test keyed on position alone dropped the assistant carrying
+  // it — reopening a failed session showed the question and nothing to
+  // explain it.
   it('keeps the failure reason of a run whose question is already settled', () => {
     const { transcript } = makeTranscript(null)
     transcript.replaceMessages([
@@ -181,7 +181,8 @@ describe('a terminal run view is not a source of new turns', () => {
     transcript.applyRuntimeTranscript(projectRuntimeTranscript({
       ...completed(),
       status: 'errored',
-      messages: [{ id: 0, type: 'error', content: 'model refused' }],
+      error_code: 'agent.provider_overloaded',
+      messages: [],
     }))
 
     expect(transcript.messages.map(turn => `${turn.role}:${turn.turnId}`)).toEqual([
@@ -190,7 +191,7 @@ describe('a terminal run view is not a source of new turns', () => {
     ])
     const assistant = transcript.messages[1]
     expect(assistant?.role === 'assistant' && assistant.messages).toEqual([
-      expect.objectContaining({ content: 'model refused' }),
+      expect.objectContaining({ type: 'error', code: 'agent.provider_overloaded' }),
     ])
   })
 

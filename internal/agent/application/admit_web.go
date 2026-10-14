@@ -15,6 +15,8 @@ type WebAdmitInput struct {
 	BotID        string
 	SessionID    string
 	InvocationID string
+	// InitiatorID is the account the submission was made under.
+	InitiatorID string
 	// Payload is the canonical form of what the client sent. Its bytes decide
 	// whether a repeated invocation is the same submit or a conflicting one.
 	Payload []byte
@@ -77,6 +79,7 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 		BotID:        strings.TrimSpace(in.BotID),
 		SessionID:    strings.TrimSpace(in.SessionID),
 		InvocationID: strings.TrimSpace(in.InvocationID),
+		InitiatorID:  in.InitiatorID,
 		Payload:      in.Payload,
 		Execution: sessionruntime.Execution{
 			Admission: builder,

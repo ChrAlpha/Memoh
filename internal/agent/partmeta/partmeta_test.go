@@ -8,10 +8,10 @@ import (
 )
 
 func TestSetAndObjectRoundTrip(t *testing.T) {
-	meta := Set(nil, KeyApproval, map[string]any{"approval_id": "a1", "short_id": 3, "can_approve": true})
+	meta := Set(nil, KeyApproval, map[string]any{"approval_id": "a1", "short_id": 3, "pending_alive": true})
 	meta = meta.Merge(sdk.NewProviderMetadata("anthropic", map[string]string{"signature": "sig"}))
 	obj, ok := Object(meta, KeyApproval)
-	if !ok || obj["approval_id"] != "a1" || obj["short_id"] != float64(3) || obj["can_approve"] != true {
+	if !ok || obj["approval_id"] != "a1" || obj["short_id"] != float64(3) || obj["pending_alive"] != true {
 		t.Fatalf("approval annotation: %#v ok=%v", obj, ok)
 	}
 	if !Has(meta, KeyApproval) || Has(meta, KeyUserInput) {

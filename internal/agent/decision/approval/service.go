@@ -858,6 +858,9 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 	if req.Operation == "" {
 		req.Operation, _ = OperationForTool(req.ToolName)
 	}
+	if row.RunID.Valid {
+		req.RunID = uuid.UUID(row.RunID.Bytes).String()
+	}
 	if row.RouteID.Valid {
 		req.RouteID = uuid.UUID(row.RouteID.Bytes).String()
 	}

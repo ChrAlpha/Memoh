@@ -103,6 +103,9 @@ func (s *PostgresStore) Admit(ctx context.Context, params AdmitParams) (Run, boo
 		if source.BotID != botID || source.SessionID != sessionID || !current {
 			return Run{}, false, ErrResumeSuperseded
 		}
+		if params.InitiatorID == "" {
+			params.InitiatorID = dbpkg.TextToString(source.InitiatorID)
+		}
 	}
 	row, err := txq.AdmitLockedSessionRun(ctx, dbsqlc.AdmitLockedSessionRunParams{
 		RunID:            runID,
@@ -112,6 +115,7 @@ func (s *PostgresStore) Admit(ctx context.Context, params AdmitParams) (Run, boo
 		TurnID:           turnID,
 		InputJson:        params.Input,
 		InputFingerprint: params.InputFingerprint,
+		InitiatorID:      params.InitiatorID,
 	})
 	if err == nil {
 		if err := tx.Commit(ctx); err != nil {
@@ -946,6 +950,7 @@ func runFromRow(row dbsqlc.SessionRun) Run {
 		ErrorMessage:         dbpkg.TextToString(row.ErrorMessage),
 		CreatedAt:            dbpkg.TimeFromPg(row.CreatedAt),
 		UpdatedAt:            dbpkg.TimeFromPg(row.UpdatedAt),
+		InitiatorID:          dbpkg.TextToString(row.InitiatorID),
 	}
 }
 

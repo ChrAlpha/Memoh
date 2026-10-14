@@ -216,18 +216,23 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
   // Runtime activity belongs to the current run, even when a steer splits its
   // transcript. Keep it out of the historical segments defined by message IDs.
   const runtimeStatus = active ? run.messages.find(message => message.type === 'status') : undefined
-  const assistantMessages = run.messages.filter(message => message.type !== 'status')
+  // A run's failure is the run's own value, so the run view is the one source
+  // of its error block while the run is projected: exactly one block per run,
+  // whatever error messages the frame or the screen may hold. Once the run
+  // settles, the history row replaces it.
+  const assistantMessages: UIMessage[] = run.messages.filter(message => message.type !== 'status' && message.type !== 'error')
   const projectsAssistantContent = active
     || assistantMessages.length > 0
     || Boolean(run.error_code)
   if (projectsAssistantContent) {
-    // The block is rendered from the code; the run carries no error text.
-    if (run.error_code && !assistantMessages.some(message => message.type === 'error')) {
+    // The block is rendered from the code and its args; the run carries no error text.
+    if (run.error_code) {
       assistantMessages.push({
         id: nextMessageId(run.messages),
         type: 'error',
         code: run.error_code,
         content: '',
+        ...(run.error_args ? { args: { ...run.error_args } } : {}),
       })
     }
     let segmentStart = 0
@@ -352,6 +357,7 @@ function applyRunPatch(
       ...next,
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.error_code !== undefined ? { error_code: patch.error_code } : {}),
+      ...(patch.error_args !== undefined ? { error_args: patch.error_args } : {}),
       ...(patch.updated_at !== undefined ? { updated_at: patch.updated_at } : {}),
       ...(patch.owner_lease_expires_at !== undefined
         ? { owner_lease_expires_at: patch.owner_lease_expires_at }

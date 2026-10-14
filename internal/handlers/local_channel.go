@@ -1508,7 +1508,7 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 // there is nothing to execute. release is called once whatever this call
 // reserved for the session is no longer needed: here when nothing runs, and
 // by the run's delivery end otherwise.
-func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), release func()) (*application.WebAdmission, wsTurnRef) {
+func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), release func()) (*application.WebAdmission, wsTurnRef) {
 	if release == nil {
 		release = func() {}
 	}
@@ -1516,6 +1516,7 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 		BotID:        botID,
 		SessionID:    ref.SessionID,
 		InvocationID: ref.InvocationID,
+		InitiatorID:  initiatorID,
 		Payload:      submission,
 		Admission:    admission,
 	})
@@ -1626,7 +1627,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	// Subscriptions observe sessions; they never own the runs behind them, so
 	// closing them on disconnect leaves a run executing for its other
 	// subscribers (SR-OBS-003).
-	subscriptions := newRuntimeSubscriptions(h.sessionRuntimeObserver(), writer, h.logger)
+	subscriptions := newRuntimeSubscriptions(h.sessionRuntimeObserver(), writer, h.logger, h.runtimeViewerDecider(channelIdentityID))
 	defer subscriptions.close()
 	authorizeSubscription := func(ctx context.Context, sessionID string) error {
 		return h.authorizeWSSession(ctx, channelIdentityID, botID, sessionID)
@@ -1699,10 +1700,8 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				failWSRequest(streamBaseCtx, h.logger, writer, botID, ref, "ws.runtime_command", apperror.FieldRequired("control_id"))
 				continue
 			}
-			if err := h.authorizeWSSession(c.Request().Context(), channelIdentityID, botID, sessionID); err != nil {
-				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(wsSessionAuthAckCode(err, apperror.CodeToolApprovalForbidden, apperror.CodeToolApprovalOperationFailed)))
-				continue
-			}
+			// No session check here: the owner authorizes the decision with
+			// CanDecideToolApproval when it commits, the same as HTTP and IM.
 			controller := h.sessionRuntimeController()
 			if controller == nil {
 				sendWSControlAck(writer, ref, msg.Type, controlID, false, string(apperror.CodeToolApprovalOperationFailed))
@@ -2160,7 +2159,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				messageAdmission.attachments = ingestedActivationAttachments
 				messageAdmission.attachmentsPrepared = true
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.message", submission, messageAdmission.build, releaseActiveWSTurn)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.message", submission, messageAdmission.build, releaseActiveWSTurn)
 			if admitted == nil {
 				continue
 			}
@@ -2266,7 +2265,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					return h.agentService.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil)
 			if admitted == nil {
 				continue
 			}
@@ -2356,7 +2355,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				},
 				attachments: chatAttachments,
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil)
 			if admitted == nil {
 				continue
 			}
@@ -2488,6 +2487,25 @@ func (h *LocalChannelHandler) authorizeBotAccess(ctx context.Context, channelIde
 func (h *LocalChannelHandler) authorizeWSChatAccess(ctx context.Context, channelIdentityID, botID string) error {
 	_, err := h.authorizeBotAccess(ctx, channelIdentityID, botID)
 	return err
+}
+
+// runtimeViewerDecider answers viewer_can_decide for the account on one
+// connection. A failed check renders the approval read-only; the decision is
+// authorized again when it is submitted.
+func (h *LocalChannelHandler) runtimeViewerDecider(channelIdentityID string) runtimeViewerDecider {
+	if h.agentService == nil {
+		return nil
+	}
+	viewer := application.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
+	return func(ctx context.Context, approvalID string) bool {
+		allowed, err := h.agentService.ViewerCanDecideToolApproval(ctx, approvalID, viewer)
+		if err != nil {
+			h.logger.WarnContext(ctx, "resolve viewer tool approval authority failed",
+				slog.Any("error", err), slog.String("approval_id", approvalID))
+			return false
+		}
+		return allowed
+	}
 }
 
 func (h *LocalChannelHandler) authorizeWSSession(ctx context.Context, channelIdentityID, botID, sessionID string) error {

@@ -31,7 +31,7 @@ func TestPostgresGracefulShutdownResumeSurvivesNewManager(t *testing.T) {
 	build := func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 		return sessionruntime.RunAdmissionView{}, nil
 	}
-	first, err := manager.Admit(ctx, sessionruntime.AdmitInput{BotID: botID, SessionID: sessionID, InvocationID: "original", Payload: []byte(`{"query":"work"}`), Execution: sessionruntime.Execution{Admission: build}})
+	first, err := manager.Admit(ctx, sessionruntime.AdmitInput{BotID: botID, SessionID: sessionID, InvocationID: "original", InitiatorID: "requester-account", Payload: []byte(`{"query":"work"}`), Execution: sessionruntime.Execution{Admission: build}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,12 @@ func TestPostgresGracefulShutdownResumeSurvivesNewManager(t *testing.T) {
 	wg.Wait()
 	if winners.Load() != 1 {
 		t.Fatalf("resume executed %d times", winners.Load())
+	}
+	// The resume continues the same request, so the requester keeps the
+	// authority over its approvals.
+	resumed, err := runs.GetByInvocation(ctx, sessionID, "resume:"+first.RunID)
+	if err != nil || resumed.InitiatorID != "requester-account" {
+		t.Fatalf("resumed run initiator = %q, %v; want inherited requester-account", resumed.InitiatorID, err)
 	}
 	candidates, err = queries.ListInterruptedSessionRuns(ctx, db.ParseUUIDOrEmpty(uuid.Nil.String()))
 	if err != nil {

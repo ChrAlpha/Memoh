@@ -398,7 +398,7 @@ func TestParityNonInteractiveAutoRejectIdentical(t *testing.T) {
 
 // TestParityApprovalStreamPayloadIdentical: the approval card payload both
 // runtimes publish to clients (the "approval" object with id/short_id/status/
-// can_approve) must be byte-for-byte the same shape, pending and decided.
+// pending_alive) must be byte-for-byte the same shape, pending and decided.
 func TestParityApprovalStreamPayloadIdentical(t *testing.T) {
 	t.Parallel()
 

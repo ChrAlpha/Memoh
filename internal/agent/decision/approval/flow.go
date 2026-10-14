@@ -289,9 +289,9 @@ func NormalizedStatus(status string) string {
 	return status
 }
 
-// CanApprove reports whether a request in the given status still accepts a
-// decision.
-func CanApprove(status string) bool {
+// AcceptsDecision reports whether a request in the given status still accepts
+// a decision. It says nothing about who may give it.
+func AcceptsDecision(status string) bool {
 	return strings.EqualFold(NormalizedStatus(status), StatusPending)
 }
 
@@ -318,10 +318,10 @@ func RejectionMessage(result FlowResult) string {
 func RequestMetadata(req Request) map[string]any {
 	status := NormalizedStatus(req.Status)
 	metadata := map[string]any{
-		"approval_id": req.ID,
-		"short_id":    req.ShortID,
-		"status":      status,
-		"can_approve": CanApprove(status),
+		"approval_id":   req.ID,
+		"short_id":      req.ShortID,
+		"status":        status,
+		"pending_alive": AcceptsDecision(status),
 	}
 	if operation := strings.TrimSpace(req.Operation); operation != "" {
 		metadata["operation"] = operation

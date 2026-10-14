@@ -293,10 +293,10 @@ func approvalTranscriptMetadata(ev event.StreamEvent) map[string]any {
 		}
 	}
 	return map[string]any{
-		"approval_id": approvalID,
-		"short_id":    ev.ShortID,
-		"status":      status,
-		"can_approve": strings.EqualFold(status, toolapproval.StatusPending),
+		"approval_id":   approvalID,
+		"short_id":      ev.ShortID,
+		"status":        status,
+		"pending_alive": strings.EqualFold(status, toolapproval.StatusPending),
 	}
 }
 

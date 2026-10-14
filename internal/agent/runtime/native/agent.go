@@ -523,7 +523,6 @@ func annotateDeferredApproval(messages []sdk.Message, approval toolexec.ToolAppr
 					"approval_id": approval.ApprovalID,
 					"short_id":    approvalShortID(approval.Metadata),
 					"status":      "pending",
-					"can_approve": true,
 					"operation":   approval.Metadata["operation"],
 				})
 			}

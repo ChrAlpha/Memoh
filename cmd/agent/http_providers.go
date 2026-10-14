@@ -74,10 +74,11 @@ func provideSessionQueueHandler(queries dbstore.Queries, agentService *applicati
 	return handlers.NewSessionQueueHandler(queries, agentService, botService, accountService)
 }
 
-func provideMessageHandler(log *slog.Logger, msgService *message.DBService, sessionService *sessionpkg.Service, mediaService *media.Service, botService *bots.Service, accountService *accounts.Service, hub *event.Hub, toolApproval *toolapproval.Service, userInput *userinput.Service, bgManager *background.Manager, acpPool *acpagent.SessionPool, compactionService *compaction.Service, cfg config.Config) *handlers.MessageHandler {
+func provideMessageHandler(log *slog.Logger, msgService *message.DBService, sessionService *sessionpkg.Service, mediaService *media.Service, botService *bots.Service, accountService *accounts.Service, hub *event.Hub, toolApproval *toolapproval.Service, agentService *application.Service, userInput *userinput.Service, bgManager *background.Manager, acpPool *acpagent.SessionPool, compactionService *compaction.Service, cfg config.Config) *handlers.MessageHandler {
 	h := handlers.NewMessageHandler(log, msgService, sessionService, botService, accountService, hub)
 	h.SetMediaService(mediaService)
 	h.SetToolApprovalService(toolApproval)
+	h.SetToolApprovalDecider(agentService)
 	h.SetUserInputService(userInput)
 	h.SetBackgroundManager(bgManager)
 	h.SetRuntimeResetService(acpPool)

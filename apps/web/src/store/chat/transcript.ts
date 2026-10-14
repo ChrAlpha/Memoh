@@ -24,7 +24,7 @@ import type { RuntimeTranscriptSlice } from './runtime-projection'
 import { createTranscriptHistory } from './transcript-history'
 import { createTranscriptDecisions } from './transcript-decisions'
 import { createTranscriptQueries } from './transcript-queries'
-import { admissibleRuntimeTurns, fillTurnErrorDetails, insertRuntimeTurns, markRuntimeTurn, reconcileRuntimeTurns } from './runtime-transcript-merge'
+import { admissibleRuntimeTurns, insertRuntimeTurns, markRuntimeTurn, reconcileRuntimeTurns } from './runtime-transcript-merge'
 
 export interface TranscriptDeps {
   currentBotId: Ref<string | null>
@@ -616,7 +616,13 @@ export function createTranscriptController({
   }
 
   // keepTurn: history keeps this turn, so an empty one shows its failure instead of being removed.
+  //
+  // A run the server accepted fails with its own durable value: the run view
+  // renders that block while the run is projected and history once it settles,
+  // so the error a send ends with adds nothing to an accepted turn. Only a
+  // request refused or lost before acceptance is shown from the error itself.
   function finalizeStreamFailure(assistantTurn: ChatAssistantTurn, botId: string, targetSessionId: string, error: Error, keepTurn = false) {
+    if (assistantTurn.runtimeRunId?.trim()) return
     const parsed = parseMemohError(error)
     if (!hasVisibleAssistantBlocks(assistantTurn)) {
       if (parsed?.code || keepTurn) {
@@ -632,7 +638,6 @@ export function createTranscriptController({
       return
     }
     if (error.name === 'AbortError') return
-    if (fillTurnErrorDetails(assistantTurn, { code: parsed?.code, content: error.message.trim(), args: stringRecord(parsed?.args) })) return
     appendAssistantError(assistantTurn, error.message, parsed?.code, parsed?.args)
   }
 

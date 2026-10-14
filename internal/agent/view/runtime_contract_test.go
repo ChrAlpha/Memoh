@@ -105,7 +105,7 @@ func TestRuntimeContractScriptAggregatesCurrentRunUIBlocks(t *testing.T) {
 	if len(execTool.Progress) != 2 {
 		t.Fatalf("exec progress = %#v, want two progress snapshots", execTool.Progress)
 	}
-	if approvalTool == nil || approvalTool.Approval == nil || !approvalTool.Approval.CanApprove {
+	if approvalTool == nil || approvalTool.Approval == nil || !approvalTool.Approval.PendingAlive {
 		t.Fatalf("approval block = %#v, want pending approval", approvalTool)
 	}
 	if askUserTool == nil || askUserTool.UserInput == nil || !askUserTool.UserInput.CanRespond {

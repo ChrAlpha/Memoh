@@ -138,6 +138,7 @@ type Request struct {
 	ID                      string             `json:"id"`
 	BotID                   string             `json:"bot_id"`
 	SessionID               string             `json:"session_id"`
+	RunID                   string             `json:"run_id,omitempty"`
 	RouteID                 string             `json:"route_id,omitempty"`
 	ChannelIdentityID       string             `json:"channel_identity_id,omitempty"`
 	WorkspaceTargetID       string             `json:"workspace_target_id,omitempty"`

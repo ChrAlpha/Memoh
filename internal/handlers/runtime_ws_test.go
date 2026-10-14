@@ -112,7 +112,7 @@ func newRuntimeWSHarness(t *testing.T) *runtimeWSHarness {
 	writer := &wsWriter{ch: make(chan []byte, 64), stop: make(chan struct{}), done: make(chan struct{})}
 	harness := &runtimeWSHarness{source: source, writer: writer}
 	logger := slog.New(slog.NewJSONHandler(&harness.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	harness.subscriptions = newRuntimeSubscriptions(source, writer, logger)
+	harness.subscriptions = newRuntimeSubscriptions(source, writer, logger, nil)
 	return harness
 }
 

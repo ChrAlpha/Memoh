@@ -63,7 +63,8 @@ INSERT INTO session_runs (
   turn_position,
   state,
   input_json,
-  input_fingerprint
+  input_fingerprint,
+  initiator_id
 )
 SELECT
   sqlc.arg(run_id),
@@ -74,7 +75,8 @@ SELECT
   allocated_position.turn_position,
   'accepted',
   sqlc.arg(input_json),
-  sqlc.arg(input_fingerprint)
+  sqlc.arg(input_fingerprint),
+  NULLIF(sqlc.arg(initiator_id)::text, '')
 FROM target_session
 CROSS JOIN allocated_position
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING

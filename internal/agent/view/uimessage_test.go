@@ -1270,7 +1270,7 @@ func TestUIMessageStreamConverterUpdatesToolApprovalDecision(t *testing.T) {
 		ShortID:    7,
 		Status:     "pending",
 	})
-	if len(pending) != 1 || pending[0].Approval == nil || !pending[0].Approval.CanApprove {
+	if len(pending) != 1 || pending[0].Approval == nil || !pending[0].Approval.PendingAlive {
 		t.Fatalf("pending approval snapshot = %#v", pending)
 	}
 
@@ -1286,7 +1286,7 @@ func TestUIMessageStreamConverterUpdatesToolApprovalDecision(t *testing.T) {
 	if len(approved) != 1 || approved[0].ID != pending[0].ID {
 		t.Fatalf("approved approval snapshot = %#v, want same tool block", approved)
 	}
-	if approved[0].Approval == nil || approved[0].Approval.Status != "approved" || approved[0].Approval.CanApprove {
+	if approved[0].Approval == nil || approved[0].Approval.Status != "approved" || approved[0].Approval.PendingAlive {
 		t.Fatalf("approved approval state = %#v", approved[0].Approval)
 	}
 }
@@ -2181,7 +2181,7 @@ func TestConvertRawModelMessagesReadsSDKShapedToolCalls(t *testing.T) {
 		Input:      sdk.ToolArguments{JSON: json.RawMessage(`{"command":"ls"}`)},
 	}
 	approved.ProviderMetadata = partmeta.Set(approved.ProviderMetadata, partmeta.KeyApproval, map[string]any{
-		"approval_id": "appr-1", "short_id": 4, "status": "pending", "can_approve": true,
+		"approval_id": "appr-1", "short_id": 4, "status": "pending", "pending_alive": true,
 	})
 	raw, err := json.Marshal([]sdk.Message{
 		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{call, approved}},

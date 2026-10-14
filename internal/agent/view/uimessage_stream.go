@@ -233,10 +233,10 @@ func (c *UIMessageStreamConverter) HandleEvent(event UIMessageStreamEvent) []UIM
 		}
 		state.Message.Running = uiBoolPtr(false)
 		approval := &UIToolApproval{
-			ApprovalID: strings.TrimSpace(event.ApprovalID),
-			ShortID:    event.ShortID,
-			Status:     status,
-			CanApprove: strings.EqualFold(status, "pending"),
+			ApprovalID:   strings.TrimSpace(event.ApprovalID),
+			ShortID:      event.ShortID,
+			Status:       status,
+			PendingAlive: strings.EqualFold(status, "pending"),
 		}
 		// The agent's own permission options ride the event metadata; without
 		// them a live card can only offer a binary answer and the user can

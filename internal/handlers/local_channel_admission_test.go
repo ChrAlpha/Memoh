@@ -137,7 +137,7 @@ func emptyWSAdmissionView(context.Context, sessionruntime.RunHandle) (sessionrun
 
 // admit runs one admission the way the message case does.
 func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (*application.WebAdmission, wsTurnRef) {
-	return h.handler.admitWSRun(context.Background(), h.writer, wsAdmissionBotID, ref, "ws.message", submission, build, nil)
+	return h.handler.admitWSRun(context.Background(), h.writer, wsAdmissionBotID, "", ref, "ws.message", submission, build, nil)
 }
 
 // send runs an admitted Web send to its end and returns once the session has
@@ -487,7 +487,7 @@ func TestAdmitWSRunRequiresConfiguredRuntime(t *testing.T) {
 		agentService: application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC, time.Second),
 	}
 	released := false
-	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, func() { released = true })
+	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, "", wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, func() { released = true })
 	if admitted != nil {
 		t.Fatalf("admission = %+v, want a refusal", admitted)
 	}

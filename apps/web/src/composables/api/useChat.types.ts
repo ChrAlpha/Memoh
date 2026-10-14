@@ -246,7 +246,10 @@ export interface UIToolApproval {
   short_id?: number
   status: string
   decision_reason?: string
-  can_approve?: boolean
+  /** The approval still takes a decision. The same for every viewer. */
+  pending_alive?: boolean
+  /** This viewer may give the decision. Computed by the server per viewer; absent means no. */
+  viewer_can_decide?: boolean
   options?: UIToolApprovalOption[]
   selected_option_id?: string
 }
@@ -488,8 +491,9 @@ export interface RuntimeCurrentRunView {
   // settled history turn that replaces them.
   steer_turns?: RuntimeSteerTurnView[]
   // The catalog code of the run's failure. The run view carries no error text;
-  // the client shows the copy for the code.
+  // the client shows the copy for the code, filled with error_args.
   error_code?: string
+  error_args?: Record<string, string> | null
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
   operation?: RuntimeRunOperation
@@ -535,6 +539,7 @@ export interface RuntimeCurrentRunPatch {
   run_id: string
   status?: RuntimeRunStatus
   error_code?: string
+  error_args?: Record<string, string> | null
   updated_at?: string
   owner_lease_expires_at?: string
   // retry replaces the run's retry state, clear_retry removes it; with

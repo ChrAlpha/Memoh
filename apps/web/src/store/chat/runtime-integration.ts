@@ -1,14 +1,13 @@
 import type { Ref } from 'vue'
 import type { UIStreamEvent } from '@/composables/api/useChat'
 import { resolveApiErrorMessage } from '@/utils/api-error'
-import { createInvocationId, stringRecord } from '../chat-list.normalize'
+import { createInvocationId } from '../chat-list.normalize'
 import { provisionalSessionTitle } from '../chat-list.utils'
 import type { createAssistantStreamRegistry } from './assistant-streams'
 import type { createChatDecisions } from './decisions'
 import type { createChatRealtimeController } from './realtime'
 import type { RuntimeProjectionChange } from './runtime-client'
 import { isRuntimeRunActive } from './runtime-projection'
-import { fillRunErrorDetails } from './runtime-transcript-merge'
 import type { createSessionList } from './session-list'
 import { commandActionErrorMessage } from './messages'
 import { CommandStreamError, StreamFailureError, failureStage } from './send'
@@ -18,11 +17,6 @@ import type {
   ChatViewTarget,
 } from './types'
 import type { createChatViewRegistry } from './view-registry'
-
-// The catalog code of a WS failure frame.
-export function wsFrameErrorCode(event: { code?: string }): string {
-  return event.code?.trim() ?? ''
-}
 
 type AssistantStreams = ReturnType<typeof createAssistantStreamRegistry>
 type Decisions = ReturnType<typeof createChatDecisions>
@@ -267,35 +261,27 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
     if (event.type === 'error') {
       const invocationId = deps.assistantStreams.invocationIdForEvent(event)
       const pending = deps.assistantStreams.getAssistantStream(invocationId)
+      // A frame no local send owns names a run this client did not start or
+      // no longer tracks; that run's failure reaches the screen through its
+      // run view and history, never through the frame.
+      if (!pending) return
       const message = resolveApiErrorMessage(
         event,
         event.message || deps.sendFailedMessage(),
       )
-      if (!pending) {
-        const sessionId = event.session_id?.trim() ?? ''
-        if (!sourceBotId || !sessionId) return
-        const view = deps.chatViews.getSession(sourceBotId, sessionId)
-        if (view) fillRunErrorDetails(view.transcript.messages, event.run_id ?? '', {
-          code: wsFrameErrorCode(event) || undefined,
-          content: message,
-          args: stringRecord(event.args),
-        })
-        return
-      }
       const stage = failureStage(
         pending.assistantTurn,
         pending.replacesTurn,
         deps.hasVisibleAssistantBlocks(pending.assistantTurn),
       )
-      // History keeps a turn the server accepted and failed with a code; a
-      // send refused before acceptance is not in history and returns to the
-      // composer without leaving a turn behind.
-      const acceptedWithCode = Boolean(pending.assistantTurn.runtimeRunId?.trim())
-        && Boolean(wsFrameErrorCode(event))
+      // History keeps a turn the server accepted, and its run view renders
+      // the failure; a send refused before acceptance is not in history and
+      // returns to the composer without leaving a turn behind.
+      const accepted = Boolean(pending.assistantTurn.runtimeRunId?.trim())
       if (
         stage === 'startup'
         && !deps.hasVisibleAssistantBlocks(pending.assistantTurn)
-        && !acceptedWithCode
+        && !accepted
       ) {
         deps.removeTurnFromSession(
           pending.botId,

@@ -147,7 +147,7 @@ export function createTranscriptDecisions(messages: ChatMessage[]) {
         block.approval = {
           ...block.approval,
           status,
-          can_approve: status === 'pending',
+          pending_alive: status === 'pending',
         }
       }
     })

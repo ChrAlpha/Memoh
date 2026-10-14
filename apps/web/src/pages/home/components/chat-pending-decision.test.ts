@@ -54,10 +54,10 @@ describe('findLatestPendingChatDecision', () => {
 
   it('returns pending approvals newest first and exposes the next one after resolution', () => {
     const older = toolBlock(1, {
-      approval: { approval_id: 'approval-1', status: 'pending', can_approve: true },
+      approval: { approval_id: 'approval-1', status: 'pending', pending_alive: true, viewer_can_decide: true },
     })
     const newer = toolBlock(2, {
-      approval: { approval_id: 'approval-2', status: 'pending', can_approve: true },
+      approval: { approval_id: 'approval-2', status: 'pending', pending_alive: true, viewer_can_decide: true },
     })
     const messages: ChatMessage[] = [assistantTurn('assistant-1', [older, newer])]
 
@@ -66,7 +66,7 @@ describe('findLatestPendingChatDecision', () => {
       approval: { approval_id: 'approval-2' },
     })
 
-    newer.approval = { ...newer.approval!, status: 'approved', can_approve: false }
+    newer.approval = { ...newer.approval!, status: 'approved', pending_alive: false }
 
     expect(findLatestPendingChatDecision(messages)).toMatchObject({
       kind: 'tool_approval',
@@ -74,10 +74,26 @@ describe('findLatestPendingChatDecision', () => {
     })
   })
 
+  it.each([
+    ['absent', undefined, false],
+    ['false', false, false],
+    ['true', true, true],
+  ] as const)('offers a live approval only when viewer_can_decide is true (%s)', (_input, viewerCanDecide, offered) => {
+    const messages: ChatMessage[] = [assistantTurn('assistant-1', [
+      toolBlock(1, {
+        approval: { approval_id: 'approval-1', status: 'pending', pending_alive: true, viewer_can_decide: viewerCanDecide },
+      }),
+    ])]
+
+    const decision = findLatestPendingChatDecision(messages)
+    if (offered) expect(decision).toMatchObject({ kind: 'tool_approval', approval: { approval_id: 'approval-1' } })
+    else expect(decision).toBeNull()
+  })
+
   it('ignores decisions that cannot be answered from this chat', () => {
     const messages: ChatMessage[] = [assistantTurn('assistant-1', [
       toolBlock(1, {
-        approval: { approval_id: 'approval-1', status: 'pending', can_approve: false },
+        approval: { approval_id: 'approval-1', status: 'pending', pending_alive: false },
       }),
       toolBlock(2, {
         userInput: { user_input_id: 'input-1', status: 'submitted', can_respond: false },

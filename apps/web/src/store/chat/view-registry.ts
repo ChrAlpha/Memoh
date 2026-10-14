@@ -1,6 +1,7 @@
 import { ref, type Ref } from 'vue'
 import { createComposerPairSync } from './composer-pair-sync'
 import { createTranscriptController, type TranscriptDeps } from './transcript'
+import { isToolApprovalAlive } from './decisions'
 import type {
   ChatMessage,
   ChatViewTarget,
@@ -91,10 +92,7 @@ function hasPendingInteraction(messages: ChatMessage[]): boolean {
     if (message.role !== 'assistant') continue
     for (const block of message.messages) {
       if (block.type !== 'tool') continue
-      if (
-        block.approval?.status === 'pending'
-        && block.approval.can_approve !== false
-      ) return true
+      if (isToolApprovalAlive(block.approval)) return true
       if (
         block.userInput?.status === 'pending'
         && block.userInput.can_respond !== false

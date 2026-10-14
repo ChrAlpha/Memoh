@@ -616,7 +616,7 @@ func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRu
 	pendingDecision := false
 	for _, message := range run.Messages {
 		pendingDecision = pendingDecision || message.UserInput != nil && (message.UserInput.Status == "pending" || message.UserInput.CanRespond) ||
-			message.Approval != nil && (message.Approval.Status == "pending" || message.Approval.CanApprove)
+			message.Approval != nil && (message.Approval.Status == "pending" || message.Approval.PendingAlive)
 	}
 	if run.Status == status && run.OwnerLeaseExpiresAt == nil && run.ProposedTerminalStatus == "" && !pendingDecision {
 		return nil
@@ -656,7 +656,7 @@ func (m *Manager) reconcileTerminalLive(ctx context.Context, terminal TerminalRu
 				}
 			}
 			if message.Approval != nil {
-				message.Approval.CanApprove = false
+				message.Approval.PendingAlive = false
 				if message.Approval.Status == "pending" {
 					message.Approval.Status = "cancelled"
 				}

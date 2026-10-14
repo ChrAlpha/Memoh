@@ -46,43 +46,58 @@ func TestIsUserFacingSessionType(t *testing.T) {
 	}
 }
 
-func TestMergeToolApprovalsUsesCanApproveFunction(t *testing.T) {
+func TestMergeToolApprovalsSplitsLivenessFromViewerAuthority(t *testing.T) {
 	t.Parallel()
 
-	turns := []chatview.UITurn{
-		{
+	newTurns := func() []chatview.UITurn {
+		return []chatview.UITurn{{
 			Role: "assistant",
 			Messages: []chatview.UIMessage{
-				{
-					Type:       chatview.UIMessageTool,
-					ToolCallID: "call-1",
-				},
+				{Type: chatview.UIMessageTool, ToolCallID: "call-1"},
+				{Type: chatview.UIMessageTool, ToolCallID: "call-2"},
 			},
-		},
+		}}
 	}
 	approvals := []toolapproval.Request{
-		{
-			ID:         "approval-1",
-			ToolCallID: "call-1",
-			ShortID:    7,
-			Status:     toolapproval.StatusPending,
-		},
+		{ID: "approval-1", ToolCallID: "call-1", ShortID: 7, Status: toolapproval.StatusPending},
+		{ID: "approval-2", ToolCallID: "call-2", ShortID: 8, Status: toolapproval.StatusApproved},
 	}
 
-	mergeToolApprovals(turns, approvals, func(req toolapproval.Request) bool {
-		return req.ID == "approval-2"
+	t.Run("no viewer authority renders read-only", func(t *testing.T) {
+		turns := newTurns()
+		mergeToolApprovals(turns, approvals, nil, nil)
+		pending, decided := turns[0].Messages[0].Approval, turns[0].Messages[1].Approval
+		if pending == nil || !pending.PendingAlive || pending.ViewerCanDecide {
+			t.Fatalf("pending approval = %+v, want alive and not decidable", pending)
+		}
+		if decided == nil || decided.PendingAlive || decided.ViewerCanDecide {
+			t.Fatalf("decided approval = %+v, want neither alive nor decidable", decided)
+		}
 	})
 
-	approval := turns[0].Messages[0].Approval
-	if approval == nil {
-		t.Fatal("approval metadata was not merged")
-	}
-	if approval.Status != toolapproval.StatusPending {
-		t.Fatalf("approval status = %q, want pending", approval.Status)
-	}
-	if approval.CanApprove {
-		t.Fatal("mergeToolApprovals ignored injected canApprove function")
-	}
+	t.Run("viewer authority is asked only about live approvals", func(t *testing.T) {
+		turns := newTurns()
+		var asked []string
+		mergeToolApprovals(turns, approvals, nil, func(req toolapproval.Request) bool {
+			asked = append(asked, req.ID)
+			return true
+		})
+		if len(asked) != 1 || asked[0] != "approval-1" {
+			t.Fatalf("viewer authority asked about %v, want only approval-1", asked)
+		}
+		if !turns[0].Messages[0].Approval.ViewerCanDecide || turns[0].Messages[1].Approval.ViewerCanDecide {
+			t.Fatalf("viewer_can_decide = %t/%t, want true/false",
+				turns[0].Messages[0].Approval.ViewerCanDecide, turns[0].Messages[1].Approval.ViewerCanDecide)
+		}
+	})
+
+	t.Run("injected liveness wins over status", func(t *testing.T) {
+		turns := newTurns()
+		mergeToolApprovals(turns, approvals, func(toolapproval.Request) bool { return false }, func(toolapproval.Request) bool { return true })
+		if approval := turns[0].Messages[0].Approval; approval.PendingAlive || approval.ViewerCanDecide {
+			t.Fatalf("zombie approval = %+v, want neither alive nor decidable", approval)
+		}
+	})
 }
 
 func TestMergeUserInputsRestoresStoredAnswers(t *testing.T) {

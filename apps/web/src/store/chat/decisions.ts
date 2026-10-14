@@ -11,6 +11,19 @@ import type { createTranscriptController } from './transcript'
 import { isRuntimeRunActive } from './runtime-projection'
 
 type Transcript = ReturnType<typeof createTranscriptController>
+
+// Both facts are the server's: pending_alive says the decision is still
+// accepted, viewer_can_decide says this viewer may give it. A field the server
+// did not send means no, so an approval is only actionable when it says so.
+// The status is read too, because a local decision marks it before the
+// server's next frame arrives.
+export function isToolApprovalAlive(approval: UIToolApproval | null | undefined): boolean {
+  return approval?.status === 'pending' && approval.pending_alive === true
+}
+
+export function canDecideToolApproval(approval: UIToolApproval | null | undefined): boolean {
+  return isToolApprovalAlive(approval) && approval?.viewer_can_decide === true
+}
 type DecisionKind = 'tool_approval_response' | 'user_input_response'
 
 interface PendingDecision {
@@ -136,7 +149,7 @@ export function createChatDecisions(deps: ChatDecisionDeps) {
           .filter(message => message.type === 'tool')
           .map(message => message.approval)
           .find(value => value?.approval_id === pending.decisionId)
-        if (approval && (approval.status !== 'pending' || approval.can_approve === false)) {
+        if (approval && !isToolApprovalAlive(approval)) {
           finish(pending.controlId, false)
         } else {
           pending.optimistic()
@@ -165,7 +178,7 @@ export function createChatDecisions(deps: ChatDecisionDeps) {
     const decisionId = approval.approval_id?.trim() ?? ''
     const run = deps.currentRun(sessionId)
     if (!botId || !sessionId || !decisionId || !run) return false
-    if (approval.status !== 'pending' || approval.can_approve === false) return false
+    if (!canDecideToolApproval(approval)) return false
     if (!deps.ensureWebSocket(botId)) {
       deps.showError(deps.connectionLostMessage())
       return false

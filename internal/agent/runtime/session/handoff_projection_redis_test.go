@@ -30,7 +30,7 @@ func TestRedisValkeyHandoffTerminalRetiresOnlyAnOlderSameRunReceipt(t *testing.T
 		deadline := time.Now().Add(time.Minute)
 		_, _, err = backend.StartRun(t.Context(), key, ref, func(_ Snapshot, _ bool) (Snapshot, bool, error) {
 			snapshot := EmptySnapshot(key.BotID, key.SessionID)
-			snapshot.CurrentRunView = &CurrentRunView{RunID: ref.RunID, OwnerID: ref.OwnerID, Generation: ref.Generation, FencingToken: token, Status: RunStatusWaitingDecision, OwnerLeaseExpiresAt: &deadline, Messages: []chatview.UIMessage{{UserInput: &chatview.UIUserInput{Status: "pending", CanRespond: true}}, {Approval: &chatview.UIToolApproval{Status: "pending", CanApprove: true}}}}
+			snapshot.CurrentRunView = &CurrentRunView{RunID: ref.RunID, OwnerID: ref.OwnerID, Generation: ref.Generation, FencingToken: token, Status: RunStatusWaitingDecision, OwnerLeaseExpiresAt: &deadline, Messages: []chatview.UIMessage{{UserInput: &chatview.UIUserInput{Status: "pending", CanRespond: true}}, {Approval: &chatview.UIToolApproval{Status: "pending", PendingAlive: true}}}}
 			return snapshot, true, nil
 		})
 		if err != nil {
@@ -48,7 +48,7 @@ func TestRedisValkeyHandoffTerminalRetiresOnlyAnOlderSameRunReceipt(t *testing.T
 		}
 		run := snapshot.CurrentRunView
 		if token <= 9 {
-			if run.Status != RunStatusLost || run.FencingToken != 9 || run.Messages[0].UserInput.CanRespond || run.Messages[1].Approval.CanApprove {
+			if run.Status != RunStatusLost || run.FencingToken != 9 || run.Messages[0].UserInput.CanRespond || run.Messages[1].Approval.PendingAlive {
 				t.Fatalf("old terminal projection survived: %+v", run)
 			}
 		} else if run.Status != RunStatusWaitingDecision || !run.Messages[0].UserInput.CanRespond {

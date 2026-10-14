@@ -919,7 +919,7 @@ func extractApprovalMetadata(metadata map[string]any) *UIToolApproval {
 		ShortID:          intFromAny(obj["short_id"]),
 		Status:           status,
 		DecisionReason:   stringFromAny(obj["decision_reason"]),
-		CanApprove:       boolFromAny(obj["can_approve"], true),
+		PendingAlive:     boolFromAny(obj["pending_alive"], strings.EqualFold(status, "pending")),
 		Options:          approvalOptionsFromAny(obj["options"]),
 		SelectedOptionID: stringFromAny(obj["selected_option_id"]),
 	}

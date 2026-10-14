@@ -79,18 +79,19 @@ function flushPromises() {
 }
 
 type RuntimeTestUpdate =
-  | { kind: 'run', status: RuntimeRunStatus, errorCode?: string }
+  | { kind: 'run', status: RuntimeRunStatus, errorCode?: string, errorArgs?: Record<string, string> }
   | { kind: 'message', message: UIMessage }
   | { kind: 'user_turn', turn: UIUserTurn }
 
 const runtime = {
   started: { kind: 'run', status: 'running' } as RuntimeTestUpdate,
   completed: { kind: 'run', status: 'completed' } as RuntimeTestUpdate,
-  // The run view has no error text; a failed run is described by its code.
-  failed: (errorCode?: string): RuntimeTestUpdate => ({
+  // The run view has no error text; a failed run is described by its code and args.
+  failed: (errorCode?: string, errorArgs?: Record<string, string>): RuntimeTestUpdate => ({
     kind: 'run',
     status: 'errored',
     errorCode,
+    errorArgs,
   }),
   message: (message: UIMessage): RuntimeTestUpdate => ({ kind: 'message', message }),
   userTurn: (turn: UIUserTurn): RuntimeTestUpdate => ({ kind: 'user_turn', turn }),
@@ -196,6 +197,7 @@ function publishRuntimeUpdate(
   if (update.kind === 'run') {
     run.status = update.status
     run.error_code = update.errorCode
+    run.error_args = update.errorArgs
     run.updated_at = now
     delta = publishedRun
       ? {
@@ -203,6 +205,7 @@ function publishRuntimeUpdate(
             run_id: runId,
             status: update.status,
             error_code: update.errorCode,
+            error_args: update.errorArgs ?? null,
             updated_at: now,
           },
         }
@@ -471,7 +474,7 @@ beforeEach(() => {
                     approval: {
                       ...candidate.approval,
                       status: control.decision === 'reject' ? 'rejected' : 'approved',
-                      can_approve: false,
+                      pending_alive: false,
                     },
                   }]
                 }
@@ -625,7 +628,7 @@ function richActiveRunStoreScript(): RuntimeTestUpdate[] {
           approval_id: 'approval-1',
           short_id: 7,
           status: 'pending',
-          can_approve: true,
+          pending_alive: true, viewer_can_decide: true,
         },
     }),
     runtime.message({
@@ -819,11 +822,12 @@ describe('chat-list store', () => {
     },
   )
 
-  // The run view carries the failure's code alone; its args come only on the
-  // error frame. The one error block keeps them whichever arrives first, and
-  // without a frame it has the code and no args.
+  // An accepted run's error block comes from the run's own failure value: the
+  // run view while the run is projected, with its code and args, and history
+  // once it settles. The error frame the send ends with adds no block and
+  // fills nothing in, whichever arrives first and whatever it says.
   it.each(['error frame first', 'projection first', 'projection only'])(
-    'keeps the args of a coded failure on its error block (%s)',
+    'renders a coded failure from the run view alone (%s)',
     async (order) => {
       h.sendUpdates = [runtime.started]
       const store = useChatStore()
@@ -831,7 +835,6 @@ describe('chat-list store', () => {
       await store.selectBot('bot-1')
       const sending = store.sendMessage('hello')
       await flushPromises()
-      // History, read again once the run settles, keeps the code alone.
       const turnId = `turn-${wsRunId(0)}`
       api.fetchMessagesUI.mockResolvedValue([
         { id: 'user-1', turn_id: turnId, role: 'user', text: 'hello', attachments: [], timestamp: '2026-09-28T08:00:00.000Z' },
@@ -839,7 +842,7 @@ describe('chat-list store', () => {
           id: 'assistant-1',
           turn_id: turnId,
           role: 'assistant',
-          messages: [{ id: 0, type: 'error', code: 'agent_dependency_missing', content: '' }],
+          messages: [{ id: 0, type: 'error', code: 'agent_dependency_missing', content: '', args: { dep_id: 'codex' } }],
           timestamp: '2026-09-28T08:00:01.000Z',
           streaming: false,
         },
@@ -850,10 +853,10 @@ describe('chat-list store', () => {
         invocation_id: wsInvocationId(0),
         session_id: 'session-1',
         code: 'agent_dependency_missing',
-        args: { dep_id: 'codex' },
-        message: '',
+        args: { dep_id: 'frame-only' },
+        message: 'frame copy',
       })
-      const projection = () => emitRuntime(runtime.failed('agent_dependency_missing'))
+      const projection = () => emitRuntime(runtime.failed('agent_dependency_missing', { dep_id: 'codex' }))
       if (order === 'error frame first') {
         errorFrame()
         projection()
@@ -869,15 +872,8 @@ describe('chat-list store', () => {
       const assistant = store.messages[1] as ChatAssistantTurn
       const errors = assistant.messages.filter(block => block.type === 'error')
       expect(errors).toHaveLength(1)
-      expect(errors[0]).toMatchObject({ type: 'error', code: 'agent_dependency_missing' })
-      if (order === 'projection only') {
-        expect(errors[0]).not.toHaveProperty('args.dep_id')
-      } else {
-        expect(errors[0]).toMatchObject({
-          args: { dep_id: 'codex' },
-          content: 'codex is not installed in this workspace. Install it from the bot\'s dependencies, or wait for the running installation to finish, then send the message again.',
-        })
-      }
+      expect(errors[0]).toMatchObject({ type: 'error', code: 'agent_dependency_missing', args: { dep_id: 'codex' } })
+      expect(errors[0]).not.toMatchObject({ content: 'frame copy' })
     },
   )
 
@@ -1202,7 +1198,7 @@ describe('chat-list store', () => {
               approval_id: 'approval-1',
               short_id: 7,
               status: 'pending',
-              can_approve: true,
+              pending_alive: true, viewer_can_decide: true,
             },
         }),
         runtime.failed(),
@@ -5605,7 +5601,7 @@ describe('chat-list store', () => {
         approval: {
           approval_id: 'approval-1',
           status: 'pending',
-          can_approve: true,
+          pending_alive: true, viewer_can_decide: true,
         },
       })
 

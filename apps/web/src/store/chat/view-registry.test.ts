@@ -36,7 +36,7 @@ function pendingApprovalTurn(id: string): ChatAssistantTurn {
       approval: {
         approval_id: `approval-${id}`,
         status: 'pending',
-        can_approve: true,
+        pending_alive: true, viewer_can_decide: true,
       },
     }],
     timestamp: '2026-01-01T00:00:01.000Z',

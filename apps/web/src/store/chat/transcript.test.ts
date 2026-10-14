@@ -68,7 +68,7 @@ function approvalMessage(status = 'pending'): UIMessage {
     input: { command: 'pwd' },
     tool_call_id: 'call-1',
     running: false,
-    approval: { approval_id: 'approval-1', status, can_approve: status === 'pending' },
+    approval: { approval_id: 'approval-1', status, pending_alive: status === 'pending', viewer_can_decide: status === 'pending' },
   }
 }
 
@@ -344,6 +344,24 @@ describe('chat transcript controller', () => {
     expect(transcript.messages).toHaveLength(1)
     const turn = transcript.messages[0] as ChatAssistantTurn
     expect(turn.messages.some(block => block.type === 'error' && block.code === 'agent.response_timeout')).toBe(true)
+  })
+
+  // An accepted run fails with its own durable value, rendered from its run
+  // view and then history; the error the send ends with adds no block.
+  it('adds no error block for a failure of an accepted run', () => {
+    const { transcript } = makeTranscript()
+    const failed = assistant('assistant-local', [{ id: 0, type: 'text', content: 'partial' }])
+    failed.turnId = 'turn-accepted'
+    failed.runtimeRunId = 'run-accepted'
+    transcript.appendToView(failed)
+    const error = Object.assign(new Error('The model did not respond in time. Please try again.'), {
+      code: 'agent.response_timeout',
+    })
+
+    transcript.finalizeStreamFailure(failed, 'bot-1', 'session-1', error, true)
+
+    expect(transcript.messages).toHaveLength(1)
+    expect((transcript.messages[0] as ChatAssistantTurn).messages).toEqual([{ id: 0, type: 'text', content: 'partial' }])
   })
 
   it('does not inject browser-memory stream errors into authoritative history', () => {

@@ -2080,7 +2080,7 @@ func TestACPResultOutputMessagesPersistsResolvedToolApprovalMetadata(t *testing.
 	if !ok {
 		t.Fatalf("provider metadata = %#v, want approval", parts[0].ProviderMetadata)
 	}
-	if approval["approval_id"] != "approval-1" || approval["status"] != toolapproval.StatusApproved || approval["can_approve"] != false {
+	if approval["approval_id"] != "approval-1" || approval["status"] != toolapproval.StatusApproved || approval["pending_alive"] != false {
 		t.Fatalf("approval metadata = %#v", approval)
 	}
 }
@@ -2481,7 +2481,8 @@ func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
 		},
 	}
 	inputTarget := userinput.Request{BotID: "bot-1", SessionID: "session-1"}
-	approvalTarget := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", Operation: toolapproval.OperationExec}
+	svc.queries = runInitiatorQueries{initiators: map[string]string{approvalTestRunID: ownerID}}
+	approvalTarget := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", RunID: approvalTestRunID, Operation: toolapproval.OperationExec}
 
 	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); err != nil {
 		t.Fatalf("owner user-input authorization error = %v", err)
@@ -2492,8 +2493,9 @@ func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
 	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: memberID}); err != nil {
 		t.Fatalf("workspace_exec member user-input authorization error = %v", err)
 	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: memberID}); err != nil {
-		t.Fatalf("workspace_exec member approval authorization error = %v", err)
+	// The member's grant does not reach a run the owner started.
+	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: memberID}); !errors.Is(err, toolapproval.ErrForbidden) {
+		t.Fatalf("workspace_exec member approval authorization error = %v, want forbidden", err)
 	}
 	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, userinput.ErrForbidden) {
 		t.Fatalf("chat-only user-input authorization error = %v, want forbidden", err)

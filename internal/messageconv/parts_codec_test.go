@@ -22,7 +22,7 @@ import (
 func TestStoredPartsRoundTripKeepsLegacyShape(t *testing.T) {
 	t.Parallel()
 	for _, content := range []string{
-		`[{"input":{"path":"/tmp/a","n":3},"providerMetadata":{"anthropic":{"signature":"sig-1"},"approval":{"approval_id":"a1","can_approve":true,"operation":{"kind":"exec"},"short_id":2,"status":"pending"},"execution_location":{"kind":"native","name":"Server Workspace"}},"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`,
+		`[{"input":{"path":"/tmp/a","n":3},"providerMetadata":{"anthropic":{"signature":"sig-1"},"approval":{"approval_id":"a1","pending_alive":true,"operation":{"kind":"exec"},"short_id":2,"status":"pending"},"execution_location":{"kind":"native","name":"Server Workspace"}},"toolCallId":"c1","toolName":"exec","type":"tool-call"}]`,
 		`[{"input":"not json {","toolCallId":"c2","toolName":"exec","type":"tool-call"}]`,
 		`[{"result":"plain text","toolCallId":"c1","toolName":"exec","type":"tool-result"}]`,
 		`[{"isError":true,"result":{"status":"expired","answers":[{"question_id":"q1"}]},"toolCallId":"c1","toolName":"ask_user","type":"tool-result"}]`,

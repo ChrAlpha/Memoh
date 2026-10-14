@@ -253,7 +253,7 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 					approvalSeen, inputSeen := false, false
 					for _, msg := range snap.CurrentRunView.Messages {
 						if msg.Approval != nil && msg.Approval.ApprovalID == q.approval.ID.String() {
-							approvalSeen = msg.Approval.Status == toolapproval.StatusRejected && !msg.Approval.CanApprove
+							approvalSeen = msg.Approval.Status == toolapproval.StatusRejected && !msg.Approval.PendingAlive
 						}
 						if msg.UserInput != nil && msg.UserInput.UserInputID == q.row.ID.String() {
 							inputSeen = msg.UserInput.Status == userinput.StatusSubmitted && !msg.UserInput.CanRespond && len(msg.UserInput.Answers) == 1

@@ -476,7 +476,7 @@ func TestNativeToolSourceWaitsForApprovalAndPublishesRequest(t *testing.T) {
 	approvedApproval, _ := approved.Metadata["approval"].(map[string]any)
 	if approvedApproval["approval_id"] != "approval-1" ||
 		approvedApproval["status"] != toolapproval.StatusApproved ||
-		approvedApproval["can_approve"] != false {
+		approvedApproval["pending_alive"] != false {
 		t.Fatalf("approved approval payload = %#v", approvedApproval)
 	}
 	structured, ok := result["structuredContent"].(map[string]any)
@@ -568,7 +568,7 @@ func TestNativeToolSourceRejectedApprovalDoesNotExecute(t *testing.T) {
 	approvalPayload, _ := toolEvents.events[1].Metadata["approval"].(map[string]any)
 	if approvalPayload["approval_id"] != "approval-2" ||
 		approvalPayload["status"] != toolapproval.StatusRejected ||
-		approvalPayload["can_approve"] != false {
+		approvalPayload["pending_alive"] != false {
 		t.Fatalf("rejected approval payload = %#v", approvalPayload)
 	}
 }

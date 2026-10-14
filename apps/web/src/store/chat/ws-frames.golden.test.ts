@@ -179,11 +179,13 @@ describe('ws frame goldens', () => {
       })
       const user = transcript.turns.find(t => t.role === 'user')
       expect(user).toMatchObject({ turn_id: TURN, text: 'do it', platform: 'web' })
-      // Steers split the run's blocks across assistant segments.
+      // Steers split the run's blocks across assistant segments. An error
+      // message inside the view is not a block source: a run's error block
+      // comes from its error_code, which this running snapshot has none of.
       const assistants = transcript.turns.filter(t => t.role === 'assistant') as Array<{ turn_id: string, messages: Array<{ id: number, type: string }> }>
       expect(assistants.every(t => typeof t.turn_id === 'string')).toBe(true)
       expect(assistants.flatMap(t => t.messages).map(m => m.type)).toEqual([
-        'reasoning', 'text', 'tool', 'tool', 'tool', 'attachments', 'error', 'notice', 'command', 'status',
+        'reasoning', 'text', 'tool', 'tool', 'tool', 'attachments', 'notice', 'command', 'status',
       ])
       expect(currentRunView).toMatchObject({
         retry: { attempt: 2, max_attempt: 5, delay_ms: 4000, reason: 'rate_limited' },
@@ -203,7 +205,7 @@ describe('ws frame goldens', () => {
     it('a waiting_decision snapshot keeps the approval and ask_user blocks', () => {
       const run = runView('runtime_snapshot_waiting_decision')
       const tools = run.messages as unknown as GoldenFrame[]
-      expect(tools[0]!.approval).toMatchObject({ approval_id: 'ap-1', status: 'pending', can_approve: true, selected_option_id: 'o1' })
+      expect(tools[0]!.approval).toMatchObject({ approval_id: 'ap-1', status: 'pending', pending_alive: true, selected_option_id: 'o1' })
       expect(tools[0]!.approval.options.map((o: { kind: string }) => o.kind)).toEqual(['allow_once', 'reject_once'])
       expect(tools[1]!.user_input).toMatchObject({ user_input_id: 'ui-1', status: 'pending', can_respond: true })
       expect(tools[1]!.user_input.questions[0]).toMatchObject({ kind: 'single_select', required: true })

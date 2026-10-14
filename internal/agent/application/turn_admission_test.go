@@ -114,3 +114,32 @@ func TestAdmitTurnRunDiscussShapeStaysContentless(t *testing.T) {
 		t.Fatalf("request user turn = %#v, want nil for a discuss-shaped command", view.RequestUserTurn)
 	}
 }
+
+// A channel run records who asked for it: the bound account when there is
+// one, otherwise the channel identity that sent the message.
+func TestAdmitTurnRunRecordsTheRequesterAsInitiator(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, userID, channelIdentityID, want string
+	}{
+		{"bound account", "account-1", "ci-1", "account-1"},
+		{"unbound channel identity", "", "ci-1", "ci-1"},
+		{"nobody", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admitter := &fakeTurnAdmitter{}
+			svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
+			cmd := turn.StartTurnCommand{
+				TeamID: "team-1", Mode: turn.ModeChat, BotID: "bot-1", ThreadID: "thread-1", Query: "hello",
+				ExternalMessageID: "ext-1", UserID: tc.userID, SourceChannelIdentityID: tc.channelIdentityID,
+			}
+			if _, err := svc.admitTurnRun(context.Background(), cmd, func() {}, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := admitter.admitInput.InitiatorID; got != tc.want {
+				t.Fatalf("InitiatorID = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -1,4 +1,5 @@
 import type { ChatMessage, ToolCallBlock } from '@/store/chat-list'
+import { canDecideToolApproval } from '@/store/chat/decisions'
 
 export type PendingChatDecision =
   | {
@@ -33,11 +34,7 @@ export function findLatestPendingChatDecision(
       }
 
       const approval = block.approval
-      if (
-        approval?.approval_id
-        && approval.status === 'pending'
-        && approval.can_approve !== false
-      ) {
+      if (approval?.approval_id && canDecideToolApproval(approval)) {
         return { kind: 'tool_approval', block, approval }
       }
     }

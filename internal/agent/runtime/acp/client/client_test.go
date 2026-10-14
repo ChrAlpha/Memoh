@@ -1314,7 +1314,7 @@ func TestRequestPermissionUsesMemohToolApproval(t *testing.T) {
 		}
 	}
 	approvalPayload, _ := events[1].Metadata["approval"].(map[string]any)
-	if approvalPayload["can_approve"] != false {
+	if approvalPayload["pending_alive"] != false {
 		t.Fatalf("approval event = %#v", events[0])
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
+	"github.com/jackc/pgx/v5"
 
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/decision"
@@ -353,35 +354,122 @@ func (s *Service) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 }
 
 func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput) error {
-	if s == nil || s.botPermissions == nil {
-		return errors.New("bot permission checker not configured")
-	}
-	botID := firstNonEmpty(target.BotID, input.BotID)
-	// Channel deciders without a bound account carry only their channel
-	// identity; grants are keyed on that identity, so it stays a valid
-	// authorization subject (base behavior).
-	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
-	permission, ok := toolApprovalPermission(target.Operation)
-	if isCapabilityManagementApproval(target) {
-		permission, ok = bots.PermissionManage, true
-	}
-	if strings.TrimSpace(botID) == "" || strings.TrimSpace(actorID) == "" || !ok {
-		return toolapproval.ErrForbidden
-	}
-	if ok, err := s.botPermissions.HasBotPermission(ctx, botID, actorID, permission); err != nil {
+	target.BotID = firstNonEmpty(target.BotID, input.BotID)
+	allowed, err := s.CanDecideToolApproval(ctx, target, ToolApprovalPrincipal{
+		UserID:            input.ActorUserID,
+		ChannelIdentityID: input.ActorChannelIdentityID,
+	})
+	if err != nil {
 		return err
-	} else if !ok {
+	}
+	if !allowed {
 		return toolapproval.ErrForbidden
 	}
 	return nil
+}
+
+// ToolApprovalPrincipal is who decides an approval, or for whom an approval is
+// rendered. Channel deciders without a bound account carry only their channel
+// identity; grants are keyed on that identity, so it stays a valid subject.
+type ToolApprovalPrincipal struct {
+	UserID            string
+	ChannelIdentityID string
+}
+
+func (p ToolApprovalPrincipal) subject() string {
+	return firstNonEmpty(p.UserID, p.ChannelIdentityID)
+}
+
+func (p ToolApprovalPrincipal) is(id string) bool {
+	id = strings.TrimSpace(id)
+	return id != "" && (id == strings.TrimSpace(p.UserID) || id == strings.TrimSpace(p.ChannelIdentityID))
+}
+
+// CanDecideToolApproval is the single authorization for answering a tool
+// approval. Every decision entry (Web WS, HTTP, IM buttons and commands) is
+// checked by it when the decision is committed, and the per-viewer
+// viewer_can_decide flag is computed by it, so what a client is offered and
+// what the server accepts cannot diverge.
+//
+// Who it admits: the user who started the run (D), holding the grant the
+// approval's operation requires, and users who manage the bot (C). Global
+// admins pass the manage check through ResolveUserPermissions (A, unchanged).
+// Who it stops: a grant holder deciding a run somebody else started — in a
+// group chat that member is neither the requester nor the bot's manager (D
+// acting for another D). A run with no recorded initiator, admitted before the
+// ledger kept one or started by a schedule, is decided by a manager only.
+func (s *Service) CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal ToolApprovalPrincipal) (bool, error) {
+	if s == nil || s.botPermissions == nil {
+		return false, errors.New("bot permission checker not configured")
+	}
+	botID := strings.TrimSpace(approval.BotID)
+	actorID := principal.subject()
+	if botID == "" || actorID == "" {
+		return false, nil
+	}
+	initiatorID, err := s.runInitiator(ctx, approval.RunID)
+	if err != nil {
+		return false, err
+	}
+	if principal.is(initiatorID) {
+		if permission, ok := toolApprovalPermission(approval); ok && permission != bots.PermissionManage {
+			allowed, err := s.botPermissions.HasBotPermission(ctx, botID, actorID, permission)
+			if err != nil || allowed {
+				return allowed, err
+			}
+		}
+	}
+	return s.botPermissions.HasBotPermission(ctx, botID, actorID, bots.PermissionManage)
+}
+
+// ViewerCanDecideToolApproval answers CanDecideToolApproval for an approval a
+// live frame names only by id.
+func (s *Service) ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal ToolApprovalPrincipal) (bool, error) {
+	if s == nil || s.toolApproval == nil {
+		return false, errors.New("tool approval service not configured")
+	}
+	approval, err := s.toolApproval.Get(ctx, approvalID)
+	if err != nil {
+		return false, err
+	}
+	return s.CanDecideToolApproval(ctx, approval, principal)
+}
+
+func (s *Service) runInitiator(ctx context.Context, runID string) (string, error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return "", nil
+	}
+	if s.queries == nil {
+		return "", errors.New("session run store not configured")
+	}
+	id, err := db.ParseUUID(runID)
+	if err != nil {
+		return "", err
+	}
+	run, err := s.queries.GetSessionRun(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read run initiator: %w", err)
+	}
+	return db.TextToString(run.InitiatorID), nil
 }
 
 func isCapabilityManagementApproval(target toolapproval.Request) bool {
 	return target.ToolName == agenttools.ToolMCPManage().String() || target.ToolName == agenttools.ToolAppManage().String()
 }
 
-func toolApprovalPermission(operation string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(operation)) {
+// toolApprovalPermission is the grant a run's initiator must hold to answer
+// the approval: the same authority as performing the operation directly.
+// Capability management changes the bot's configuration, which only a manager
+// may do.
+func toolApprovalPermission(target toolapproval.Request) (string, bool) {
+	if isCapabilityManagementApproval(target) {
+		return bots.PermissionManage, true
+	}
+	switch strings.ToLower(strings.TrimSpace(target.Operation)) {
 	case toolapproval.OperationRead:
 		return bots.PermissionWorkspaceRead, true
 	case toolapproval.OperationWrite:

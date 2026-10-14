@@ -20681,9 +20681,6 @@ const docTemplate = `{
                 "approval_id": {
                     "type": "string"
                 },
-                "can_approve": {
-                    "type": "boolean"
-                },
                 "decision_reason": {
                     "type": "string"
                 },
@@ -20694,6 +20691,10 @@ const docTemplate = `{
                         "$ref": "#/definitions/conversation.UIToolApprovalOption"
                     }
                 },
+                "pending_alive": {
+                    "description": "PendingAlive reports whether the approval can still take a decision. It\nis the same for every viewer, so the shared live view carries it.",
+                    "type": "boolean"
+                },
                 "selected_option_id": {
                     "type": "string"
                 },
@@ -20702,6 +20703,10 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "viewer_can_decide": {
+                    "description": "ViewerCanDecide reports whether the viewer this payload was rendered for\nmay decide it. It is computed per WS connection and per HTTP request and\nnever carried by the shared live view; absent means the viewer may not.",
+                    "type": "boolean"
                 }
             }
         },

@@ -1426,16 +1426,26 @@ export type ConversationUiReplyRef = {
 
 export type ConversationUiToolApproval = {
     approval_id?: string;
-    can_approve?: boolean;
     decision_reason?: string;
     /**
      * Options are the agent-provided permission options, verbatim; the client
      * renders one action per option and answers with the chosen option id.
      */
     options?: Array<ConversationUiToolApprovalOption>;
+    /**
+     * PendingAlive reports whether the approval can still take a decision. It
+     * is the same for every viewer, so the shared live view carries it.
+     */
+    pending_alive?: boolean;
     selected_option_id?: string;
     short_id?: number;
     status?: string;
+    /**
+     * ViewerCanDecide reports whether the viewer this payload was rendered for
+     * may decide it. It is computed per WS connection and per HTTP request and
+     * never carried by the shared live view; absent means the viewer may not.
+     */
+    viewer_can_decide?: boolean;
 };
 
 export type ConversationUiToolApprovalOption = {

@@ -65,7 +65,7 @@ func goldenMessages() []chatview.UIMessage {
 			ID: 4, Type: chatview.UIMessageTool, Name: "write", ToolCallID: "call-2", Input: map[string]any{"path": "x"},
 			Running: ptr(true),
 			Approval: &chatview.UIToolApproval{
-				ApprovalID: "ap-1", ShortID: 7, Status: "pending", DecisionReason: "needs review", CanApprove: true,
+				ApprovalID: "ap-1", ShortID: 7, Status: "pending", DecisionReason: "needs review", PendingAlive: true,
 				Options: []chatview.UIToolApprovalOption{
 					{ID: "o1", Name: "Allow once", Kind: "allow_once"},
 					{ID: "o2", Name: "Reject", Kind: "reject_once"},
