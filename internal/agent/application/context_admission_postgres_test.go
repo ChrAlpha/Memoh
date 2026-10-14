@@ -127,3 +127,24 @@ func TestPostgresContextFailsWhenRequiredRowWasRefused(t *testing.T) {
 		t.Fatalf("assembleContext error = %v, want the refused request row reported as not visible", err)
 	}
 }
+
+// A refused row larger than the whole history budget, the newest in the
+// session, does not use the budget up: the readable rows behind it still load.
+func TestPostgresContextBudgetIsNotSpentOnRefusedRows(t *testing.T) {
+	s := newStage4Session(t)
+	s.persist("user", "q0")
+	s.persist("assistant", "a0")
+	s.persist("user", "q1")
+	s.persistRefusedPadded(messagepkg.AdmissionRejectedACL, "refused-large", 4000)
+
+	assembled, err := s.assembleFor(contextPurposeRun, ChatRequest{}, 2000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stage4Labels(assembled.Messages), []string{"q0", "a0", "q1"}; !slices.Equal(got, want) {
+		t.Fatalf("context = %v, want %v", got, want)
+	}
+	if assembled.Truncated {
+		t.Fatal("context reported truncated: the refused row took budget from the readable history")
+	}
+}

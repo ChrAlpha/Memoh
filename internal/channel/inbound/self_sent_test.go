@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/channel/adapters/misskey"
 	"github.com/felinics/memoh/internal/channel/adapters/slack"
 	"github.com/felinics/memoh/internal/channel/adapters/telegram"
+	"github.com/felinics/memoh/internal/channel/adapters/weixin"
 	"github.com/felinics/memoh/internal/channel/identities"
 )
 
@@ -162,5 +163,50 @@ func TestResolveWithoutRecordedSelfIdentityStopsNothing(t *testing.T) {
 				t.Fatalf("Decision = %+v, want none without a recorded id", state.Decision)
 			}
 		})
+	}
+}
+
+// Weixin is owner-only and records no id for the bot, so the platform's own
+// sender type is all there is to tell the bot's message apart. One it marks as
+// the bot's is dropped before any identity or owner account is resolved for it;
+// one from the user is resolved as usual, as the owner.
+func TestResolveStopsMessagesThePlatformMarksAsTheBots(t *testing.T) {
+	t.Parallel()
+	registry := channel.NewRegistry()
+	registry.MustRegister(weixin.NewWeixinAdapter(nil))
+	identitySvc := &fakeChannelIdentityService{channelIdentity: identities.ChannelIdentity{ID: "ci-1"}}
+	resolver := NewIdentityResolver(nil, registry, identitySvc, &fakePolicyService{ownerUserID: "owner-1"}, "")
+	cfg := channel.ChannelConfig{ID: "cfg-1", BotID: "bot-1", ChannelType: weixin.Type}
+	message := func(sentByBot bool) channel.InboundMessage {
+		return channel.InboundMessage{
+			BotID:        "bot-1",
+			Channel:      weixin.Type,
+			Message:      channel.Message{ID: "m1", Text: "hello"},
+			ReplyTarget:  "user1@im.wechat",
+			Sender:       channel.Identity{SubjectID: "user1@im.wechat", Attributes: map[string]string{"user_id": "user1@im.wechat"}},
+			Conversation: channel.Conversation{ID: "user1@im.wechat", Type: channel.ConversationTypePrivate},
+			SentByBot:    sentByBot,
+		}
+	}
+
+	state, err := resolver.Resolve(context.Background(), cfg, message(true))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if state.Decision == nil || !state.Decision.Stop || !state.Decision.Reply.IsEmpty() {
+		t.Fatalf("Decision = %+v, want a silent stop", state.Decision)
+	}
+	if identitySvc.calls != 0 || state.Identity.ChannelIdentityID != "" || state.Identity.UserID != "" {
+		t.Fatalf("the bot's message was given an identity (%d lookups, id %q, user %q)",
+			identitySvc.calls, state.Identity.ChannelIdentityID, state.Identity.UserID)
+	}
+
+	state, err = resolver.Resolve(context.Background(), cfg, message(false))
+	if err != nil {
+		t.Fatalf("Resolve(user message) error = %v", err)
+	}
+	if state.Decision != nil || state.Identity.ChannelIdentityID != "ci-1" || state.Identity.UserID != "owner-1" {
+		t.Fatalf("user message: Decision = %+v, identity %q, user %q, want resolved as the owner and not stopped",
+			state.Decision, state.Identity.ChannelIdentityID, state.Identity.UserID)
 	}
 }

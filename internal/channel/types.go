@@ -77,6 +77,11 @@ type InboundMessage struct {
 	ReceivedAt   time.Time
 	Source       string
 	Metadata     map[string]any
+	// SentByBot is set by an adapter whose platform marks every message with
+	// the kind of its sender, when the platform marks this one as sent by the
+	// bot itself. It is the platform's own statement, for platforms where the
+	// sender ids give nothing to compare against SelfIdentityPolicy.
+	SentByBot bool
 }
 
 // RoutingKey returns a stable identifier used for reply routing.

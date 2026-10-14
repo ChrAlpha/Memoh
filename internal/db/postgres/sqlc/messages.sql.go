@@ -2331,12 +2331,14 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_visible = true
   AND m.id = $2
+  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 LIMIT 1
 `
 
 type GetMessageByIDBySessionParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MessageID pgtype.UUID `json:"message_id"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	MessageID         pgtype.UUID `json:"message_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
 }
 
 type GetMessageByIDBySessionRow struct {
@@ -2361,8 +2363,10 @@ type GetMessageByIDBySessionRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
+// include_unadmitted false returns no row for a row refused at admission, for
+// readers whose output reaches a model.
 func (q *Queries) GetMessageByIDBySession(ctx context.Context, arg GetMessageByIDBySessionParams) (GetMessageByIDBySessionRow, error) {
-	row := q.db.QueryRow(ctx, getMessageByIDBySession, arg.SessionID, arg.MessageID)
+	row := q.db.QueryRow(ctx, getMessageByIDBySession, arg.SessionID, arg.MessageID, arg.IncludeUnadmitted)
 	var i GetMessageByIDBySessionRow
 	err := row.Scan(
 		&i.ID,
@@ -2778,14 +2782,16 @@ FROM (
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ) ranked
-WHERE ranked.preceding_bytes < $2::BIGINT
+WHERE ranked.preceding_bytes < $3::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC
 `
 
 type ListActiveMessagesAfterCompactionBySessionWithinBytesParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MaxBytes  int64       `json:"max_bytes"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+	MaxBytes          int64       `json:"max_bytes"`
 }
 
 type ListActiveMessagesAfterCompactionBySessionWithinBytesRow struct {
@@ -2816,9 +2822,12 @@ type ListActiveMessagesAfterCompactionBySessionWithinBytesRow struct {
 // when its compact_id points at an ok artifact of the session's current
 // epoch; rows claimed by a pending or failed artifact are still returned
 // because no summary stands in for them yet. Byte admission is newest-first:
-// the crossing row is kept, rows are returned in ascending order.
+// the crossing row is kept, rows are returned in ascending order. Rows refused
+// at admission are excluded before the byte window is measured, so they cannot
+// use up budget meant for readable history;
+// message.ContextIncludesUnadmittedPassive is passed as include_unadmitted.
 func (q *Queries) ListActiveMessagesAfterCompactionBySessionWithinBytes(ctx context.Context, arg ListActiveMessagesAfterCompactionBySessionWithinBytesParams) ([]ListActiveMessagesAfterCompactionBySessionWithinBytesRow, error) {
-	rows, err := q.db.Query(ctx, listActiveMessagesAfterCompactionBySessionWithinBytes, arg.SessionID, arg.MaxBytes)
+	rows, err := q.db.Query(ctx, listActiveMessagesAfterCompactionBySessionWithinBytes, arg.SessionID, arg.IncludeUnadmitted, arg.MaxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -3837,14 +3846,16 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.created_at < $2
+  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ListMessagesBeforeBySessionParams struct {
-	SessionID pgtype.UUID        `json:"session_id"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	MaxCount  int32              `json:"max_count"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	IncludeUnadmitted bool               `json:"include_unadmitted"`
+	MaxCount          int32              `json:"max_count"`
 }
 
 type ListMessagesBeforeBySessionRow struct {
@@ -3871,8 +3882,15 @@ type ListMessagesBeforeBySessionRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
+// include_unadmitted false leaves out rows refused at admission before the
+// LIMIT, for readers whose output reaches a model.
 func (q *Queries) ListMessagesBeforeBySession(ctx context.Context, arg ListMessagesBeforeBySessionParams) ([]ListMessagesBeforeBySessionRow, error) {
-	rows, err := q.db.Query(ctx, listMessagesBeforeBySession, arg.SessionID, arg.CreatedAt, arg.MaxCount)
+	rows, err := q.db.Query(ctx, listMessagesBeforeBySession,
+		arg.SessionID,
+		arg.CreatedAt,
+		arg.IncludeUnadmitted,
+		arg.MaxCount,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4480,13 +4498,15 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_id IS NOT NULL
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
+  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-LIMIT $2
+LIMIT $3
 `
 
 type ListMessagesLatestBySessionParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MaxCount  int32       `json:"max_count"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+	MaxCount          int32       `json:"max_count"`
 }
 
 type ListMessagesLatestBySessionRow struct {
@@ -4512,8 +4532,10 @@ type ListMessagesLatestBySessionRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
+// include_unadmitted false leaves out rows refused at admission before the
+// LIMIT, for readers whose output reaches a model.
 func (q *Queries) ListMessagesLatestBySession(ctx context.Context, arg ListMessagesLatestBySessionParams) ([]ListMessagesLatestBySessionRow, error) {
-	rows, err := q.db.Query(ctx, listMessagesLatestBySession, arg.SessionID, arg.MaxCount)
+	rows, err := q.db.Query(ctx, listMessagesLatestBySession, arg.SessionID, arg.IncludeUnadmitted, arg.MaxCount)
 	if err != nil {
 		return nil, err
 	}
@@ -5546,7 +5568,7 @@ WITH cursor_message AS (
     AND m.turn_visible = true
     AND m.turn_id IS NOT NULL
     AND m.turn_position IS NOT NULL
-    AND m.id = $2
+    AND m.id = $3
   LIMIT 1
 )
 SELECT
@@ -5581,12 +5603,14 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.turn_position >= cursor.turn_position
+  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
 type ListVisibleMessagesFromBySessionParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MessageID pgtype.UUID `json:"message_id"`
+	SessionID         pgtype.UUID `json:"session_id"`
+	IncludeUnadmitted bool        `json:"include_unadmitted"`
+	MessageID         pgtype.UUID `json:"message_id"`
 }
 
 type ListVisibleMessagesFromBySessionRow struct {
@@ -5613,8 +5637,11 @@ type ListVisibleMessagesFromBySessionRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
+// The cursor row is located without the admission filter; include_unadmitted
+// false leaves refused rows out of the returned window, so a cursor that was
+// itself refused is simply absent from it.
 func (q *Queries) ListVisibleMessagesFromBySession(ctx context.Context, arg ListVisibleMessagesFromBySessionParams) ([]ListVisibleMessagesFromBySessionRow, error) {
-	rows, err := q.db.Query(ctx, listVisibleMessagesFromBySession, arg.SessionID, arg.MessageID)
+	rows, err := q.db.Query(ctx, listVisibleMessagesFromBySession, arg.SessionID, arg.IncludeUnadmitted, arg.MessageID)
 	if err != nil {
 		return nil, err
 	}
@@ -6462,12 +6489,13 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = $1
   AND m.session_id = ANY($2::uuid[])
-  AND ($3::uuid IS NULL OR m.session_id = $3::uuid)
-  AND ($4::uuid IS NULL OR m.sender_channel_identity_id = $4::uuid)
-  AND ($5::timestamptz IS NULL OR m.created_at >= $5::timestamptz)
-  AND ($6::timestamptz IS NULL OR m.created_at <= $6::timestamptz)
-  AND ($7::text IS NULL OR m.role = $7::text)
-  AND ($8::text IS NULL OR (
+  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($4::uuid IS NULL OR m.session_id = $4::uuid)
+  AND ($5::uuid IS NULL OR m.sender_channel_identity_id = $5::uuid)
+  AND ($6::timestamptz IS NULL OR m.created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR m.created_at <= $7::timestamptz)
+  AND ($8::text IS NULL OR m.role = $8::text)
+  AND ($9::text IS NULL OR (
     CASE
       WHEN jsonb_typeof(m.content->'content') = 'string'
         THEN m.content->>'content'
@@ -6477,21 +6505,22 @@ WHERE m.team_id = public.memoh_current_team_id()
               WHERE elem->>'type' = 'text')
       ELSE ''
     END
-  ) ILIKE '%' || $8::text || '%')
+  ) ILIKE '%' || $9::text || '%')
 ORDER BY m.created_at DESC, m.id DESC
-LIMIT $9
+LIMIT $10
 `
 
 type SearchMessagesParams struct {
-	BotID      pgtype.UUID        `json:"bot_id"`
-	SessionIds []pgtype.UUID      `json:"session_ids"`
-	SessionID  pgtype.UUID        `json:"session_id"`
-	ContactID  pgtype.UUID        `json:"contact_id"`
-	StartTime  pgtype.Timestamptz `json:"start_time"`
-	EndTime    pgtype.Timestamptz `json:"end_time"`
-	Role       pgtype.Text        `json:"role"`
-	Keyword    pgtype.Text        `json:"keyword"`
-	MaxCount   int32              `json:"max_count"`
+	BotID             pgtype.UUID        `json:"bot_id"`
+	SessionIds        []pgtype.UUID      `json:"session_ids"`
+	IncludeUnadmitted bool               `json:"include_unadmitted"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	ContactID         pgtype.UUID        `json:"contact_id"`
+	StartTime         pgtype.Timestamptz `json:"start_time"`
+	EndTime           pgtype.Timestamptz `json:"end_time"`
+	Role              pgtype.Text        `json:"role"`
+	Keyword           pgtype.Text        `json:"keyword"`
+	MaxCount          int32              `json:"max_count"`
 }
 
 type SearchMessagesRow struct {
@@ -6506,10 +6535,13 @@ type SearchMessagesRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
+// include_unadmitted false leaves out rows refused at admission, for readers
+// whose output reaches a model.
 func (q *Queries) SearchMessages(ctx context.Context, arg SearchMessagesParams) ([]SearchMessagesRow, error) {
 	rows, err := q.db.Query(ctx, searchMessages,
 		arg.BotID,
 		arg.SessionIds,
+		arg.IncludeUnadmitted,
 		arg.SessionID,
 		arg.ContactID,
 		arg.StartTime,

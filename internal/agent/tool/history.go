@@ -29,10 +29,12 @@ type SessionLister interface {
 }
 
 // HistoryMessageReader is the minimal interface for reading persisted messages.
+// The tools' results reach the model, so it reads through the ForModel readers,
+// which apply the admission rule in SQL.
 type HistoryMessageReader interface {
-	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]messagepkg.Message, error)
-	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]messagepkg.Message, error)
-	GetByIDBySession(ctx context.Context, sessionID string, messageID string) (messagepkg.Message, error)
+	ListLatestForModelBySession(ctx context.Context, sessionID string, limit int32) ([]messagepkg.Message, error)
+	ListBeforeForModelBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]messagepkg.Message, error)
+	GetByIDForModelBySession(ctx context.Context, sessionID string, messageID string) (messagepkg.Message, error)
 }
 
 // HistoryProvider exposes list_sessions, get_messages, and search_messages tools.
@@ -227,7 +229,7 @@ func (p *HistoryProvider) execGetMessages(ctx context.Context, sess SessionConte
 		before   time.Time
 	)
 	if messageID != "" {
-		message, loadErr := p.messages.GetByIDBySession(ctx, sessionID, messageID)
+		message, loadErr := p.messages.GetByIDForModelBySession(ctx, sessionID, messageID)
 		switch {
 		case errors.Is(loadErr, pgx.ErrNoRows):
 			messages = []messagepkg.Message{}
@@ -241,9 +243,9 @@ func (p *HistoryProvider) execGetMessages(ctx context.Context, sess SessionConte
 		if err != nil {
 			return nil, err
 		}
-		messages, err = p.messages.ListBeforeBySession(ctx, sessionID, before, limit)
+		messages, err = p.messages.ListBeforeForModelBySession(ctx, sessionID, before, limit)
 	} else {
-		messages, err = p.messages.ListLatestBySession(ctx, sessionID, limit)
+		messages, err = p.messages.ListLatestForModelBySession(ctx, sessionID, limit)
 		reverseHistoryMessages(messages)
 	}
 	if err != nil {
@@ -320,9 +322,10 @@ func (p *HistoryProvider) execSearchMessages(ctx context.Context, sess SessionCo
 	}
 
 	params := sqlc.SearchMessagesParams{
-		BotID:      pgBotID,
-		SessionIds: allowedSessionIDs,
-		MaxCount:   limit,
+		BotID:             pgBotID,
+		SessionIds:        allowedSessionIDs,
+		IncludeUnadmitted: messagepkg.ContextIncludesUnadmittedPassive,
+		MaxCount:          limit,
 	}
 
 	if v := strings.TrimSpace(args.SessionID); v != "" {

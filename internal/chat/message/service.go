@@ -1145,15 +1145,17 @@ func (s *DBService) ListSinceBySession(ctx context.Context, sessionID string, si
 
 // ListActiveAfterCompactionBySessionWithinBytes returns the live summaries and
 // every active row they do not cover, admitted newest-first within the content
-// byte budget (CM-ADM-001).
+// byte budget (CM-ADM-001). Rows refused at admission are not counted against
+// the budget and are not returned.
 func (s *DBService) ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (SessionHistoryAfterCompaction, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return SessionHistoryAfterCompaction{}, err
 	}
 	rows, err := s.queries.ListActiveMessagesAfterCompactionBySessionWithinBytes(ctx, sqlc.ListActiveMessagesAfterCompactionBySessionWithinBytesParams{
-		SessionID: pgSessionID,
-		MaxBytes:  maxBytes,
+		SessionID:         pgSessionID,
+		IncludeUnadmitted: ContextIncludesUnadmittedPassive,
+		MaxBytes:          maxBytes,
 	})
 	if err != nil {
 		return SessionHistoryAfterCompaction{}, err
@@ -1241,15 +1243,28 @@ func (s *DBService) ListActiveSinceBySession(ctx context.Context, sessionID stri
 	return msgs, nil
 }
 
-// ListLatestBySession returns the latest N session messages.
+// ListLatestBySession returns the latest N session messages, rows refused at
+// admission included. Output that reaches a model reads
+// ListLatestForModelBySession.
 func (s *DBService) ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error) {
+	return s.listLatestBySession(ctx, sessionID, limit, true)
+}
+
+// ListLatestForModelBySession is ListLatestBySession for output that reaches a
+// model: ContextIncludesUnadmittedPassive decides whether refused rows appear.
+func (s *DBService) ListLatestForModelBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error) {
+	return s.listLatestBySession(ctx, sessionID, limit, ContextIncludesUnadmittedPassive)
+}
+
+func (s *DBService) listLatestBySession(ctx context.Context, sessionID string, limit int32, includeUnadmitted bool) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListMessagesLatestBySession(ctx, sqlc.ListMessagesLatestBySessionParams{
-		SessionID: pgSessionID,
-		MaxCount:  limit,
+		SessionID:         pgSessionID,
+		IncludeUnadmitted: includeUnadmitted,
+		MaxCount:          limit,
 	})
 	if err != nil {
 		return nil, err
@@ -1278,16 +1293,29 @@ func (s *DBService) ListLatestUIBySession(ctx context.Context, sessionID string,
 	return msgs, nil
 }
 
-// ListBeforeBySession returns up to limit session messages older than before.
+// ListBeforeBySession returns up to limit session messages older than before,
+// rows refused at admission included. Output that reaches a model reads
+// ListBeforeForModelBySession.
 func (s *DBService) ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error) {
+	return s.listBeforeBySession(ctx, sessionID, before, limit, true)
+}
+
+// ListBeforeForModelBySession is ListBeforeBySession for output that reaches a
+// model: ContextIncludesUnadmittedPassive decides whether refused rows appear.
+func (s *DBService) ListBeforeForModelBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error) {
+	return s.listBeforeBySession(ctx, sessionID, before, limit, ContextIncludesUnadmittedPassive)
+}
+
+func (s *DBService) listBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32, includeUnadmitted bool) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListMessagesBeforeBySession(ctx, sqlc.ListMessagesBeforeBySessionParams{
-		SessionID: pgSessionID,
-		CreatedAt: pgtype.Timestamptz{Time: before, Valid: true},
-		MaxCount:  limit,
+		SessionID:         pgSessionID,
+		IncludeUnadmitted: includeUnadmitted,
+		CreatedAt:         pgtype.Timestamptz{Time: before, Valid: true},
+		MaxCount:          limit,
 	})
 	if err != nil {
 		return nil, err
@@ -1371,7 +1399,21 @@ func (s *DBService) LocateByExternalIDBySession(ctx context.Context, sessionID s
 	return LocateResult{Messages: messages, TargetID: uuidString(rows[0].TargetID)}, nil
 }
 
+// GetByIDBySession returns one visible row of the session, including a row
+// refused at admission. Output that reaches a model reads
+// GetByIDForModelBySession.
 func (s *DBService) GetByIDBySession(ctx context.Context, sessionID string, messageID string) (Message, error) {
+	return s.getByIDBySession(ctx, sessionID, messageID, true)
+}
+
+// GetByIDForModelBySession is GetByIDBySession for output that reaches a
+// model: a row ContextIncludesUnadmittedPassive keeps out is reported as
+// pgx.ErrNoRows, the same as a row that does not exist.
+func (s *DBService) GetByIDForModelBySession(ctx context.Context, sessionID string, messageID string) (Message, error) {
+	return s.getByIDBySession(ctx, sessionID, messageID, ContextIncludesUnadmittedPassive)
+}
+
+func (s *DBService) getByIDBySession(ctx context.Context, sessionID string, messageID string, includeUnadmitted bool) (Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return Message{}, err
@@ -1381,8 +1423,9 @@ func (s *DBService) GetByIDBySession(ctx context.Context, sessionID string, mess
 		return Message{}, err
 	}
 	row, err := s.queries.GetMessageByIDBySession(ctx, sqlc.GetMessageByIDBySessionParams{
-		SessionID: pgSessionID,
-		MessageID: pgMessageID,
+		SessionID:         pgSessionID,
+		MessageID:         pgMessageID,
+		IncludeUnadmitted: includeUnadmitted,
 	})
 	if err != nil {
 		return Message{}, err
@@ -1393,7 +1436,21 @@ func (s *DBService) GetByIDBySession(ctx context.Context, sessionID string, mess
 	return msgs[0], nil
 }
 
+// ListVisibleFromBySession returns the visible rows from the turn of messageID
+// onward, rows refused at admission included. A window that reaches a model
+// reads ListVisibleFromForModelBySession.
 func (s *DBService) ListVisibleFromBySession(ctx context.Context, sessionID string, messageID string) ([]Message, error) {
+	return s.listVisibleFromBySession(ctx, sessionID, messageID, true)
+}
+
+// ListVisibleFromForModelBySession is ListVisibleFromBySession for a window
+// that reaches a model: ContextIncludesUnadmittedPassive decides whether
+// refused rows appear, including messageID itself.
+func (s *DBService) ListVisibleFromForModelBySession(ctx context.Context, sessionID string, messageID string) ([]Message, error) {
+	return s.listVisibleFromBySession(ctx, sessionID, messageID, ContextIncludesUnadmittedPassive)
+}
+
+func (s *DBService) listVisibleFromBySession(ctx context.Context, sessionID string, messageID string, includeUnadmitted bool) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return nil, err
@@ -1403,8 +1460,9 @@ func (s *DBService) ListVisibleFromBySession(ctx context.Context, sessionID stri
 		return nil, err
 	}
 	rows, err := s.queries.ListVisibleMessagesFromBySession(ctx, sqlc.ListVisibleMessagesFromBySessionParams{
-		SessionID: pgSessionID,
-		MessageID: pgMessageID,
+		SessionID:         pgSessionID,
+		MessageID:         pgMessageID,
+		IncludeUnadmitted: includeUnadmitted,
 	})
 	if err != nil {
 		return nil, err

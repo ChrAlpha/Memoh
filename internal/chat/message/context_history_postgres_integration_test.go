@@ -2,8 +2,11 @@ package message
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -317,4 +320,135 @@ func TestPostgresCompactionCandidatesExcludeRefusedRows(t *testing.T) {
 			assertContextHistoryIDs(t, []string{uuidString(rows[0].ID), uuidString(rows[1].ID)}, u1, a1)
 		}
 	}
+}
+
+// Rows refused at admission use none of the byte budget: refused rows larger
+// than the whole budget, both newer and older than the readable rows, leave
+// those rows in the window. Measuring the budget before leaving them out would
+// let the newest refused row spend it all and return nothing readable.
+func TestPostgresListActiveAfterCompactionBudgetIgnoresRefusedRows(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+	huge := strings.Repeat("x", 8000)
+
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", huge)
+	h1 := persistContextHistoryRow(t, ctx, svc, sid, "user", "h1")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", huge)
+	h2 := persistContextHistoryRow(t, ctx, svc, sid, "assistant", "h2")
+	h3 := persistContextHistoryRow(t, ctx, svc, sid, "user", "h3")
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", huge)
+
+	var readableBytes int64
+	if err := tx.QueryRow(ctx, `SELECT sum(octet_length(content::text)) FROM bot_history_messages WHERE id = ANY($1::uuid[])`,
+		[]string{h1, h2, h3}).Scan(&readableBytes); err != nil {
+		t.Fatalf("measure readable rows: %v", err)
+	}
+
+	history, err := svc.ListActiveAfterCompactionBySessionWithinBytes(ctx, sid, readableBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContextHistoryIDs(t, contextHistoryIDs(history), h1, h2, h3)
+
+	rows, err := dbsqlc.New(tx).ListActiveMessagesAfterCompactionBySessionWithinBytes(ctx, dbsqlc.ListActiveMessagesAfterCompactionBySessionWithinBytesParams{
+		SessionID: mustTestUUID(t, sid), IncludeUnadmitted: true, MaxBytes: readableBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("include_unadmitted read %d rows under the same budget, want only the newest refused row", len(rows))
+	}
+}
+
+// The readers behind the history tools leave refused rows out before any row
+// limit and report one by id as absent, while the plain readers still return it.
+func TestPostgresForModelReadersLeaveOutRefusedRows(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+
+	u1 := persistContextHistoryRow(t, ctx, svc, sid, "user", "u1")
+	refused := persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused")
+	a1 := persistContextHistoryRow(t, ctx, svc, sid, "assistant", "a1")
+	later := time.Now().Add(time.Hour)
+
+	ids := func(msgs []Message) []string {
+		out := make([]string, 0, len(msgs))
+		for _, m := range msgs {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	sorted := func(values ...string) string {
+		slices.Sort(values)
+		return strings.Join(values, ",")
+	}
+	assertSet := func(t *testing.T, name string, got []string, want ...string) {
+		t.Helper()
+		if sorted(got...) != sorted(want...) {
+			t.Fatalf("%s = %v, want %v in any order", name, got, want)
+		}
+	}
+
+	t.Run("latest", func(t *testing.T) {
+		plain, err := svc.ListLatestBySession(ctx, sid, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "plain", ids(plain), a1, refused)
+		forModel, err := svc.ListLatestForModelBySession(ctx, sid, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "for model", ids(forModel), a1, u1)
+	})
+	t.Run("before", func(t *testing.T) {
+		plain, err := svc.ListBeforeBySession(ctx, sid, later, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "plain", ids(plain), a1, refused)
+		forModel, err := svc.ListBeforeForModelBySession(ctx, sid, later, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "for model", ids(forModel), a1, u1)
+	})
+	t.Run("by id", func(t *testing.T) {
+		plain, err := svc.GetByIDBySession(ctx, sid, refused)
+		if err != nil || plain.ID != refused {
+			t.Fatalf("plain reader = (%q, %v), want the refused row", plain.ID, err)
+		}
+		if _, err := svc.GetByIDForModelBySession(ctx, sid, refused); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("for model reader error = %v, want pgx.ErrNoRows", err)
+		}
+		admitted, err := svc.GetByIDForModelBySession(ctx, sid, u1)
+		if err != nil || admitted.ID != u1 {
+			t.Fatalf("for model reader = (%q, %v), want the admitted row", admitted.ID, err)
+		}
+	})
+	t.Run("visible from", func(t *testing.T) {
+		plain, err := svc.ListVisibleFromBySession(ctx, sid, u1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "plain", ids(plain), u1, refused, a1)
+		forModel, err := svc.ListVisibleFromForModelBySession(ctx, sid, u1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "for model", ids(forModel), u1, a1)
+		// A refused row that starts the window is left out of it as well.
+		fromRefused, err := svc.ListVisibleFromForModelBySession(ctx, sid, refused)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSet(t, "for model from the refused row", ids(fromRefused), a1)
+	})
 }

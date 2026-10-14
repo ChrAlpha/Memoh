@@ -20,7 +20,7 @@ type requiredHistoryMessageService struct {
 	byID    map[string]messagepkg.Message
 }
 
-func (s *requiredHistoryMessageService) ListVisibleFromBySession(context.Context, string, string) ([]messagepkg.Message, error) {
+func (s *requiredHistoryMessageService) ListVisibleFromForModelBySession(context.Context, string, string) ([]messagepkg.Message, error) {
 	return append([]messagepkg.Message(nil), s.visible...), nil
 }
 

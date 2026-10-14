@@ -41,7 +41,7 @@ func (s *assembleMessageService) ListRecentUserBySession(context.Context, string
 	return append([]messagepkg.Message(nil), s.recent...), nil
 }
 
-func (s *assembleMessageService) ListVisibleFromBySession(context.Context, string, string) ([]messagepkg.Message, error) {
+func (s *assembleMessageService) ListVisibleFromForModelBySession(context.Context, string, string) ([]messagepkg.Message, error) {
 	return append([]messagepkg.Message(nil), s.visible...), nil
 }
 

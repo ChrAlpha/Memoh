@@ -151,17 +151,14 @@ func (s *Service) loadContextRecords(ctx context.Context, r contextRequest) ([]h
 
 // recordsFromMessages is where stored rows become context records. Every read
 // of history goes through it, the initial load and the required-row window
-// re-read alike, so the admission rule cannot be skipped by one path. The
-// budget covers content only and metadata arrives undecoded, so each source
-// row is released once converted and at most one row's metadata is decoded at
-// a time.
+// re-read alike. Rows refused at admission never reach it: each reader is a
+// message-service ForModel or model-only query that leaves them out in SQL,
+// before any byte budget or row limit is applied. The budget covers content
+// only and metadata arrives undecoded, so each source row is released once
+// converted and at most one row's metadata is decoded at a time.
 func (s *Service) recordsFromMessages(msgs []messagepkg.Message, fallback historyfrag.ScopeFallback) ([]historyfrag.HistoryRecord, error) {
 	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for i := range msgs {
-		if !messagepkg.ContextIncludesUnadmittedPassive && msgs[i].Admission() != "" {
-			msgs[i] = messagepkg.Message{}
-			continue
-		}
 		record, err := historyfrag.FromDBMessageWithLogger(s.logger, msgs[i], fallback)
 		if err != nil {
 			return nil, err

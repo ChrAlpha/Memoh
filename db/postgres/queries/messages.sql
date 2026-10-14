@@ -1810,7 +1810,10 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 -- when its compact_id points at an ok artifact of the session's current
 -- epoch; rows claimed by a pending or failed artifact are still returned
 -- because no summary stands in for them yet. Byte admission is newest-first:
--- the crossing row is kept, rows are returned in ascending order.
+-- the crossing row is kept, rows are returned in ascending order. Rows refused
+-- at admission are excluded before the byte window is measured, so they cannot
+-- use up budget meant for readable history;
+-- message.ContextIncludesUnadmittedPassive is passed as include_unadmitted.
 SELECT
   ranked.id,
   ranked.bot_id,
@@ -1876,6 +1879,7 @@ FROM (
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
@@ -1977,6 +1981,8 @@ ORDER BY m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListMessagesBeforeBySession :many
+-- include_unadmitted false leaves out rows refused at admission before the
+-- LIMIT, for readers whose output reaches a model.
 SELECT
   m.id,
   m.bot_id,
@@ -2008,6 +2014,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.created_at < sqlc.arg(created_at)
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
@@ -2085,6 +2092,8 @@ ORDER BY m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListMessagesLatestBySession :many
+-- include_unadmitted false leaves out rows refused at admission before the
+-- LIMIT, for readers whose output reaches a model.
 SELECT
   m.id,
   m.bot_id,
@@ -2114,6 +2123,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_id IS NOT NULL
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
@@ -2148,6 +2158,8 @@ ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id 
 LIMIT sqlc.arg(max_count);
 
 -- name: GetMessageByIDBySession :one
+-- include_unadmitted false returns no row for a row refused at admission, for
+-- readers whose output reaches a model.
 SELECT
   m.id,
   m.bot_id,
@@ -2174,6 +2186,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(session_id)
   AND m.turn_visible = true
   AND m.id = sqlc.arg(message_id)
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 LIMIT 1;
 
 -- name: GetMessageByExternalIDBySession :one
@@ -2518,6 +2531,9 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 LIMIT sqlc.arg(max_count);
 
 -- name: ListVisibleMessagesFromBySession :many
+-- The cursor row is located without the admission filter; include_unadmitted
+-- false leaves refused rows out of the returned window, so a cursor that was
+-- itself refused is simply absent from it.
 WITH cursor_message AS (
   SELECT m.turn_position
   FROM bot_history_messages m
@@ -2560,6 +2576,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.turn_position >= cursor.turn_position
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: CountMessagesByBot :one
@@ -2865,6 +2882,8 @@ GROUP BY
 ORDER BY rr.last_observed_at DESC;
 
 -- name: SearchMessages :many
+-- include_unadmitted false leaves out rows refused at admission, for readers
+-- whose output reaches a model.
 SELECT
   m.id,
   m.bot_id,
@@ -2881,6 +2900,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = sqlc.arg(bot_id)
   AND m.session_id = ANY(sqlc.arg(session_ids)::uuid[])
+  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
   AND (sqlc.narg(session_id)::uuid IS NULL OR m.session_id = sqlc.narg(session_id)::uuid)
   AND (sqlc.narg(contact_id)::uuid IS NULL OR m.sender_channel_identity_id = sqlc.narg(contact_id)::uuid)
   AND (sqlc.narg(start_time)::timestamptz IS NULL OR m.created_at >= sqlc.narg(start_time)::timestamptz)

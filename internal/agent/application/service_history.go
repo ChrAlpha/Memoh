@@ -149,7 +149,7 @@ func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []h
 			return messages, nil
 		}
 	}
-	window, err := s.messageService.ListVisibleFromBySession(ctx, req.ThreadID, messageID)
+	window, err := s.messageService.ListVisibleFromForModelBySession(ctx, req.ThreadID, messageID)
 	if err != nil {
 		return nil, err
 	}

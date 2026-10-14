@@ -205,3 +205,32 @@ func TestBuildInboundMessage_FileAttachment(t *testing.T) {
 		t.Errorf("name = %q", att.Name)
 	}
 }
+
+// The platform's own sender type decides whether the message is marked as the
+// bot's: only type 2 is.
+func TestBuildInboundMessage_SentByBot(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		messageType int
+		want        bool
+	}{
+		{"user", MessageTypeUser, false},
+		{"bot", MessageTypeBot, true},
+		{"unset", MessageTypeNone, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inbound, ok := buildInboundMessage(WeixinMessage{
+				MessageID:   "1",
+				FromUserID:  "user1@im.wechat",
+				MessageType: tc.messageType,
+				ItemList:    []MessageItem{{Type: ItemTypeText, TextItem: &TextItem{Text: "hello"}}},
+			})
+			if !ok {
+				t.Fatal("expected valid inbound message")
+			}
+			if inbound.SentByBot != tc.want {
+				t.Errorf("SentByBot = %v, want %v", inbound.SentByBot, tc.want)
+			}
+		})
+	}
+}

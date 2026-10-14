@@ -355,6 +355,10 @@ func (s *fakeAgentMessageService) ListVisibleFromBySession(_ context.Context, se
 	return nil, nil
 }
 
+func (s *fakeAgentMessageService) ListVisibleFromForModelBySession(ctx context.Context, sessionID string, messageID string) ([]messagepkg.Message, error) {
+	return s.ListVisibleFromBySession(ctx, sessionID, messageID)
+}
+
 func (*fakeAgentMessageService) GetVisibleTurnByMessage(context.Context, string, string) (messagepkg.HistoryTurn, error) {
 	return messagepkg.HistoryTurn{}, nil
 }

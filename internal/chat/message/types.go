@@ -289,6 +289,10 @@ type Service interface {
 	LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error)
 	GetByIDBySession(ctx context.Context, sessionID string, messageID string) (Message, error)
 	ListVisibleFromBySession(ctx context.Context, sessionID string, messageID string) ([]Message, error)
+	// ListVisibleFromForModelBySession is ListVisibleFromBySession for a window
+	// that reaches a model: ContextIncludesUnadmittedPassive decides whether
+	// rows refused at admission appear.
+	ListVisibleFromForModelBySession(ctx context.Context, sessionID string, messageID string) ([]Message, error)
 	GetVisibleTurnByMessage(ctx context.Context, sessionID string, messageID string) (HistoryTurn, error)
 	GetLatestVisibleTurnBySession(ctx context.Context, sessionID string) (HistoryTurn, error)
 	ReplaceTurn(ctx context.Context, sessionID string, oldTurnID string, replacementTurnID string, replacementTurnPosition *int64, requestMessageID string, assistantMessageID string, reason string) (HistoryTurn, error)

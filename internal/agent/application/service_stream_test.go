@@ -242,6 +242,10 @@ func (*recordingMessageService) ListVisibleFromBySession(context.Context, string
 	return nil, nil
 }
 
+func (*recordingMessageService) ListVisibleFromForModelBySession(context.Context, string, string) ([]messagepkg.Message, error) {
+	return nil, nil
+}
+
 func (*recordingMessageService) GetVisibleTurnByMessage(context.Context, string, string) (messagepkg.HistoryTurn, error) {
 	return messagepkg.HistoryTurn{}, nil
 }

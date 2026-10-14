@@ -73,6 +73,11 @@ func buildInboundMessage(msg WeixinMessage) (channel.InboundMessage, bool) {
 		ReceivedAt: receivedAt,
 		Source:     "weixin",
 		Metadata:   meta,
+		// Weixin is owner-only: a sender with no linked account is taken to be
+		// the bot owner. A message the platform marks as the bot's own that
+		// came back in as input would therefore run with the owner's
+		// permissions, so the shared inbound layer drops it.
+		SentByBot: msg.MessageType == MessageTypeBot,
 	}, true
 }
 

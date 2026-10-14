@@ -203,11 +203,15 @@ func (r *IdentityResolver) Resolve(ctx context.Context, cfg channel.ChannelConfi
 	return state, nil
 }
 
-// sentByBot reports whether the message's sender is the bot's own platform
-// account, by the id the adapter's policy says the platform reports it under.
-// A platform without such an id, or a config that has not recorded one, never
-// matches: the sender cannot be told apart from anyone else.
+// sentByBot reports whether the message was sent by the bot itself: the
+// adapter says the platform marked it so, or its sender is the bot's own
+// platform account by the id the adapter's policy says the platform reports it
+// under. A platform with neither, or a config that has not recorded an id,
+// never matches: the sender cannot be told apart from anyone else.
 func (r *IdentityResolver) sentByBot(cfg channel.ChannelConfig, msg channel.InboundMessage, subjectID string) bool {
+	if msg.SentByBot {
+		return true
+	}
 	if r.registry == nil {
 		return false
 	}

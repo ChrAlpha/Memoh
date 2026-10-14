@@ -31,18 +31,18 @@ type fakeHistoryMessageReader struct {
 	exactErr        error
 }
 
-func (f *fakeHistoryMessageReader) ListLatestBySession(_ context.Context, sessionID string, _ int32) ([]messagepkg.Message, error) {
+func (f *fakeHistoryMessageReader) ListLatestForModelBySession(_ context.Context, sessionID string, _ int32) ([]messagepkg.Message, error) {
 	f.latestSessionID = sessionID
 	return f.latestMessages, nil
 }
 
-func (f *fakeHistoryMessageReader) ListBeforeBySession(_ context.Context, sessionID string, before time.Time, _ int32) ([]messagepkg.Message, error) {
+func (f *fakeHistoryMessageReader) ListBeforeForModelBySession(_ context.Context, sessionID string, before time.Time, _ int32) ([]messagepkg.Message, error) {
 	f.beforeSessionID = sessionID
 	f.before = before
 	return f.beforeMessages, nil
 }
 
-func (f *fakeHistoryMessageReader) GetByIDBySession(_ context.Context, sessionID string, messageID string) (messagepkg.Message, error) {
+func (f *fakeHistoryMessageReader) GetByIDForModelBySession(_ context.Context, sessionID string, messageID string) (messagepkg.Message, error) {
 	f.exactSessionID = sessionID
 	f.exactMessageID = messageID
 	return f.exactMessage, f.exactErr
