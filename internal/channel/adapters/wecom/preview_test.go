@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/channel/channeltest"
 	"github.com/felinics/memoh/internal/channel/delivery"
 	"github.com/felinics/memoh/internal/redact"
 )
@@ -336,7 +337,10 @@ func TestPreviewResetReplacesTheText(t *testing.T) {
 }
 
 // With no text shown, an error is the reply's terminal state: it takes the
-// place of the answer, and nothing that follows adds to it.
+// place of the answer, and nothing that follows adds to it. The text is shown
+// as it arrives: the mapping layer masks secrets before it reaches a preview,
+// so the preview does not mask them again. A registered secret in the text
+// shows that nothing is rewritten here.
 func TestPreviewErrorIsTheTerminalState(t *testing.T) {
 	redact.ResetForTest()
 	t.Cleanup(redact.ResetForTest)
@@ -354,9 +358,9 @@ func TestPreviewErrorIsTheTerminalState(t *testing.T) {
 			want:  "The workspace is unreachable.",
 		},
 		{
-			name:  "uncoded error is redacted and labelled",
+			name:  "uncoded error is labelled and otherwise shown as it is",
 			event: channel.PreparedStreamEvent{Type: channel.StreamEventError, Error: "request failed with token " + secret},
-			want:  "Error: request failed with token " + strings.Repeat("*", len(secret)),
+			want:  "Error: request failed with token " + secret,
 		},
 	}
 	for _, tc := range cases {
@@ -519,38 +523,42 @@ func imageAttachment(data []byte) channel.PreparedAttachment {
 	}
 }
 
-// aibot_send_msg carries no media. An attachment arrives without the reply
-// reference of its message, so it answers the newest callback of its
-// conversation.
-func TestSendAttachmentAnswersTheNewestCallbackOfTheConversation(t *testing.T) {
+// aibot_send_msg carries no media, so an attachment goes out as the reply to
+// the callback its message quotes, and no other callback of the conversation.
+func TestSendAttachmentAnswersTheCallbackItQuotes(t *testing.T) {
 	p := newWeComPlatform(t)
 	p.adapter.rememberCallback(p.cfg.ID, "msg_0", "req_old", "", "chat_1", "u1")
 	p.adapter.rememberCallback(p.cfg.ID, "msg_1", "req_new", "", "chat_1", "u1")
-	p.adapter.rememberCallback(p.cfg.ID, "msg_2", "req_other", "", "chat_2", "u1")
 	att := imageAttachment([]byte("image"))
 
 	err := p.adapter.Send(context.Background(), p.cfg, channel.PreparedOutboundMessage{
-		Target:  "chat_id:chat_1",
-		Message: channel.PreparedMessage{Message: channel.Message{Attachments: []channel.Attachment{att.Logical}}, Attachments: []channel.PreparedAttachment{att}},
+		Target: "chat_id:chat_1",
+		Message: channel.PreparedMessage{
+			Message:     channel.Message{Attachments: []channel.Attachment{att.Logical}, Reply: &channel.ReplyRef{Target: "chat_id:chat_1", MessageID: "msg_0"}},
+			Attachments: []channel.PreparedAttachment{att},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	frames := p.settle()
-	if len(frames) != 1 || frames[0].Headers.ReqID != "req_new" || len(streamOf(t, frames[0]).MsgItems) != 1 {
-		t.Fatalf("frames = %+v, want the image answering the newest callback of chat_1", frames)
+	if len(frames) != 1 || frames[0].Headers.ReqID != "req_old" || len(streamOf(t, frames[0]).MsgItems) != 1 {
+		t.Fatalf("frames = %+v, want the image answering the callback it quotes", frames)
 	}
 }
 
-func TestSendAttachmentWithoutACallbackFails(t *testing.T) {
+func TestSendAttachmentThatQuotesNothingFails(t *testing.T) {
 	p := newWeComPlatform(t)
+	// Another callback of the conversation does not take the place of the one
+	// the attachment quotes.
+	p.callback("req_1")
 	att := imageAttachment([]byte("image"))
 	err := p.adapter.Send(context.Background(), p.cfg, channel.PreparedOutboundMessage{
 		Target:  "chat_id:chat_1",
 		Message: channel.PreparedMessage{Message: channel.Message{Attachments: []channel.Attachment{att.Logical}}, Attachments: []channel.PreparedAttachment{att}},
 	})
 	if err == nil {
-		t.Fatal("Send of an attachment with no callback to answer succeeded")
+		t.Fatal("Send of an attachment that quotes no callback succeeded")
 	}
 }
 
@@ -562,6 +570,7 @@ func replySender(t *testing.T, adapter channel.Adapter, cfg channel.ChannelConfi
 	registry.MustRegister(adapter)
 	capture := &captureProcessor{sender: make(chan channel.StreamReplySender, 1), release: make(chan struct{})}
 	manager := channel.NewManager(slog.New(slog.DiscardHandler), registry, singleConfigStore{cfg: cfg}, capture)
+	manager.SetAttachmentStore(channeltest.NewMemoryAttachmentStore())
 	t.Cleanup(func() {
 		close(capture.release)
 		_ = manager.Shutdown(context.Background())
@@ -595,6 +604,32 @@ func (c *captureProcessor) HandleInbound(_ context.Context, _ channel.ChannelCon
 	c.sender <- sender
 	<-c.release
 	return nil
+}
+
+// The mapping layer sends an attachment with the reference of the message it
+// answers, so the image reaches the conversation as that callback's reply.
+func TestAttachThroughTheManagerAnswersTheCallbackItQuotes(t *testing.T) {
+	p := newWeComPlatform(t)
+	p.callback("req_1")
+	surface := replySender(t, p.adapter, p.cfg)
+	png := []byte("not really a png")
+
+	err := surface.Attach(context.Background(), "chat_id:chat_1", channel.Attachment{
+		Type:   channel.AttachmentImage,
+		Mime:   "image/png",
+		Base64: base64.StdEncoding.EncodeToString(png),
+	}, callbackReply)
+	if err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	frames := p.settle()
+	if len(frames) != 1 || frames[0].Headers.ReqID != "req_1" {
+		t.Fatalf("frames = %+v, want one reply to the callback", frames)
+	}
+	items := streamOf(t, frames[0]).MsgItems
+	if len(items) != 1 || items[0].Image == nil || items[0].Image.Base64 != base64.StdEncoding.EncodeToString(png) {
+		t.Fatalf("items = %+v, want the image", items)
+	}
 }
 
 func openReply(t *testing.T, p *wecomPlatform, receivedAt time.Time) *delivery.Reply {

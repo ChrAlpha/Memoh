@@ -205,13 +205,7 @@ func (a *WeComAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg 
 		reqID    string
 		buildErr error
 	)
-	ctxMeta, ok := a.lookupCallbackContext(cfg.ID, msg.Message.Message.Reply)
-	if !ok && len(msg.Message.Attachments) > 0 {
-		// aibot_send_msg carries no media, and an attachment is sent on its own,
-		// without the reply reference of the message it belongs to.
-		ctxMeta, ok = a.latestCallbackContext(cfg.ID, normalizeTarget(logical.Target))
-	}
-	if ok {
+	if ctxMeta, ok := a.lookupCallbackContext(cfg.ID, msg.Message.Message.Reply); ok {
 		payload, cmd, reqID, buildErr = buildPreparedRespondPayload(ctx, msg.Message, ctxMeta.ReqID)
 	} else {
 		_ = targetKind

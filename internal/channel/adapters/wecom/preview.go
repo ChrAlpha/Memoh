@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 // OpenPreview opens the stream message that shows a reply while it is
@@ -109,7 +108,7 @@ func (p *wecomPreview) Abort(ctx context.Context) error {
 
 // fail ends the reply with the error in place of the answer.
 func (p *wecomPreview) fail(ctx context.Context, event channel.PreparedStreamEvent) error {
-	text := redact.Text(strings.TrimSpace(event.Error))
+	text := strings.TrimSpace(event.Error)
 	if text == "" {
 		return nil
 	}
