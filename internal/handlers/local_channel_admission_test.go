@@ -35,6 +35,12 @@ type wsLifecycleQueries struct {
 	upserts []sqlc.UpsertTerminalContextLifecycleParams
 }
 
+// GetDiscussSession reports no discuss session: every run end asks, and these
+// runs are chat runs.
+func (*wsLifecycleQueries) GetDiscussSession(context.Context, sqlc.GetDiscussSessionParams) (sqlc.GetDiscussSessionRow, error) {
+	return sqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
+}
+
 func (q *wsLifecycleQueries) CreateContextLifecycle(
 	_ context.Context,
 	arg sqlc.CreateContextLifecycleParams,

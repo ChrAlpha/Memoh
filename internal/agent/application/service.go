@@ -450,7 +450,9 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 
 func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, modelHTTPClient *http.Client) (resolvedContext, ChatRequest, error) {
 	modelQuery := modelQueryText(req)
-	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 {
+	// A request whose input is already persisted carries no query of its own:
+	// its current message is the history row it names.
+	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 && !req.ReusePersistedUserMessage {
 		return resolvedContext{}, req, errors.New("query or attachments is required")
 	}
 	if strings.TrimSpace(req.BotID) == "" {

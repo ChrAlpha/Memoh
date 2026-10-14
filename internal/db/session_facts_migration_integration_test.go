@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -103,11 +104,12 @@ func TestSessionFactsMigrationBackfillsFromMode(t *testing.T) {
 		}
 	}
 
-	// 0167 sits above 0163, so stepping over 0163 takes two steps from head.
+	// Stepping over 0163 from head reverts every migration from 0163 up.
 	t.Run("chain steps over 0163 in both directions", func(t *testing.T) {
-		stepDown(t, dsn, 2)
+		steps := migrationsFrom(t, 163)
+		stepDown(t, dsn, steps)
 		assertSessionFactColumns(t, ctx, pool, false)
-		stepUp(t, dsn, 2)
+		stepUp(t, dsn, steps)
 		assertSessionFactColumns(t, ctx, pool, true)
 	})
 
@@ -266,4 +268,24 @@ func assertSessionTablesKeepRLS(t *testing.T, ctx context.Context, pool *pgxpool
 			t.Fatalf("%s RLS enabled=%t forced=%t after 0163", table, enabled, forced)
 		}
 	}
+}
+
+// migrationsFrom counts the up migrations numbered version or above.
+func migrationsFrom(t *testing.T, version int) int {
+	t.Helper()
+	entries, err := fs.ReadDir(postgresMigrationsFS(t), ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, entry := range entries {
+		var number int
+		if _, err := fmt.Sscanf(entry.Name(), "%04d_", &number); err != nil || !strings.HasSuffix(entry.Name(), ".up.sql") {
+			continue
+		}
+		if number >= version {
+			count++
+		}
+	}
+	return count
 }

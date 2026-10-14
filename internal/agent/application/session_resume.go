@@ -335,6 +335,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 	var input struct {
 		Resume                *resumeContext                             `json:"resume"`
 		DecisionContinuations map[string]decision.ContinuationCheckpoint `json:"decision_continuations"`
+		CoverPosition         *int64                                     `json:"cover_position"`
 	}
 	if err := json.Unmarshal(row.InputJson, &input); err != nil {
 		return nil, fmt.Errorf("%w: %w", errResumeUnrecoverable, err)
@@ -376,7 +377,13 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		oldCancel := cancel
 		cancel = func() { cancelDeadline(); oldCancel() }
 	}
-	payload, err := json.Marshal(map[string]any{"kind": "resume", "interrupted_run_id": row.RunID.String(), "resume": data})
+	// A discuss run's cover position travels with its continuation, so the
+	// batch it was answering is covered when the continuation completes.
+	payloadFields := map[string]any{"kind": "resume", "interrupted_run_id": row.RunID.String(), "resume": data}
+	if input.CoverPosition != nil {
+		payloadFields["cover_position"] = *input.CoverPosition
+	}
+	payload, err := json.Marshal(payloadFields)
 	if err != nil {
 		cancel()
 		return nil, err

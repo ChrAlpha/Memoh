@@ -14,6 +14,7 @@ service TurnService {
   rpc RespondToolApproval(JsonRequest) returns (stream EventResponse);
   rpc RespondUserInput(JsonRequest) returns (stream EventResponse);
   rpc AdvancePlainTextUserInput(JsonRequest) returns (JsonResponse);
+  rpc AdmitDiscuss(JsonRequest) returns (JsonResponse);
 }
 
 message JsonRequest {

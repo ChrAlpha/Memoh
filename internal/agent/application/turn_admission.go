@@ -70,6 +70,7 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 		// a stale steer that still names the finished run.
 		s.closeSteerQueueForRun(ctx, terminal)
 		s.startFollowUpAfterTerminal(ctx, terminal)
+		s.checkDiscussAfterTerminal(ctx, terminal)
 	})
 	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)
 }

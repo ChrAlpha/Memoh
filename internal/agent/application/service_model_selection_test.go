@@ -409,6 +409,12 @@ type modelSelectionFakeQueries struct {
 	session sqlc.BotSession
 }
 
+// GetDiscussSession reports no discuss session: every run end asks, and the
+// sessions these fakes serve are chat sessions.
+func (*modelSelectionFakeQueries) GetDiscussSession(context.Context, sqlc.GetDiscussSessionParams) (sqlc.GetDiscussSessionRow, error) {
+	return sqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
+}
+
 // GetSessionByID returns the configured row (zero row by default: no
 // persisted model preference). Kept out of the embedded store so a
 // preference read can never panic on the nil interface.

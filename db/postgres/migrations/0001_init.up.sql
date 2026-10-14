@@ -2258,6 +2258,11 @@ CREATE INDEX IF NOT EXISTS idx_session_runs_orphan
     ON public.session_runs (team_id, created_at, run_id)
     WHERE state = 'accepted' AND owner_id IS NULL;
 
+-- Discuss cursor: the maximum cover_position of a session's completed discuss runs.
+CREATE INDEX IF NOT EXISTS session_runs_discuss_cover
+    ON public.session_runs (team_id, session_id, state, ((input_json->>'cover_position')::bigint))
+    WHERE input_json ? 'cover_position';
+
 -- Interrupted runs whose resume intent is still pending; the recovery worker
 -- lists these instead of walking a team's run history.
 CREATE INDEX IF NOT EXISTS idx_session_runs_resume_pending
@@ -2300,6 +2305,12 @@ CREATE INDEX IF NOT EXISTS idx_user_input_run
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_run
     ON public.bot_history_messages (team_id, run_id)
     WHERE run_id IS NOT NULL;
+
+-- External inputs a discuss session may have to answer: user rows written with
+-- their session event.
+CREATE INDEX IF NOT EXISTS bot_history_messages_discuss_pending
+    ON public.bot_history_messages (team_id, session_id, turn_position)
+    WHERE event_id IS NOT NULL AND role = 'user';
 
 -- Bot-scoped Connect-It bindings. Provider credentials and short-lived MCP
 -- session tokens remain in Connect-It; Memoh stores only the durable

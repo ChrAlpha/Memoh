@@ -46,7 +46,7 @@ type agentStepCommitter struct {
 func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc resolvedContext) *agentStepCommitter {
 	if s == nil || s.messageService == nil || strings.TrimSpace(req.RunID) == "" ||
 		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" ||
-		((req.SkipHistoryTurn || req.ReusePersistedUserMessage) && req.TurnReplacement == nil) {
+		(req.SkipHistoryTurn && req.TurnReplacement == nil) {
 		return nil
 	}
 	if _, ok := runtimefence.FromContext(ctx); !ok {
