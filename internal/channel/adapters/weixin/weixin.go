@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 // Type is the channel type identifier for WeChat.
@@ -33,7 +32,7 @@ func NewWeixinAdapter(log *slog.Logger) *WeixinAdapter {
 	return &WeixinAdapter{
 		logger:       log.With(slog.String("adapter", "weixin")),
 		client:       NewClient(log),
-		contextCache: newContextTokenCache(24 * time.Hour),
+		contextCache: newContextTokenCache(contextTokenTTL),
 	}
 }
 
@@ -59,6 +58,12 @@ func (*WeixinAdapter) Descriptor() channel.Descriptor {
 			Reply:          true,
 			BlockStreaming: true,
 			ChatTypes:      []string{channel.ConversationTypePrivate},
+			// The reply goes out as one message when the run ends. Every send
+			// needs the context_token of an inbound message (Send refuses
+			// without one), so replies stop at the end of its cache window and
+			// there is no proactive send.
+			Preview:     channel.PreviewNone,
+			ReplyWindow: contextTokenTTL,
 		},
 		OutboundPolicy: channel.OutboundPolicy{
 			TextChunkLimit: 4000,
@@ -247,20 +252,6 @@ func (a *WeixinAdapter) pollLoop(ctx context.Context, cfg channel.ChannelConfig,
 			_ = handler(ctx, cfg, inbound)
 		}
 	}
-}
-
-// -- StreamSender (block-streaming: buffer deltas, send final as one message) --
-
-func (a *WeixinAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, target string, _ channel.StreamOptions) (channel.PreparedOutboundStream, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return nil, errors.New("weixin target is required")
-	}
-	return &weixinBlockStream{
-		adapter: a,
-		cfg:     cfg,
-		target:  target,
-	}, nil
 }
 
 // -- Sender --
@@ -453,91 +444,6 @@ func (a *WeixinAdapter) ProcessingCompleted(ctx context.Context, cfg channel.Cha
 
 func (a *WeixinAdapter) ProcessingFailed(ctx context.Context, cfg channel.ChannelConfig, msg channel.InboundMessage, info channel.ProcessingStatusInfo, handle channel.ProcessingStatusHandle, _ error) error {
 	return a.ProcessingCompleted(ctx, cfg, msg, info, handle)
-}
-
-// weixinBlockStream buffers streaming deltas and sends the final message as one Send call.
-type weixinBlockStream struct {
-	adapter     *WeixinAdapter
-	cfg         channel.ChannelConfig
-	target      string
-	textBuilder strings.Builder
-	attachments []channel.PreparedAttachment
-	final       *channel.PreparedMessage
-	closed      bool
-}
-
-func (s *weixinBlockStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s.closed {
-		return nil
-	}
-	switch event.Type {
-	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
-		s.textBuilder.Reset()
-		s.attachments = nil
-		s.final = nil
-		if errText == "" {
-			return nil
-		}
-		return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-			Target: s.target,
-			Message: channel.PreparedMessage{Message: channel.Message{
-				Format: channel.MessageFormatPlain,
-				Text:   channel.ErrorReplyText(event.ErrorCode, errText),
-			}},
-		})
-	case channel.StreamEventDelta:
-		if strings.TrimSpace(event.Delta) != "" && event.Phase != channel.StreamPhaseReasoning {
-			s.textBuilder.WriteString(event.Delta)
-		}
-	case channel.StreamEventReset:
-		s.textBuilder.Reset()
-	case channel.StreamEventAttachment:
-		s.attachments = append(s.attachments, event.Attachments...)
-	case channel.StreamEventFinal:
-		if event.Final != nil {
-			msg := event.Final.Message
-			s.final = &msg
-		}
-	}
-	return nil
-}
-
-func (s *weixinBlockStream) Close(ctx context.Context) error {
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-
-	msg := channel.PreparedMessage{Message: channel.Message{Format: channel.MessageFormatPlain}}
-	if s.final != nil {
-		msg = *s.final
-	}
-	if strings.TrimSpace(msg.Message.Text) == "" {
-		msg.Message.Text = strings.TrimSpace(s.textBuilder.String())
-	}
-	if len(msg.Attachments) == 0 && len(s.attachments) > 0 {
-		msg.Attachments = append(msg.Attachments, s.attachments...)
-		msg.Message.Attachments = weixinLogicalAttachments(msg.Attachments)
-	}
-	if msg.Message.IsEmpty() && len(msg.Attachments) == 0 {
-		return nil
-	}
-	return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-		Target:  s.target,
-		Message: msg,
-	})
-}
-
-func weixinLogicalAttachments(attachments []channel.PreparedAttachment) []channel.Attachment {
-	if len(attachments) == 0 {
-		return nil
-	}
-	logical := make([]channel.Attachment, 0, len(attachments))
-	for _, att := range attachments {
-		logical = append(logical, att.Logical)
-	}
-	return logical
 }
 
 // sleepCtx sleeps for the given duration or until the context is cancelled.

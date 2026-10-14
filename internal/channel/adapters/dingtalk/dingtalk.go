@@ -64,6 +64,10 @@ func (*DingTalkAdapter) Descriptor() channel.Descriptor {
 			// The OpenAPI path silently ignores the reply context.
 			Reply:     true,
 			ChatTypes: []string{channel.ConversationTypePrivate, channel.ConversationTypeGroup},
+			// The reply goes out as one message when the run ends. Send falls
+			// back from the session webhook to the OpenAPI, so the reply has no
+			// window.
+			Preview: channel.PreviewNone,
 		},
 		ConfigSchema: channel.ConfigSchema{
 			Version: 1,
@@ -355,32 +359,6 @@ func (a *DingTalkAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 		Reader: reader,
 		Mime:   mimeType,
 		Name:   strings.TrimSpace(att.Name),
-	}, nil
-}
-
-// OpenStream creates a new accumulating outbound stream for the given target.
-func (a *DingTalkAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return nil, errors.New("dingtalk: target is required")
-	}
-	reply := opts.Reply
-	if reply == nil && strings.TrimSpace(opts.SourceMessageID) != "" {
-		reply = &channel.ReplyRef{
-			Target:    target,
-			MessageID: strings.TrimSpace(opts.SourceMessageID),
-		}
-	}
-	return &dingtalkOutboundStream{
-		adapter: a,
-		cfg:     cfg,
-		target:  target,
-		reply:   reply,
 	}, nil
 }
 

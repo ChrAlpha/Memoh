@@ -32,16 +32,14 @@ var (
 	_ channel.Sender = (*wecom.WeComAdapter)(nil)
 	_ channel.Sender = (*weixin.WeixinAdapter)(nil)
 
-	_ channel.StreamSender = (*dingtalk.DingTalkAdapter)(nil)
-	_ channel.StreamSender = (*wechatoa.WeChatOAAdapter)(nil)
-	_ channel.StreamSender = (*wecom.WeComAdapter)(nil)
-	_ channel.StreamSender = (*weixin.WeixinAdapter)(nil)
-
 	_ channel.PreviewOpener = (*discord.DiscordAdapter)(nil)
 	_ channel.PreviewOpener = (*feishu.FeishuAdapter)(nil)
 	_ channel.PreviewOpener = (*localadapter.WebAdapter)(nil)
 	_ channel.PreviewOpener = (*matrix.MatrixAdapter)(nil)
+	_ channel.PreviewOpener = (*qq.QQAdapter)(nil)
 	_ channel.PreviewOpener = (*slack.SlackAdapter)(nil)
+	_ channel.PreviewOpener = (*telegram.TelegramAdapter)(nil)
+	_ channel.PreviewOpener = (*wecom.WeComAdapter)(nil)
 
 	_ channel.SelfIdentityPolicyProvider = (*dingtalk.DingTalkAdapter)(nil)
 	_ channel.SelfIdentityPolicyProvider = (*discord.DiscordAdapter)(nil)

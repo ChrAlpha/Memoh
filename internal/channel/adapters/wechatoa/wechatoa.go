@@ -11,12 +11,16 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 const Type channel.ChannelType = "wechatoa"
 
 const wechatoaVerificationTimeout = 15 * time.Second
+
+// customerMessageWindow is how long after a user's message the customer
+// service message API accepts replies to that user ("用户发送消息: 5条, 48小时",
+// 发送客服消息, developers.weixin.qq.com/doc/service/api/customer/message/api_sendcustommessage.html).
+const customerMessageWindow = 48 * time.Hour
 
 type WeChatOAAdapter struct {
 	logger *slog.Logger
@@ -48,6 +52,11 @@ func (*WeChatOAAdapter) Descriptor() channel.Descriptor {
 			Reply:          true,
 			BlockStreaming: true,
 			ChatTypes:      []string{channel.ConversationTypePrivate},
+			// The reply goes out as customer service messages when the run ends.
+			// The API only reaches users who wrote to the account in the last 48
+			// hours; there is no proactive alternative.
+			Preview:     channel.PreviewNone,
+			ReplyWindow: customerMessageWindow,
 		},
 		ConfigSchema: channel.ConfigSchema{
 			Version: 1,
@@ -225,120 +234,4 @@ func (a *WeChatOAAdapter) ResolveAttachment(ctx context.Context, cfg channel.Cha
 		return channel.AttachmentPayload{}, errors.New("wechatoa platform_key(media_id) is required")
 	}
 	return client.downloadMedia(ctx, mediaID)
-}
-
-func (a *WeChatOAAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return nil, errors.New("wechatoa target is required")
-	}
-	return &outboundStream{
-		adapter: a,
-		cfg:     cfg,
-		target:  target,
-		opts:    opts,
-	}, nil
-}
-
-type outboundStream struct {
-	adapter     *WeChatOAAdapter
-	cfg         channel.ChannelConfig
-	target      string
-	opts        channel.StreamOptions
-	closed      bool
-	textBuilder strings.Builder
-	attachments []channel.PreparedAttachment
-	final       *channel.PreparedMessage
-	mu          sync.Mutex
-}
-
-func (s *outboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s.closed {
-		return errors.New("wechatoa stream is closed")
-	}
-	switch event.Type {
-	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
-		s.mu.Lock()
-		s.textBuilder.Reset()
-		s.attachments = nil
-		s.final = nil
-		s.mu.Unlock()
-		if errText == "" {
-			return nil
-		}
-		return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-			Target: s.target,
-			Message: channel.PreparedMessage{Message: channel.Message{
-				Format: channel.MessageFormatPlain,
-				Text:   channel.ErrorReplyText(event.ErrorCode, errText),
-			}},
-		})
-	case channel.StreamEventDelta:
-		if strings.TrimSpace(event.Delta) == "" || event.Phase == channel.StreamPhaseReasoning {
-			return nil
-		}
-		s.mu.Lock()
-		s.textBuilder.WriteString(event.Delta)
-		s.mu.Unlock()
-	case channel.StreamEventReset:
-		s.mu.Lock()
-		s.textBuilder.Reset()
-		s.mu.Unlock()
-	case channel.StreamEventAttachment:
-		if len(event.Attachments) == 0 {
-			return nil
-		}
-		s.mu.Lock()
-		s.attachments = append(s.attachments, event.Attachments...)
-		s.mu.Unlock()
-	case channel.StreamEventFinal:
-		if event.Final != nil {
-			msg := event.Final.Message
-			s.mu.Lock()
-			s.final = &msg
-			s.mu.Unlock()
-		}
-	}
-	return nil
-}
-
-func (s *outboundStream) Close(ctx context.Context) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	msg := channel.PreparedMessage{Message: channel.Message{Format: channel.MessageFormatPlain}}
-	if s.final != nil {
-		msg = *s.final
-	}
-	if strings.TrimSpace(msg.Message.Text) == "" {
-		msg.Message.Text = strings.TrimSpace(s.textBuilder.String())
-	}
-	if len(msg.Attachments) == 0 && len(s.attachments) > 0 {
-		msg.Attachments = append(msg.Attachments, s.attachments...)
-		msg.Message.Attachments = logicalAttachments(s.attachments)
-	}
-	s.mu.Unlock()
-
-	if msg.Message.IsEmpty() && len(msg.Attachments) == 0 {
-		return nil
-	}
-	return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-		Target:  s.target,
-		Message: msg,
-	})
-}
-
-func logicalAttachments(attachments []channel.PreparedAttachment) []channel.Attachment {
-	if len(attachments) == 0 {
-		return nil
-	}
-	logical := make([]channel.Attachment, 0, len(attachments))
-	for _, att := range attachments {
-		logical = append(logical, att.Logical)
-	}
-	return logical
 }

@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// contextTokenTTL is how long the cache keeps the context_token of an inbound
+// message, which every outbound send needs.
+const contextTokenTTL = 24 * time.Hour
+
 // contextTokenCache stores the latest context_token per target user.
 // The WeChat API requires a context_token (issued per inbound message)
 // for every outbound send. This cache is populated by the long-poll

@@ -430,3 +430,10 @@ func (a *WeComAdapter) lookupCallbackContext(configID string, reply *channel.Rep
 	}
 	return a.cache.Get(configID, messageID)
 }
+
+func (a *WeComAdapter) latestCallbackContext(configID, target string) (callbackContext, bool) {
+	if a == nil || a.cache == nil {
+		return callbackContext{}, false
+	}
+	return a.cache.Latest(configID, target)
+}
