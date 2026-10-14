@@ -95,18 +95,6 @@ func TestAdaptInbound_PreservesAddressingMetadata(t *testing.T) {
 	if !me.RepliesToMe {
 		t.Fatal("expected is_reply_to_bot metadata to set timeline.MessageEvent.RepliesToMe")
 	}
-
-	ic := timeline.Reduce(timeline.NewEmptyIC("sess"), me)
-	rc := timeline.Render(ic, timeline.RenderParams{})
-	if len(rc) != 1 {
-		t.Fatalf("expected one rendered segment, got %d", len(rc))
-	}
-	if !rc[0].MentionsMe {
-		t.Fatal("expected rendered segment to preserve MentionsMe without BotUserID")
-	}
-	if !rc[0].RepliesToMe {
-		t.Fatal("expected rendered segment to preserve RepliesToMe without BotUserID")
-	}
 }
 
 func TestAdaptInbound_PreservesLink_FromParts(t *testing.T) {
@@ -277,40 +265,6 @@ func TestAdaptInbound_EditEvent_PreservesParts(t *testing.T) {
 	e := AdaptInbound(msg, "sess", "ci", "Alice").(timeline.EditEvent)
 	if len(e.Content) != 1 || e.Content[0].Type != "mention" || e.Content[0].UserID != "ci-bot" {
 		t.Fatalf("expected edit event to preserve mention, got %+v", e.Content)
-	}
-}
-
-func TestAdaptInbound_RoundTripsThroughRenderer(t *testing.T) {
-	msg := channel.InboundMessage{
-		Channel: channel.ChannelTypeTelegram,
-		Message: channel.Message{
-			ID:     "m1",
-			Format: channel.MessageFormatRich,
-			Parts: []channel.MessagePart{
-				{Type: channel.MessagePartText, Text: "hi "},
-				{Type: channel.MessagePartMention, Text: "@bot", ChannelIdentityID: "ci-bot"},
-				{Type: channel.MessagePartText, Text: " see "},
-				{Type: channel.MessagePartLink, Text: "Memoh", URL: "https://example.com"},
-			},
-		},
-		ReceivedAt: time.Unix(1700000000, 0).UTC(),
-	}
-	me := AdaptInbound(msg, "sess", "ci-sender", "Alice").(timeline.MessageEvent)
-	ic := timeline.Reduce(timeline.NewEmptyIC("sess"), me)
-	rc := timeline.Render(ic, timeline.RenderParams{})
-	if len(rc) != 1 {
-		t.Fatalf("expected one rendered segment, got %d", len(rc))
-	}
-	seg := rc[0]
-	if len(seg.Content) == 0 {
-		t.Fatalf("expected rendered content")
-	}
-	xml := seg.Content[0].Text
-	if !strings.Contains(xml, `<mention uid="ci-bot">@bot</mention>`) {
-		t.Fatalf("expected rendered mention tag, got: %s", xml)
-	}
-	if !strings.Contains(xml, `<a href="https://example.com">Memoh</a>`) {
-		t.Fatalf("expected rendered link tag, got: %s", xml)
 	}
 }
 

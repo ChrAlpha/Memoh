@@ -37,19 +37,12 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 			t.Fatal(err)
 		}
 	}
-	// Neither passive-sync nor superseded rows may enter the budget/window.
-	for _, excluded := range []struct {
-		metadata string
-		visible  bool
-	}{
-		{`{"trigger_mode":"passive_sync"}`, true}, {`{}`, false},
-	} {
-		if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+	// A superseded row may not enter the budget/window.
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
    (id,bot_id,session_id,role,content,metadata,created_at,turn_position,turn_message_seq,turn_visible,turn_id)
-   VALUES ($1,$2,$3,'assistant','{"role":"assistant","content":"excluded"}', $4::jsonb,$5,99,0,$6,gen_random_uuid())`,
-			uuid.NewString(), postgresMessageTestBotID, postgresMessageTestSessionID, excluded.metadata, base, excluded.visible); err != nil {
-			t.Fatal(err)
-		}
+   VALUES ($1,$2,$3,'assistant','{"role":"assistant","content":"excluded"}', '{}'::jsonb,$4,99,0,false,gen_random_uuid())`,
+		uuid.NewString(), postgresMessageTestBotID, postgresMessageTestSessionID, base); err != nil {
+		t.Fatal(err)
 	}
 	for _, since := range []time.Time{time.Unix(0, 0), base.Add(3 * time.Second)} {
 		for _, budget := range []int64{0, 1, 100, 1 << 20} {

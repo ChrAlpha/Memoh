@@ -148,15 +148,14 @@ func (s *Service) admitTurnRun(
 			// session on the thread) see what fired the run while it still
 			// executes — the same contract the ws and schedule admissions
 			// already honor. NewRequestUserTurn returns nil for commands that
-			// persist no user message (discuss-shaped, attachment-only), and
+			// persist no user message (attachment-only), and
 			// those runs stay contentless in the projection.
 			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 				return sessionruntime.RunAdmissionView{
 					RequestUserTurn: chatview.NewRequestUserTurn(cmd, handle.TurnID),
 				}, nil
 			},
-			Cancel: cancel,
-			// Nil for discuss, which has no reader for steering messages.
+			Cancel:          cancel,
 			InjectCh:        injectCh,
 			OwnershipCancel: ownershipCancel,
 		},
@@ -176,15 +175,6 @@ func (s *Service) admitTurnRun(
 		// Someone owns this run already, or it has finished. Either way this
 		// call has no execution to perform and the caller has its answer.
 		return sessionruntime.Admission{}, fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, invocationID)
-	}
-	if cmd.Mode == turn.ModeDiscuss {
-		req := chatRequestFromCommand(cmd)
-		req.RunID = admission.RunID
-		req.SessionType = "discuss"
-		if err := s.recordRunResumeContext(s.withAdmissionRuntimeFence(ctx, admission), req); err != nil {
-			s.turnRunFinisher(ctx, admission, string(cmd.Mode))(RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: err})
-			return sessionruntime.Admission{}, err
-		}
 	}
 	return admission, nil
 }

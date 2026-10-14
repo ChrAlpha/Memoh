@@ -790,7 +790,7 @@ func provideCompactionService(log *slog.Logger, queries dbstore.Queries, cfg con
 }
 
 func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, workdirService *workdir.Service, cfg config.Config) *application.Service {
-	service := application.NewService(log, modelsService, queries, msgService, settingsService, accountService, a, rc.TimezoneLocation, 120*time.Second)
+	service := application.NewService(log, modelsService, queries, msgService, settingsService, accountService, a, rc.TimezoneLocation)
 	service.SetResumeSecret(rc.JwtSecret)
 	service.SetResumeReadiness(func(ctx context.Context, botID, targetID string) error {
 		client, err := workspaceManager.NativeMCPClient(ctx, botID)
@@ -811,11 +811,6 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 		return nil
 	})
 	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextFallbackTokens())
-	syncCompactionMode, recognized := cfg.Agent.EffectiveSyncCompactionMode()
-	if !recognized {
-		log.Warn("unrecognized agent.sync_compaction value; defaulting to shadow", slog.String("value", cfg.Agent.SyncCompaction))
-	}
-	service.SetSyncCompactionMode(syncCompactionMode)
 	service.SetBotPermissionChecker(&applicationBotPermissionChecker{bots: botService, accounts: accountService})
 	// Every turn entry point goes through admission, so a service without it can
 	// start nothing: this is the thread's single-run guarantee, not an add-on.

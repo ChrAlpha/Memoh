@@ -1,22 +1,18 @@
 package turn
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestRunTerminalEventRoundTrip(t *testing.T) {
-	payload, err := NewRunTerminalEvent(" failed ", " agent.provider_overloaded ")
+	payload, err := json.Marshal(RunTerminal{Type: EventRunTerminal, State: " failed ", ErrorCode: " agent.provider_overloaded "})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if string(payload) != `{"type":"run_terminal","state":"failed","error_code":"agent.provider_overloaded"}` {
-		t.Fatalf("payload = %s", payload)
 	}
 	terminal, ok := RunTerminalFrom(Event{Kind: EventRunTerminal, Payload: payload})
 	if !ok || terminal.State != RunStateFailed || terminal.ErrorCode != "agent.provider_overloaded" || !terminal.Failed() {
 		t.Fatalf("terminal = %+v, ok = %v", terminal, ok)
-	}
-	completed, _ := NewRunTerminalEvent(RunStateCompleted, "")
-	if string(completed) != `{"type":"run_terminal","state":"completed"}` {
-		t.Fatalf("completed payload = %s", completed)
 	}
 }
 

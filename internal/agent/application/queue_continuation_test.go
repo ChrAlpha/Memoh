@@ -16,16 +16,16 @@ import (
 // newFollowUpTestService wires a Service whose live queue lives in a memory
 // backend with one active run, while turn admission is scripted so a
 // continuation can start without PostgreSQL.
-func newFollowUpTestService(t *testing.T, runner *fakeRunner) (*Service, *scriptedAdmitter, *sessionruntime.MemoryBackend, sessionruntime.Key) {
+func newFollowUpTestService(t *testing.T) (*Service, *scriptedAdmitter, *sessionruntime.MemoryBackend, sessionruntime.Key) {
 	t.Helper()
 	backend := sessionruntime.NewMemoryBackend()
-	service, admitter, key := newFollowUpTestServiceOn(t, runner, backend, backend)
+	service, admitter, key := newFollowUpTestServiceOn(t, backend, backend)
 	return service, admitter, backend, key
 }
 
 // newFollowUpTestServiceOn seeds the active run on memory and wires the
 // manager over queue, which may wrap memory to inject backend failures.
-func newFollowUpTestServiceOn(t *testing.T, runner *fakeRunner, memory *sessionruntime.MemoryBackend, queue sessionruntime.Backend) (*Service, *scriptedAdmitter, sessionruntime.Key) {
+func newFollowUpTestServiceOn(t *testing.T, memory *sessionruntime.MemoryBackend, queue sessionruntime.Backend) (*Service, *scriptedAdmitter, sessionruntime.Key) {
 	t.Helper()
 	backend := memory
 	key := sessionruntime.Key{BotID: "bot", SessionID: "session"}
@@ -41,7 +41,7 @@ func newFollowUpTestServiceOn(t *testing.T, runner *fakeRunner, memory *sessionr
 	}
 	manager := sessionruntime.NewManager(queue, sessionruntime.Options{})
 	t.Cleanup(func() { _ = manager.Close() })
-	service, admitter := newAdmittedTurnTestService(runner)
+	service, admitter := newAdmittedTurnTestService()
 	service.sessionManager = manager
 	service.allowedTeam = "team1"
 	return service, admitter, key
@@ -162,7 +162,7 @@ func TestEnqueueDeferredTurnWithoutActiveRunReportsNoActiveRun(t *testing.T) {
 // access must not be able to put words in that sender's mouth: the edit is
 // refused and the stored item keeps its original text and sender.
 func TestUpdateFollowUpOnlyBySender(t *testing.T) {
-	service, _, _, key := newFollowUpTestService(t, &fakeRunner{})
+	service, _, _, key := newFollowUpTestService(t)
 	ctx := context.Background()
 	item, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-1", "original"))
 	if err != nil {
@@ -275,7 +275,7 @@ func TestQueuedTextFollowUpReplaysRecordedIdentityWithoutServedTeam(t *testing.T
 }
 
 func TestQueueInputRequiresRecordedTeam(t *testing.T) {
-	service, _, _, key := newFollowUpTestService(t, &fakeRunner{})
+	service, _, _, key := newFollowUpTestService(t)
 	input := testQueueInput(key.BotID, key.SessionID, "invoke-1", "hello")
 	input.TeamID = ""
 	if _, err := service.EnqueueFollowUp(context.Background(), input); !errors.Is(err, ErrQueueInputIncomplete) {
@@ -364,8 +364,7 @@ func TestUnreplayableFollowUpIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 // A team this instance does not serve never becomes served between two
 // boundaries, so the item is rejected instead of released for another try.
 func TestFollowUpForUnservedTeamIsRejectedNotRetried(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-	service, admitter, backend, key := newFollowUpTestService(t, runner)
+	service, admitter, backend, key := newFollowUpTestService(t)
 	ctx := context.Background()
 	foreign := testQueueInput(key.BotID, key.SessionID, "invoke-foreign", "for another team")
 	foreign.TeamID = "team-elsewhere"
@@ -386,8 +385,8 @@ func TestFollowUpForUnservedTeamIsRejectedNotRetried(t *testing.T) {
 	admitter.mu.Lock()
 	started := len(admitter.inputs)
 	admitter.mu.Unlock()
-	if started != 0 || runner.gotReq.Query != "" {
-		t.Fatalf("unserved item was admitted: inputs=%d req=%+v", started, runner.gotReq)
+	if started != 0 {
+		t.Fatalf("unserved item was admitted: inputs=%d", started)
 	}
 	if _, _, ok, err := service.sessionManager.ClaimNextFollowUp(ctx, key, "original-run"); err != nil || !ok {
 		t.Fatalf("served item should be claimable by the same boundary: ok=%v err=%v", ok, err)
@@ -408,10 +407,9 @@ func (b *failingRejectBackend) RejectFollowUp(context.Context, sessionruntime.Ke
 // the next ClaimNextFollowUp for the same run would hand it straight back. The
 // starter must stop rather than spin on it.
 func TestFollowUpStarterStopsWhenRejectionCannotBeRecorded(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
 	memory := sessionruntime.NewMemoryBackend()
 	backend := &failingRejectBackend{MemoryBackend: memory}
-	service, admitter, key := newFollowUpTestServiceOn(t, runner, memory, backend)
+	service, admitter, key := newFollowUpTestServiceOn(t, memory, backend)
 	ctx := context.Background()
 	if _, err := service.sessionManager.EnqueueFollowUp(ctx, key, "legacy-item", "legacy-invocation", []byte(`{"text":"no command"}`)); err != nil {
 		t.Fatal(err)
@@ -436,14 +434,13 @@ func TestFollowUpStarterStopsWhenRejectionCannotBeRecorded(t *testing.T) {
 	admitter.mu.Lock()
 	started := len(admitter.inputs)
 	admitter.mu.Unlock()
-	if started != 0 || runner.gotReq.Query != "" {
-		t.Fatalf("an item was admitted although the boundary could not move on: inputs=%d req=%+v", started, runner.gotReq)
+	if started != 0 {
+		t.Fatalf("an item was admitted although the boundary could not move on: inputs=%d", started)
 	}
 }
 
 func TestFollowUpStartIsSingleFlightPerSession(t *testing.T) {
-	runner := &fakeRunner{chunks: []string{`{"type":"done"}`}}
-	service, _, backend, key := newFollowUpTestService(t, runner)
+	service, _, backend, key := newFollowUpTestService(t)
 	ctx := context.Background()
 	if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, "invoke-1", "queued")); err != nil {
 		t.Fatal(err)
@@ -451,9 +448,6 @@ func TestFollowUpStartIsSingleFlightPerSession(t *testing.T) {
 	markFollowUpTestRunTerminal(t, backend, key)
 	service.followUpStarts.Store(key.String(), &followUpStart{})
 	service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "original-run", BotID: key.BotID, SessionID: key.SessionID})
-	if runner.gotReq.Query != "" {
-		t.Fatalf("second starter ran while another was in flight: %+v", runner.gotReq)
-	}
 	queues, err := service.ListSessionQueues(ctx, key.BotID, key.SessionID)
 	if err != nil || len(queues.FollowUp) != 1 || queues.FollowUp[0].Status != sessionruntime.QueueAccepted {
 		t.Fatalf("follow-up should remain accepted: %#v, %v", queues.FollowUp, err)
@@ -471,7 +465,7 @@ func TestFollowUpSchedulingRaces(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				service, admitter, backend, key := newFollowUpTestService(t, &fakeRunner{chunks: []string{`{"type":"done"}`}})
+				service, admitter, backend, key := newFollowUpTestService(t)
 				ctx := context.Background()
 				for _, id := range []string{"first", "second"}[:tc.pending] {
 					if _, err := service.EnqueueFollowUp(ctx, testQueueInput(key.BotID, key.SessionID, id, "queued")); err != nil {

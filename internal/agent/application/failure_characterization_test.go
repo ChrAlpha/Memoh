@@ -189,7 +189,7 @@ func TestCharacterizeNativeStreamErrorClassification(t *testing.T) {
 			if got := string(apperror.CodeOf(cause)); got != tc.code {
 				t.Fatalf("lifecycle code = %q, want %q", got, tc.code)
 			}
-			if got := string(snapshotFailureCode(false, cause)); got != tc.historyCode {
+			if got := string(historyFailureCode(publicFailureCode(cause))); got != tc.historyCode {
 				t.Fatalf("history failure code = %q, want %q", got, tc.historyCode)
 			}
 			public := publicAgentStreamEvent(tc.event)
@@ -223,13 +223,10 @@ func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 			t.Fatalf("failure event for %v = %s, want %s", cause, data, want)
 		}
 	}
-	// The history marker is not written for such a cause: snapshotFailureCode
+	// The history marker is not written for such a cause: historyFailureCode
 	// only accepts the codes it lists.
-	if got := snapshotFailureCode(false, errors.New("SECRET provider response")); got != "" {
+	if got := historyFailureCode(publicFailureCode(errors.New("SECRET provider response"))); got != "" {
 		t.Fatalf("history failure code = %q, want none", got)
-	}
-	if got := snapshotFailureCode(true, errors.New("idle")); got != "agent.response_timeout" {
-		t.Fatalf("history failure code after idle timeout = %q", got)
 	}
 }
 
@@ -267,12 +264,15 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 	t.Parallel()
 	messages := &recordingMessageService{}
 	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
-	service.persistPartialResult(context.Background(),
-		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
-		resolvedContext{},
-		[]sdk.Message{sdk.AssistantMessage("partial answer")},
-		nil, 0, false, true,
-		apperror.CodeAgentProviderOverloaded, nil)
+	partial := terminalSnapshot{
+		sdkMessages:   []sdk.Message{sdk.AssistantMessage("partial answer")},
+		visibleOutput: true,
+		failureCode:   apperror.CodeAgentProviderOverloaded,
+	}
+	if _, err := service.persistTerminalSnapshotResult(context.Background(),
+		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, resolvedContext{}, partial); err != nil {
+		t.Fatalf("persistTerminalSnapshotResult: %v", err)
+	}
 
 	if len(messages.persisted) != 2 {
 		t.Fatalf("persisted = %#v, want user + assistant", messages.persisted)
@@ -285,83 +285,13 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 	// Without visible output the same partial snapshot becomes the failure marker.
 	hidden := &recordingMessageService{}
 	service = &Service{messageService: hidden, logger: slog.New(slog.DiscardHandler)}
-	service.persistPartialResult(context.Background(),
-		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
-		resolvedContext{},
-		[]sdk.Message{sdk.AssistantMessage("partial answer")},
-		nil, 0, false, false,
-		apperror.CodeAgentProviderOverloaded, nil)
+	partial.visibleOutput = false
+	if _, err := service.persistTerminalSnapshotResult(context.Background(),
+		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, resolvedContext{}, partial); err != nil {
+		t.Fatalf("persistTerminalSnapshotResult: %v", err)
+	}
 	if len(hidden.persisted) != 2 || hidden.persisted[1].Metadata["error_code"] != "agent.provider_overloaded" {
 		t.Fatalf("persisted without visible output = %#v, want failure marker", hidden.persisted)
-	}
-}
-
-// discussCharRun drives the native discuss pump against a real session runtime
-// manager, so the run's published events, the turn port's errors, the live run
-// view and the durable row all come from production code.
-type discussCharRun struct {
-	events  []string
-	errs    []string
-	errCode []string
-	view    [2]string
-	ledger  [3]string
-	stores  int
-}
-
-type scriptedNativeStreamer struct{ events []native.StreamEvent }
-
-func (s *scriptedNativeStreamer) Stream(context.Context, native.RunConfig) <-chan native.StreamEvent {
-	ch := make(chan native.StreamEvent, len(s.events))
-	for _, event := range s.events {
-		ch <- event
-	}
-	close(ch)
-	return ch
-}
-
-func runDiscussCharacterization(t *testing.T, events ...native.StreamEvent) discussCharRun {
-	t.Helper()
-	runs := sessionledger.New()
-	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
-		OwnerID: "owner-discuss-failure", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
-	})
-	t.Cleanup(func() { _ = manager.Close() })
-	resolver := &fakeDiscussService{}
-	service := newDiscussTestService(&fakeRunner{}, &scriptedNativeStreamer{events: events}, resolver)
-	service.SetSessionRuntime(manager)
-
-	cmd := discussCommand()
-	handle, err := service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("start discuss turn: %v", err)
-	}
-	var out discussCharRun
-	for event := range handle.Events() {
-		out.events = append(out.events, string(event.Payload))
-	}
-	for err := range handle.Errs() {
-		out.errs = append(out.errs, err.Error())
-		out.errCode = append(out.errCode, string(apperror.CodeOf(err)))
-	}
-	out.stores = resolver.storeCalls
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		snapshot, err := manager.Snapshot(context.Background(), cmd.BotID, cmd.ThreadID)
-		if err != nil || snapshot.CurrentRunView == nil {
-			t.Fatalf("snapshot = %+v, %v", snapshot, err)
-		}
-		view := snapshot.CurrentRunView
-		run, err := runs.Get(context.Background(), view.RunID)
-		if err != nil {
-			t.Fatalf("load ledger run: %v", err)
-		}
-		if run.State.Terminal() || time.Now().After(deadline) {
-			out.view = [2]string{view.Status, view.ErrorCode}
-			out.ledger = [3]string{string(run.State), run.ErrorCode, run.ErrorMessage}
-			return out
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -371,105 +301,6 @@ func assertStrings(t *testing.T, what string, got, want []string) {
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("%s = %s\nwant %s", what, gotJSON, wantJSON)
-	}
-}
-
-// Scenario 2 on the discuss path: the native runtime gives up after retries,
-// publishes its giving-up EventError and ends with agent_abort.
-//
-// Current behavior: the turn port reports no error, and no history is written.
-// The retry reaches subscribers with its counters alone. The terminal event
-// carries the run's failure code, and the stream ends with run_terminal naming
-// the recorded state and code.
-func TestCharacterizeDiscussRetriesExhausted_CurrentBehavior(t *testing.T) {
-	t.Parallel()
-	got := runDiscussCharacterization(t,
-		native.StreamEvent{Type: native.EventAgentStart},
-		native.StreamEvent{Type: native.EventRetry, Attempt: 1, MaxAttempt: 3},
-		native.StreamEvent{Type: native.EventError, Cause: charExhausted(charProviderErr(503, sdk.KindServerError))},
-		native.StreamEvent{Type: native.EventAgentAbort, Messages: json.RawMessage(`[]`)},
-	)
-	assertStrings(t, "turn events", got.events, []string{
-		`{"runtime_type":""}`,
-		`{"type":"agent_start"}`,
-		`{"type":"retry","attempt":1,"maxAttempt":3}`,
-		`{"type":"error","code":"agent.provider_overloaded","error":"` + charOverloadedDetail + `"}`,
-		`{"type":"agent_abort","messages":[],"code":"agent.provider_overloaded"}`,
-		`{"type":"run_terminal","state":"failed","error_code":"agent.provider_overloaded"}`,
-	})
-	assertStrings(t, "turn errors", got.errs, nil)
-	if want := [3]string{"failed", "agent.provider_overloaded", ""}; got.ledger != want {
-		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
-	}
-	if want := [2]string{"errored", "agent.provider_overloaded"}; got.view != want {
-		t.Fatalf("run view = %q, want %q", got.view, want)
-	}
-	if got.stores != 0 {
-		t.Fatalf("history rounds stored = %d, current behavior stores none", got.stores)
-	}
-}
-
-// X3 on the discuss path: the attempts fail with different classes. The run
-// records the class of the last attempt, the one the giving-up error carries:
-// the retried attempts publish no error of their own.
-func TestCharacterizeDiscussMixedFailureClassesRecordLast(t *testing.T) {
-	t.Parallel()
-	got := runDiscussCharacterization(t,
-		native.StreamEvent{Type: native.EventAgentStart},
-		native.StreamEvent{Type: native.EventRetry, Attempt: 1, MaxAttempt: 3},
-		native.StreamEvent{Type: native.EventError, Cause: charExhausted(charProviderErr(503, sdk.KindServerError))},
-		native.StreamEvent{Type: native.EventAgentAbort, Messages: json.RawMessage(`[]`)},
-	)
-	if want := [3]string{"failed", "agent.provider_overloaded", ""}; got.ledger != want {
-		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
-	}
-	if want := [2]string{"errored", "agent.provider_overloaded"}; got.view != want {
-		t.Fatalf("run view = %q, want %q", got.view, want)
-	}
-}
-
-// Scenario 3 on the discuss path: a retried attempt that recovers.
-func TestCharacterizeDiscussRetryRecovered(t *testing.T) {
-	t.Parallel()
-	got := runDiscussCharacterization(t,
-		native.StreamEvent{Type: native.EventAgentStart},
-		native.StreamEvent{Type: native.EventRetry, Attempt: 1, MaxAttempt: 3},
-		native.StreamEvent{Type: native.EventAgentEnd, Messages: json.RawMessage(`[{"role":"assistant","content":"done"}]`)},
-	)
-	assertStrings(t, "turn errors", got.errs, nil)
-	if want := [3]string{"completed", "", ""}; got.ledger != want {
-		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
-	}
-	if want := [2]string{"completed", ""}; got.view != want {
-		t.Fatalf("run view = %q, want %q", got.view, want)
-	}
-	if got.stores != 1 {
-		t.Fatalf("history rounds stored = %d, want 1", got.stores)
-	}
-}
-
-// Scenario 1 on the discuss path: the runtime fails before any output (for
-// example "stream start: ...") and closes the stream without a terminal event.
-// This is the one discuss failure the turn port reports as an error.
-func TestCharacterizeDiscussFailureWithoutTerminalEvent(t *testing.T) {
-	t.Parallel()
-	got := runDiscussCharacterization(t,
-		native.StreamEvent{Type: native.EventAgentStart},
-		native.StreamEvent{Type: native.EventError, Cause: errors.New("stream start: SECRET dispatch failure")},
-	)
-	assertStrings(t, "turn events", got.events, []string{
-		`{"runtime_type":""}`,
-		`{"type":"agent_start"}`,
-		`{"type":"error","code":"agent.response_interrupted","error":"` + charInterruptedDetail + `"}`,
-		`{"type":"run_terminal","state":"failed","error_code":"agent.response_interrupted"}`,
-	})
-	assertStrings(t, "turn errors", got.errs, []string{"agent.response_interrupted"})
-	assertStrings(t, "turn error codes", got.errCode, []string{"agent.response_interrupted"})
-	if want := [3]string{"failed", "agent.response_interrupted", ""}; got.ledger != want {
-		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
-	}
-	if want := [2]string{"errored", "agent.response_interrupted"}; got.view != want {
-		t.Fatalf("run view = %q, want %q", got.view, want)
 	}
 }
 

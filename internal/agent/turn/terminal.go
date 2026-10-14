@@ -29,15 +29,6 @@ type RunTerminal struct {
 	ErrorArgs map[string]string `json:"error_args,omitempty"`
 }
 
-// NewRunTerminalEvent builds the EventRunTerminal payload.
-func NewRunTerminalEvent(state, errorCode string) (json.RawMessage, error) {
-	return json.Marshal(RunTerminal{
-		Type:      EventRunTerminal,
-		State:     strings.TrimSpace(state),
-		ErrorCode: strings.TrimSpace(errorCode),
-	})
-}
-
 // RunTerminalFrom decodes event as an EventRunTerminal. It reports false for
 // any other event.
 func RunTerminalFrom(event Event) (RunTerminal, bool) {

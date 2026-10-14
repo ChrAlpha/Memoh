@@ -5,12 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	"github.com/felinics/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -36,35 +31,18 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	if s.allowedTeam != "" && cmd.TeamID != s.allowedTeam {
 		return nil, fmt.Errorf("%w: %s", turn.ErrTeamNotServed, cmd.TeamID)
 	}
-	if cmd.Mode == turn.ModeDiscuss && !s.discussRuntimeConfigured() {
-		return nil, errors.New("turn: discuss runtime not configured")
-	}
 
-	// The run context is cancellable by cause so a lost owner lease can stop
-	// execution with a reason, instead of a superseded owner racing the fence it
-	// can no longer pass.
-	runCtx, stopRun := context.WithCancelCause(ctx)
-	cancel := func() { stopRun(context.Canceled) }
-
-	if cmd.Mode == turn.ModeDiscuss {
-		admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, nil)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
-		return s.startDiscussTurn(runCtx, cmd, cancel, admission)
-	}
-
-	// A chat run names its own ending, so its context is derived from the
-	// caller's without inheriting it: a cancelled parent fixes its children's
-	// cause, and what the caller's ending means to this run is a stop, not the
-	// plain cancellation it carries. The caller going away, a transport
-	// closing, the channel being told /stop — for this run they are one thing,
-	// and the driver names the ending from the marker they leave.
-	runCtx, stopRun = context.WithCancelCause(context.WithoutCancel(runCtx))
+	// A run names its own ending, so its context is derived from the caller's
+	// without inheriting it: a cancelled parent fixes its children's cause, and
+	// what the caller's ending means to this run is a stop, not the plain
+	// cancellation it carries. The caller going away, a transport closing, the
+	// channel being told /stop — for this run they are one thing, and the driver
+	// names the ending from the marker they leave. The context is cancellable by
+	// cause so a lost owner lease can stop execution with a reason, instead of a
+	// superseded owner racing the fence it can no longer pass.
+	runCtx, stopRun := context.WithCancelCause(context.WithoutCancel(ctx))
 	context.AfterFunc(ctx, func() { stopRun(runContextEnding(context.Cause(ctx))) })
-	cancel = func() { stopRun(errRunStopped) }
+	cancel := func() { stopRun(errRunStopped) }
 
 	injectCh := make(chan turn.InjectMessage, 16)
 	admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, injectCh)
@@ -113,161 +91,6 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	return handle, nil
 }
 
-func (s *Service) streamTurnChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, <-chan error) {
-	if s.turnHooks != nil && s.turnHooks.streamChat != nil {
-		return s.turnHooks.streamChat(ctx, req)
-	}
-	return s.StreamChat(ctx, req)
-}
-
-type runHandle struct {
-	id        string
-	events    chan turn.Event
-	errs      chan error
-	ctx       context.Context
-	cancel    context.CancelFunc
-	inject    chan turn.InjectMessage
-	addAssets func([]turn.OutboundAssetRef)
-
-	// injectMu lets teardown mark direct injection stopped before the durable
-	// finisher runs, so a steer that arrives while the run is finishing is
-	// refused rather than left in a channel nobody reads.
-	injectMu      sync.Mutex
-	injectStopped bool
-
-	// failed records that the run ended in an error or cancellation, and
-	// streamErr keeps the error itself when there was one. Both are needed
-	// because the terminal record distinguishes a run someone stopped from a run
-	// that broke, and cancellation alone cannot tell them apart. Only the pump
-	// goroutine writes either, and it reads them in its own defer.
-	failed            atomic.Bool
-	streamErr         error
-	terminalPublished bool
-	finishRun         func(RunOutcome) sessionruntime.TerminalRun
-	publishAgentEvent func(context.Context, native.StreamEvent) error
-	// terminal is the run's terminal record once finish wrote it. The pump
-	// goroutine writes and reads it.
-	terminal sessionruntime.TerminalRun
-}
-
-func (h *runHandle) RunID() string             { return h.id }
-func (h *runHandle) Events() <-chan turn.Event { return h.events }
-func (h *runHandle) Errs() <-chan error        { return h.errs }
-func (h *runHandle) Cancel()                   { h.cancel() }
-
-// ReportsRunTerminal reports that a run with a durable record ends its event
-// stream with turn.EventRunTerminal.
-func (h *runHandle) ReportsRunTerminal() bool { return h.finishRun != nil }
-
-func (h *runHandle) Inject(ctx context.Context, msg turn.InjectMessage) error {
-	h.injectMu.Lock()
-	defer h.injectMu.Unlock()
-	if err := h.ctx.Err(); err != nil {
-		return err
-	}
-	if h.injectStopped {
-		return errors.New("turn: run already finished")
-	}
-	select {
-	case h.inject <- msg:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-h.ctx.Done():
-		return h.ctx.Err()
-	}
-}
-
-// finish records the run's terminal state and releases the thread's slot after
-// direct injects stop but before the application closes the shared channel.
-//
-// Every outcome is terminal, including failure. A failed run is this invocation's
-// recorded answer, so a platform redelivery of the same external message is a
-// replay to drop rather than a turn to run again: nothing here can tell a run
-// that failed before saying anything from one that failed halfway through a
-// reply, and re-running the latter would say it twice.
-func (h *runHandle) finish() {
-	if h.finishRun == nil {
-		return
-	}
-	if h.streamErr != nil {
-		h.terminal = h.finishRun(failedRunOutcome(h.streamErr))
-		return
-	}
-	// Once the terminal event is in the runtime projection, that projection is
-	// authoritative. A consumer disconnect while forwarding the same terminal
-	// event must not rewrite a completed, aborted, or parked run as aborted.
-	if h.terminalPublished {
-		h.terminal = h.finishRun(RunOutcome{})
-		return
-	}
-	// Canceled with nothing on the error channel means someone stopped this run
-	// — /stop, a routed abort, or a lost owner lease — rather than it breaking.
-	if h.failed.Load() {
-		h.terminal = h.finishRun(RunOutcome{Status: sessionruntime.RunStatusAborted})
-		return
-	}
-	// An unnamed clean end lets the runtime preserve waiting_decision or derive
-	// completed from its event projection. Naming completion here would collapse
-	// a deferred decision into a terminal run.
-	h.terminal = h.finishRun(RunOutcome{})
-}
-
-// terminalEventTimeout bounds the wait to hand run_terminal to a consumer.
-// The run has ended by then, so a consumer that stopped reading only loses
-// the event; it must not hold the pump goroutine open.
-const terminalEventTimeout = 5 * time.Second
-
-// sendTerminal delivers turn.EventRunTerminal for the terminal record finish
-// wrote. A run without one (parked on a decision, ownership lost, or a failed
-// terminal write) ends without the event, as it did before the event existed.
-func (h *runHandle) sendTerminal(teamID, threadID string, seq int64) {
-	if h.terminal.RunID == "" || h.terminal.State == "" {
-		return
-	}
-	payload, err := turn.NewRunTerminalEvent(h.terminal.State, h.terminal.ErrorCode)
-	if err != nil {
-		return
-	}
-	timer := time.NewTimer(terminalEventTimeout)
-	defer timer.Stop()
-	select {
-	case h.events <- turn.Event{
-		RunID:    h.id,
-		TeamID:   teamID,
-		ThreadID: threadID,
-		Seq:      seq,
-		Kind:     turn.EventRunTerminal,
-		Payload:  payload,
-	}:
-	case <-timer.C:
-	}
-}
-
-func (h *runHandle) recordStreamFailure(err error) bool {
-	h.failed.Store(true)
-	if err == nil {
-		return false
-	}
-	// Native and ACP streams may report context.Canceled after the run was
-	// explicitly stopped. That terminal signal still means aborted; a provider
-	// cancellation while the run context is active remains an error.
-	failureCause := err
-	if privateCause := apperror.CauseOf(err); privateCause != nil {
-		failureCause = privateCause
-	}
-	explicitlyCanceled := h.ctx != nil &&
-		errors.Is(failureCause, context.Canceled) &&
-		errors.Is(context.Cause(h.ctx), context.Canceled)
-	if explicitlyCanceled {
-		return false
-	}
-	if h.streamErr == nil {
-		h.streamErr = err
-	}
-	return true
-}
-
 func runtimeHistoryError(err error) error {
 	if err == nil || apperror.CodeOf(err) != "" {
 		return err
@@ -283,30 +106,6 @@ func runtimePublishError(err error) error {
 		return err
 	}
 	return apperror.Wrap(apperror.CodeSessionPublishFailed, err, nil)
-}
-
-func (s *Service) turnAgentEventPublisher(handle sessionruntime.RunHandle) func(context.Context, native.StreamEvent) error {
-	if s == nil || s.publishTurnEvent == nil {
-		return nil
-	}
-	return func(ctx context.Context, event native.StreamEvent) error {
-		return runtimePublishError(s.publishTurnEvent(ctx, handle, event))
-	}
-}
-
-func (h *runHandle) publishChunk(chunk StreamChunk) error {
-	if h.publishAgentEvent == nil {
-		return nil
-	}
-	var event native.StreamEvent
-	if err := json.Unmarshal(chunk, &event); err != nil || event.Type == "" {
-		return nil
-	}
-	err := h.publishAgentEvent(h.ctx, event)
-	if err == nil && (event.Type == native.EventAgentEnd || event.Type == native.EventAgentAbort) {
-		h.terminalPublished = true
-	}
-	return err
 }
 
 // RespondToolApproval resumes a turn deferred on tool approval.
@@ -325,21 +124,6 @@ func (s *Service) RespondUserInput(ctx context.Context, input turn.UserInputResp
 		return err
 	}
 	return s.respondUserInput(ctx, converted, eventCh)
-}
-
-func (h *runHandle) AddOutboundAssets(refs []turn.OutboundAssetRef) {
-	h.addAssets(refs)
-}
-
-// parseKind extracts the "type" field from a raw chunk, best effort.
-func parseKind(p json.RawMessage) string {
-	var env struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(p, &env) != nil {
-		return ""
-	}
-	return env.Type
 }
 
 // StopTurn routes cancellation to the durable owner even after the channel

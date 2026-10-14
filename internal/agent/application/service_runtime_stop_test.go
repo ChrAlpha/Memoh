@@ -25,42 +25,6 @@ func (d stopDuringSetupDriver) Prompt(ctx context.Context, _ external.PromptInpu
 	return external.PromptResult{}, external.Unavailable(ctx.Err())
 }
 
-func TestUserStopDuringDriverSetupKeepsTheUserMessage(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
-	driver := stopDuringSetupDriver{started: make(chan struct{})}
-	abortCh := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- ignoreOutcome(service.streamRuntimeWS(context.Background(), driver, ChatRequest{
-			BotID:    lifecycleTestBotID,
-			ThreadID: lifecycleTestSessionID,
-			RunID:    lifecycleTestRunID,
-			Query:    "inspect",
-		}, make(chan WSStreamEvent, 8), abortCh, true))
-	}()
-	select {
-	case <-driver.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("prompt did not start")
-	}
-	close(abortCh)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("a user stop surfaced as a runtime error: %v", err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("stopped prompt did not return")
-	}
-	if len(messages.deleted) != 0 {
-		t.Fatalf("the user's message was deleted by their own stop: %v", messages.deleted)
-	}
-	if len(messages.persisted) == 0 || messages.persisted[0].Role != "user" {
-		t.Fatalf("persisted = %+v, want the user message kept", messages.persisted)
-	}
-}
-
 // ignoreOutcome keeps the error of a WebSocket stream call.
 func ignoreOutcome(_ RunOutcome, err error) error {
 	return err
@@ -75,12 +39,12 @@ func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	service.streamIdleTimeout = 20 * time.Millisecond
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	events := make(chan WSStreamEvent, 16)
-	err := ignoreOutcome(service.streamRuntimeWS(context.Background(), driver, ChatRequest{
+	err := ignoreOutcome(service.streamExternalWebSend(context.Background(), driver, ChatRequest{
 		BotID:    lifecycleTestBotID,
 		ThreadID: lifecycleTestSessionID,
 		RunID:    lifecycleTestRunID,
 		Query:    "inspect",
-	}, events, make(chan struct{}), true))
+	}, events, make(chan struct{})))
 	if apperror.CodeOf(err) == apperror.CodeAgentResponseTimeout {
 		t.Fatalf("the idle timeout was answered as a configuration failure: %v", err)
 	}

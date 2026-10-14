@@ -83,13 +83,6 @@ type StartTurn struct {
 	SkipMemoryExtraction bool                  `json:"SkipMemoryExtraction"`
 	SkipTitleGeneration  bool                  `json:"SkipTitleGeneration"`
 	UserMessagePersisted bool                  `json:"UserMessagePersisted"`
-
-	SessionToken string `json:"SessionToken"` //nolint:gosec // session credential material; crosses only the authenticated internal RPC and the server-side queue
-	ToolHTTPURL  string `json:"ToolHTTPURL"`
-
-	DiscussMessages  []turn.DiscussMessage  `json:"DiscussMessages"`
-	DiscussImageRefs []turn.DiscussImageRef `json:"DiscussImageRefs"`
-	DiscussAddressed bool                   `json:"DiscussAddressed"`
 }
 
 // RequestedSkill is the serialized turn.RequestedSkillContext, skill body
@@ -154,11 +147,6 @@ func FromStartTurn(cmd turn.StartTurnCommand) StartTurn {
 		SkipMemoryExtraction:      cmd.SkipMemoryExtraction,
 		SkipTitleGeneration:       cmd.SkipTitleGeneration,
 		UserMessagePersisted:      cmd.UserMessagePersisted,
-		SessionToken:              cmd.SessionToken,
-		ToolHTTPURL:               cmd.ToolHTTPURL,
-		DiscussMessages:           cmd.DiscussMessages,
-		DiscussImageRefs:          cmd.DiscussImageRefs,
-		DiscussAddressed:          cmd.DiscussAddressed,
 	}
 }
 
@@ -215,11 +203,6 @@ func (w StartTurn) Command() (turn.StartTurnCommand, error) {
 		SkipMemoryExtraction:      w.SkipMemoryExtraction,
 		SkipTitleGeneration:       w.SkipTitleGeneration,
 		UserMessagePersisted:      w.UserMessagePersisted,
-		SessionToken:              w.SessionToken,
-		ToolHTTPURL:               w.ToolHTTPURL,
-		DiscussMessages:           w.DiscussMessages,
-		DiscussImageRefs:          w.DiscussImageRefs,
-		DiscussAddressed:          w.DiscussAddressed,
 	}, nil
 }
 

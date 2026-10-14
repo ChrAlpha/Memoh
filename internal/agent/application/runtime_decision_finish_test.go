@@ -2,9 +2,7 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -204,7 +202,7 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 			}
 			// Close dropped both decision notifications; the application still emits
 			// its failure and abort before calling FinishRun with an empty outcome.
-			for _, ev := range []native.StreamEvent{runtimeFailureEvent(apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET"), nil)), {Type: native.EventAbort}} {
+			for _, ev := range []native.StreamEvent{agentFailureStreamEvent(apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET"), nil)), {Type: native.EventAbort}} {
 				if _, err := manager.HandleAgentEvent(t.Context(), handle, ev); err != nil {
 					t.Fatal(err)
 				}
@@ -304,34 +302,6 @@ func TestRunDecisionFinishFenceRules(t *testing.T) {
 	}
 }
 
-func TestRuntimeFailureEventKeepsStableCodePrivateCause(t *testing.T) {
-	for _, cause := range []error{errors.New("SECRET"), apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET"), nil)} {
-		ev := runtimeFailureEvent(cause)
-		raw, err := json.Marshal(ev)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ev.Code == "" || ev.Code != ev.Error || strings.Contains(string(raw), "SECRET") {
-			t.Fatalf("invalid public failure: %s", raw)
-		}
-	}
-}
-
-func TestRuntimeFailureEventCarriesPublicArgs(t *testing.T) {
-	cause := apperror.Wrap(apperror.CodeAgentDependencyMissing, errors.New("SECRET"), map[string]string{"dep_id": "python", "secret": "SECRET"})
-	ev := runtimeFailureEvent(cause)
-	if ev.Code != string(apperror.CodeAgentDependencyMissing) || len(ev.Args) != 1 || ev.Args["dep_id"] != "python" {
-		t.Fatalf("runtime failure event = %+v, want %s with dep_id", ev, apperror.CodeAgentDependencyMissing)
-	}
-	raw, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `"args":{"dep_id":"python"}`) || strings.Contains(string(raw), "SECRET") {
-		t.Fatalf("runtime failure event wire = %s", raw)
-	}
-}
-
 func TestFinishRereadsConcurrentUserDecision(t *testing.T) {
 	q := &finishDecisionQueries{row: sqlc.UserInputRequest{ID: db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"), BotID: db.ParseUUIDOrEmpty(lifecycleTestBotID), SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID), RunID: db.ParseUUIDOrEmpty(lifecycleTestRunID), Status: userinput.StatusPending, RuntimeFencingToken: pgtype.Int8{Int64: 7, Valid: true}}}
 	input := &fakeUserInputService{cancelErr: userinput.ErrAlreadyDecided, target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted}}
@@ -345,17 +315,5 @@ func TestFinishRereadsConcurrentUserDecision(t *testing.T) {
 	input.target.Status = userinput.StatusPending
 	if err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 7}); err == nil {
 		t.Fatal("unresolved decision allowed finish")
-	}
-}
-
-func TestPublishedRuntimeFailureKeepsPublicArgs(t *testing.T) {
-	cause := apperror.Wrap(apperror.CodeAgentDependencyMissing, errors.New("SECRET"), map[string]string{"dep_id": "python"})
-	ev := publicAgentStreamEvent(runtimeFailureEvent(cause))
-	raw, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ev.Code != string(apperror.CodeAgentDependencyMissing) || ev.Args["dep_id"] != "python" || strings.Contains(string(raw), "SECRET") {
-		t.Fatalf("published runtime failure = %s, want %s with dep_id and no cause", raw, apperror.CodeAgentDependencyMissing)
 	}
 }

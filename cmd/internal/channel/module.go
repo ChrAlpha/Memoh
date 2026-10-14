@@ -8,6 +8,7 @@ import (
 	"github.com/felinics/memoh/internal/channel/adapters/local"
 	"github.com/felinics/memoh/internal/channel/identities"
 	"github.com/felinics/memoh/internal/channel/inbound"
+	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/rpc/serverruntime"
 	"github.com/felinics/memoh/internal/webhooktunnel"
 )
@@ -21,7 +22,7 @@ func FoundationModule() fx.Option {
 		fx.Provide(
 			identities.NewService,
 			provideRouteService,
-			provideEventStore,
+			timeline.NewEventStore,
 			provideDiscussWaker,
 			local.NewRouteHub,
 			provideChannelRegistry,

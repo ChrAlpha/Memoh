@@ -229,7 +229,6 @@ func TestWebSendRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 	pool := &recordingACPPrompter{}
 	resolver := &Service{
 		logger:         slog.New(slog.DiscardHandler),
-		acpPool:        pool,
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 	}
 	resolver.SetACPSessionPool(pool)

@@ -262,17 +262,12 @@ func (p *runPressure) tokens() int {
 }
 
 // asyncCompactionInputTokens is the pressure the background trigger judges a
-// finished run by: the run's own estimate when it kept one. A discuss turn
-// reports its raw history share instead.
+// finished run by: the run's own estimate when it kept one.
 func asyncCompactionInputTokens(rc resolvedContext, providerInputTokens int) int {
-	switch {
-	case rc.pressure != nil:
+	if rc.pressure != nil {
 		return rc.pressure.tokens()
-	case rc.compactableTokensKnown:
-		return rc.compactableTokens
-	default:
-		return providerInputTokens
 	}
+	return providerInputTokens
 }
 
 // maybeCompact decides on the caller's goroutine whether this turn's pressure
@@ -410,21 +405,14 @@ func (s *Service) runCompactionPass(ctx context.Context, cfg compaction.TriggerC
 	return s.compactionService.RunCompactionSync(ctx, cfg)
 }
 
-// runCompactionSync runs compaction synchronously when context reaches the
+// runCompactionSyncFixed runs compaction synchronously when context reaches the
 // blocking share of the model's context window and reports the session-scoped
-// result. A compaction already in flight for the session is waited for and
-// its outcome reused; a noop (failure cooldown or nothing to compact) means
-// the caller proceeds with the context it has. The input is raw history alone,
-// so no part of it is fixed.
-func (s *Service) runCompactionSync(ctx context.Context, req ChatRequest, inputTokens, contextTokenBudget int, turnModelID string) compaction.Result {
-	return s.runCompactionSyncFixed(ctx, req, inputTokens, 0, contextTokenBudget, turnModelID)
-}
-
-// runCompactionSyncFixed is runCompactionSync for a request whose judged
-// pressure includes fixedTokens that no compaction can shrink. The rows are
-// aimed at the target less that part, so the target and the trigger measure
-// the same request. A replacement request compacts only the history before
-// its cutoff.
+// result. A compaction already in flight for the session is waited for and its
+// outcome reused; a noop (failure cooldown or nothing to compact) means the
+// caller proceeds with the context it has. The judged pressure includes
+// fixedTokens that no compaction can shrink. The rows are aimed at the target
+// less that part, so the target and the trigger measure the same request. A
+// replacement request compacts only the history before its cutoff.
 func (s *Service) runCompactionSyncFixed(ctx context.Context, req ChatRequest, inputTokens, fixedTokens, contextTokenBudget int, turnModelID string) compaction.Result {
 	if s.compactionService == nil || s.settingsService == nil {
 		s.logger.WarnContext(ctx, "compaction sync: skipped, service or settings nil")

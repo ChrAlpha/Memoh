@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -98,15 +97,13 @@ func TestAnimatedStickerIsIdenticalAcrossEntryPoints(t *testing.T) {
 	}}}
 
 	gateway := extractNativeImageParts(s.routeAndMergeAttachments(context.Background(), model, req))
-	discuss := s.InlineImageAttachments(context.Background(), "bot-1",
-		[]timeline.ImageAttachmentRef{{ContentHash: "sticker", Mime: "application/x-gzip"}})
 	injected := s.inlineInjectAttachments(context.Background(), "bot-1", req.Attachments)
 
-	if len(gateway) != animationFrameCount || len(discuss) != len(gateway) || len(injected) != len(gateway) {
-		t.Fatalf("frame counts differ: gateway=%d discuss=%d injected=%d", len(gateway), len(discuss), len(injected))
+	if len(gateway) != animationFrameCount || len(injected) != len(gateway) {
+		t.Fatalf("frame counts differ: gateway=%d injected=%d", len(gateway), len(injected))
 	}
 	for i := range gateway {
-		if discuss[i].Image != gateway[i].Image || injected[i].Image != gateway[i].Image {
+		if injected[i].Image != gateway[i].Image {
 			t.Fatalf("frame %d differs between entry points", i)
 		}
 	}
@@ -139,10 +136,10 @@ func TestAnimatedStickerReachesExternalAgentAsFrames(t *testing.T) {
 // times costs five times as much and says nothing more.
 func TestStaticAnimationCollapsesToOneFrame(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"still": tgsSticker(t)})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1",
-		[]timeline.ImageAttachmentRef{{ContentHash: "still", Mime: "application/x-gzip"}})
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
+		[]ChatAttachment{{Type: "image", ContentHash: "still", Mime: "application/x-gzip"}})
 	if len(parts) != 1 {
-		t.Fatalf("InlineImageAttachments() = %d parts, want identical frames collapsed to one", len(parts))
+		t.Fatalf("inlineInjectAttachments() = %d parts, want identical frames collapsed to one", len(parts))
 	}
 }
 
@@ -150,8 +147,8 @@ func TestStaticAnimationCollapsesToOneFrame(t *testing.T) {
 // providers as a subject on black.
 func TestAnimatedStickerFramesAreFlattenedOnWhite(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1",
-		[]timeline.ImageAttachmentRef{{ContentHash: "sticker", Mime: "application/x-gzip"}})
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
+		[]ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-gzip"}})
 	if len(parts) == 0 {
 		t.Fatal("no frames rendered")
 	}
@@ -171,12 +168,12 @@ func TestAnimationFailureLeavesOtherImagesAlone(t *testing.T) {
 		"photo":  rasterPNG(t),
 	})
 	s.logger = slog.Default()
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
-		{ContentHash: "broken", Mime: "application/x-gzip"},
-		{ContentHash: "photo", Mime: "image/png"},
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+		{Type: "image", ContentHash: "broken", Mime: "application/x-gzip"},
+		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
 	if len(parts) != 1 || parts[0].Image != dataURL("image/png", rasterPNG(t)) {
-		t.Fatalf("InlineImageAttachments() = %#v, want only the intact photo", parts)
+		t.Fatalf("inlineInjectAttachments() = %#v, want only the intact photo", parts)
 	}
 }
 
@@ -186,9 +183,9 @@ func TestAnimationFailureLeavesOtherImagesAlone(t *testing.T) {
 // bytes decide, and the sticker reaches the model as frames.
 func TestAdapterLabelledAnimatedStickerRenders(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1",
-		[]timeline.ImageAttachmentRef{{ContentHash: "sticker", Mime: "application/x-tgsticker"}})
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
+		[]ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}})
 	if len(parts) != animationFrameCount {
-		t.Fatalf("InlineImageAttachments() = %d parts, want %d frames", len(parts), animationFrameCount)
+		t.Fatalf("inlineInjectAttachments() = %d parts, want %d frames", len(parts), animationFrameCount)
 	}
 }

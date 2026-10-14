@@ -3165,14 +3165,14 @@ func TestChannelInboundProcessorPipelineUsesResolvedAttachments(t *testing.T) {
 		t.Fatalf("expected media ingest to be called once, got %d", mediaSvc.calls)
 	}
 
-	ic := timeline.NewEmptyIC("session-pipeline-asset")
-	for _, event := range eventStore.events {
-		ic = timeline.Reduce(ic, event)
+	if len(eventStore.events) == 0 {
+		t.Fatal("expected a persisted event")
 	}
-	if len(ic.Nodes) == 0 || ic.Nodes[0].Message == nil {
-		t.Fatal("expected first persisted event to be a message")
+	persisted, ok := eventStore.events[0].(timeline.MessageEvent)
+	if !ok {
+		t.Fatalf("expected first persisted event to be a message, got %T", eventStore.events[0])
 	}
-	atts := ic.Nodes[0].Message.Attachments
+	atts := persisted.Attachments
 	if len(atts) != 1 {
 		t.Fatalf("expected one persisted attachment, got %d", len(atts))
 	}
@@ -4126,7 +4126,7 @@ func TestChannelInboundProcessorDiscussTimelineHoldsTranscribedVoice(t *testing.
 	if got := waker.woken(); len(got) != 1 || got[0].sessionID != "discuss-voice" {
 		t.Fatalf("wakes = %+v, want one for the discuss session", got)
 	}
-	if got := timeline.RCToXML(timeline.BuildRC(eventStore.events, timeline.RenderParams{})); !strings.Contains(got, "hello from voice") {
+	if got := persistedEventsJSON(t, eventStore.events); !strings.Contains(got, "hello from voice") {
 		t.Fatalf("timeline lacks transcript: %s", got)
 	}
 }
@@ -4155,13 +4155,23 @@ func TestChannelInboundProcessorPassiveChatVoiceNotTranscribed(t *testing.T) {
 	if err := processor.HandleInbound(context.Background(), cfg, msg, &fakeReplySender{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := timeline.RCToXML(timeline.BuildRC(eventStore.events, timeline.RenderParams{})); strings.Contains(got, "hello from voice") {
+	if got := persistedEventsJSON(t, eventStore.events); strings.Contains(got, "hello from voice") {
 		t.Fatalf("passive message must not be transcribed: %s", got)
 	}
 }
 
-// memEventStore stands in for the durable event store: it implements both the
-// inbound write side and the discuss read side.
+// persistedEventsJSON is what the store holds, as the stored payloads would
+// read.
+func persistedEventsJSON(t *testing.T, events []timeline.CanonicalEvent) string {
+	t.Helper()
+	raw, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// memEventStore stands in for the durable event store's write side.
 type memEventStore struct {
 	mu         sync.Mutex
 	events     []timeline.CanonicalEvent
@@ -4200,12 +4210,6 @@ func (w *memPassiveRows) PersistWithin(_ context.Context, _ dbstore.Queries, inp
 }
 
 func (*memPassiveRows) PublishCreated(messagepkg.Message) {}
-
-func (s *memEventStore) LoadEventsForReplay(context.Context, string, string) ([]timeline.CanonicalEvent, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]timeline.CanonicalEvent(nil), s.events...), nil
-}
 
 // recordingDiscussWaker stands in for the server side of the wake: it records
 // which discuss session was told about new input.
@@ -4283,7 +4287,7 @@ func TestChannelInboundProcessorDiscussSignalsAfterEventCommit(t *testing.T) {
 	if got := waker.woken(); len(got) != 1 || got[0] != (discussWake{teamID: "team-test", botID: "bot-1", sessionID: "discuss-signal"}) {
 		t.Fatalf("wakes = %+v, want one for the discuss session", got)
 	}
-	if got := timeline.RCToXML(timeline.BuildRC(fixture.store.events, timeline.RenderParams{})); !strings.Contains(got, "ping from group") {
+	if got := persistedEventsJSON(t, fixture.store.events); !strings.Contains(got, "ping from group") {
 		t.Fatalf("committed events lack the message: %s", got)
 	}
 	if len(fixture.rows.rows) != 1 {

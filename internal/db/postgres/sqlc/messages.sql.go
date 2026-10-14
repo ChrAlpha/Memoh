@@ -2781,7 +2781,6 @@ FROM (
         AND c.status = 'ok'
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ) ranked
 WHERE ranked.preceding_bytes < $3::BIGINT
@@ -2895,7 +2894,6 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = $1
   AND m.created_at >= $2
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.created_at ASC, m.id ASC
 `
 
@@ -2996,7 +2994,6 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND m.created_at >= $2
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
@@ -5093,7 +5090,6 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND m.role = 'user'
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT $3::INT
@@ -5201,7 +5197,6 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND m.created_at >= $2
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < $3::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC
@@ -5304,7 +5299,6 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
@@ -5410,7 +5404,6 @@ WITH candidate_rows AS MATERIALIZED (
           OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
         )
     ))
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
@@ -6072,7 +6065,6 @@ FROM bot_visible_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND m.created_at >= $2
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 `
 
 type MeasureActiveMessagesBySessionParams struct {
@@ -6129,7 +6121,6 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
   AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 `
 

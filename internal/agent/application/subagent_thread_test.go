@@ -88,9 +88,9 @@ func TestApplySubagentThreadDefaults(t *testing.T) {
 	}
 }
 
-// The defaults are worthless if they stay inside resolve: Chat and StreamChat
-// keep their own copy of the request for title generation, the step committer
-// and terminal persistence, so resolve has to hand the effective request back.
+// The defaults are worthless if they stay inside resolve: a run keeps its own
+// copy of the request for title generation, the step committer and terminal
+// persistence, so resolve has to hand the effective request back.
 func TestResolveReturnsTheEffectiveSubagentRequest(t *testing.T) {
 	svc := &fakeSubagentThreadService{
 		fakeBackgroundSessionService: fakeBackgroundSessionService{

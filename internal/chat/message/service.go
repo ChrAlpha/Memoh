@@ -1053,7 +1053,7 @@ func (s *DBService) ListSince(ctx context.Context, botID string, since time.Time
 	return msgs, nil
 }
 
-// ListActiveSince returns bot messages since a given time, excluding passive_sync messages.
+// ListActiveSince returns bot messages since a given time.
 func (s *DBService) ListActiveSince(ctx context.Context, botID string, since time.Time) ([]Message, error) {
 	pgBotID, err := dbpkg.ParseUUID(botID)
 	if err != nil {
@@ -1225,7 +1225,7 @@ func (s *DBService) MeasureActiveBySession(ctx context.Context, sessionID string
 	return ActiveMessagesMeasure{MessageCount: row.MessageCount, ContentBytes: row.ContentBytes}, nil
 }
 
-// ListActiveSinceBySession returns session messages since a given time, excluding passive_sync messages.
+// ListActiveSinceBySession returns session messages since a given time.
 func (s *DBService) ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {

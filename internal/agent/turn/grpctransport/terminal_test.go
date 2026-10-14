@@ -19,7 +19,7 @@ func (*terminalHandle) ReportsRunTerminal() bool { return true }
 // The started frame carries whether the run ends with run_terminal, and the
 // event reaches the client ahead of the run's error.
 func TestRunTerminalCrossesTransport(t *testing.T) {
-	payload, err := turn.NewRunTerminalEvent(turn.RunStateFailed, string(apperror.CodeAgentProviderOverloaded))
+	payload, err := json.Marshal(turn.RunTerminal{Type: turn.EventRunTerminal, State: turn.RunStateFailed, ErrorCode: string(apperror.CodeAgentProviderOverloaded)})
 	if err != nil {
 		t.Fatal(err)
 	}

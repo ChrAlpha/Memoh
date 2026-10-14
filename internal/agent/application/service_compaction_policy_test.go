@@ -208,9 +208,8 @@ func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
 		ThreadID: "00000000-0000-0000-0000-000000000454",
 	}
 	resolved := resolvedContext{
-		contextTokenBudget:     200000,
-		compactableTokens:      150000,
-		compactableTokensKnown: true,
+		contextTokenBudget: 200000,
+		pressure:           &runPressure{conversation: 150000},
 	}
 
 	runAutomaticCompaction(t, service, req, resolved, 150000)
@@ -230,7 +229,7 @@ func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
 	}
 
 	runner.configs = nil
-	result := service.runCompactionSync(context.Background(), req, 150000, 200000, "")
+	result := service.runCompactionSyncFixed(context.Background(), req, 150000, 0, 200000, "")
 	if result.Status != compaction.StatusOK {
 		t.Fatalf("sync compaction status = %q, want %q", result.Status, compaction.StatusOK)
 	}
@@ -291,9 +290,8 @@ func TestSyncBackstopTargetCapsAtSoftShare(t *testing.T) {
 				ThreadID: "00000000-0000-0000-0000-000000000454",
 			}
 			resolved := resolvedContext{
-				contextTokenBudget:     8000,
-				compactableTokens:      4000,
-				compactableTokensKnown: true,
+				contextTokenBudget: 8000,
+				pressure:           &runPressure{conversation: 4000},
 			}
 
 			runAutomaticCompaction(t, service, req, resolved, 4000)
@@ -307,7 +305,7 @@ func TestSyncBackstopTargetCapsAtSoftShare(t *testing.T) {
 			}
 
 			runner.configs = nil
-			result := service.runCompactionSync(context.Background(), req, 6000, 8000, "")
+			result := service.runCompactionSyncFixed(context.Background(), req, 6000, 0, 8000, "")
 			if result.Status != compaction.StatusOK {
 				t.Fatalf("sync compaction status = %q, want %q", result.Status, compaction.StatusOK)
 			}

@@ -10,6 +10,11 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
+// terminalEventTimeout bounds the wait to hand run_terminal to a consumer.
+// The run has ended by then, so a consumer that stopped reading only loses
+// the event; it must not hold the driver open.
+const terminalEventTimeout = 5 * time.Second
+
 // turnRun is the turn port's end of a driven run: the delivery end the driver
 // hands its events to, and the handle its caller steers. It carries the two
 // facts the port needs beyond the event payload — who the run belongs to, and

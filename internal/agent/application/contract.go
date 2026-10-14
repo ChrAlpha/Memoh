@@ -124,16 +124,6 @@ type InjectedMessageRecord struct {
 	InsertAfter     int
 }
 
-// ChatResponse is the output of a non-streaming application call.
-type ChatResponse struct {
-	Messages []turn.ModelMessage `json:"messages"`
-	Model    string              `json:"model,omitempty"`
-	Provider string              `json:"provider,omitempty"`
-}
-
-// StreamChunk is one raw event emitted by the application stream.
-type StreamChunk = json.RawMessage
-
 // The canonical turn value objects are re-exported inside application so the
 // orchestration code can use them without maintaining a second DTO family.
 type (
@@ -154,8 +144,4 @@ const UserMessageKindSkillActivation = turn.UserMessageKindSkillActivation
 
 func newTextContent(text string) json.RawMessage {
 	return turn.NewTextContent(text)
-}
-
-func skillActivationModelQuery(activation *SkillActivation) string {
-	return turn.SkillActivationModelQuery(activation)
 }

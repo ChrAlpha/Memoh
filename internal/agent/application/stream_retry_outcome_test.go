@@ -126,7 +126,7 @@ type nativeTurnRun struct {
 	ledger    [3]string
 }
 
-// runNativeTurn drives StartTurn -> StreamChat against a real session runtime
+// runNativeTurn drives StartTurn against a real session runtime
 // manager and an in-memory ledger that records every finish proposal.
 func runNativeTurn(t *testing.T, fixture directLifecycleFixture) nativeTurnRun {
 	t.Helper()
@@ -188,7 +188,7 @@ func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *propo
 // recovered from is not reported. The stream carries the retry and no error,
 // the caller's Errs() stays empty, both finish proposals say completed, and
 // session_runs ends completed.
-func TestStreamChatRetrySuccessReportsNoError(t *testing.T) {
+func TestChatTurnRetrySuccessReportsNoError(t *testing.T) {
 	fixture, transport := newScriptedFailureFixture(t, http.StatusServiceUnavailable)
 	got := runNativeTurn(t, fixture)
 
@@ -201,8 +201,8 @@ func TestStreamChatRetrySuccessReportsNoError(t *testing.T) {
 		t.Fatal("the recovered answer was not stored")
 	}
 	assertStrings(t, "turn error codes", got.errCodes, nil)
-	// The AgentEnd event proposes completed through HandleAgentEvent, and
-	// runHandle.finish proposes the same outcome afterwards.
+	// The AgentEnd event proposes completed through HandleAgentEvent, and the
+	// run's terminal write proposes the same outcome afterwards.
 	wantProposals := [][2]string{{"completed", ""}, {"completed", ""}}
 	if len(got.proposals) != len(wantProposals) || got.proposals[0] != wantProposals[0] || got.proposals[1] != wantProposals[1] {
 		t.Fatalf("finish proposals = %q, want %q", got.proposals, wantProposals)
@@ -215,7 +215,7 @@ func TestStreamChatRetrySuccessReportsNoError(t *testing.T) {
 // A retry that does not recover still fails the turn: the retried 503 is
 // followed by a non-retryable 400, the run ends with agent_abort, and the
 // caller's Errs() reports it.
-func TestStreamChatRetryFailureReportsError(t *testing.T) {
+func TestChatTurnRetryFailureReportsError(t *testing.T) {
 	fixture, transport := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
 	got := runNativeTurn(t, fixture)
 
@@ -259,51 +259,10 @@ func assertOrdered(t *testing.T, got []string, want ...string) {
 	}
 }
 
-// failedRunOutcome prefers a failure the stream delivered before the error it
-// is given, and the wrapped error still reads and unwraps as that error.
-func TestFailedRunOutcomePrefersDeliveredFailure(t *testing.T) {
-	delivered := RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: apperror.New(apperror.CodeAgentProviderOverloaded, nil)}
-	commitErr := errors.New("commit agent step: boom")
-	wrapped := withDeliveredOutcome(commitErr, delivered)
-	if wrapped.Error() != commitErr.Error() || !errors.Is(wrapped, commitErr) || apperror.CodeOf(wrapped) != "" {
-		t.Fatalf("wrapped error = %v (code %q), want it to read as %v", wrapped, apperror.CodeOf(wrapped), commitErr)
-	}
-	if got := failedRunOutcome(wrapped); got.ErrorCode() != string(apperror.CodeAgentProviderOverloaded) {
-		t.Fatalf("failedRunOutcome(wrapped) code = %q", got.ErrorCode())
-	}
-	if got := failedRunOutcome(commitErr); got.Status != sessionruntime.RunStatusErrored || !errors.Is(got.Cause, commitErr) {
-		t.Fatalf("failedRunOutcome(plain) = %+v", got)
-	}
-	var wrappedAgain *deliveredFailureError
-	if plain := withDeliveredOutcome(commitErr, RunOutcome{}); errors.As(plain, &wrappedAgain) || !errors.Is(plain, commitErr) {
-		t.Fatal("an error without a delivered failure must be returned unchanged")
-	}
-}
-
-// Path A on the turn port: StreamChat reports a step commit failure after the
-// stream delivered a coded failure. The run's terminal write records the
-// delivered failure's code, while the caller is still told about the commit
-// failure.
-func TestTurnFinishAfterDeliveredFailureKeepsItsCode(t *testing.T) {
-	delivered := RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: apperror.New(apperror.CodeAgentProviderOverloaded, nil)}
-	var got RunOutcome
-	h := &runHandle{
-		streamErr: withDeliveredOutcome(errors.New("commit agent step: boom"), delivered),
-		finishRun: func(outcome RunOutcome) sessionruntime.TerminalRun {
-			got = outcome
-			return sessionruntime.TerminalRun{}
-		},
-	}
-	h.finish()
-	if got.Status != sessionruntime.RunStatusErrored || got.ErrorCode() != string(apperror.CodeAgentProviderOverloaded) {
-		t.Fatalf("terminal outcome = %q / %q, want errored with the delivered code", got.Status, got.ErrorCode())
-	}
-}
-
 // When the terminal event's proposal write fails, the run's outcome is deferred
 // to finish. The turn port's finish already holds the delivered failure, so the
 // row still records the code the caller was told about.
-func TestStreamChatDeferredProposalFinishKeepsDeliveredCode(t *testing.T) {
+func TestChatTurnDeferredProposalFinishKeepsDeliveredCode(t *testing.T) {
 	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
 	runs := &proposalRecordingLedger{Store: sessionledger.New(), failFirst: true}
 	got := runNativeTurnWith(t, fixture, runs)

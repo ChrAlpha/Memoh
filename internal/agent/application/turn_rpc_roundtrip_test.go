@@ -9,13 +9,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,7 +26,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn/turnpb"
 	"github.com/felinics/memoh/internal/apperror"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	intrpc "github.com/felinics/memoh/internal/rpc"
@@ -262,91 +259,6 @@ func TestChatTurnOverRPCDeliversRequestedSkillsAndAttachments(t *testing.T) {
 	}
 	if !strings.Contains(request, attachmentPath) {
 		t.Fatalf("model request lacks the attachment: %s", request)
-	}
-}
-
-// recordingDiscussResolver records the routing a discuss turn resolved its
-// run config with and the image references it inlined.
-type recordingDiscussResolver struct {
-	fakeDiscussService
-	mu       sync.Mutex
-	resolved []string
-	images   []timeline.ImageAttachmentRef
-}
-
-func (r *recordingDiscussResolver) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (ResolveRunConfigResult, error) {
-	r.mu.Lock()
-	r.resolved = []string{botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken}
-	r.mu.Unlock()
-	return r.fakeDiscussService.ResolveRunConfig(ctx, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken)
-}
-
-func (r *recordingDiscussResolver) InlineImageAttachments(_ context.Context, _ string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart {
-	r.mu.Lock()
-	r.images = append(r.images, refs...)
-	r.mu.Unlock()
-	return []sdk.ImagePart{{Image: "data:image/png;base64,AA==", MediaType: "image/png"}}
-}
-
-// A discuss turn started over the RPC runs on the context the channel
-// composed and the routing it resolved, and ends with run_terminal.
-func TestDiscussTurnOverRPCKeepsComposedContextAndRouting(t *testing.T) {
-	agent := &fakeAgentStreamer{}
-	resolver := &recordingDiscussResolver{fakeDiscussService: fakeDiscussService{
-		resolveResult: ResolveRunConfigResult{RunConfig: native.RunConfig{SupportsImageInput: true}, ModelID: "model-1"},
-	}}
-	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
-	service.SetSessionRuntime(newRPCRuntime(t, "owner-rpc-discuss"))
-	client := serveTurnOverRPC(t, service)
-
-	cmd := turn.StartTurnCommand{
-		SchemaVersion:           1,
-		TeamID:                  "team-1",
-		Mode:                    turn.ModeDiscuss,
-		BotID:                   "bot-1",
-		ThreadID:                "sess-1",
-		RouteID:                 "route-1",
-		SourceChannelIdentityID: "ci-1",
-		CurrentChannel:          "telegram",
-		ReplyTarget:             "tg:42",
-		ConversationType:        "group",
-		SessionToken:            "session-token",
-		ChatToken:               "chat-token",
-		ToolHTTPURL:             "http://tools.invalid",
-		DiscussMessages: []turn.DiscussMessage{
-			{Role: "user", Content: `<message id="1">PRIVATE_DISCUSS_CONTEXT</message>`},
-		},
-		DiscussImageRefs: []turn.DiscussImageRef{{ContentHash: "img-hash", Mime: "image/png"}},
-		DiscussAddressed: true,
-	}
-	handle, err := client.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("start discuss turn over rpc: %v", err)
-	}
-	events, errs := drainOverRPC(t, handle)
-	requireCompletedRunTerminal(t, handle, events, errs)
-	if events[0].Kind != turn.DiscussEventRunResolved {
-		t.Fatalf("first discuss event = %s, want %s", events[0].Kind, turn.DiscussEventRunResolved)
-	}
-
-	resolver.mu.Lock()
-	resolved, images := resolver.resolved, resolver.images
-	resolver.mu.Unlock()
-	if want := []string{"bot-1", "sess-1", "ci-1", "telegram", "tg:42", "group", "session-token"}; !reflect.DeepEqual(resolved, want) {
-		t.Fatalf("discuss run config resolved with %q, want %q", resolved, want)
-	}
-	if len(images) != 1 || images[0].ContentHash != "img-hash" || images[0].Mime != "image/png" {
-		t.Fatalf("inlined image refs = %+v", images)
-	}
-	if agent.lastConfig == nil {
-		t.Fatal("discuss turn did not reach the runtime")
-	}
-	rendered, err := json.Marshal(agent.lastConfig.Messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(rendered), "PRIVATE_DISCUSS_CONTEXT") || !strings.Contains(string(rendered), "data:image/png;base64,AA==") {
-		t.Fatalf("runtime messages lack the composed discuss context: %s", rendered)
 	}
 }
 

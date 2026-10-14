@@ -15,16 +15,18 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/schedule"
 )
 
-// A failed External Agent round records the code classifyRuntimeFailure gives
-// its cause, and nothing beside it.
-func TestPersistRuntimeRoundFailureCode(t *testing.T) {
+// A failed External Agent round records the code the executor names its cause
+// with, and nothing beside it.
+func TestPersistExternalRoundFailureCode(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -48,18 +50,18 @@ func TestPersistRuntimeRoundFailureCode(t *testing.T) {
 			t.Parallel()
 			messages := &recordingMessageService{}
 			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
-			if err := service.persistRuntimeRound(
+			if err := service.persistExternalRound(
 				context.Background(),
 				ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "run"},
 				"codex",
 				"/data/app",
 				external.PromptResult{},
-				tc.cause,
+				externalRoundFailure(tc.cause),
 				false,
 				nil,
 				nil,
 			); err != nil {
-				t.Fatalf("persistRuntimeRound() error = %v", err)
+				t.Fatalf("persistExternalRound() error = %v", err)
 			}
 			if len(messages.persisted) != 2 {
 				t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
@@ -94,11 +96,11 @@ func TestStreamRuntimeExternalAgentFailureCarriesOneCode(t *testing.T) {
 			apperror.New(apperror.CodeACPRuntimeBusy, nil)
 	}}
 	ch := make(chan WSStreamEvent, 64)
-	outcome, err := service.streamRuntimeWS(context.Background(), driver, ChatRequest{
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
-	}, ch, make(chan struct{}), true)
+	}, ch, make(chan struct{}))
 	if err != nil {
-		t.Fatalf("streamRuntimeWS() error = %v", err)
+		t.Fatalf("streamExternalWebSend() error = %v", err)
 	}
 	var failureCode, terminalCode string
 	for _, ev := range drainAgentEvents(t, ch) {
@@ -129,90 +131,15 @@ func TestStreamRuntimeFailureNamesItsRuntime(t *testing.T) {
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}}, errors.New("driver exit")
 	}}
-	outcome, err := service.streamRuntimeWS(context.Background(), driver, ChatRequest{
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
-	}, make(chan WSStreamEvent, 64), make(chan struct{}), true)
+	}, make(chan WSStreamEvent, 64), make(chan struct{}))
 	if err != nil {
-		t.Fatalf("streamRuntimeWS() error = %v", err)
+		t.Fatalf("streamExternalWebSend() error = %v", err)
 	}
 	attrs := errs.Analyze(context.Background(), outcome.Cause).Attrs
 	if !slices.ContainsFunc(attrs, func(attr slog.Attr) bool { return attr.Key == "runtime" && attr.Value.String() == "codex" }) {
 		t.Fatalf("result record attrs = %v, want runtime=codex", attrs)
-	}
-}
-
-// A new Web send whose External Agent fails on configuration before anything
-// ran, such as a runtime the workspace has not installed, keeps the user's
-// message and records the failure under the code its run ends with. The
-// history is written before the failure frame is sent, so a client that reloads
-// the session on that frame reads both.
-func TestStreamRuntimeWebConfigurationFailureIsInHistoryBeforeItsFrame(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
-	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
-		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
-	}}
-	ch := make(chan WSStreamEvent)
-	reloaded := make(chan []messagepkg.PersistInput, 1)
-	var frameCode string
-	var textDeltas []string
-	go func() {
-		defer close(reloaded)
-		for data := range ch {
-			var ev native.StreamEvent
-			if err := json.Unmarshal(data, &ev); err != nil {
-				t.Errorf("decode stream event: %v", err)
-				return
-			}
-			if ev.Type == native.EventTextDelta {
-				textDeltas = append(textDeltas, ev.Delta)
-			}
-			if ev.Type == native.EventError {
-				frameCode = ev.Code
-				reloaded <- slices.Clone(messages.persisted)
-			}
-		}
-	}()
-	outcome, err := service.streamRuntimeWS(context.Background(), driver, ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
-	}, ch, make(chan struct{}), true)
-	close(ch)
-	if err != nil {
-		t.Fatalf("streamRuntimeWS() error = %v, want the failure delivered in the stream", err)
-	}
-	persistedAtFrame, framed := <-reloaded
-	if !framed {
-		t.Fatal("no failure frame was sent")
-	}
-	turns := historyTurns(t, persistedAtFrame)
-	want := string(apperror.CodeAgentDependencyMissing)
-	if frameCode != want || outcome.ErrorCode() != want {
-		t.Fatalf("frame code = %q, outcome code = %q, want %q", frameCode, outcome.ErrorCode(), want)
-	}
-	if len(messages.deleted) != 0 {
-		t.Fatalf("deleted = %v, want the user's message kept", messages.deleted)
-	}
-	var userText, historyCode string
-	for _, turn := range turns {
-		if turn.Role == "user" {
-			userText = turn.Text
-		}
-		for _, block := range turn.Messages {
-			switch block.Type {
-			case chatview.UIMessageError:
-				historyCode = block.Code
-			case chatview.UIMessageText:
-				t.Fatalf("history at the failure frame has assistant text %q, want only the failure block", block.Content)
-			}
-		}
-	}
-	if userText != "inspect" || historyCode != want {
-		t.Fatalf("history at the failure frame: user text = %q, failure code = %q, want %q / %q", userText, historyCode, "inspect", want)
-	}
-	for range reloaded {
-	}
-	if len(textDeltas) != 0 {
-		t.Fatalf("text deltas = %q, want the failure sent only as its error frame", textDeltas)
 	}
 }
 
@@ -227,10 +154,10 @@ func TestStreamRuntimeFailureKeepsPartialOutputUnchanged(t *testing.T) {
 			apperror.New(apperror.CodeACPRuntimeBusy, nil)
 	}}
 	ch := make(chan WSStreamEvent, 64)
-	if _, err := service.streamRuntimeWS(context.Background(), driver, ChatRequest{
+	if _, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
-	}, ch, make(chan struct{}), true); err != nil {
-		t.Fatalf("streamRuntimeWS() error = %v", err)
+	}, ch, make(chan struct{})); err != nil {
+		t.Fatalf("streamExternalWebSend() error = %v", err)
 	}
 	var failures []string
 	for _, ev := range drainAgentEvents(t, ch) {
@@ -323,30 +250,80 @@ func TestScheduledRuntimeFailureTextIsItsCode(t *testing.T) {
 	}
 }
 
-// An IM turn that fails on configuration before anything ran leaves no round:
-// the user's message is removed and the failure goes to the caller.
-func TestStreamRuntimeChunksConfigurationFailureLeavesNoRound(t *testing.T) {
+// A Web send the runtime refuses before it starts is handed back: the draft
+// still belongs to the composer, so the user's message is removed again and no
+// failure row is written. The failure reaches the client as its error frame
+// under the runtime's own code, and the frame carries no text.
+func TestWebSendRefusedByRuntimeHandsTheDraftBack(t *testing.T) {
 	messages := &recordingMessageService{}
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
 	}}
-	chunkCh := make(chan StreamChunk, 64)
-	var failed error
-	service.streamRuntimeChunks(context.Background(), driver, ChatRequest{
+	ch := make(chan WSStreamEvent, 64)
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
-	}, chunkCh, func(err error) { failed = err })
-	close(chunkCh)
-	if apperror.CodeOf(failed) != apperror.CodeAgentDependencyMissing {
-		t.Fatalf("failure = %v, want %s", failed, apperror.CodeAgentDependencyMissing)
+	}, ch, make(chan struct{}))
+	if err != nil {
+		t.Fatalf("streamExternalWebSend() error = %v", err)
+	}
+	const want = string(apperror.CodeAgentDependencyMissing)
+	if outcome.ErrorCode() != want {
+		t.Fatalf("outcome code = %q, want %q", outcome.ErrorCode(), want)
+	}
+	var frameCode string
+	for _, ev := range drainAgentEvents(t, ch) {
+		switch ev.Type {
+		case native.EventTextDelta:
+			t.Fatalf("text delta %q, want the failure sent only as its error frame", ev.Delta)
+		case native.EventError:
+			frameCode = ev.Code
+		}
+	}
+	if frameCode != want {
+		t.Fatalf("frame code = %q, want %q", frameCode, want)
 	}
 	if len(messages.persisted) != 1 || messages.persisted[0].Role != "user" || len(messages.deleted) != 1 {
 		t.Fatalf("persisted = %+v deleted = %v, want only the user message, then removed", messages.persisted, messages.deleted)
 	}
-	for _, ev := range drainStreamChunks(t, chunkCh) {
-		if ev.Type == native.EventError {
-			t.Fatalf("stream carried a failure frame %q, want the failure returned", ev.Code)
-		}
+}
+
+// A send an IM channel started has left the sender's hands, so the same
+// refusal keeps the user's message and records the failure under its code.
+func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
+	messages := &recordingMessageService{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+	service.SetAllowedTeam(driveTeamID)
+	service.SetExternalRuntimes(noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
+		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
+	}})
+	handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:     1,
+		TeamID:            driveTeamID,
+		Mode:              turn.ModeChat,
+		BotID:             lifecycleTestBotID,
+		ChatID:            lifecycleTestBotID,
+		ThreadID:          lifecycleTestSessionID,
+		Query:             "inspect",
+		ExternalMessageID: "im-message-1",
+		CurrentChannel:    "telegram",
+		ReplyTarget:       "im-chat-1",
+		ConversationType:  "private",
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	drainDriveHandle(t, handle)
+
+	if len(messages.deleted) != 0 {
+		t.Fatalf("deleted = %v, want the user's message kept", messages.deleted)
+	}
+	if len(messages.persisted) != 2 || messages.persisted[0].Role != "user" {
+		t.Fatalf("persisted = %+v, want the user turn and its failure row", messages.persisted)
+	}
+	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != string(apperror.CodeAgentDependencyMissing) {
+		t.Fatalf("history error_code = %q, want %q", got, apperror.CodeAgentDependencyMissing)
 	}
 }
 
@@ -363,37 +340,4 @@ func historyTurns(t *testing.T, persisted []messagepkg.PersistInput) []chatview.
 		rows = append(rows, messagepkg.Message{ID: fmt.Sprintf("message-%d", i), TurnID: lifecycleTestRunID, Role: input.Role, Content: input.Content, DisplayContent: input.DisplayText, RawMetadata: metadata})
 	}
 	return chatview.ConvertMessagesToUITurns(rows)
-}
-
-// A completed External Agent turn, or one an IM channel started that failed on
-// configuration, delivered no failure in the stream, so its outcome is left
-// unnamed.
-func TestStreamRuntimeOutcomeWithoutDeliveredFailure(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		result external.PromptResult
-		err    error
-	}{
-		{name: "completed", result: external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("done")}, TurnCompleted: true}},
-		{name: "configuration failure", err: external.Unavailable(errors.New("bridge down"))},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
-			driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
-				return tc.result, tc.err
-			}}
-			ch := make(chan WSStreamEvent, 64)
-			outcome, _ := service.streamRuntimeWS(context.Background(), driver, ChatRequest{
-				BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
-			}, ch, nil, false)
-			for _, ev := range drainAgentEvents(t, ch) {
-				if ev.IsTerminal() && ev.Code != "" {
-					t.Fatalf("terminal event code = %q, want none", ev.Code)
-				}
-			}
-			if outcome != (RunOutcome{}) {
-				t.Fatalf("outcome = %+v, want unnamed", outcome)
-			}
-		})
-	}
 }

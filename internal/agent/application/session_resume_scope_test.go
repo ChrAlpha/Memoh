@@ -224,13 +224,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	// read it makes goes through the tenant-bound store. Recording the scopes
 	// those reads ran under is how the binding is observed: a turn that ran
 	// under another tenant's scope would be reading another team's rows.
-	s, admitter := newAdmittedTurnTestService(testChatStreamerFunc(func(context.Context, ChatRequest) (<-chan StreamChunk, <-chan error) {
-		chunks := make(chan StreamChunk)
-		close(chunks)
-		errs := make(chan error)
-		close(errs)
-		return chunks, errs
-	}))
+	s, admitter := newAdmittedTurnTestService()
 	s.logger = slog.Default()
 	s.queries = q
 	s.SetSessionResumeScopeProvider(scopes)

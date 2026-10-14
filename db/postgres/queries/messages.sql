@@ -1725,7 +1725,6 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = sqlc.arg(bot_id)
   AND m.created_at >= sqlc.arg(created_at)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.created_at ASC, m.id ASC;
 
 -- name: ListActiveMessagesSinceBySession :many
@@ -1756,7 +1755,6 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
   AND m.created_at >= sqlc.arg(created_at)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: MeasureActiveMessagesBySession :one
@@ -1769,8 +1767,7 @@ SELECT
 FROM bot_visible_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
-  AND m.created_at >= sqlc.arg(created_at)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
+  AND m.created_at >= sqlc.arg(created_at);
 
 -- name: ListTurnResponseSourcesSinceBySessionWithinBytes :many
 -- Turn-response (TR) composition only needs
@@ -1799,7 +1796,6 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.created_at >= sqlc.arg(created_at)
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
@@ -1878,7 +1874,6 @@ FROM (
         AND c.status = 'ok'
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
@@ -1943,7 +1938,6 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.role = 'user'
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT sqlc.arg(row_limit)::INT
@@ -3141,7 +3135,6 @@ WITH candidate_rows AS MATERIALIZED (
           OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
         )
     ))
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
@@ -3238,7 +3231,6 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
   AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '');
 
 -- name: ListUncompactedMessagesBySession :many
@@ -3296,7 +3288,6 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: ListMessagesByCompactID :many

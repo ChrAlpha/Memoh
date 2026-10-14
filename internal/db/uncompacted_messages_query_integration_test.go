@@ -130,7 +130,6 @@ INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summar
 	type fixture struct {
 		name      string
 		compactID string
-		metadata  string
 		eligible  bool
 	}
 	fixtures := []fixture{
@@ -141,15 +140,10 @@ INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summar
 		{name: "stale pending lease", compactID: logs["pendingStale"], eligible: true},
 		{name: "legacy ok with empty summary", compactID: logs["poison"], eligible: true},
 		{name: "legacy ok with whitespace-only summary", compactID: logs["whitespace"], eligible: true},
-		{name: "passive sync", metadata: `{"trigger_mode":"passive_sync"}`, eligible: false},
 	}
 	wantEligible := make(map[string]string)
 	for i, f := range fixtures {
 		id := uuid.NewString()
-		metadata := f.metadata
-		if metadata == "" {
-			metadata = "{}"
-		}
 		var compactID any
 		if f.compactID != "" {
 			compactID = f.compactID
@@ -158,8 +152,8 @@ INSERT INTO bot_history_message_compacts (id, bot_id, session_id, status, summar
 INSERT INTO bot_history_messages
   (id, bot_id, session_id, role, content, metadata, compact_id, turn_visible, turn_id, turn_position, turn_message_seq, created_at)
 VALUES
-  ($1, $2, $3, 'user', '[{"type":"text","text":"m"}]', $4, $5, true, $6, $7, 0, now() + make_interval(secs => $8))
-`, id, botID, sessionID, metadata, compactID, uuid.NewString(), i, i); err != nil {
+  ($1, $2, $3, 'user', '[{"type":"text","text":"m"}]', '{}', $4, true, $5, $6, 0, now() + make_interval(secs => $7))
+`, id, botID, sessionID, compactID, uuid.NewString(), i, i); err != nil {
 			t.Fatalf("insert message %q: %v", f.name, err)
 		}
 		if f.eligible {
@@ -220,35 +214,5 @@ VALUES
 	}
 	if len(oversized) != 0 {
 		t.Fatalf("tiny byte budget admitted %d payload rows", len(oversized))
-	}
-
-	if _, err := tx.Exec(ctx, `
-INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms) VALUES
-  ($1, $5, $6, 'message', '{"message_id":"covered","received_at_ms":10}', 'covered', 10),
-  ($2, $5, $6, 'message', '{"message_id":"uncovered","received_at_ms":15}', 'uncovered', 15),
-  ($3, $5, $6, 'edit',    '{"message_id":"covered","received_at_ms":30}', 'covered', 30),
-  ($4, $5, $6, 'message', '{"message_id":"covered-stable","received_at_ms":5}', 'covered-stable', 5)
-`, uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(), botID, sessionID); err != nil {
-		t.Fatalf("insert replay events: %v", err)
-	}
-	replayRows, err := queries.ListSessionEventsBySessionPageBeforeWithinBytes(ctx, sqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
-		SessionID:               sessionUUID,
-		CoveredExternalMessages: []byte(`{"covered":20,"covered-stable":20}`),
-		MaxBytes:                1 << 20,
-		PageSize:                10,
-	})
-	if err != nil {
-		t.Fatalf("ListSessionEventsBySessionPageBeforeWithinBytes: %v", err)
-	}
-	if len(replayRows) != 3 {
-		t.Fatalf("frontier-aware replay returned %d rows, want 3", len(replayRows))
-	}
-	if replayRows[0].ReceivedAtMs != 30 || replayRows[1].ReceivedAtMs != 15 || replayRows[2].ReceivedAtMs != 10 {
-		t.Fatalf("unexpected replay order/coverage: %#v", replayRows)
-	}
-	for i, row := range replayRows {
-		if row.CumulativeBytes > 1<<20 || (i > 0 && row.CumulativeBytes < replayRows[i-1].CumulativeBytes) {
-			t.Fatalf("invalid replay byte accounting: %#v", replayRows)
-		}
 	}
 }

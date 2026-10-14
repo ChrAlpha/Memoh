@@ -109,15 +109,15 @@ func TestStoreRoundPassesSourceRefsToMemory(t *testing.T) {
 		logger:          slog.New(slog.DiscardHandler),
 	}
 
-	if err := resolver.storeRound(context.Background(), ChatRequest{
+	if err := resolver.storeRoundWithOptions(context.Background(), ChatRequest{
 		BotID:    storeRoundBotID,
 		ThreadID: "session-1",
 		Query:    "hello",
 	}, []ModelMessage{
 		{Role: "user", Content: newTextContent("hello")},
 		{Role: "assistant", Content: newTextContent("hi there")},
-	}, "model-1"); err != nil {
-		t.Fatalf("storeRound error: %v", err)
+	}, "model-1", storeRoundOptions{}); err != nil {
+		t.Fatalf("storeRoundWithOptions error: %v", err)
 	}
 
 	select {
@@ -162,9 +162,9 @@ func TestPersistRuntimeRoundSkipsMemoryFormation(t *testing.T) {
 					BotID: storeRoundBotID, ThreadID: user.SessionID, Query: "remember this",
 					UserMessagePersisted: eagerUser, PersistedUserMessageID: user.ID,
 				}
-				err := service.persistRuntimeRound(t.Context(), req, string(kind), "/data", external.PromptResult{
+				err := service.persistExternalRound(t.Context(), req, string(kind), "/data", external.PromptResult{
 					Output: []sdk.Message{sdk.AssistantMessage("external agent answer")},
-				}, nil, true, nil, nil)
+				}, externalRoundFailure(nil), true, nil, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -235,13 +235,13 @@ func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 		logger:          slog.New(slog.DiscardHandler),
 	}
 
-	if err := resolver.storeRound(context.Background(), ChatRequest{
+	if err := resolver.storeRoundWithOptions(context.Background(), ChatRequest{
 		BotID: storeRoundBotID, ThreadID: "session-1", Query: "hello",
 	}, []ModelMessage{
 		{Role: "user", Content: newTextContent("hello")},
 		{Role: "assistant", Content: newTextContent("hi there")},
-	}, "model-1"); err != nil {
-		t.Fatalf("storeRound error: %v", err)
+	}, "model-1", storeRoundOptions{}); err != nil {
+		t.Fatalf("storeRoundWithOptions error: %v", err)
 	}
 
 	select {

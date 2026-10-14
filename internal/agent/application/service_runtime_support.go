@@ -27,12 +27,6 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-// runtimeSinkStallTimeout bounds how long a live-turn event delivery may wait on
-// a WS consumer that is connected but not draining. Reaching it cancels the
-// stream (client-disconnect semantics) so the adapter callback — and the
-// prompt's runtime slot behind it — cannot stall indefinitely.
-const runtimeSinkStallTimeout = 30 * time.Second
-
 type acpPrompter interface {
 	Prompt(ctx context.Context, input acpagent.PromptInput) (acpclient.PromptResult, error)
 }
@@ -51,7 +45,6 @@ type RuntimeSessionExecutionInfo struct {
 }
 
 func (s *Service) SetACPSessionPool(pool acpPrompter) {
-	s.acpPool = pool
 	s.SetExternalRuntimes(acpagent.NewDriver(pool))
 }
 

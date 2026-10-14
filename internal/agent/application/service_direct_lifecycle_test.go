@@ -10,12 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -209,10 +207,9 @@ func (s *synchronizedLifecycleStore) creates() []sqlc.CreateContextLifecyclePara
 type directLifecycleModelMode string
 
 const (
-	directLifecycleModelSuccess      directLifecycleModelMode = "success"
-	directLifecycleModelFailure      directLifecycleModelMode = "failure"
-	directLifecycleModelBlock        directLifecycleModelMode = "block"
-	directLifecycleModelStallHeaders directLifecycleModelMode = "stall_headers"
+	directLifecycleModelSuccess directLifecycleModelMode = "success"
+	directLifecycleModelFailure directLifecycleModelMode = "failure"
+	directLifecycleModelBlock   directLifecycleModelMode = "block"
 	// directLifecycleModelHoldOnCancel streams a reply and then keeps the
 	// handler open past the caller's cancellation, the way a provider that has
 	// to finish writing its own state does. A test uses it to hold a run in its
@@ -260,11 +257,6 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 			case <-release:
 			case <-time.After(30 * time.Second):
 			}
-			return
-		}
-		if mode == directLifecycleModelStallHeaders && !request.Stream {
-			startedOnce.Do(func() { close(started) })
-			<-r.Context().Done()
 			return
 		}
 		if mode == directLifecycleModelBlock && request.Stream {
@@ -346,22 +338,19 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 	if !ok {
 		t.Fatalf("httptest transport = %T, want *http.Transport", server.Client().Transport)
 	}
-	nonStreamingTransport := streamTransport.Clone()
-	nonStreamingTransport.ResponseHeaderTimeout = 50 * time.Millisecond
 	lifecycles := &synchronizedLifecycleStore{}
 	messages := &recordingMessageService{}
 	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 	service := &Service{
-		agent:                  native.New(native.Deps{Logger: logger}),
-		modelsService:          models.NewService(logger, queries),
-		queries:                queries,
-		contextLifecycles:      lifecycles,
-		messageService:         messages,
-		settingsService:        settings.NewService(logger, queries, nil, nil),
-		sessionRuntime:         runtime,
-		streamHTTPClient:       &http.Client{Transport: streamTransport},
-		nonStreamingHTTPClient: &http.Client{Transport: nonStreamingTransport, Timeout: time.Second},
-		logger:                 logger,
+		agent:             native.New(native.Deps{Logger: logger}),
+		modelsService:     models.NewService(logger, queries),
+		queries:           queries,
+		contextLifecycles: lifecycles,
+		messageService:    messages,
+		settingsService:   settings.NewService(logger, queries, nil, nil),
+		sessionRuntime:    runtime,
+		streamHTTPClient:  &http.Client{Transport: streamTransport},
+		logger:            logger,
 	}
 	return directLifecycleFixture{
 		service:     service,
@@ -373,66 +362,6 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		release:     release,
 		releaseOnce: releaseOnce,
 		requests:    requests,
-	}
-}
-
-func TestDirectChatWithoutCallerDeadlineUsesBoundedNonStreamingClient(t *testing.T) {
-	fixture := newDirectLifecycleFixture(t, directLifecycleModelStallHeaders)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if _, hasDeadline := ctx.Deadline(); hasDeadline {
-		t.Fatal("test caller context unexpectedly has a deadline")
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := fixture.service.Chat(ctx, ChatRequest{
-			BotID:                lifecycleTestBotID,
-			ChatID:               lifecycleTestBotID,
-			ThreadID:             lifecycleTestSessionID,
-			Query:                directLifecyclePrompt,
-			UserMessagePersisted: true,
-		})
-		done <- err
-	}()
-
-	select {
-	case <-fixture.started:
-	case <-time.After(time.Second):
-		cancel()
-		<-done
-		t.Fatal("provider did not receive synchronous Chat request")
-	}
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("Chat() error = nil, want response-header timeout")
-		}
-		if !strings.Contains(err.Error(), "timeout awaiting response headers") {
-			t.Fatalf("Chat() error = %v, want response-header timeout", err)
-		}
-	case <-time.After(500 * time.Millisecond):
-		cancel()
-		<-done
-		t.Fatal("Chat() remained blocked after the bounded response-header window")
-	}
-}
-
-func TestDirectChatCallerDeadlineWinsOverNonStreamingClientTimeout(t *testing.T) {
-	fixture := newDirectLifecycleFixture(t, directLifecycleModelStallHeaders)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-
-	_, err := fixture.service.Chat(ctx, ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Chat() error = %v, want caller context deadline exceeded", err)
 	}
 }
 
@@ -466,10 +395,12 @@ func assertDirectLifecycle(
 	}
 }
 
-func TestDirectChatMintsRunAndPersistsCompletedLifecycleAfterAssistant(t *testing.T) {
-	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
-
-	response, err := fixture.service.Chat(context.Background(), ChatRequest{
+func startDirectLifecycleTurn(t *testing.T, fixture directLifecycleFixture) {
+	t.Helper()
+	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "direct-lifecycle-team",
+		Mode:                 turn.ModeChat,
 		BotID:                lifecycleTestBotID,
 		ChatID:               lifecycleTestBotID,
 		ThreadID:             lifecycleTestSessionID,
@@ -477,43 +408,39 @@ func TestDirectChatMintsRunAndPersistsCompletedLifecycleAfterAssistant(t *testin
 		UserMessagePersisted: true,
 	})
 	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
+		t.Fatalf("StartTurn() error = %v", err)
 	}
-	if len(response.Messages) == 0 || len(fixture.messages.persisted) == 0 {
-		t.Fatal("Chat() did not persist its assistant response")
+	for range handle.Events() {
+	}
+	for range handle.Errs() {
+	}
+}
+
+func TestAdmittedStreamPersistsCompletedLifecycleAfterAssistant(t *testing.T) {
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
+
+	startDirectLifecycleTurn(t, fixture)
+
+	if len(fixture.messages.persisted) == 0 {
+		t.Fatal("the run did not persist its assistant response")
 	}
 	runID := fixture.messages.persisted[len(fixture.messages.persisted)-1].RunID
-	if _, err := uuid.Parse(runID); err != nil {
-		t.Fatalf("persisted direct run ID = %q, want UUID: %v", runID, err)
+	if runID != lifecycleTestRunID {
+		t.Fatalf("persisted run ID = %q, want the admitted run %q", runID, lifecycleTestRunID)
 	}
 	assertDirectLifecycle(t, fixture.lifecycles, runID, contextLifecycleStatusCompleted, "message-id")
 }
 
-func TestDirectChatProviderFailurePersistsFailedProviderLifecycle(t *testing.T) {
+func TestAdmittedStreamProviderFailurePersistsFailedProviderLifecycle(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelFailure)
 
-	_, err := fixture.service.Chat(context.Background(), ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
-		Query:                directLifecyclePrompt,
-		UserMessagePersisted: true,
-	})
-	if err == nil {
-		t.Fatal("Chat() error = nil, want provider failure")
-	}
+	startDirectLifecycleTurn(t, fixture)
+
 	creates := fixture.lifecycles.creates()
 	if len(creates) != 1 {
 		t.Fatalf("lifecycle creates = %d, want 1", len(creates))
 	}
-	runID := pgUUIDString(creates[0].RunID)
-	if _, parseErr := uuid.Parse(runID); parseErr != nil {
-		t.Fatalf("failed direct run ID = %q, want UUID: %v", runID, parseErr)
-	}
-	assertDirectLifecycle(t, fixture.lifecycles, runID, contextLifecycleStatusFailedProvider, "")
-	if creates[0].ErrorCode.Valid {
-		t.Fatalf("private provider diagnostic became stable error code: %#v", creates[0].ErrorCode)
-	}
+	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider, "message-id")
 }
 
 func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {

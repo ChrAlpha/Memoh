@@ -8,7 +8,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -69,14 +68,14 @@ func TestNonVisionModelDoesNotPrepareImages(t *testing.T) {
 func TestRenderedFramesAreCachedAcrossTurns(t *testing.T) {
 	opens := 0
 	s := countingStickerService(t, &opens)
-	refs := []timeline.ImageAttachmentRef{{ContentHash: "sticker", Mime: "application/x-tgsticker"}}
+	refs := []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
 
-	first := s.InlineImageAttachments(context.Background(), "bot-1", refs)
+	first := s.inlineInjectAttachments(context.Background(), "bot-1", refs)
 	if len(first) != animationFrameCount || opens != 1 {
 		t.Fatalf("first turn: %d parts, %d opens", len(first), opens)
 	}
 	for turn := range 3 {
-		again := s.InlineImageAttachments(context.Background(), "bot-1", refs)
+		again := s.inlineInjectAttachments(context.Background(), "bot-1", refs)
 		if opens != 1 {
 			t.Fatalf("turn %d re-read the asset: %d opens", turn+2, opens)
 		}
@@ -95,9 +94,9 @@ func TestRenderedFramesAreCachedAcrossTurns(t *testing.T) {
 func TestFrameCacheIsScopedPerBot(t *testing.T) {
 	opens := 0
 	s := countingStickerService(t, &opens)
-	refs := []timeline.ImageAttachmentRef{{ContentHash: "sticker", Mime: "application/x-tgsticker"}}
-	s.InlineImageAttachments(context.Background(), "bot-a", refs)
-	s.InlineImageAttachments(context.Background(), "bot-b", refs)
+	refs := []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
+	s.inlineInjectAttachments(context.Background(), "bot-a", refs)
+	s.inlineInjectAttachments(context.Background(), "bot-b", refs)
 	if opens != 2 {
 		t.Fatalf("asset opened %d time(s), want one per bot", opens)
 	}
@@ -131,23 +130,24 @@ func TestTurnVisionBudgetShedsExpansionFirst(t *testing.T) {
 		},
 	}}
 	const stickers = 10
-	refs := make([]timeline.ImageAttachmentRef, 0, stickers)
+	refs := make([]ChatAttachment, 0, stickers)
 	for i := range stickers {
-		refs = append(refs, timeline.ImageAttachmentRef{
+		refs = append(refs, ChatAttachment{
+			Type:        "image",
 			ContentHash: "sticker-" + string(rune('a'+i)),
 			Mime:        "application/x-tgsticker",
 		})
 	}
 
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", refs)
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", refs)
 	if len(parts) > maxTurnVisionImages {
-		t.Fatalf("InlineImageAttachments() = %d parts, over the %d budget", len(parts), maxTurnVisionImages)
+		t.Fatalf("inlineInjectAttachments() = %d parts, over the %d budget", len(parts), maxTurnVisionImages)
 	}
 	// Four stickers fit whole (20 images); the rest still contribute one frame
 	// each until the budget is gone, so nothing disappears silently while
 	// there is room.
 	if len(parts) != maxTurnVisionImages {
-		t.Fatalf("InlineImageAttachments() = %d parts, want the budget spent in full", len(parts))
+		t.Fatalf("inlineInjectAttachments() = %d parts, want the budget spent in full", len(parts))
 	}
 }
 

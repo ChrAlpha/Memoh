@@ -39,7 +39,6 @@ import (
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/hooks"
@@ -116,7 +115,6 @@ type Service struct {
 	settingsService         *settings.Service
 	accountService          *accounts.Service
 	sessionService          SessionService
-	acpPool                 acpPrompter
 	externalDrivers         map[string]external.Driver
 	compactionService       compactionRunner
 	eventPublisher          messageevent.Publisher
@@ -128,7 +126,6 @@ type Service struct {
 	workspaceTargets        workspaceTargetResolver
 	workdirs                sessionWorkdirResolver
 	streamHTTPClient        *http.Client
-	nonStreamingHTTPClient  *http.Client
 	compactionHTTPClient    *http.Client
 	streamIdleTimeout       time.Duration
 	streamIdleTimeoutMax    time.Duration
@@ -144,10 +141,8 @@ type Service struct {
 	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error)
 	sessionCompactionMu               sync.Mutex
 	sessionCompactions                map[string]*sessionCompactionGate
-	timeout                           time.Duration
 	memorySearchTimeout               time.Duration
 	contextAbsoluteCapTokens          int
-	syncCompactionMode                string
 	clockLocation                     *time.Location
 	logger                            *slog.Logger
 	allowedTeam                       string
@@ -159,7 +154,6 @@ type Service struct {
 	contextLifecycleCandidatesMu      sync.Mutex
 	contextLifecycleCandidates        map[contextLifecycleCandidateKey]contextLifecycleCandidate
 	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
-	turnHooks                         *turnRuntimeHooks
 	sessionManager                    *sessionruntime.Manager
 	// outputMedia and outputSpeech prepare a run's events on their way to the
 	// subscribers: attachments are stored, speech is synthesized into voice
@@ -180,11 +174,7 @@ func NewService(
 	accountService *accounts.Service,
 	a *native.Agent,
 	clockLocation *time.Location,
-	timeout time.Duration,
 ) *Service {
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
 	if clockLocation == nil {
 		clockLocation = time.UTC
 	}
@@ -205,12 +195,6 @@ func NewService(
 	streamHTTPClient := &http.Client{
 		Transport: streamTransport,
 	}
-	nonStreamingTransport := streamTransport.Clone()
-	nonStreamingTransport.ResponseHeaderTimeout = 30 * time.Second
-	nonStreamingHTTPClient := &http.Client{
-		Transport: nonStreamingTransport,
-		Timeout:   10 * time.Minute,
-	}
 	// The summarizer sends one large cold prompt whose first byte routinely
 	// takes 60-93s upstream; the interactive 30s header deadline would kill
 	// every automatic pass while manual /compact (SDK default client) works.
@@ -222,20 +206,18 @@ func NewService(
 	}
 
 	service := &Service{
-		agent:                  a,
-		modelsService:          modelsService,
-		queries:                queries,
-		contextLifecycles:      queries,
-		messageService:         messageService,
-		settingsService:        settingsService,
-		accountService:         accountService,
-		streamHTTPClient:       streamHTTPClient,
-		nonStreamingHTTPClient: nonStreamingHTTPClient,
-		compactionHTTPClient:   compactionHTTPClient,
-		timeout:                timeout,
-		memorySearchTimeout:    defaultMemorySearchTimeout,
-		clockLocation:          clockLocation,
-		logger:                 log.With(slog.String("service", "agent/application")),
+		agent:                a,
+		modelsService:        modelsService,
+		queries:              queries,
+		contextLifecycles:    queries,
+		messageService:       messageService,
+		settingsService:      settingsService,
+		accountService:       accountService,
+		streamHTTPClient:     streamHTTPClient,
+		compactionHTTPClient: compactionHTTPClient,
+		memorySearchTimeout:  defaultMemorySearchTimeout,
+		clockLocation:        clockLocation,
+		logger:               log.With(slog.String("service", "agent/application")),
 	}
 	return service
 }
@@ -267,32 +249,6 @@ func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int 
 		slog.String("model_id", chatModel.ID),
 		slog.Int("fallback_tokens", fallback))
 	return fallback
-}
-
-// Pre-turn synchronous compaction backstop rollout modes (CM-CMP-003). The
-// wire values match config.SyncCompactionMode*; the application keeps its own
-// constants so the domain layer does not import the config package.
-const (
-	syncCompactionModeActive = "active"
-	syncCompactionModeShadow = "shadow"
-	syncCompactionModeOff    = "off"
-)
-
-// SetSyncCompactionMode sets the rollout mode for the pre-turn synchronous
-// compaction backstop on the discuss and pipeline-chat paths.
-func (s *Service) SetSyncCompactionMode(mode string) {
-	s.syncCompactionMode = mode
-}
-
-// effectiveSyncCompactionMode normalizes the configured mode; anything
-// unrecognized (including unset) observes in shadow rather than enforcing.
-func (s *Service) effectiveSyncCompactionMode() string {
-	switch s.syncCompactionMode {
-	case syncCompactionModeActive, syncCompactionModeOff:
-		return s.syncCompactionMode
-	default:
-		return syncCompactionModeShadow
-	}
 }
 
 // SetMemoryRegistry sets the provider registry for memory operations.
@@ -357,37 +313,6 @@ func (s *Service) SetUserInputService(service *userinput.Service) {
 	s.userInput = service
 }
 
-// InlineImageAttachments resolves image content hashes to sdk.ImagePart values
-// using the configured asset loader. Intended for the discuss driver to inline
-// images from new RC segments before calling the LLM.
-func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart {
-	if s == nil || s.assetLoader == nil || len(refs) == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
-	defer cancel()
-	var parts []sdk.ImagePart
-	var budget visionBudget
-	seen := make(map[string]bool, len(refs))
-	for _, ref := range refs {
-		contentHash := strings.TrimSpace(ref.ContentHash)
-		if contentHash == "" || seen[contentHash] {
-			continue
-		}
-		seen[contentHash] = true
-		framed, err := s.inlineStoredImageParts(ctx, botID, contentHash, ref.Mime)
-		if err != nil {
-			// One unusable attachment must not cost the turn its other images:
-			// the reference stays in the rendered context and every later turn
-			// skips the same bytes again instead of failing the model call.
-			s.logImageInputRejected(err, botID, contentHash)
-			continue
-		}
-		parts = append(parts, budget.take(framed)...)
-	}
-	return parts
-}
-
 type resolvedContext struct {
 	runConfig       native.RunConfig
 	model           models.GetResponse
@@ -397,12 +322,8 @@ type resolvedContext struct {
 	estimatedTokens int // estimated input token count for compaction
 	// pressure is a native chat run's estimate of its next request, which the
 	// background trigger judges the finished run by.
-	pressure *runPressure
-	// compactableTokens is the raw history share a discuss turn reports in
-	// place of a run estimate.
-	compactableTokens      int
-	compactableTokensKnown bool
-	contextTokenBudget     int // token budget used to clamp compaction triggers
+	pressure           *runPressure
+	contextTokenBudget int // token budget used to clamp compaction triggers
 }
 
 func runIDForChatRequest(admittedRunID string) string {
@@ -445,10 +366,6 @@ func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID 
 // request, not the one that went in. Query is deliberately untouched: callers
 // that persist a headerified user message still take it from resolvedContext.
 func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext, ChatRequest, error) {
-	return s.resolveWithHTTPClient(ctx, req, nil)
-}
-
-func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, modelHTTPClient *http.Client) (resolvedContext, ChatRequest, error) {
 	modelQuery := modelQueryText(req)
 	// A request whose input is already persisted carries no query of its own:
 	// its current message is the history row it names.
@@ -502,7 +419,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		Model:              req.Model,
 		Provider:           req.Provider,
 		ReasoningEffort:    req.ReasoningEffort,
-		HTTPClient:         modelHTTPClient,
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "resolve: buildBaseRunConfig failed",
@@ -697,107 +613,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	}, req, nil
 }
 
-// Chat sends a synchronous chat request and stores the result.
-func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	if err := rejectReservedSkillMetadataIfPresent(req); err != nil {
-		return ChatResponse{}, err
-	}
-	if err := s.rejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
-		return ChatResponse{}, err
-	}
-	dispatch, err := s.resolveRuntimeDispatch(ctx, req)
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	switch dispatch.kind {
-	case dispatchExternal:
-		// Chat surfaces stream; the synchronous path never carried runtime
-		// turns and silently running the native model here would be wrong
-		// (the pre-unification ACP path used to degrade exactly that way).
-		return ChatResponse{}, errors.New("runtime sessions support only streaming chat surfaces")
-	default:
-		var err error
-		ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
-		if err != nil {
-			return ChatResponse{}, err
-		}
-	}
-
-	if req.RawQuery == "" {
-		req.RawQuery = strings.TrimSpace(req.Query)
-	}
-	if !req.UserMessagePersisted {
-		req, err = s.applyUserMessageHook(ctx, req)
-		if err != nil {
-			return ChatResponse{}, err
-		}
-	}
-	rc, req, err := s.resolveWithHTTPClient(ctx, req, s.nonStreamingHTTPClient)
-	if err != nil {
-		return ChatResponse{}, err
-	}
-	req.Query = rc.query
-	req.RunID = rc.runConfig.RunID
-
-	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
-
-	cfg := rc.runConfig
-	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
-	if stepCommitter != nil {
-		cfg.OnStepCommitted = stepCommitter.commit
-		stepCommitter.bindContinuation(&cfg)
-	}
-	cfg = s.prepareRunConfig(ctx, cfg)
-	terminal := s.contextLifecycleTerminal(ctx, cfg)
-	var lifecycleCause error
-	defer func() { terminal(lifecycleCause) }()
-
-	result, err := s.agent.Generate(ctx, cfg)
-	lifecycleCause = err
-	if err != nil {
-		if stepCommitter != nil {
-			_ = stepCommitter.finish(ctx, rc.estimatedTokens)
-		}
-		return ChatResponse{}, err
-	}
-
-	outputMessages := sdkMessagesWithOrigins(result.Messages, result.InternalFeedbackIndexes)
-	storeReq := req
-	if stepCommitter != nil {
-		inputTokens := 0
-		if result.Usage != nil {
-			inputTokens = result.Usage.InputTokens
-		}
-		if err := stepCommitter.finish(ctx, inputTokens); err != nil {
-			lifecycleCause = err
-			return ChatResponse{}, err
-		}
-	} else {
-		roundMessages := prependTurnUserMessage(storeReq, outputMessages)
-		if err := s.storeRoundWithOptions(ctx, storeReq, roundMessages, rc.model.ID, storeRoundOptions{
-			SkipMemory:       storeReq.SkipMemoryExtraction,
-			ContextLifecycle: cfg.ContextLifecycle,
-		}); err != nil {
-			lifecycleCause = err
-			return ChatResponse{}, err
-		}
-		if err := s.persistSessionWorkspaceTarget(ctx, storeReq); err != nil {
-			lifecycleCause = err
-			return ChatResponse{}, err
-		}
-		rc.pressure.add(result.Messages)
-		if result.Usage != nil {
-			s.maybeCompact(context.WithoutCancel(ctx), req, rc, result.Usage.InputTokens)
-		}
-	}
-
-	return ChatResponse{
-		Messages: outputMessages,
-		Model:    rc.model.ModelID,
-		Provider: rc.provider.ClientType,
-	}, nil
-}
-
 // baseRunConfigParams holds parameters for buildBaseRunConfig that differ
 // between chat and discuss callers.
 type baseRunConfigParams struct {
@@ -822,7 +637,6 @@ type baseRunConfigParams struct {
 	Model              string
 	Provider           string
 	ReasoningEffort    string // caller-provided override (empty = use bot default)
-	HTTPClient         *http.Client
 }
 
 // buildBaseRunConfig creates a RunConfig with model, credentials, skills,
@@ -866,10 +680,6 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 
 	reasoningConfig := resolveRunReasoningConfig(chatModel, botSettings, p, provider.ClientType)
 
-	modelHTTPClient := p.HTTPClient
-	if modelHTTPClient == nil {
-		modelHTTPClient = s.streamHTTPClient
-	}
 	sdkModel := models.NewSDKChatModel(models.SDKModelConfig{
 		ModelID:               chatModel.ModelID,
 		ClientType:            provider.ClientType,
@@ -877,7 +687,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		CodexAccountID:        creds.CodexAccountID,
 		BaseURL:               baseURL,
 		ChatCompletionsCompat: chatCompletionsCompat,
-		HTTPClient:            modelHTTPClient,
+		HTTPClient:            s.streamHTTPClient,
 		ReasoningConfig:       reasoningConfig,
 		ReasoningDialect:      chatModel.Config.ReasoningDialect,
 		ReasoningOffSupport:   chatModel.Config.ReasoningOffSupport,
@@ -974,10 +784,6 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 
 func (s *Service) canDeliverUserInputStream() bool {
 	return s.userInput != nil
-}
-
-func (s *Service) canDeliverUserInputWS(eventCh chan<- WSStreamEvent) bool {
-	return s.userInput != nil && eventCh != nil
 }
 
 func supportsImageInputForModel(m models.GetResponse) bool {

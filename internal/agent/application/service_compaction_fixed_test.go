@@ -32,24 +32,6 @@ func TestRunCompactionSyncFixedCarriesTheFixedRequestIntoTheConfig(t *testing.T)
 	}
 }
 
-// The plain sync path carries no fixed part: its input is raw history alone.
-func TestRunCompactionSyncPlainHasNoFixedPart(t *testing.T) {
-	t.Parallel()
-
-	service, runner := newControllerPolicyService(t, nil)
-	req := ChatRequest{
-		BotID:    "00000000-0000-0000-0000-000000000453",
-		ThreadID: "00000000-0000-0000-0000-000000000454",
-	}
-	service.runCompactionSync(context.Background(), req, 9000, 8000, "")
-	if len(runner.configs) == 0 {
-		t.Fatal("no compaction reached the engine")
-	}
-	if got := runner.configs[0].FixedTokens; got != 0 {
-		t.Fatalf("FixedTokens = %d, want 0 for raw history", got)
-	}
-}
-
 // At run end the fixed part is the judged request less the rows it holds,
 // so a run whose system prompt and tools are large gets a large fixed part.
 func TestRunEndCompactionCarriesTheRunsFixedPart(t *testing.T) {

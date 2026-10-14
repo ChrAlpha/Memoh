@@ -35,7 +35,6 @@ type agentStepCommitter struct {
 	memoryPersisted      []messagepkg.Message
 	messages             []ModelMessage
 	nextStep             int // In-process ordering guard, not a durable replay cursor.
-	commitErr            error
 	finalized            bool
 	replacementFinalized bool
 	// checkpointed means an interrupted step was written: the run already has
@@ -155,13 +154,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var dir native.StepDirective
-	// A failed interrupted checkpoint is reported to its caller but never
-	// recorded as a commit failure: the turn is already ending, and losing an
-	// unfinished snapshot must not turn an abort into a turn error.
 	fail := func(err error) (native.StepDirective, error) {
-		if mode != stepInterrupted {
-			c.commitErr = err
-		}
 		return native.StepDirective{}, err
 	}
 	if stepIndex != c.nextStep {
@@ -359,15 +352,6 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 		c.service.logger.WarnContext(ctx, "publish runtime queue user turns failed",
 			slog.String("run_id", c.req.RunID), slog.Any("error", err))
 	}
-}
-
-func (c *agentStepCommitter) err() error {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.commitErr
 }
 
 // recordFailure writes the history of a run that failed with f, before the run

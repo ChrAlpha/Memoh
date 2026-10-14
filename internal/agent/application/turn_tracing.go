@@ -8,7 +8,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/telemetry"
 )
@@ -66,37 +65,5 @@ func startTurnSpan(ctx context.Context, req ChatRequest) (context.Context, func(
 			span.SetAttributes(attribute.String("agent.turn.outcome", "completed"))
 		}
 		span.End()
-	}
-}
-
-// startSelfCanceledTurnSpan is startTurnSpan for a turn that cancels its own
-// context on the way out, as the discuss pump does. Whether that context ended
-// says nothing about how the turn ended, so the span concludes from the error
-// it is closed with alone.
-func startSelfCanceledTurnSpan(ctx context.Context, req ChatRequest) (context.Context, func(error)) {
-	spanCtx, endTurn := startTurnSpan(context.WithoutCancel(ctx), req)
-	return trace.ContextWithSpan(ctx, trace.SpanFromContext(spanCtx)), endTurn
-}
-
-// discussTurnSpanCause is what a discuss turn's span records, the conclusion
-// its run's result record reaches: the error the turn reported, or else the
-// run's terminal record. A run without one was parked on a decision, which has
-// no conclusion yet, or lost its owner, whose cause ended runCtx.
-func discussTurnSpanCause(runCtx context.Context, h *discussHandle) error {
-	if h.streamErr != nil {
-		return h.streamErr
-	}
-	switch ledger.State(h.terminal.State) {
-	case "":
-		if cause := context.Cause(runCtx); cause != nil && !errs.CallerEnded(runCtx) {
-			return cause
-		}
-		return nil
-	case ledger.StateCompleted:
-		return nil
-	case ledger.StateAborted:
-		return context.Canceled
-	default:
-		return runResultError(h.terminal, nil)
 	}
 }

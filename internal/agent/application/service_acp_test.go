@@ -7,13 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
@@ -23,7 +21,9 @@ import (
 	"github.com/felinics/memoh/internal/agent/partmeta"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
+	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
@@ -47,7 +47,6 @@ func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "ok", StopReason: "end_turn"}}
 	resolver := &Service{
 		messageService: &recordingMessageService{},
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, _ string) (session.Thread, error) {
@@ -89,10 +88,9 @@ func newACPLifecycleService(
 	lifecycles contextLifecycleStore,
 ) *Service {
 	t.Helper()
-	return &Service{
+	service := &Service{
 		messageService:    messages,
 		contextLifecycles: lifecycles,
-		acpPool:           pool,
 		botPermissions:    allowWorkspaceExecForBot(lifecycleTestBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -110,6 +108,8 @@ func newACPLifecycleService(
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
+	service.SetACPSessionPool(pool)
+	return service
 }
 
 func requireACPLifecycle(
@@ -135,13 +135,12 @@ func requireACPLifecycle(
 	return row, snapshot
 }
 
-func TestStreamACPAgentWSPersistsMinimalCompletedLifecycle(t *testing.T) {
+func TestStreamACPAgentWSPassesTheAdmittedRunAndRecordsACompletedLifecycle(t *testing.T) {
 	t.Parallel()
 
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-	messages := &recordingMessageService{}
 	lifecycles := &recordingContextLifecycleStore{}
-	service := newACPLifecycleService(t, pool, messages, lifecycles)
+	service := newACPLifecycleService(t, pool, &recordingMessageService{}, lifecycles)
 
 	_, err := service.streamACPAgentWS(context.Background(), ChatRequest{
 		BotID:    lifecycleTestBotID,
@@ -155,46 +154,13 @@ func TestStreamACPAgentWSPersistsMinimalCompletedLifecycle(t *testing.T) {
 	if pool.input.RunID != lifecycleTestRunID {
 		t.Fatalf("ACP prompt RunID = %q, want admitted RunID %q", pool.input.RunID, lifecycleTestRunID)
 	}
-	row, snapshot := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
+	row, _ := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
 	if row.ErrorCode.Valid {
 		t.Fatalf("completed lifecycle error code = %#v, want none", row.ErrorCode)
-	}
-	if snapshot.Version != contextfrag.LifecycleSnapshotVersion || snapshot.View != contextfrag.ViewExternalAgentPrompt || snapshot.Counts.Fragments == 0 {
-		t.Fatalf("ACP context-view snapshot = %#v, want populated ACP manifest", snapshot)
-	}
-	if len(snapshot.SelectionDecisions) == 0 {
-		t.Fatalf("ACP context-view snapshot omitted selection decisions: %#v", snapshot)
-	}
-	if snapshot.AssistantMessageID != "message-id" {
-		t.Fatalf("assistant message ID = %q, want message-id", snapshot.AssistantMessageID)
 	}
 	if strings.Contains(string(row.Snapshot), "PRIVATE_ACP_PROMPT") {
 		t.Fatalf("content-light lifecycle leaked prompt: %s", row.Snapshot)
 	}
-	last := messages.persisted[len(messages.persisted)-1]
-	if _, ok := last.Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot); !ok {
-		t.Fatalf("assistant lifecycle metadata = %#v, want snapshot", last.Metadata)
-	}
-}
-
-func TestStreamACPAgentWSMintsRunIdentityAtDirectBoundary(t *testing.T) {
-	t.Parallel()
-
-	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done"}}
-	lifecycles := &recordingContextLifecycleStore{}
-	service := newACPLifecycleService(t, pool, &recordingMessageService{}, lifecycles)
-
-	if _, err := service.streamACPAgentWS(context.Background(), ChatRequest{
-		BotID:    lifecycleTestBotID,
-		ThreadID: lifecycleTestSessionID,
-		Query:    "inspect",
-	}, make(chan WSStreamEvent, 8), make(chan struct{})); err != nil {
-		t.Fatalf("streamACPAgentWS() error = %v", err)
-	}
-	if _, err := uuid.Parse(pool.input.RunID); err != nil {
-		t.Fatalf("ACP prompt RunID = %q, want minted UUID: %v", pool.input.RunID, err)
-	}
-	requireACPLifecycle(t, lifecycles, pool.input.RunID, contextLifecycleStatusCompleted)
 }
 
 func TestStreamACPAgentWSProviderFailurePersistsFailedLifecycle(t *testing.T) {
@@ -297,7 +263,6 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -401,6 +366,64 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 	}
 }
 
+func TestWebSendRoutesDiscussACPAgentSessionToACPPool(t *testing.T) {
+	t.Parallel()
+
+	pool := &recordingACPPrompter{
+		result: acpclient.PromptResult{
+			Text:       "done from codex",
+			StopReason: "end_turn",
+		},
+	}
+	resolver := &Service{
+		messageService: &recordingMessageService{},
+		botPermissions: allowWorkspaceExecFor("user-1"),
+		sessionService: &fakeBackgroundSessionService{
+			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				if sessionID != "session-1" {
+					t.Fatalf("unexpected session id: %s", sessionID)
+				}
+				return session.Thread{
+					ID:          "session-1",
+					BotID:       "bot-1",
+					Type:        session.TypeDiscuss,
+					SessionMode: session.TypeDiscuss,
+					RuntimeType: session.RuntimeACPAgent,
+					RuntimeMetadata: map[string]any{
+						"acp_agent_id":             "codex",
+						"project_path":             "/data/app",
+						"runtime_owner_account_id": "user-1",
+					},
+				}, nil
+			},
+		},
+		logger: slog.New(slog.DiscardHandler),
+	}
+	resolver.SetACPSessionPool(pool)
+
+	eventCh, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
+		BotID:    "bot-1",
+		ThreadID: "session-1",
+		Query:    "inspect the group thread",
+	})
+	if err != nil {
+		t.Fatalf("Web send failed: %v", err)
+	}
+	events := drainAgentEvents(t, eventCh)
+	if pool.calls != 1 {
+		t.Fatalf("ACP pool calls = %d, want 1", pool.calls)
+	}
+	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/data/app" {
+		t.Fatalf("ACP prompt input = %#v", pool.input)
+	}
+	if !containsStreamEvent(events, native.EventStart) || !containsStreamEvent(events, native.EventEnd) {
+		t.Fatalf("events = %#v, want agent start/end", events)
+	}
+	if !containsTextDelta(events, "streamed from acp") {
+		t.Fatalf("events = %#v, want ACP stream delta", events)
+	}
+}
+
 func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 	t.Parallel()
 
@@ -408,7 +431,6 @@ func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 	pool := &recordingACPPrompter{}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -455,126 +477,6 @@ func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 // which also covers what the in-process version could not express: the rejected
 // invocation is admitted normally once the active run reaches a terminal state.
 
-func TestStreamChatRoutesACPRuntimeSessionToACPPool(t *testing.T) {
-	t.Parallel()
-
-	pool := &recordingACPPrompter{
-		result: acpclient.PromptResult{
-			Text:       "done from codex",
-			StopReason: "end_turn",
-		},
-	}
-	resolver := &Service{
-		messageService: &recordingMessageService{},
-		acpPool:        pool,
-		botPermissions: allowWorkspaceExecFor("user-1"),
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
-				if sessionID != "session-1" {
-					t.Fatalf("unexpected session id: %s", sessionID)
-				}
-				return session.Thread{
-					ID:    "session-1",
-					BotID: "bot-1",
-					Type:  session.TypeACPAgent,
-					Metadata: map[string]any{
-						"acp_agent_id":             "codex",
-						"project_path":             "/data/app",
-						"runtime_owner_account_id": "user-1",
-					},
-				}, nil
-			},
-		},
-		logger: slog.New(slog.DiscardHandler),
-	}
-	resolver.SetACPSessionPool(pool)
-
-	chunks, errs := resolver.StreamChat(context.Background(), ChatRequest{
-		BotID:    "bot-1",
-		ThreadID: "session-1",
-		Query:    "inspect the app",
-	})
-	events := drainStreamChunks(t, chunks)
-	if err := <-errs; err != nil {
-		t.Fatalf("StreamChat() error = %v", err)
-	}
-	if pool.calls != 1 {
-		t.Fatalf("ACP pool calls = %d, want 1", pool.calls)
-	}
-	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/data/app" {
-		t.Fatalf("ACP prompt input = %#v", pool.input)
-	}
-	if !containsStreamEvent(events, native.EventStart) || !containsStreamEvent(events, native.EventEnd) {
-		t.Fatalf("events = %#v, want agent start/end", events)
-	}
-	if !containsTextDelta(events, "streamed from acp") {
-		t.Fatalf("events = %#v, want ACP stream delta", events)
-	}
-	end := requireStreamEvent(t, events, native.EventEnd)
-	if got := terminalAssistantText(t, end); got != "done from codex" {
-		t.Fatalf("terminal assistant text = %q, want done from codex", got)
-	}
-}
-
-func TestStreamChatRoutesDiscussACPAgentSessionToACPPool(t *testing.T) {
-	t.Parallel()
-
-	pool := &recordingACPPrompter{
-		result: acpclient.PromptResult{
-			Text:       "done from codex",
-			StopReason: "end_turn",
-		},
-	}
-	resolver := &Service{
-		messageService: &recordingMessageService{},
-		acpPool:        pool,
-		botPermissions: allowWorkspaceExecFor("user-1"),
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
-				if sessionID != "session-1" {
-					t.Fatalf("unexpected session id: %s", sessionID)
-				}
-				return session.Thread{
-					ID:          "session-1",
-					BotID:       "bot-1",
-					Type:        session.TypeDiscuss,
-					SessionMode: session.TypeDiscuss,
-					RuntimeType: session.RuntimeACPAgent,
-					RuntimeMetadata: map[string]any{
-						"acp_agent_id":             "codex",
-						"project_path":             "/data/app",
-						"runtime_owner_account_id": "user-1",
-					},
-				}, nil
-			},
-		},
-		logger: slog.New(slog.DiscardHandler),
-	}
-	resolver.SetACPSessionPool(pool)
-
-	chunks, errs := resolver.StreamChat(context.Background(), ChatRequest{
-		BotID:    "bot-1",
-		ThreadID: "session-1",
-		Query:    "inspect the group thread",
-	})
-	events := drainStreamChunks(t, chunks)
-	if err := <-errs; err != nil {
-		t.Fatalf("StreamChat() error = %v", err)
-	}
-	if pool.calls != 1 {
-		t.Fatalf("ACP pool calls = %d, want 1", pool.calls)
-	}
-	if pool.input.BotID != "bot-1" || pool.input.SessionID != "session-1" || pool.input.AgentID != "codex" || pool.input.ProjectPath != "/data/app" {
-		t.Fatalf("ACP prompt input = %#v", pool.input)
-	}
-	if !containsStreamEvent(events, native.EventStart) || !containsStreamEvent(events, native.EventEnd) {
-		t.Fatalf("events = %#v, want agent start/end", events)
-	}
-	if !containsTextDelta(events, "streamed from acp") {
-		t.Fatalf("events = %#v, want ACP stream delta", events)
-	}
-}
-
 func TestACPTerminalStreamEventFallsBackToTranscriptEvents(t *testing.T) {
 	t.Parallel()
 
@@ -609,14 +511,13 @@ func TestStreamACPAgentWSRechecksRuntimeOwnerWorkspaceExecBeforePrompt(t *testin
 	}
 	resolver := &Service{
 		messageService: &recordingMessageService{},
-		acpPool:        pool,
 		botPermissions: &fakeBotPermissionChecker{values: map[string]bool{}},
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		logger:         slog.New(slog.DiscardHandler),
 	}
 	resolver.SetACPSessionPool(pool)
 
-	_, err := resolver.streamACPAgentWS(
+	outcome, err := resolver.streamACPAgentWS(
 		context.Background(),
 		ChatRequest{
 			BotID:    "bot-1",
@@ -626,8 +527,8 @@ func TestStreamACPAgentWSRechecksRuntimeOwnerWorkspaceExecBeforePrompt(t *testin
 		make(chan WSStreamEvent, 8),
 		make(chan struct{}),
 	)
-	if apperror.CodeOf(err) != apperror.CodeNoWorkspaceExec {
-		t.Fatalf("streamACPAgentWS() error = %v, want %s", err, apperror.CodeNoWorkspaceExec)
+	if err != nil || outcome.ErrorCode() != string(apperror.CodeNoWorkspaceExec) {
+		t.Fatalf("streamACPAgentWS() = %q, %v, want %s", outcome.ErrorCode(), err, apperror.CodeNoWorkspaceExec)
 	}
 	if pool.calls != 0 {
 		t.Fatalf("ACP pool calls = %d, want 0 when runtime owner lost workspace_exec", pool.calls)
@@ -755,7 +656,6 @@ func TestWebSendPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing
 	}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -916,7 +816,6 @@ func TestWebSendPersistsACPSubmittedUserInputResult(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		logger:         slog.New(slog.DiscardHandler),
@@ -1041,7 +940,6 @@ func TestWebSendPersistsACPApprovalProjectionOnce(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1116,7 +1014,6 @@ func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        pool,
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1177,7 +1074,6 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService:  messages,
-		acpPool:         pool,
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		modelsService:   models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:         queries,
@@ -1198,6 +1094,7 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
+	resolver.SetACPSessionPool(pool)
 
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -1553,7 +1450,6 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		acpPool:         pool,
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1624,20 +1520,23 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 }
 
-func TestStreamACPAgentWSUserStopKeepsPartialOutputWithoutFailureOrMemory(t *testing.T) {
+func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
+	started := make(chan struct{})
 	pool := &recordingACPPrompter{
-		result: withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "partial answer"}},
-		}),
-		err: context.Canceled,
+		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
+			close(started)
+			<-ctx.Done()
+			return withTranscriptOutput(acpclient.PromptResult{
+				Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "partial answer"}},
+			}), context.Canceled
+		},
 	}
 	resolver := &Service{
 		messageService:  messages,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		acpPool:         pool,
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1654,47 +1553,58 @@ func TestStreamACPAgentWSUserStopKeepsPartialOutputWithoutFailureOrMemory(t *tes
 	}
 	resolver.SetACPSessionPool(pool)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	eventCh := make(chan WSStreamEvent, 8)
-	if _, err := resolver.streamACPAgentWS(ctx, ChatRequest{
-		BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
-	}, eventCh, make(chan struct{})); err != nil {
+	abortCh := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- ignoreOutcome(resolver.streamACPAgentWS(context.Background(), ChatRequest{
+			BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+		}, make(chan WSStreamEvent, 8), abortCh))
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ACP prompt did not start")
+	}
+	close(abortCh)
+	if err := <-done; err != nil {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted %d messages, want user + partial assistant", len(messages.persisted))
-	}
-	if got := persistedText(t, messages.persisted[1].Content); got != "partial answer" {
-		t.Fatalf("assistant text = %q, want partial answer without failure marker", got)
-	}
-	if _, exists := messages.persisted[1].Metadata["error"]; exists {
-		t.Fatalf("stopped assistant metadata = %#v, want no failure", messages.persisted[1].Metadata)
+	for _, row := range messages.persisted {
+		if _, exists := row.Metadata["error"]; exists {
+			t.Fatalf("stopped run persisted a failure marker: %#v", row.Metadata)
+		}
+		if _, exists := row.Metadata["error_code"]; exists {
+			t.Fatalf("stopped run persisted a failure code: %#v", row.Metadata)
+		}
 	}
 }
 
 // A prompt can complete in the same instant the user stops it. Stop wins: the
-// output is kept, but the round persists as an abort - no memory extraction,
-// EventAbort instead of EventEnd - so a stop is never recorded as a completed
-// turn.
-func TestStreamACPAgentWSStopRacingCompletionPersistsAsAbort(t *testing.T) {
+// run ends with EventAbort instead of EventEnd and extracts no memory, so a stop
+// is never recorded as a completed turn.
+func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
+	started := make(chan struct{})
 	pool := &recordingACPPrompter{
-		result: withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
-		}),
+		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
+			close(started)
+			<-ctx.Done()
+			// The prompt finishes in the instant the run is stopped.
+			return withTranscriptOutput(acpclient.PromptResult{
+				Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
+			}), nil
+		},
 	}
 	resolver := &Service{
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		acpPool:         pool,
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1711,28 +1621,28 @@ func TestStreamACPAgentWSStopRacingCompletionPersistsAsAbort(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	// A closed channel keeps the abort observable regardless of which
-	// goroutine consumes the signal first; production sends one value, which
-	// the watcher records before cancelling the stream context.
 	abortCh := make(chan struct{})
-	close(abortCh)
 	eventCh := make(chan WSStreamEvent, 8)
-	if _, err := resolver.streamACPAgentWS(ctx, ChatRequest{
-		BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
-	}, eventCh, abortCh); err != nil {
+	done := make(chan error, 1)
+	go func() {
+		done <- ignoreOutcome(resolver.streamACPAgentWS(context.Background(), ChatRequest{
+			BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+		}, eventCh, abortCh))
+	}()
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ACP prompt did not start")
+	}
+	close(abortCh)
+	if err := <-done; err != nil {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted %d messages, want user + assistant output", len(messages.persisted))
-	}
-	if got := persistedText(t, messages.persisted[1].Content); got != "done" {
-		t.Fatalf("assistant text = %q, want completed output kept", got)
-	}
-	if _, exists := messages.persisted[1].Metadata["error"]; exists {
-		t.Fatalf("stopped assistant metadata = %#v, want no failure", messages.persisted[1].Metadata)
+	for _, row := range messages.persisted {
+		if _, exists := row.Metadata["error"]; exists {
+			t.Fatalf("stopped run persisted a failure marker: %#v", row.Metadata)
+		}
 	}
 	events := drainAgentEvents(t, eventCh)
 	if !containsStreamEvent(events, native.EventAbort) || containsStreamEvent(events, native.EventEnd) {
@@ -1745,7 +1655,7 @@ func TestStreamACPAgentWSStopRacingCompletionPersistsAsAbort(t *testing.T) {
 	}
 }
 
-func TestStreamACPAgentWSExternalAgentErrorKeepsTheSend(t *testing.T) {
+func TestStreamACPAgentWSExternalAgentErrorCarriesItsCode(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
@@ -1768,26 +1678,10 @@ func TestStreamACPAgentWSExternalAgentErrorKeepsTheSend(t *testing.T) {
 	if err != nil || outcome.ErrorCode() != string(apperror.CodeACPAgentNotConfigured) {
 		t.Fatalf("streamACPAgentWS() = %q, %v, want %s", outcome.ErrorCode(), err, apperror.CodeACPAgentNotConfigured)
 	}
-	requireWebSendFailureRound(t, messages, apperror.CodeACPAgentNotConfigured)
 	requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider)
 	events := drainAgentEvents(t, eventCh)
 	if !containsStreamEvent(events, native.EventError) || !containsStreamEvent(events, native.EventAbort) {
 		t.Fatalf("events = %#v, want the failure frame and an aborted terminal", events)
-	}
-}
-
-// requireWebSendFailureRound checks that a failed Web send kept its user
-// message and recorded one failure row under code.
-func requireWebSendFailureRound(t *testing.T, messages *recordingMessageService, code apperror.Code) {
-	t.Helper()
-	if len(messages.deleted) != 0 {
-		t.Fatalf("cleanup calls = %#v, want the user message kept", messages.deleted)
-	}
-	if len(messages.persisted) != 2 || messages.persisted[0].Role != "user" {
-		t.Fatalf("persisted = %#v, want the user turn and its failure row", messages.persisted)
-	}
-	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != string(code) {
-		t.Fatalf("history error_code = %q, want %q", got, code)
 	}
 }
 
@@ -1797,7 +1691,6 @@ func TestStreamACPAgentWSImageCapabilityErrorCarriesItsCode(t *testing.T) {
 	messages := &recordingMessageService{}
 	resolver := &Service{
 		messageService: messages,
-		acpPool:        &recordingACPPrompter{err: acpclient.ErrImagePromptUnsupported},
 		botPermissions: allowWorkspaceExecFor("user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1836,7 +1729,6 @@ func TestStreamACPAgentWSImageCapabilityErrorCarriesItsCode(t *testing.T) {
 	if err != nil || outcome.ErrorCode() != string(apperror.CodeACPImageInputUnsupported) {
 		t.Fatalf("streamACPAgentWS() = %q, %#v, want %s", outcome.ErrorCode(), err, apperror.CodeACPImageInputUnsupported)
 	}
-	requireWebSendFailureRound(t, messages, apperror.CodeACPImageInputUnsupported)
 }
 
 func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
@@ -1863,7 +1755,6 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		acpPool:         pool,
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
 			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -1909,25 +1800,6 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("memory was not called for successful ACP stream")
-	}
-
-	var snapshot *contextfrag.LifecycleSnapshot
-	for i := len(messages.persisted) - 1; i >= 0; i-- {
-		if messages.persisted[i].Role != "assistant" {
-			continue
-		}
-		value, ok := messages.persisted[i].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
-		if ok {
-			snapshot = &value
-		}
-		break
-	}
-	if snapshot == nil || snapshot.MemoryRecall == nil {
-		t.Fatalf("ACP lifecycle missing memory trace: %#v", snapshot)
-	}
-	if snapshot.MemoryRecall.ProviderID != storeRoundMemoryProviderID || snapshot.MemoryRecall.CacheState != "miss" ||
-		snapshot.MemoryRecall.Result.Count != 1 || !slices.Equal(snapshot.MemoryRecall.Result.Refs, []string{"memory-1"}) {
-		t.Fatalf("ACP memory trace = %#v", snapshot.MemoryRecall)
 	}
 }
 
@@ -2315,19 +2187,6 @@ func drainAgentEvents(t *testing.T, eventCh <-chan WSStreamEvent) []native.Strea
 	return events
 }
 
-func drainStreamChunks(t *testing.T, chunkCh <-chan StreamChunk) []native.StreamEvent {
-	t.Helper()
-	var events []native.StreamEvent
-	for chunk := range chunkCh {
-		var event native.StreamEvent
-		if err := json.Unmarshal(chunk, &event); err != nil {
-			t.Fatalf("decode stream chunk: %v", err)
-		}
-		events = append(events, event)
-	}
-	return events
-}
-
 func containsStreamEvent(events []native.StreamEvent, eventType native.StreamEventType) bool {
 	for _, event := range events {
 		if event.Type == eventType {
@@ -2513,15 +2372,76 @@ func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
 	}
 }
 
-// streamACPAgentWS preserves the pre-unification test entry: it runs the
-// unified runtime flow through an ACP driver over the service's pool.
+// streamACPAgentWS is the test entry for an ACP session's Web send over the
+// service's pool.
 func (s *Service) streamACPAgentWS(ctx context.Context, req ChatRequest, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) (RunOutcome, error) {
-	return s.streamRuntimeWS(ctx, acpagent.NewDriver(s.acpPool), req, eventCh, abortCh, true)
+	return s.streamExternalWebSend(ctx, s.externalDrivers[session.RuntimeACPAgent], req, eventCh, abortCh)
 }
 
-// persistACPRound preserves the pre-unification test entry: it maps the pool
-// result exactly as the ACP driver does and persists through the unified
-// runtime path.
+// runtimeTypedSessions serves the session the fixture describes as one that runs
+// on runtimeType, which is the driver the test registered.
+type runtimeTypedSessions struct {
+	SessionService
+	runtimeType string
+}
+
+func (r runtimeTypedSessions) Get(ctx context.Context, sessionID string) (session.Thread, error) {
+	thread, err := r.SessionService.Get(ctx, sessionID)
+	if err == nil {
+		thread.RuntimeType = r.runtimeType
+	}
+	return thread, err
+}
+
+// streamExternalWebSend admits and runs req as a Web send on driver, the way
+// the WebSocket does, and hands back what the run delivered. abortCh stops the
+// run the way a routed Stop does. A run that failed reports its failure in the
+// outcome.
+func (s *Service) streamExternalWebSend(ctx context.Context, driver external.Driver, req ChatRequest, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) (RunOutcome, error) {
+	s.SetExternalRuntimes(driver)
+	s.sessionService = runtimeTypedSessions{SessionService: s.sessionService, runtimeType: driver.RuntimeType()}
+	if s.sessionRuntime == nil {
+		s.sessionRuntime = &lifecycleTurnAdmitter{admission: webTestAdmission(req)}
+	}
+	admission, err := s.AdmitWebRun(ctx, WebAdmitInput{
+		BotID:        req.BotID,
+		SessionID:    req.ThreadID,
+		InvocationID: "web-invocation",
+		Payload:      []byte(`{"kind":"message"}`),
+	})
+	if err != nil {
+		return RunOutcome{}, err
+	}
+	runEnded := make(chan struct{})
+	defer close(runEnded)
+	go func() {
+		select {
+		case <-abortCh:
+			admission.stop(errRunStopped)
+		case <-runEnded:
+		}
+	}()
+	delivery := newWebTestDelivery()
+	s.RunWebSend(admission, req, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
+	select {
+	case <-delivery.done:
+	case <-time.After(10 * time.Second):
+		return RunOutcome{}, errors.New("the Web run did not end")
+	}
+	delivery.mu.Lock()
+	defer delivery.mu.Unlock()
+	for _, ev := range delivery.events {
+		eventCh <- ev.Payload
+	}
+	if delivery.ended.Failure != nil {
+		return RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: delivery.ended.Failure}, nil
+	}
+	return RunOutcome{}, nil
+}
+
+// persistACPRound persists one ACP round the way the runtime executor does:
+// the pool result is mapped as the ACP driver maps it, and a prompt error
+// becomes the failure the round records.
 func (s *Service) persistACPRound(
 	ctx context.Context,
 	req ChatRequest,
@@ -2532,5 +2452,15 @@ func (s *Service) persistACPRound(
 	contextLifecycle *contextfrag.LifecycleHolder,
 	reasoningTiming []messagepkg.ReasoningTimingSegment,
 ) error {
-	return s.persistRuntimeRound(ctx, req, acpagent.RuntimeType, projectPath, acpagent.DriverPromptResult(result, agentID), promptErr, turnCompleted, contextLifecycle, reasoningTiming)
+	return s.persistExternalRound(ctx, req, acpagent.RuntimeType, projectPath, acpagent.DriverPromptResult(result, agentID), externalRoundFailure(promptErr), turnCompleted, contextLifecycle, reasoningTiming)
+}
+
+// externalRoundFailure is the failure a round records for an error the runtime's
+// prompt returned, named the way the executor names it.
+func externalRoundFailure(promptErr error) *RunFailure {
+	if promptErr == nil {
+		return nil
+	}
+	code, args := runFailureCode(externalPromptFailure{ExternalAgentError(promptErr)}, phaseExecution, false)
+	return &RunFailure{Code: code, Args: args, Cause: promptErr, Phase: phaseExecution}
 }

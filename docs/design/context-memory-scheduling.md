@@ -23,6 +23,12 @@ long-term memory subsystem in `internal/memory/`.
 Code anchors below are verified against `main` @ `8382d42eb` (2026-08-25). Function
 names are authoritative; line numbers will drift.
 
+> Status (2026-10): the Discuss path this document analyzes (`internal/channel/discuss`,
+> `turn_discuss.go`, `timeline` composition and replay, the `[agent] sync_compaction`
+> setting) has been removed. Discuss turns are now admitted from history rows and the run
+> ledger (`drive_discuss.go`). The sections below stay as the dated record of the incident
+> and its requirements.
+
 ## 2. Incident and problem boundary
 
 A long-lived Discuss thread (~8,000 history messages, ~5,200 timeline events, zero

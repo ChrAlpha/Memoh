@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -84,23 +83,23 @@ func imageInputService(t *testing.T, assets map[string][]byte) *Service {
 // The reported failure: an unusable attachment sitting in pending discussion
 // context made every later turn fail image parsing. It must be skipped without
 // taking the other images of the turn down with it.
-func TestInlineImageAttachmentsRendersAnimationsAndSkipsUnparsableBytes(t *testing.T) {
+func TestInlineInjectAttachmentsRendersAnimationsAndSkipsUnparsableBytes(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{
 		"video-sticker":    webmSticker(),
 		"animated-sticker": movingStickerTGS(t),
 		"photo":            rasterPNG(t),
 	})
 
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
 		// WebM has no renderer here, so it stays out of the vision lane.
-		{ContentHash: "video-sticker", Mime: "video/webm"},
+		{Type: "image", ContentHash: "video-sticker", Mime: "video/webm"},
 		// TGS is rendered into frames, whatever the stored label claims.
-		{ContentHash: "animated-sticker", Mime: "application/x-gzip"},
-		{ContentHash: "photo", Mime: "image/png"},
+		{Type: "image", ContentHash: "animated-sticker", Mime: "application/x-gzip"},
+		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
 
 	if len(parts) != animationFrameCount+1 {
-		t.Fatalf("InlineImageAttachments() = %d parts, want %d sticker frames plus the photo",
+		t.Fatalf("inlineInjectAttachments() = %d parts, want %d sticker frames plus the photo",
 			len(parts), animationFrameCount)
 	}
 	for i, part := range parts {
@@ -115,17 +114,17 @@ func TestInlineImageAttachmentsRendersAnimationsAndSkipsUnparsableBytes(t *testi
 
 // Historical records label sticker bytes as image/png. The label must not be
 // enough to get them into a vision request.
-func TestInlineImageAttachmentsIgnoresMislabeledStickerBytes(t *testing.T) {
+func TestInlineInjectAttachmentsIgnoresMislabeledStickerBytes(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"legacy": webmSticker()})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
-		{ContentHash: "legacy", Mime: "image/png"},
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+		{Type: "image", ContentHash: "legacy", Mime: "image/png"},
 	})
 	if len(parts) != 0 {
-		t.Fatalf("InlineImageAttachments() = %#v, want nothing for WebM bytes labelled image/png", parts)
+		t.Fatalf("inlineInjectAttachments() = %#v, want nothing for WebM bytes labelled image/png", parts)
 	}
 }
 
-func TestInlineImageAttachmentsLoadsEachAssetOnce(t *testing.T) {
+func TestInlineInjectAttachmentsLoadsEachAssetOnce(t *testing.T) {
 	opens := 0
 	s := &Service{
 		logger: slog.Default(),
@@ -136,12 +135,12 @@ func TestInlineImageAttachmentsLoadsEachAssetOnce(t *testing.T) {
 			},
 		},
 	}
-	refs := []timeline.ImageAttachmentRef{
-		{ContentHash: "photo", Mime: "image/png"},
-		{ContentHash: "photo", Mime: "image/png"},
+	refs := []ChatAttachment{
+		{Type: "image", ContentHash: "photo", Mime: "image/png"},
+		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	}
-	if parts := s.InlineImageAttachments(context.Background(), "bot-1", refs); len(parts) != 1 {
-		t.Fatalf("InlineImageAttachments() = %d parts, want the repeated reference collapsed", len(parts))
+	if parts := s.inlineInjectAttachments(context.Background(), "bot-1", refs); len(parts) != 1 {
+		t.Fatalf("inlineInjectAttachments() = %d parts, want the repeated reference collapsed", len(parts))
 	}
 	if opens != 1 {
 		t.Fatalf("asset opened %d times, want 1", opens)
@@ -260,11 +259,11 @@ func TestStoredImageSurvivesShortReads(t *testing.T) {
 			},
 		},
 	}
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
-		{ContentHash: "photo", Mime: "image/png"},
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
 	if len(parts) != 1 || parts[0].MediaType != "image/png" {
-		t.Fatalf("InlineImageAttachments() = %#v, want the image through a drip-feeding reader", parts)
+		t.Fatalf("inlineInjectAttachments() = %#v, want the image through a drip-feeding reader", parts)
 	}
 	if parts[0].Image != dataURL("image/png", data) {
 		t.Fatal("drip-feeding reader truncated the encoded image")
@@ -275,11 +274,11 @@ func TestStoredImageSurvivesShortReads(t *testing.T) {
 func TestStoredImageShorterThanSniffWindow(t *testing.T) {
 	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9}
 	s := imageInputService(t, map[string][]byte{"tiny": jpegBytes})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
-		{ContentHash: "tiny", Mime: "image/jpeg"},
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+		{Type: "image", ContentHash: "tiny", Mime: "image/jpeg"},
 	})
 	if len(parts) != 1 || parts[0].Image != dataURL("image/jpeg", jpegBytes) {
-		t.Fatalf("InlineImageAttachments() = %#v, want the whole short image", parts)
+		t.Fatalf("inlineInjectAttachments() = %#v, want the whole short image", parts)
 	}
 }
 
@@ -301,11 +300,11 @@ func TestGatewayInlineDataURLKeepsRealImage(t *testing.T) {
 func TestStoredImageMimeIsCorrectedFromBytes(t *testing.T) {
 	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9}
 	s := imageInputService(t, map[string][]byte{"mislabeled": jpegBytes})
-	parts := s.InlineImageAttachments(context.Background(), "bot-1", []timeline.ImageAttachmentRef{
-		{ContentHash: "mislabeled", Mime: "image/png"},
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+		{Type: "image", ContentHash: "mislabeled", Mime: "image/png"},
 	})
 	if len(parts) != 1 || parts[0].MediaType != "image/jpeg" {
-		t.Fatalf("InlineImageAttachments() = %#v, want the sniffed image/jpeg", parts)
+		t.Fatalf("inlineInjectAttachments() = %#v, want the sniffed image/jpeg", parts)
 	}
 }
 

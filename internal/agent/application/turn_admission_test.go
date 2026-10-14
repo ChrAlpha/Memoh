@@ -87,34 +87,6 @@ func TestAdmitTurnRunProjectsRequestUserTurn(t *testing.T) {
 	}
 }
 
-func TestAdmitTurnRunDiscussShapeStaysContentless(t *testing.T) {
-	t.Parallel()
-
-	admitter := &fakeTurnAdmitter{}
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
-
-	// Discuss-shaped commands carry composed context and persist no user
-	// message, so the projection must stay empty — otherwise a bubble would
-	// render during the run and vanish at the database handover.
-	cmd := turn.StartTurnCommand{
-		TeamID:   "team-1",
-		Mode:     turn.ModeDiscuss,
-		BotID:    "bot-1",
-		ThreadID: "thread-1",
-	}
-	admission, err := svc.admitTurnRun(context.Background(), cmd, func() {}, nil, nil)
-	if err != nil {
-		t.Fatalf("admitTurnRun() error = %v", err)
-	}
-	view, err := admitter.admitInput.Execution.Admission(context.Background(), admission.Handle)
-	if err != nil {
-		t.Fatalf("admission hook error = %v", err)
-	}
-	if view.RequestUserTurn != nil {
-		t.Fatalf("request user turn = %#v, want nil for a discuss-shaped command", view.RequestUserTurn)
-	}
-}
-
 // A channel run records who asked for it: the bound account when there is
 // one, otherwise the channel identity that sent the message.
 func TestAdmitTurnRunRecordsTheRequesterAsInitiator(t *testing.T) {

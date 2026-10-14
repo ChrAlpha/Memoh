@@ -41,7 +41,7 @@ func UIAttachmentsFromTurnAttachments(botID string, attachments []turn.Attachmen
 //
 //  1. The result is nil exactly when the turn will not persist a user
 //     message (mirrors prependTurnUserMessage in internal/agent/application):
-//     an attachment-only or discuss-shaped command produces no history turn,
+//     an attachment-only command produces no history turn,
 //     so projecting one would make a bubble vanish at the database handover.
 //  2. The text is the same display text the persistence layer stores
 //     (mirrors the displayText switch in service_store.go): UserVisibleText

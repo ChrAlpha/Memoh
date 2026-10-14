@@ -2,21 +2,17 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
 func recordTurnSpans(t *testing.T) *tracetest.SpanRecorder {
@@ -51,29 +47,6 @@ func spanAttr(span sdktrace.ReadOnlySpan, key string) attribute.Value {
 		}
 	}
 	return attribute.Value{}
-}
-
-func drainChans(t *testing.T, chunks <-chan StreamChunk, errs <-chan error) error {
-	t.Helper()
-	var last error
-	timeout := time.After(5 * time.Second)
-	for chunks != nil || errs != nil {
-		select {
-		case _, ok := <-chunks:
-			if !ok {
-				chunks = nil
-			}
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			last = err
-		case <-timeout:
-			t.Fatal("stream did not finish within 5s")
-		}
-	}
-	return last
 }
 
 // The span covers the turn, not the moment it is set up. A span closed
@@ -130,8 +103,7 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 		recorder := recordTurnSpans(t)
 		service := newTracingTestService()
 
-		chunks, errs := service.StreamChat(context.Background(), ChatRequest{BotID: "b", ThreadID: "s"})
-		if err := drainChans(t, chunks, errs); err == nil {
+		if _, err := streamWebSend(context.Background(), t, service, ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
 			t.Fatal("expected this harness to fail the turn")
 		}
 
@@ -147,12 +119,16 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 	t.Run("aborted", func(t *testing.T) {
 		recorder := recordTurnSpans(t)
 		service := newTracingTestService()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
+		admission := admitTracingWebRun(t, service)
+		exec := &blockingExecutor{started: make(chan struct{})}
+		spec := service.webRunSpec(admission, ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), inputHeld)
+		spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+			return runPlan{Exec: exec, Req: req}, nil
+		}
+		service.startWebRun(admission, spec)
+		awaitStarted(t, exec.started)
 
-		chunks, errs := service.StreamChat(ctx, ChatRequest{BotID: "b", ThreadID: "s"})
-		// Whatever the turn reported, a cancelled context makes it aborted.
-		_ = drainChans(t, chunks, errs)
+		admission.stop(errRunStopped)
 
 		span := turnSpan(t, recorder)
 		if got := spanAttr(span, "agent.turn.outcome").AsString(); got != "aborted" {
@@ -202,9 +178,9 @@ func admitTracingWebRun(t *testing.T, service *Service) *WebAdmission {
 
 // newTracingTestService is newTurnTestService plus a logger. The harness
 // leaves it nil because the paths it was written for never log; these tests
-// drive StreamChat, which does.
+// drive runs that do.
 func newTracingTestService() *Service {
-	service := newTurnTestService(&fakeRunner{})
+	service := newTurnTestService()
 	service.logger = slog.New(slog.DiscardHandler)
 	return service
 }
@@ -217,8 +193,7 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 	recorder := recordTurnSpans(t)
 	service := newTracingTestService()
 
-	chunks, errs := service.StreamChat(context.Background(), ChatRequest{BotID: "b", ThreadID: "s"})
-	callerSaw := drainChans(t, chunks, errs)
+	_, callerSaw := streamWebSend(context.Background(), t, service, ChatRequest{BotID: "b", ThreadID: "s"})
 
 	span := turnSpan(t, recorder)
 	outcome := spanAttr(span, "agent.turn.outcome").AsString()
@@ -227,122 +202,5 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 		t.Fatalf("caller was told %v but the span says completed", callerSaw)
 	case callerSaw == nil && outcome == "errored":
 		t.Fatal("the span says errored but the caller was told nothing")
-	}
-}
-
-// fail sends on a channel that holds one. A second failure must not block: if
-// it did, and the consumer were busy with the event channel at that moment,
-// neither side would move and this turn's goroutine would never exit.
-func TestFailDoesNotBlockOnASecondError(t *testing.T) {
-	errCh := make(chan error, 1)
-	var turnErr error
-	fail := func(err error) {
-		if turnErr != nil {
-			return
-		}
-		turnErr = err
-		select {
-		case errCh <- err:
-		default:
-		}
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		fail(errors.New("first"))
-		fail(errors.New("second"))
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("a second failure blocked the turn goroutine")
-	}
-	if got := <-errCh; got.Error() != "first" {
-		t.Errorf("caller got %q, want the first error", got)
-	}
-	if turnErr.Error() != "first" {
-		t.Errorf("turnErr = %q, want the first error", turnErr)
-	}
-}
-
-// A discuss turn has a turn span, as the chat entry points do, and it reaches
-// the conclusion the run's result record reaches. The pump cancels its own
-// context on the way out, which must not turn every discuss run into a stop.
-func TestTurnSpanCoversTheDiscussPath(t *testing.T) {
-	tests := []struct {
-		name        string
-		events      []native.StreamEvent
-		wantState   string
-		wantOutcome string
-		wantStatus  codes.Code
-	}{
-		{
-			name: "completed",
-			events: []native.StreamEvent{
-				{Type: native.EventAgentStart},
-				{Type: native.EventAgentEnd, Messages: json.RawMessage(`[]`)},
-			},
-			wantState: "completed", wantOutcome: "completed", wantStatus: codes.Unset,
-		},
-		{
-			name: "failed",
-			events: []native.StreamEvent{
-				{Type: native.EventAgentStart},
-				{Type: native.EventError, Cause: charExhausted(charProviderErr(503, sdk.KindServerError))},
-				{Type: native.EventAgentAbort, Messages: json.RawMessage(`[]`)},
-			},
-			wantState: "failed", wantOutcome: "errored", wantStatus: codes.Error,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			recorder := recordTurnSpans(t)
-
-			got := runDiscussCharacterization(t, tt.events...)
-
-			if got.ledger[0] != tt.wantState {
-				t.Fatalf("session_runs state = %q, want %q", got.ledger[0], tt.wantState)
-			}
-			span := turnSpan(t, recorder)
-			if got := spanAttr(span, "agent.bot_id").AsString(); got != "bot-1" {
-				t.Errorf("agent.bot_id = %q, want bot-1", got)
-			}
-			if got := spanAttr(span, "agent.turn.outcome").AsString(); got != tt.wantOutcome {
-				t.Errorf("outcome = %q, want %q", got, tt.wantOutcome)
-			}
-			if span.Status().Code != tt.wantStatus {
-				t.Errorf("status = %v, want %v", span.Status().Code, tt.wantStatus)
-			}
-		})
-	}
-}
-
-// A turn that cancels its own context on the way out concludes from the error
-// it is closed with: the stop it reports is aborted, and its own cancellation
-// is not.
-func TestSelfCanceledTurnSpanConcludesFromItsError(t *testing.T) {
-	tests := []struct {
-		name        string
-		err         error
-		wantOutcome string
-	}{
-		{name: "completed", wantOutcome: "completed"},
-		{name: "stopped", err: context.Canceled, wantOutcome: "aborted"},
-		{name: "failed", err: errors.New("provider failed"), wantOutcome: "errored"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			recorder := recordTurnSpans(t)
-			ctx, cancel := context.WithCancel(context.Background())
-			_, endTurn := startSelfCanceledTurnSpan(ctx, ChatRequest{BotID: "b", ThreadID: "s"})
-			cancel()
-
-			endTurn(tt.err)
-
-			if got := spanAttr(turnSpan(t, recorder), "agent.turn.outcome").AsString(); got != tt.wantOutcome {
-				t.Fatalf("outcome = %q, want %q", got, tt.wantOutcome)
-			}
-		})
 	}
 }

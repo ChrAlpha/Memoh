@@ -1,6 +1,5 @@
-// Package timeline implements the Deterministic Context Pipeline (DCP) for
-// assembling LLM context from canonical IM events. It provides Adaptation
-// types, Projection (reduce), and Rendering (RC) layers.
+// Package timeline holds the canonical IM event types and the store that
+// persists them to bot_session_events.
 package timeline
 
 // EventKind classifies a canonical event.

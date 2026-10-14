@@ -157,26 +157,3 @@ func (s *Service) persistExternalRound(
 	}
 	return err
 }
-
-// persistRuntimeRound keeps the shape the External Agent stream loop calls: it
-// names the failure the way an external runtime's own failure is named and
-// writes the round through the one implementation. The stream loop is discuss's
-// until stage 5 removes it.
-func (s *Service) persistRuntimeRound(
-	ctx context.Context,
-	req ChatRequest,
-	runtimeType, projectPath string,
-	result external.PromptResult,
-	promptErr error,
-	turnCompleted bool,
-	contextLifecycle *contextfrag.LifecycleHolder,
-	reasoningTiming []messagepkg.ReasoningTimingSegment,
-) error {
-	var failure *RunFailure
-	if promptErr != nil {
-		named := ExternalAgentError(promptErr)
-		code, args := runFailureCode(externalPromptFailure{named}, phaseExecution, false)
-		failure = &RunFailure{Code: code, Args: args, Cause: promptErr, Phase: phaseExecution}
-	}
-	return s.persistExternalRound(ctx, req, runtimeType, projectPath, result, failure, turnCompleted, contextLifecycle, reasoningTiming)
-}

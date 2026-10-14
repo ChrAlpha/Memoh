@@ -60,9 +60,9 @@ func TestStartTurnRoundTrip(t *testing.T) {
 }
 
 // The start frame carries what the command carries, requested skill bodies
-// and discuss context included, even though the turn contract types keep the
-// skill body out of their own JSON.
-func TestStartTurnCarriesSkillsAndDiscussContext(t *testing.T) {
+// included, even though the turn contract types keep the skill body out of
+// their own JSON.
+func TestStartTurnCarriesRequestedSkills(t *testing.T) {
 	fake := &fakeService{}
 	client, cleanup := newTestClient(t, fake, "secret")
 	defer cleanup()
@@ -70,7 +70,7 @@ func TestStartTurnCarriesSkillsAndDiscussContext(t *testing.T) {
 	cmd := turn.StartTurnCommand{
 		SchemaVersion: 1,
 		TeamID:        "team-1",
-		Mode:          turn.ModeDiscuss,
+		Mode:          turn.ModeChat,
 		BotID:         "bot-1",
 		ThreadID:      "session-1",
 		Query:         "use the skill",
@@ -78,11 +78,6 @@ func TestStartTurnCarriesSkillsAndDiscussContext(t *testing.T) {
 			Name: "alpha", Description: "desc", Content: "SKILL BODY", SourceKind: "registry",
 			OpaqueSourceID: "opaque", ContentHash: "hash", Identity: "identity",
 		}},
-		SessionToken:     "session-token",
-		ToolHTTPURL:      "http://tools.invalid",
-		DiscussMessages:  []turn.DiscussMessage{{Role: "user", Content: "hi", RawContent: json.RawMessage(`{"k":"v"}`), CompactionArtifactID: "artifact"}},
-		DiscussImageRefs: []turn.DiscussImageRef{{ContentHash: "img", Mime: "image/png"}},
-		DiscussAddressed: true,
 	}
 	handle, err := client.StartTurn(context.Background(), cmd)
 	if err != nil {

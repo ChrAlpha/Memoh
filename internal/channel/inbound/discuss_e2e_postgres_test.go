@@ -406,7 +406,7 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 	})
 	e.sessions = sessionpkg.NewService(e.logger, e.queries, nil)
 	e.service = application.NewService(e.logger, models.NewService(e.logger, e.queries), e.queries,
-		messagepkg.NewService(e.logger, e.queries), settings.NewService(e.logger, e.queries, nil, nil), nil, agent, time.UTC, time.Minute)
+		messagepkg.NewService(e.logger, e.queries), settings.NewService(e.logger, e.queries, nil, nil), nil, agent, time.UTC)
 	e.service.SetSessionRuntime(e.manager)
 	e.service.SetResumeSecret(e2eSigningKey)
 	e.service.SetAllowedTeam(team.DefaultTeamID)

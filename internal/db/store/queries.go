@@ -95,7 +95,6 @@ type Queries interface {
 	CountProviders(ctx context.Context) (int64, error)
 	CountScheduleLogsByBot(ctx context.Context, botID pgtype.UUID) (int64, error)
 	CountScheduleLogsBySchedule(ctx context.Context, scheduleID pgtype.UUID) (int64, error)
-	CountSessionEvents(ctx context.Context, sessionID pgtype.UUID) (int64, error)
 	NextSessionEventCursor(ctx context.Context) (int64, error)
 	CountTokenUsageRecords(ctx context.Context, arg dbsqlc.CountTokenUsageRecordsParams) (int64, error)
 	CreateMemoryUsage(ctx context.Context, arg dbsqlc.CreateMemoryUsageParams) error
@@ -289,7 +288,6 @@ type Queries interface {
 	GetTurnAgentTurnID(ctx context.Context, arg dbsqlc.GetTurnAgentTurnIDParams) (string, error)
 	SetRoundAgentTurnID(ctx context.Context, arg dbsqlc.SetRoundAgentTurnIDParams) (int64, error)
 	LockSessionForCommitReconciliation(ctx context.Context, arg dbsqlc.LockSessionForCommitReconciliationParams) (pgtype.UUID, error)
-	GetSessionDiscussCursor(ctx context.Context, arg dbsqlc.GetSessionDiscussCursorParams) (dbsqlc.BotSessionDiscussCursor, error)
 	GetSessionCacheStats(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.GetSessionCacheStatsRow, error)
 	GetSessionUsedSkills(ctx context.Context, sessionID pgtype.UUID) ([]string, error)
 	GetSettingsByBotID(ctx context.Context, id pgtype.UUID) (dbsqlc.GetSettingsByBotIDRow, error)
@@ -424,7 +422,6 @@ type Queries interface {
 	ListSpeechModelsByProviderID(ctx context.Context, providerID pgtype.UUID) ([]dbsqlc.Model, error)
 	ListSpeechProviders(ctx context.Context) ([]dbsqlc.Provider, error)
 	ListStorageProviders(ctx context.Context) ([]dbsqlc.StorageProvider, error)
-	ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, error)
 	ListSubagentSessionsByParent(ctx context.Context, parentSessionID pgtype.UUID) ([]dbsqlc.BotSession, error)
 	ListTerminalSessionRunsNeedingContextLifecycle(ctx context.Context, batchSize int32) ([]dbsqlc.ListTerminalSessionRunsNeedingContextLifecycleRow, error)
 	ListTokenUsageRecords(ctx context.Context, arg dbsqlc.ListTokenUsageRecordsParams) ([]dbsqlc.ListTokenUsageRecordsRow, error)

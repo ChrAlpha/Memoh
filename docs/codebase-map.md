@@ -75,7 +75,6 @@ Memoh/
 │   ├── capabilities/           #   Model reasoning capability derivation (LiteLLM registry)
 │   ├── channel/                #   Channel adapter system
 │   │   ├── adapters/           #     Platform adapters: telegram, discord, feishu, qq, dingtalk, weixin, wecom, wechatoa, matrix, misskey, line, slack, local
-│   │   ├── discuss/            #     Discuss-mode driver
 │   │   ├── inbound/            #     Inbound adaptation and Turn dispatch
 │   │   ├── route/              #     External conversation/thread to internal Thread routing
 │   │   └── identities/         #     Channel identity service
@@ -84,7 +83,7 @@ Memoh/
 │   │   ├── event/              #     Persisted chat event hub
 │   │   ├── message/            #     Message persistence
 │   │   ├── thread/             #     Internal Thread lifecycle and forks
-│   │   ├── timeline/           #     Canonical events, projection, rendering, and persistence
+│   │   ├── timeline/           #     Canonical event types and persistence
 │   │   └── view/               #     API/UI history projection
 │   ├── command/                #   Slash command system (extensible command handlers)
 │   ├── config/                 #   Configuration loading and parsing (TOML + YAML providers)

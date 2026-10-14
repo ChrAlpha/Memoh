@@ -30,10 +30,8 @@ func (d noticeTestDriver) Prompt(ctx context.Context, input external.PromptInput
 
 func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 	for _, runtime := range []string{"codex", "claude-code", "acp_agent"} {
-		for _, outcome := range []string{"completed", "failed", "stopped_during_setup", "configuration_failure"} {
+		for _, outcome := range []string{"completed", "failed", "configuration_failure"} {
 			t.Run(runtime+"/"+outcome, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
 				messages := &recordingMessageService{}
 				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
 				driver := noticeTestDriver{kind: runtime, prompt: func(_ context.Context, input external.PromptInput) (external.PromptResult, error) {
@@ -45,10 +43,6 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 					// created any transcript, and coalesce repeated delivery.
 					input.Sink.EmitStreamEvent(notice)
 					input.Sink.EmitStreamEvent(notice)
-					if outcome == "stopped_during_setup" {
-						cancel()
-						return external.PromptResult{}, external.Unavailable(context.Canceled)
-					}
 					if outcome == "configuration_failure" {
 						return external.PromptResult{}, external.Unavailable(errors.New("SECRET bridge down"))
 					}
@@ -59,7 +53,7 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 					return result, nil
 				}}
 				ch := make(chan WSStreamEvent, 64)
-				if _, err := service.streamRuntimeWS(ctx, driver, ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test"}, ch, make(chan struct{}), true); err != nil {
+				if _, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test"}, ch, make(chan struct{})); err != nil {
 					t.Fatal(err)
 				}
 				if len(messages.deleted) != 0 {

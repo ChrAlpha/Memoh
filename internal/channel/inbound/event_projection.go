@@ -31,8 +31,8 @@ type DiscussWaker interface {
 }
 
 // persistInboundEvent durably stores the event and reports whether the commit
-// succeeded. Callers wake the discuss driver only on success, because the
-// driver renders its context from the store.
+// succeeded. Callers wake the discuss session only on success, because its
+// admission reads what the store committed.
 func persistInboundEvent(
 	ctx context.Context,
 	store EventPersister,

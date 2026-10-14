@@ -8,18 +8,12 @@ import (
 	"log/slog"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
-
-func (s *Service) storeRound(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string) error {
-	return s.storeRoundWithOptions(ctx, req, messages, modelID, storeRoundOptions{})
-}
 
 type storeRoundOptions struct {
 	AllowPendingToolCalls             bool
@@ -174,23 +168,6 @@ func isEmptyAssistantMessage(m ModelMessage) bool {
 	// Check if content is empty array "[]" or null/empty
 	content := strings.TrimSpace(string(m.Content))
 	return content == "" || content == "[]" || content == "null"
-}
-
-// StoreRound persists SDK messages as a complete round (assistant + tool
-// output) into bot_history_messages with full metadata, usage tracking,
-// and memory extraction. Used by the discuss driver so it shares the same
-// persistence quality as chat mode.
-func (s *Service) StoreRound(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform string, sdkMessages []sdk.Message, modelID string) error {
-	modelMessages := sdkMessagesToModelMessages(sdkMessages)
-	req := ChatRequest{
-		BotID:                   botID,
-		ChatID:                  botID,
-		ThreadID:                sessionID,
-		SourceChannelIdentityID: channelIdentityID,
-		CurrentChannel:          currentPlatform,
-		UserMessagePersisted:    true,
-	}
-	return s.storeRound(ctx, req, modelMessages, modelID)
 }
 
 func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {

@@ -110,7 +110,7 @@ func newWSRunHarness(t *testing.T, queries dbstore.Queries) wsRunHarness {
 		Fence:         wsAdmissionFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, queries, nil, nil, nil, nil, time.UTC, time.Second)
+	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, queries, nil, nil, nil, nil, time.UTC)
 	agentService.SetSessionRuntime(manager)
 	// The run's setup reads the session first; failing that read ends every
 	// run these tests start in its setup, before anything executes.
@@ -484,7 +484,7 @@ func TestAdmitWSRunRequiresConfiguredRuntime(t *testing.T) {
 	writer := &wsWriter{ch: make(chan []byte, 4), stop: make(chan struct{}), done: make(chan struct{})}
 	handler := &LocalChannelHandler{
 		logger:       slog.New(slog.DiscardHandler),
-		agentService: application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC, time.Second),
+		agentService: application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC),
 	}
 	released := false
 	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, "", wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, func() { released = true })

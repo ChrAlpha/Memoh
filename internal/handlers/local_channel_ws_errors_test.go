@@ -193,7 +193,7 @@ func (allowAllPermissions) HasBotPermission(context.Context, string, string, str
 func TestPermissionQuickActionRecordsAnUnclassifiedCause(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC, time.Second)
+	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC)
 	agentService.SetSessionService(failingSessionService{err: errors.New("SECRET session store unreachable")})
 	agentService.SetBotPermissionChecker(allowAllPermissions{})
 	handler := &LocalChannelHandler{agentService: agentService, logger: slog.New(slog.NewJSONHandler(&logs, nil))}

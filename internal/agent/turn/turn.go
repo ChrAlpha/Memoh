@@ -40,10 +40,7 @@ var ErrTeamNotServed = errors.New("turn: team not served by this instance")
 // Mode selects the turn orchestration path.
 type Mode string
 
-const (
-	ModeChat    Mode = "chat"
-	ModeDiscuss Mode = "discuss"
-)
+const ModeChat Mode = "chat"
 
 // StartTurnCommand is a pure-data command. Field set mirrors exactly what
 // the channel inbound processor supplies today; function- and channel-typed fields are
@@ -112,57 +109,6 @@ type StartTurnCommand struct {
 	SkipMemoryExtraction bool
 	SkipTitleGeneration  bool
 	UserMessagePersisted bool
-
-	// Discuss-mode extras.
-	SessionToken string //nolint:gosec // session credential material; crosses only the authenticated internal RPC in split deployments
-	ToolHTTPURL  string
-
-	// DiscussMessages is the composed conversation context for a discuss
-	// turn (Mode == ModeDiscuss), already rendered by the caller's
-	// projection. Image parts are injected into the last real user message
-	// before the runtime starts streaming.
-	DiscussMessages  []DiscussMessage
-	DiscussImageRefs []DiscussImageRef
-	// DiscussAddressed covers an explicit @-mention, a reply-to, or a direct
-	// (1:1) conversation. Expensive external runtimes (ACP) use it as a
-	// participation gate and skip the run when false. Mention/reply details
-	// stay attached to their canonical timeline messages.
-	DiscussAddressed bool
-}
-
-// DiscussMessage is one composed context message for a discuss turn.
-type DiscussMessage struct {
-	Role                 string          `json:"role"`
-	Content              string          `json:"content"`
-	RawContent           json.RawMessage `json:"raw_content,omitempty"`
-	CompactionArtifactID string          `json:"compaction_artifact_id,omitempty"`
-}
-
-// DiscussImageRef references an image attachment to inline as vision input.
-type DiscussImageRef struct {
-	ContentHash string `json:"content_hash"`
-	Mime        string `json:"mime,omitempty"`
-}
-
-// Synthetic discuss event kinds emitted by the runtime before (or instead
-// of) the model event stream.
-const (
-	// DiscussEventRunResolved is always the first event of a discuss run;
-	// its payload is DiscussRunResolvedPayload.
-	DiscussEventRunResolved = "discuss_run_resolved"
-	// DiscussEventSkipped signals the runtime declined to start (e.g. ACP
-	// participation gate); the run ends after this event.
-	DiscussEventSkipped = "discuss_skipped"
-	// DiscussEventRecompose signals the runtime compacted the thread
-	// synchronously before calling the model; the run ends after this event
-	// and the driver must recompose against the refreshed artifact frontier
-	// and resubmit (CM-CMP-001). The cursor must not advance.
-	DiscussEventRecompose = "discuss_recompose"
-)
-
-// DiscussRunResolvedPayload is the payload of DiscussEventRunResolved.
-type DiscussRunResolvedPayload struct {
-	RuntimeType string `json:"runtime_type"`
 }
 
 // ToolApprovalResponse resumes a thread's turn deferred on tool approval

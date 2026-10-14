@@ -57,8 +57,8 @@ func TestIdleTimeoutCapsInitialWindow(t *testing.T) {
 	}
 }
 
-func TestServiceHTTPClientsHaveSeparateTimeoutOwnership(t *testing.T) {
-	service := NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC, time.Minute)
+func TestServiceStreamHTTPClientHasNoRequestDeadline(t *testing.T) {
+	service := NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC)
 	if service.streamHTTPClient.Timeout != 0 {
 		t.Fatalf("stream client timeout = %v, want no whole-request deadline", service.streamHTTPClient.Timeout)
 	}
@@ -68,20 +68,6 @@ func TestServiceHTTPClientsHaveSeparateTimeoutOwnership(t *testing.T) {
 	}
 	if streamTransport.ResponseHeaderTimeout != 0 {
 		t.Fatalf("stream response header timeout = %v, want application watchdog ownership", streamTransport.ResponseHeaderTimeout)
-	}
-
-	if service.nonStreamingHTTPClient.Timeout != 10*time.Minute {
-		t.Fatalf("non-streaming client timeout = %v, want 10m", service.nonStreamingHTTPClient.Timeout)
-	}
-	nonStreamingTransport, ok := service.nonStreamingHTTPClient.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("non-streaming transport = %T, want *http.Transport", service.nonStreamingHTTPClient.Transport)
-	}
-	if nonStreamingTransport == streamTransport {
-		t.Fatal("streaming and non-streaming clients share a mutable transport")
-	}
-	if nonStreamingTransport.ResponseHeaderTimeout != 30*time.Second {
-		t.Fatalf("non-streaming response header timeout = %v, want 30s", nonStreamingTransport.ResponseHeaderTimeout)
 	}
 }
 
@@ -184,7 +170,7 @@ func TestScheduleBudgetHasDistinctCause(t *testing.T) {
 	if apperror.CodeOf(cause) != apperror.CodeScheduleExecutionTimeout {
 		t.Fatalf("cause=%v", cause)
 	}
-	if snapshotFailureCode(false, cause) != apperror.CodeScheduleExecutionTimeout {
-		t.Fatal("budget cause lost in terminal snapshot")
+	if historyFailureCode(publicFailureCode(cause)) != apperror.CodeScheduleExecutionTimeout {
+		t.Fatal("budget cause lost in the history marker")
 	}
 }

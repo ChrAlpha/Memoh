@@ -634,35 +634,6 @@ func (q *Queries) GetSessionByID(ctx context.Context, id pgtype.UUID) (BotSessio
 	return i, err
 }
 
-const getSessionDiscussCursor = `-- name: GetSessionDiscussCursor :one
-SELECT session_id, scope_key, route_id, source, consumed_cursor, consumed_event_cursor, updated_at, team_id
-FROM bot_session_discuss_cursors
-WHERE team_id = public.memoh_current_team_id()
-  AND session_id = $1
-  AND scope_key = $2
-`
-
-type GetSessionDiscussCursorParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	ScopeKey  string      `json:"scope_key"`
-}
-
-func (q *Queries) GetSessionDiscussCursor(ctx context.Context, arg GetSessionDiscussCursorParams) (BotSessionDiscussCursor, error) {
-	row := q.db.QueryRow(ctx, getSessionDiscussCursor, arg.SessionID, arg.ScopeKey)
-	var i BotSessionDiscussCursor
-	err := row.Scan(
-		&i.SessionID,
-		&i.ScopeKey,
-		&i.RouteID,
-		&i.Source,
-		&i.ConsumedCursor,
-		&i.ConsumedEventCursor,
-		&i.UpdatedAt,
-		&i.TeamID,
-	)
-	return i, err
-}
-
 const listSessionDiscussCursorsByBot = `-- name: ListSessionDiscussCursorsByBot :many
 SELECT c.session_id, c.scope_key, c.route_id, c.source, c.consumed_cursor, c.consumed_event_cursor, c.updated_at, c.team_id
 FROM bot_session_discuss_cursors c

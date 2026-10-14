@@ -103,7 +103,7 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 	}
 }
 
-func TestAsyncCompactionInputTokensPrefersKnownCompactableHistory(t *testing.T) {
+func TestAsyncCompactionInputTokensPrefersRunPressure(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -113,19 +113,19 @@ func TestAsyncCompactionInputTokensPrefersKnownCompactableHistory(t *testing.T) 
 		want          int
 	}{
 		{
-			name:          "excludes summaries and prompt overhead",
-			resolved:      resolvedContext{compactableTokens: 4000, compactableTokensKnown: true},
+			name:          "run pressure wins over provider usage",
+			resolved:      resolvedContext{pressure: &runPressure{conversation: 4000}},
 			providerInput: 9000,
 			want:          4000,
 		},
 		{
-			name:          "known summary-only history stays zero",
-			resolved:      resolvedContext{compactableTokensKnown: true},
+			name:          "zero run pressure stays zero",
+			resolved:      resolvedContext{pressure: &runPressure{}},
 			providerInput: 9000,
 			want:          0,
 		},
 		{
-			name:          "pipeline without a raw projection falls back to provider usage",
+			name:          "a run without pressure falls back to provider usage",
 			resolved:      resolvedContext{},
 			providerInput: 9000,
 			want:          9000,

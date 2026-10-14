@@ -168,7 +168,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 }
 
 func TestResumeWaitsForWorkspaceBeforeAdmission(t *testing.T) {
-	s, admitter := newAdmittedTurnTestService(&fakeRunner{})
+	s, admitter := newAdmittedTurnTestService()
 	s.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
 	s.resumeReady = func(context.Context, string, string) error { return errors.New("bridge not ready") }
 	raw, _ := json.Marshal(map[string]any{"resume": resumeContext{Version: 1, ChatID: "chat", Query: "work"}})

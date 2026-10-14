@@ -539,13 +539,6 @@ UPDATE bot_sessions
 SET next_turn_position = sqlc.arg(next_turn_position)::bigint
 WHERE team_id = public.memoh_current_team_id() AND id = sqlc.arg(session_id);
 
--- name: GetSessionDiscussCursor :one
-SELECT *
-FROM bot_session_discuss_cursors
-WHERE team_id = public.memoh_current_team_id()
-  AND session_id = sqlc.arg(session_id)
-  AND scope_key = sqlc.arg(scope_key);
-
 -- name: ListSessionDiscussCursorsByBot :many
 SELECT c.*
 FROM bot_session_discuss_cursors c

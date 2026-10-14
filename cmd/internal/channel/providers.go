@@ -69,12 +69,6 @@ import (
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
-func provideEventStore(log *slog.Logger, queries dbstore.Queries) *timeline.EventStore {
-	store := timeline.NewEventStore(log, queries)
-	store.SetReplayArtifactProvider(compaction.NewTimelineArtifactSource(queries))
-	return store
-}
-
 // provideDiscussWaker tells the server a discuss session took input, through
 // the turn port of this deployment: the application service itself in the
 // server process, the turn RPC client in the channel process. Both must offer

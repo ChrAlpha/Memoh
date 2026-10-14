@@ -29,12 +29,12 @@ func TestRuntimeRoundPublishesOnlyCompletedRequestedHead(t *testing.T) {
 			t.Parallel()
 			messages := &recordingMessageService{}
 			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
-			err := service.persistRuntimeRound(
+			err := service.persistExternalRound(
 				context.Background(),
 				ChatRequest{BotID: "bot-1", ThreadID: "session-1", RunID: "run-1", Query: "inspect"},
 				"codex", "/data/app",
 				external.PromptResult{Text: "partial", PublishHead: tc.publishHead},
-				tc.promptErr, tc.completed, nil, nil,
+				externalRoundFailure(tc.promptErr), tc.completed, nil, nil,
 			)
 			if err != nil {
 				t.Fatal(err)
