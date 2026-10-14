@@ -38,6 +38,8 @@ func (*WebAdapter) Descriptor() channel.Descriptor {
 			NativeUserInput: true,
 			NativeApproval:  true,
 			BlockStreaming:  true,
+			Preview:         channel.PreviewNativeStream,
+			ProactiveSend:   true,
 		},
 		TargetSpec: channel.TargetSpec{
 			Format: "bot_id",
@@ -65,8 +67,8 @@ func (a *WebAdapter) Send(_ context.Context, _ channel.ChannelConfig, msg channe
 	return nil
 }
 
-// OpenStream opens a local stream session bound to the target route.
-func (a *WebAdapter) OpenStream(ctx context.Context, _ channel.ChannelConfig, target string, _ channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+// OpenPreview opens the preview of a reply on the target route.
+func (a *WebAdapter) OpenPreview(ctx context.Context, _ channel.ChannelConfig, target string, _ channel.StreamOptions) (channel.PreparedPreview, error) {
 	if a.hub == nil {
 		return nil, errors.New("web hub not configured")
 	}
@@ -74,10 +76,8 @@ func (a *WebAdapter) OpenStream(ctx context.Context, _ channel.ChannelConfig, ta
 	if target == "" {
 		return nil, errors.New("web target is required")
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return newLocalOutboundStream(a.hub, target), nil
+	return newLocalPreview(a.hub, target), nil
 }

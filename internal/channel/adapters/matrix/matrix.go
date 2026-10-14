@@ -30,7 +30,6 @@ const Type channel.ChannelType = "matrix"
 
 const (
 	matrixDefaultTimeout  = 30 * time.Second
-	matrixEditThrottle    = 1200 * time.Millisecond
 	matrixRoutingStateKey = "_matrix"
 )
 
@@ -199,10 +198,11 @@ func (*MatrixAdapter) Descriptor() channel.Descriptor {
 			Media:          true,
 			Reply:          true,
 			Streaming:      true,
-			NativeApproval: true,
 			BlockStreaming: true,
 			Edit:           true,
 			ChatTypes:      []string{"direct", "group"},
+			Preview:        channel.PreviewEditInPlace,
+			ProactiveSend:  true,
 		},
 		OutboundPolicy: channel.OutboundPolicy{
 			MediaOrder: channel.OutboundOrderTextFirst,
@@ -439,7 +439,8 @@ func (a *MatrixAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg
 	return nil
 }
 
-func (a *MatrixAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+// OpenPreview opens the room messages that show a reply while it is produced.
+func (a *MatrixAdapter) OpenPreview(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	if err := validateTarget(target); err != nil {
 		return nil, err
 	}
@@ -451,7 +452,7 @@ func (a *MatrixAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig,
 	if reply == nil && strings.TrimSpace(opts.SourceMessageID) != "" {
 		reply = &channel.ReplyRef{Target: normalizeTarget(target), MessageID: strings.TrimSpace(opts.SourceMessageID)}
 	}
-	return &matrixOutboundStream{
+	return &matrixPreview{
 		adapter: a,
 		cfg:     parsed,
 		target:  normalizeTarget(target),

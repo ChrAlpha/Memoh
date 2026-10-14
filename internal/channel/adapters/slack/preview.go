@@ -7,30 +7,33 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	slackapi "github.com/slack-go/slack"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 const (
+	slackThinkingText          = "Thinking..."
 	slackStreamUpdateThrottle  = 1500 * time.Millisecond
 	slackStreamRetryFallback   = 2 * time.Second
 	slackStreamFinalMaxRetries = 3
 )
 
-type slackOutboundStream struct {
+// slackPreview shows one reply as a message that is updated while the reply
+// is produced. The message opens as a placeholder and takes the streamed text,
+// then the final text.
+type slackPreview struct {
 	adapter      *SlackAdapter
 	cfg          channel.ChannelConfig
 	target       string
 	reply        *channel.ReplyRef
 	api          *slackapi.Client
-	closed       atomic.Bool
 	mu           sync.Mutex
+	ended        bool
 	msgTS        string // Slack message timestamp (used as message ID)
+	placeholder  bool
 	buffer       strings.Builder
 	lastSent     string
 	lastUpdate   time.Time
@@ -38,26 +41,20 @@ type slackOutboundStream struct {
 	toolMessages map[string]string
 }
 
-var _ channel.PreparedOutboundStream = (*slackOutboundStream)(nil)
+var _ channel.PreparedPreview = (*slackPreview)(nil)
 
-func (s *slackOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s == nil || s.adapter == nil {
-		return errors.New("slack stream not configured")
+func (s *slackPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
+	if s.finished() {
+		return nil
 	}
-	if s.closed.Load() {
-		return errors.New("slack stream is closed")
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	switch event.Type {
 	case channel.StreamEventStatus:
 		if event.Status == channel.StreamStatusStarted {
-			return s.ensureMessage(ctx, "Thinking...")
+			return s.ensureMessage(ctx, slackThinkingText)
 		}
 		return nil
 
@@ -78,61 +75,15 @@ func (s *slackOutboundStream) Push(ctx context.Context, event channel.PreparedSt
 		s.mu.Unlock()
 		return nil
 
-	case channel.StreamEventFinal:
-		if event.Final == nil {
-			return errors.New("slack stream final payload is required")
-		}
-		s.mu.Lock()
-		bufText := strings.TrimSpace(s.buffer.String())
-		s.mu.Unlock()
-		finalBody := renderSlackStreamFinalBody(event.Final.Message.Message, bufText)
-		if finalBody.Text != "" {
-			if err := s.finalizeMessageBody(ctx, finalBody, event.Final.Message.Message.Actions); err != nil {
-				return err
-			}
-		} else if err := s.clearPlaceholder(ctx); err != nil {
-			return err
-		}
-		for _, att := range event.Final.Message.Attachments {
-			if err := s.sendAttachment(ctx, att); err != nil {
-				return err
-			}
-		}
-		return nil
-
 	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
+		errText := strings.TrimSpace(event.Error)
 		if errText == "" {
 			return nil
 		}
 		return s.finalizeMessage(ctx, channel.ErrorReplyText(event.ErrorCode, errText), nil)
 
-	case channel.StreamEventAttachment:
-		if len(event.Attachments) == 0 {
-			return nil
-		}
-		s.mu.Lock()
-		finalText := strings.TrimSpace(s.buffer.String())
-		s.mu.Unlock()
-		if finalText != "" {
-			if err := s.finalizeMessage(ctx, finalText, nil); err != nil {
-				return err
-			}
-		} else if err := s.clearPlaceholder(ctx); err != nil {
-			return err
-		}
-		for _, att := range event.Attachments {
-			if err := s.sendAttachment(ctx, att); err != nil {
-				return err
-			}
-		}
-		return nil
-
 	case channel.StreamEventToolCallStart:
-		s.mu.Lock()
-		bufText := strings.TrimSpace(s.buffer.String())
-		s.mu.Unlock()
-		if bufText != "" {
+		if bufText := s.bufferedText(); bufText != "" {
 			if err := s.finalizeMessage(ctx, bufText, nil); err != nil {
 				return err
 			}
@@ -148,7 +99,7 @@ func (s *slackOutboundStream) Push(ctx context.Context, event channel.PreparedSt
 		channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd,
 		channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted,
 		channel.StreamEventProcessingFailed,
-		channel.StreamEventReaction, channel.StreamEventSpeech:
+		channel.StreamEventReaction:
 		return nil
 
 	default:
@@ -156,20 +107,67 @@ func (s *slackOutboundStream) Push(ctx context.Context, event channel.PreparedSt
 	}
 }
 
-func (s *slackOutboundStream) Close(ctx context.Context) error {
-	if s == nil {
+// Finish ends the reply. A nil final means the run said nothing: a message
+// that still shows only the placeholder is removed. A final without a message
+// leaves the text streamed so far as the reply.
+func (s *slackPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.end() {
 		return nil
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if final == nil || final.Final == nil {
+		return s.clearBarePlaceholder(ctx)
 	}
-	s.closed.Store(true)
+
+	msg := final.Final.Message
+	finalBody := renderSlackStreamFinalBody(msg.Message, s.bufferedText())
+	if finalBody.Text != "" {
+		if err := s.finalizeMessageBody(ctx, finalBody, msg.Message.Actions); err != nil {
+			return err
+		}
+	} else if err := s.clearBarePlaceholder(ctx); err != nil {
+		return err
+	}
+	for _, att := range msg.Attachments {
+		if err := s.sendAttachment(ctx, att); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (s *slackOutboundStream) ensureMessage(ctx context.Context, text string) error {
+// Abort ends the reply as it stands.
+func (s *slackPreview) Abort(context.Context) error {
+	s.end()
+	return nil
+}
+
+func (s *slackPreview) finished() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
+}
+
+// end marks the preview ended and reports whether this call did it.
+func (s *slackPreview) end() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return false
+	}
+	s.ended = true
+	return true
+}
+
+func (s *slackPreview) bufferedText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(s.buffer.String())
+}
+
+func (s *slackPreview) ensureMessage(ctx context.Context, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -185,13 +183,14 @@ func (s *slackOutboundStream) ensureMessage(ctx context.Context, text string) er
 	}
 
 	s.msgTS = ts
+	s.placeholder = true
 	s.lastSent = normalizeSlackStreamText(text)
 	s.lastUpdate = time.Now()
 	s.nextUpdate = s.lastUpdate.Add(slackStreamUpdateThrottle)
 	return nil
 }
 
-func (s *slackOutboundStream) updateMessage(ctx context.Context) error {
+func (s *slackPreview) updateMessage(ctx context.Context) error {
 	s.mu.Lock()
 	msgTS := s.msgTS
 	content := truncateSlackText(strings.TrimSpace(s.buffer.String()))
@@ -212,6 +211,7 @@ func (s *slackOutboundStream) updateMessage(ctx context.Context) error {
 	err := s.updateMessageText(ctx, msgTS, slackDefaultBody(content), nil)
 	if err == nil {
 		s.mu.Lock()
+		s.placeholder = false
 		s.lastSent = normalizeSlackStreamText(content)
 		s.lastUpdate = time.Now()
 		s.nextUpdate = s.lastUpdate.Add(slackStreamUpdateThrottle)
@@ -252,11 +252,11 @@ func renderSlackStreamFinalBody(msg channel.Message, buffered string) slackOutbo
 	return slackDefaultBody(strings.TrimSpace(buffered))
 }
 
-func (s *slackOutboundStream) finalizeMessage(ctx context.Context, text string, actions []channel.Action) error {
+func (s *slackPreview) finalizeMessage(ctx context.Context, text string, actions []channel.Action) error {
 	return s.finalizeMessageBody(ctx, slackDefaultBody(text), actions)
 }
 
-func (s *slackOutboundStream) finalizeMessageBody(ctx context.Context, body slackOutboundBody, actions []channel.Action) error {
+func (s *slackPreview) finalizeMessageBody(ctx context.Context, body slackOutboundBody, actions []channel.Action) error {
 	s.mu.Lock()
 	text := truncateSlackText(body.Text)
 	blockText := truncateSlackText(body.BlockText)
@@ -280,6 +280,7 @@ func (s *slackOutboundStream) finalizeMessageBody(ctx context.Context, body slac
 		}
 		s.mu.Lock()
 		s.msgTS = ts
+		s.placeholder = false
 		s.lastSent = normalizeSlackStreamText(text)
 		s.lastUpdate = time.Now()
 		s.nextUpdate = s.lastUpdate.Add(slackStreamUpdateThrottle)
@@ -292,6 +293,7 @@ func (s *slackOutboundStream) finalizeMessageBody(ctx context.Context, body slac
 	err := s.updateMessageTextWithRetry(ctx, msgTS, body, actions)
 	if err == nil {
 		s.mu.Lock()
+		s.placeholder = false
 		s.lastSent = normalizeSlackStreamText(text)
 		s.lastUpdate = time.Now()
 		s.nextUpdate = s.lastUpdate.Add(slackStreamUpdateThrottle)
@@ -317,6 +319,7 @@ func (s *slackOutboundStream) finalizeMessageBody(ctx context.Context, body slac
 	}
 	s.mu.Lock()
 	s.msgTS = ts
+	s.placeholder = false
 	s.lastSent = normalizeSlackStreamText(text)
 	s.lastUpdate = time.Now()
 	s.nextUpdate = s.lastUpdate.Add(slackStreamUpdateThrottle)
@@ -324,7 +327,7 @@ func (s *slackOutboundStream) finalizeMessageBody(ctx context.Context, body slac
 	return nil
 }
 
-func (s *slackOutboundStream) clearPlaceholder(ctx context.Context) error {
+func (s *slackPreview) clearPlaceholder(ctx context.Context) error {
 	s.mu.Lock()
 	msgTS := s.msgTS
 	s.mu.Unlock()
@@ -338,6 +341,7 @@ func (s *slackOutboundStream) clearPlaceholder(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.msgTS = ""
+	s.placeholder = false
 	s.lastSent = ""
 	s.lastUpdate = time.Time{}
 	s.nextUpdate = time.Time{}
@@ -345,7 +349,19 @@ func (s *slackOutboundStream) clearPlaceholder(ctx context.Context) error {
 	return nil
 }
 
-func (s *slackOutboundStream) sendAttachment(ctx context.Context, att channel.PreparedAttachment) error {
+// clearBarePlaceholder deletes the message only while it still shows nothing
+// but the placeholder; text or an error it already shows stays.
+func (s *slackPreview) clearBarePlaceholder(ctx context.Context) error {
+	s.mu.Lock()
+	bare := s.placeholder
+	s.mu.Unlock()
+	if !bare {
+		return nil
+	}
+	return s.clearPlaceholder(ctx)
+}
+
+func (s *slackPreview) sendAttachment(ctx context.Context, att channel.PreparedAttachment) error {
 	threadTS := ""
 	if s.reply != nil && s.reply.MessageID != "" {
 		threadTS = s.reply.MessageID
@@ -357,7 +373,7 @@ func (s *slackOutboundStream) sendAttachment(ctx context.Context, att channel.Pr
 // message on tool_call_end via chat.update so the running → completed/failed
 // transition shares one visible post. If the edit fails (or no prior message
 // is tracked), it falls back to posting a new message.
-func (s *slackOutboundStream) sendToolCallMessage(
+func (s *slackPreview) sendToolCallMessage(
 	ctx context.Context,
 	tc *channel.StreamToolCall,
 	p channel.ToolCallPresentation,
@@ -389,7 +405,7 @@ func (s *slackOutboundStream) sendToolCallMessage(
 	return nil
 }
 
-func (s *slackOutboundStream) lookupToolCallMessage(callID string) (string, bool) {
+func (s *slackPreview) lookupToolCallMessage(callID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -399,7 +415,7 @@ func (s *slackOutboundStream) lookupToolCallMessage(callID string) (string, bool
 	return v, ok
 }
 
-func (s *slackOutboundStream) storeToolCallMessage(callID, ts string) {
+func (s *slackPreview) storeToolCallMessage(callID, ts string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -408,7 +424,7 @@ func (s *slackOutboundStream) storeToolCallMessage(callID, ts string) {
 	s.toolMessages[callID] = ts
 }
 
-func (s *slackOutboundStream) forgetToolCallMessage(callID string) {
+func (s *slackPreview) forgetToolCallMessage(callID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -417,9 +433,10 @@ func (s *slackOutboundStream) forgetToolCallMessage(callID string) {
 	delete(s.toolMessages, callID)
 }
 
-func (s *slackOutboundStream) resetStreamState() {
+func (s *slackPreview) resetStreamState() {
 	s.mu.Lock()
 	s.msgTS = ""
+	s.placeholder = false
 	s.buffer.Reset()
 	s.lastSent = ""
 	s.lastUpdate = time.Time{}
@@ -427,7 +444,7 @@ func (s *slackOutboundStream) resetStreamState() {
 	s.mu.Unlock()
 }
 
-func (s *slackOutboundStream) postMessageWithRetry(ctx context.Context, body slackOutboundBody, actions []channel.Action) (string, error) {
+func (s *slackPreview) postMessageWithRetry(ctx context.Context, body slackOutboundBody, actions []channel.Action) (string, error) {
 	text := body.Text
 	blockText := body.BlockText
 	if blockText == "" {
@@ -470,7 +487,7 @@ func (s *slackOutboundStream) postMessageWithRetry(ctx context.Context, body sla
 	return "", lastErr
 }
 
-func (s *slackOutboundStream) updateMessageText(ctx context.Context, msgTS string, body slackOutboundBody, actions []channel.Action) error {
+func (s *slackPreview) updateMessageText(ctx context.Context, msgTS string, body slackOutboundBody, actions []channel.Action) error {
 	text := body.Text
 	blockText := body.BlockText
 	if blockText == "" {
@@ -495,7 +512,7 @@ func (s *slackOutboundStream) updateMessageText(ctx context.Context, msgTS strin
 	return err
 }
 
-func (s *slackOutboundStream) updateMessageTextWithRetry(ctx context.Context, msgTS string, body slackOutboundBody, actions []channel.Action) error {
+func (s *slackPreview) updateMessageTextWithRetry(ctx context.Context, msgTS string, body slackOutboundBody, actions []channel.Action) error {
 	var lastErr error
 	for attempt := 0; attempt < slackStreamFinalMaxRetries; attempt++ {
 		err := s.updateMessageText(ctx, msgTS, body, actions)

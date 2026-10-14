@@ -1,7 +1,6 @@
 package local
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -30,21 +29,5 @@ func TestRouteHubPublishEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected event but timed out")
-	}
-}
-
-func TestLocalOutboundStreamClose(t *testing.T) {
-	t.Parallel()
-
-	hub := NewRouteHub()
-	stream := newLocalOutboundStream(hub, "bot-2")
-	if err := stream.Close(context.Background()); err != nil {
-		t.Fatalf("unexpected close error: %v", err)
-	}
-	if err := stream.Push(context.Background(), channel.PreparedStreamEvent{
-		Type:  channel.StreamEventDelta,
-		Delta: "should fail",
-	}); err == nil {
-		t.Fatal("expected push on closed stream to fail")
 	}
 }

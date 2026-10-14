@@ -138,8 +138,11 @@ func (*FeishuAdapter) Descriptor() channel.Descriptor {
 			Reactions:      true,
 			Reply:          true,
 			Streaming:      true,
-			NativeApproval: true,
 			BlockStreaming: true,
+			Preview:        channel.PreviewEditInPlace,
+			ProactiveSend:  true,
+			// Removing a reaction takes the id the add call returned.
+			ReactionRemoveKey: channel.ReactionRemoveByReactionID,
 		},
 		OutboundPolicy: channel.OutboundPolicy{
 			RichTextChunkLimit: feishuStreamMaxRunes,
@@ -686,9 +689,9 @@ func buildFeishuTextContent(body string) (string, error) {
 	return string(content), nil
 }
 
-// OpenStream opens a Feishu streaming session.
-// The adapter strategy uses one interactive card and patches it incrementally.
-func (a *FeishuAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+// OpenPreview opens the card that shows a reply while it is produced. The
+// card is patched incrementally.
+func (a *FeishuAdapter) OpenPreview(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return nil, errors.New("feishu target is required")
@@ -707,7 +710,7 @@ func (a *FeishuAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfi
 		return nil, ctx.Err()
 	default:
 	}
-	return &feishuOutboundStream{
+	return &feishuPreview{
 		adapter:       a,
 		cfg:           cfg,
 		target:        target,
@@ -716,6 +719,7 @@ func (a *FeishuAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfi
 		receiveID:     receiveID,
 		receiveType:   receiveType,
 		patchInterval: feishuStreamPatchInterval,
+		sendMessage:   a.Send,
 	}, nil
 }
 

@@ -72,7 +72,7 @@ type SlackAdapter struct {
 
 var (
 	_ channel.Sender                   = (*SlackAdapter)(nil)
-	_ channel.StreamSender             = (*SlackAdapter)(nil)
+	_ channel.PreviewOpener            = (*SlackAdapter)(nil)
 	_ channel.Reactor                  = (*SlackAdapter)(nil)
 	_ channel.Receiver                 = (*SlackAdapter)(nil)
 	_ channel.AttachmentResolver       = (*SlackAdapter)(nil)
@@ -140,10 +140,11 @@ func (*SlackAdapter) Descriptor() channel.Descriptor {
 			Attachments:    true,
 			Media:          true,
 			Streaming:      true,
-			NativeApproval: true,
 			BlockStreaming: true,
 			Reactions:      true,
 			Threads:        true,
+			Preview:        channel.PreviewEditInPlace,
+			ProactiveSend:  true,
 		},
 		OutboundPolicy: channel.OutboundPolicy{
 			RichTextChunkLimit: slackMaxLength,
@@ -974,7 +975,8 @@ func mimeExtension(mime string) string {
 	}
 }
 
-func (a *SlackAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+// OpenPreview opens the message that shows a reply while it is produced.
+func (a *SlackAdapter) OpenPreview(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	target = strings.TrimSpace(target)
 	slackCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
@@ -994,7 +996,7 @@ func (a *SlackAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfig
 		}
 	}
 
-	return &slackOutboundStream{
+	return &slackPreview{
 		adapter: a,
 		cfg:     cfg,
 		target:  target,

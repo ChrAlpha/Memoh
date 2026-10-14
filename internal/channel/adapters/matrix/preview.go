@@ -2,45 +2,40 @@ package matrix
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
-type matrixOutboundStream struct {
+// matrixPreview shows one reply as room messages. The text of a phase is sent
+// when the phase ends, and the final edits that message with the text in its
+// final format. A tool call is its own message, edited when the call ends.
+type matrixPreview struct {
 	adapter *MatrixAdapter
 	cfg     Config
 	target  string
 	reply   *channel.ReplyRef
 
-	closed atomic.Bool
-	mu     sync.Mutex
+	mu    sync.Mutex
+	ended bool
 
 	roomID          string
 	originalEventID string
 	rawBuffer       strings.Builder
 	lastText        string
 	lastFormat      channel.MessageFormat
-	lastEditedAt    time.Time
 	toolMessages    map[string]string
 }
 
-func (s *matrixOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s == nil || s.adapter == nil {
-		return errors.New("matrix stream not configured")
+var _ channel.PreparedPreview = (*matrixPreview)(nil)
+
+func (s *matrixPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
+	if s.finished() {
+		return nil
 	}
-	if s.closed.Load() {
-		return errors.New("matrix stream is closed")
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	switch event.Type {
@@ -56,16 +51,10 @@ func (s *matrixOutboundStream) Push(ctx context.Context, event channel.PreparedS
 		if event.Phase != channel.StreamPhaseText {
 			return nil
 		}
-		s.mu.Lock()
-		text := strings.TrimSpace(s.rawBuffer.String())
-		s.mu.Unlock()
-		return s.upsertText(ctx, text, channel.MessageFormatPlain, true)
+		return s.upsertText(ctx, s.bufferedText(), channel.MessageFormatPlain)
 	case channel.StreamEventToolCallStart:
-		s.mu.Lock()
-		bufText := strings.TrimSpace(s.rawBuffer.String())
-		s.mu.Unlock()
-		if bufText != "" {
-			if err := s.upsertText(ctx, bufText, channel.MessageFormatPlain, true); err != nil {
+		if bufText := s.bufferedText(); bufText != "" {
+			if err := s.upsertText(ctx, bufText, channel.MessageFormatPlain); err != nil {
 				return err
 			}
 		}
@@ -87,54 +76,72 @@ func (s *matrixOutboundStream) Push(ctx context.Context, event channel.PreparedS
 		s.mu.Unlock()
 		return nil
 	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
+		errText := strings.TrimSpace(event.Error)
 		if errText == "" {
 			return nil
 		}
-		return s.upsertText(ctx, channel.ErrorReplyText(event.ErrorCode, errText), channel.MessageFormatPlain, true)
-	case channel.StreamEventAttachment:
-		return s.pushAttachments(ctx, event.Attachments)
-	case channel.StreamEventFinal:
-		if event.Final == nil {
-			return errors.New("matrix stream final payload is required")
-		}
-		finalMsg := event.Final.Message.Message
-		if matrixMessageBody(finalMsg) == "" {
-			s.mu.Lock()
-			text := strings.TrimSpace(s.rawBuffer.String())
-			s.mu.Unlock()
-			finalMsg.Text = text
-			if finalMsg.Format == "" {
-				finalMsg.Format = channel.MessageFormatPlain
-			}
-		}
-		if err := s.upsertMessage(ctx, finalMsg, true); err != nil {
-			return err
-		}
-		if err := s.pushAttachments(ctx, event.Final.Message.Attachments); err != nil {
-			return err
-		}
-		s.resetMessageState()
-		return nil
+		return s.upsertText(ctx, channel.ErrorReplyText(event.ErrorCode, errText), channel.MessageFormatPlain)
 	default:
 		return nil
 	}
 }
 
-func (s *matrixOutboundStream) Close(ctx context.Context) error {
-	if s == nil {
+// Finish ends the reply. The room shows no placeholder, so a nil final adds
+// nothing. A final without a message sends the text streamed so far.
+func (s *matrixPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.end() {
 		return nil
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if final == nil || final.Final == nil {
+		return nil
 	}
-	s.closed.Store(true)
+
+	finalMsg := final.Final.Message.Message
+	if matrixMessageBody(finalMsg) == "" {
+		finalMsg.Text = s.bufferedText()
+		if finalMsg.Format == "" {
+			finalMsg.Format = channel.MessageFormatPlain
+		}
+	}
+	if err := s.upsertMessage(ctx, finalMsg); err != nil {
+		return err
+	}
+	return s.pushAttachments(ctx, final.Final.Message.Attachments)
+}
+
+// Abort ends the reply as it stands.
+func (s *matrixPreview) Abort(context.Context) error {
+	s.end()
 	return nil
 }
 
-func (s *matrixOutboundStream) upsertText(ctx context.Context, text string, format channel.MessageFormat, force bool) error {
+func (s *matrixPreview) finished() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
+}
+
+// end marks the preview ended and reports whether this call did it.
+func (s *matrixPreview) end() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return false
+	}
+	s.ended = true
+	return true
+}
+
+func (s *matrixPreview) bufferedText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(s.rawBuffer.String())
+}
+
+func (s *matrixPreview) upsertText(ctx context.Context, text string, format channel.MessageFormat) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
@@ -142,10 +149,10 @@ func (s *matrixOutboundStream) upsertText(ctx context.Context, text string, form
 	if format == "" {
 		format = channel.MessageFormatPlain
 	}
-	return s.upsertMessage(ctx, channel.Message{Text: text, Format: format}, force)
+	return s.upsertMessage(ctx, channel.Message{Text: text, Format: format})
 }
 
-func (s *matrixOutboundStream) upsertMessage(ctx context.Context, msg channel.Message, force bool) error {
+func (s *matrixPreview) upsertMessage(ctx context.Context, msg channel.Message) error {
 	text := matrixMessageBody(msg)
 	if text == "" {
 		return nil
@@ -165,7 +172,6 @@ func (s *matrixOutboundStream) upsertMessage(ctx context.Context, msg channel.Me
 	originalEventID := s.originalEventID
 	lastText := s.lastText
 	lastFormat := s.lastFormat
-	lastEditedAt := s.lastEditedAt
 	reply := s.reply
 	s.mu.Unlock()
 
@@ -192,15 +198,11 @@ func (s *matrixOutboundStream) upsertMessage(ctx context.Context, msg channel.Me
 		s.originalEventID = eventID
 		s.lastText = text
 		s.lastFormat = format
-		s.lastEditedAt = time.Now()
 		s.mu.Unlock()
 		return nil
 	}
 
 	if text == lastText && format == lastFormat {
-		return nil
-	}
-	if !force && time.Since(lastEditedAt) < matrixEditThrottle {
 		return nil
 	}
 	msg.Reply = nil
@@ -211,7 +213,6 @@ func (s *matrixOutboundStream) upsertMessage(ctx context.Context, msg channel.Me
 	s.mu.Lock()
 	s.lastText = text
 	s.lastFormat = format
-	s.lastEditedAt = time.Now()
 	s.mu.Unlock()
 	return nil
 }
@@ -220,7 +221,7 @@ func (s *matrixOutboundStream) upsertMessage(ctx context.Context, msg channel.Me
 // m.replace edit event on tool_call_end so both lifecycle states share a
 // single visible message. If no prior event is tracked (or the edit fails),
 // it falls back to creating a new event.
-func (s *matrixOutboundStream) sendToolCallMessage(
+func (s *matrixPreview) sendToolCallMessage(
 	ctx context.Context,
 	tc *channel.StreamToolCall,
 	p channel.ToolCallPresentation,
@@ -280,7 +281,7 @@ func (s *matrixOutboundStream) sendToolCallMessage(
 	return nil
 }
 
-func (s *matrixOutboundStream) lookupToolCallMessage(callID string) (string, bool) {
+func (s *matrixPreview) lookupToolCallMessage(callID string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -290,7 +291,7 @@ func (s *matrixOutboundStream) lookupToolCallMessage(callID string) (string, boo
 	return v, ok
 }
 
-func (s *matrixOutboundStream) storeToolCallMessage(callID, eventID string) {
+func (s *matrixPreview) storeToolCallMessage(callID, eventID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -299,7 +300,7 @@ func (s *matrixOutboundStream) storeToolCallMessage(callID, eventID string) {
 	s.toolMessages[callID] = eventID
 }
 
-func (s *matrixOutboundStream) forgetToolCallMessage(callID string) {
+func (s *matrixPreview) forgetToolCallMessage(callID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -308,17 +309,16 @@ func (s *matrixOutboundStream) forgetToolCallMessage(callID string) {
 	delete(s.toolMessages, callID)
 }
 
-func (s *matrixOutboundStream) resetMessageState() {
+func (s *matrixPreview) resetMessageState() {
 	s.mu.Lock()
 	s.originalEventID = ""
 	s.rawBuffer.Reset()
 	s.lastText = ""
 	s.lastFormat = ""
-	s.lastEditedAt = time.Time{}
 	s.mu.Unlock()
 }
 
-func (s *matrixOutboundStream) pushAttachments(ctx context.Context, attachments []channel.PreparedAttachment) error {
+func (s *matrixPreview) pushAttachments(ctx context.Context, attachments []channel.PreparedAttachment) error {
 	if len(attachments) == 0 {
 		return nil
 	}

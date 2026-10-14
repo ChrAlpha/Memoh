@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,7 +15,6 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 const (
@@ -26,7 +24,10 @@ const (
 	feishuStreamMaxRunes      = 8000
 )
 
-type feishuOutboundStream struct {
+// feishuPreview shows one reply as an interactive card that is patched while
+// the reply is produced. The card opens as a placeholder and takes the streamed
+// text, then the final text.
+type feishuPreview struct {
 	adapter       *FeishuAdapter
 	cfg           channel.ChannelConfig
 	target        string
@@ -35,25 +36,25 @@ type feishuOutboundStream struct {
 	receiveID     string
 	receiveType   string
 	cardMessageID string
+	placeholder   bool
 	textBuffer    strings.Builder
 	lastPatchedAt time.Time
 	lastPatched   string
 	patchInterval time.Duration
-	closed        atomic.Bool
-	toolMessages  map[string]string
+	// sendMessage delivers the attachments of the final as messages of their own.
+	sendMessage  func(ctx context.Context, cfg channel.ChannelConfig, msg channel.PreparedOutboundMessage) error
+	ended        bool
+	toolMessages map[string]string
 }
 
-func (s *feishuOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s == nil || s.adapter == nil {
-		return errors.New("feishu stream not configured")
+var _ channel.PreparedPreview = (*feishuPreview)(nil)
+
+func (s *feishuPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
+	if s.ended {
+		return nil
 	}
-	if s.closed.Load() {
-		return errors.New("feishu stream is closed")
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	switch event.Type {
 	case channel.StreamEventStatus:
@@ -82,65 +83,17 @@ func (s *feishuOutboundStream) Push(ctx context.Context, event channel.PreparedS
 		if s.cardMessageID != "" && bufText != "" {
 			_ = s.patchCard(ctx, bufText)
 		}
-		s.cardMessageID = ""
-		s.lastPatched = ""
-		s.lastPatchedAt = time.Time{}
-		s.textBuffer.Reset()
+		s.resetCard()
 		return s.renderToolCallCard(ctx, event.ToolCall, channel.BuildToolCallStart(event.ToolCall))
 	case channel.StreamEventToolCallEnd:
-		s.cardMessageID = ""
-		s.lastPatched = ""
-		s.lastPatchedAt = time.Time{}
-		s.textBuffer.Reset()
+		s.resetCard()
 		return s.renderToolCallCard(ctx, event.ToolCall, channel.BuildToolCallEnd(event.ToolCall))
-	case channel.StreamEventAttachment:
-		if len(event.Attachments) == 0 {
-			return nil
-		}
-		return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-			Target: s.target,
-			Message: channel.PreparedMessage{
-				Message: channel.Message{
-					Attachments: feishuLogicalAttachments(event.Attachments),
-				},
-				Attachments: event.Attachments,
-			},
-		})
 	case channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd:
 		return nil
 	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted, channel.StreamEventProcessingFailed:
 		return nil
-	case channel.StreamEventFinal:
-		if event.Final == nil || event.Final.Message.Message.IsEmpty() {
-			return nil
-		}
-		msg := event.Final.Message
-		bufText := strings.TrimSpace(s.textBuffer.String())
-		finalText := renderFeishuStreamFinalText(msg.Message, bufText)
-		if finalText != "" {
-			if err := s.ensureCard(ctx, feishuStreamThinkingText); err != nil {
-				return err
-			}
-			if err := s.patchCard(ctx, finalText); err != nil {
-				return err
-			}
-		}
-		if len(msg.Attachments) > 0 {
-			media := msg
-			media.Message.Format = ""
-			media.Message.Text = ""
-			media.Message.Parts = nil
-			media.Message.Actions = nil
-			media.Message.Reply = nil
-			media.Message.Attachments = feishuLogicalAttachments(media.Attachments)
-			return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
-				Target:  s.target,
-				Message: media,
-			})
-		}
-		return nil
 	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
+		errText := strings.TrimSpace(event.Error)
 		if errText == "" {
 			return nil
 		}
@@ -151,6 +104,68 @@ func (s *feishuOutboundStream) Push(ctx context.Context, event channel.PreparedS
 	default:
 		return nil
 	}
+}
+
+// Finish ends the reply. A nil final means the run said nothing: a card that
+// still shows only the placeholder is recalled. A final without a message
+// leaves the text streamed so far as the reply.
+func (s *feishuPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.ended {
+		return nil
+	}
+	s.ended = true
+	if final == nil || final.Final == nil {
+		return s.clearPlaceholder(ctx)
+	}
+
+	msg := final.Final.Message
+	bufText := strings.TrimSpace(s.textBuffer.String())
+	finalText := bufText
+	if !msg.Message.IsEmpty() {
+		finalText = renderFeishuStreamFinalText(msg.Message, bufText)
+	}
+	if finalText != "" {
+		if err := s.ensureCard(ctx, feishuStreamThinkingText); err != nil {
+			return err
+		}
+		if err := s.patchCard(ctx, finalText); err != nil {
+			return err
+		}
+	} else if err := s.clearPlaceholder(ctx); err != nil {
+		return err
+	}
+	if len(msg.Attachments) > 0 {
+		media := msg
+		media.Message.Format = ""
+		media.Message.Text = ""
+		media.Message.Parts = nil
+		media.Message.Actions = nil
+		media.Message.Reply = nil
+		media.Message.Attachments = feishuLogicalAttachments(media.Attachments)
+		return s.sendMessage(ctx, s.cfg, channel.PreparedOutboundMessage{
+			Target:  s.target,
+			Message: media,
+		})
+	}
+	return nil
+}
+
+// Abort ends the reply as it stands.
+func (s *feishuPreview) Abort(context.Context) error {
+	s.ended = true
+	return nil
+}
+
+// resetCard forgets the open card, so the next text opens a new one.
+func (s *feishuPreview) resetCard() {
+	s.cardMessageID = ""
+	s.placeholder = false
+	s.lastPatched = ""
+	s.lastPatchedAt = time.Time{}
+	s.textBuffer.Reset()
 }
 
 func renderFeishuStreamFinalText(msg channel.Message, buffered string) string {
@@ -179,20 +194,7 @@ func feishuLogicalAttachments(attachments []channel.PreparedAttachment) []channe
 	return logical
 }
 
-func (s *feishuOutboundStream) Close(ctx context.Context) error {
-	if s == nil {
-		return nil
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.closed.Store(true)
-	return nil
-}
-
-func (s *feishuOutboundStream) ensureCard(ctx context.Context, text string) error {
+func (s *feishuPreview) ensureCard(ctx context.Context, text string) error {
 	if strings.TrimSpace(s.cardMessageID) != "" {
 		return nil
 	}
@@ -227,6 +229,7 @@ func (s *feishuOutboundStream) ensureCard(ctx context.Context, text string) erro
 			return errors.New("feishu stream reply failed: empty message id")
 		}
 		s.cardMessageID = strings.TrimSpace(*replyResp.Data.MessageId)
+		s.placeholder = true
 		s.lastPatched = normalizeFeishuStreamText(text)
 		s.lastPatchedAt = time.Now()
 		return nil
@@ -255,12 +258,13 @@ func (s *feishuOutboundStream) ensureCard(ctx context.Context, text string) erro
 		return errors.New("feishu stream create failed: empty message id")
 	}
 	s.cardMessageID = strings.TrimSpace(*createResp.Data.MessageId)
+	s.placeholder = true
 	s.lastPatched = normalizeFeishuStreamText(text)
 	s.lastPatchedAt = time.Now()
 	return nil
 }
 
-func (s *feishuOutboundStream) patchCard(ctx context.Context, text string) error {
+func (s *feishuPreview) patchCard(ctx context.Context, text string) error {
 	if strings.TrimSpace(s.cardMessageID) == "" {
 		return errors.New("feishu stream card message not initialized")
 	}
@@ -289,8 +293,31 @@ func (s *feishuOutboundStream) patchCard(ctx context.Context, text string) error
 		}
 		return fmt.Errorf("feishu stream patch failed: %s (code: %d)", msg, code)
 	}
+	s.placeholder = false
 	s.lastPatched = contentText
 	s.lastPatchedAt = time.Now()
+	return nil
+}
+
+// clearPlaceholder recalls the card while it still shows only the placeholder.
+func (s *feishuPreview) clearPlaceholder(ctx context.Context) error {
+	if !s.placeholder || strings.TrimSpace(s.cardMessageID) == "" {
+		return nil
+	}
+	resp, err := s.client.Im.Message.Delete(ctx, larkim.NewDeleteMessageReqBuilder().
+		MessageId(strings.TrimSpace(s.cardMessageID)).
+		Build())
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.Success() {
+		code, msg := 0, ""
+		if resp != nil {
+			code, msg = resp.Code, resp.Msg
+		}
+		return fmt.Errorf("feishu stream placeholder recall failed: %s (code: %d)", msg, code)
+	}
+	s.resetCard()
 	return nil
 }
 
@@ -404,7 +431,7 @@ func processFeishuCardMarkdown(s string) string {
 // card on tool_call_end, producing a single message whose status flips from
 // "running" to "completed"/"failed". If no prior card is tracked (or patching
 // fails), it falls back to creating a new card.
-func (s *feishuOutboundStream) renderToolCallCard(
+func (s *feishuPreview) renderToolCallCard(
 	ctx context.Context,
 	tc *channel.StreamToolCall,
 	p channel.ToolCallPresentation,
@@ -446,7 +473,7 @@ func (s *feishuOutboundStream) renderToolCallCard(
 	return nil
 }
 
-func (s *feishuOutboundStream) patchToolCallCard(ctx context.Context, messageID, text string) error {
+func (s *feishuPreview) patchToolCallCard(ctx context.Context, messageID, text string) error {
 	content, err := buildFeishuCardContent(text)
 	if err != nil {
 		return err
@@ -471,7 +498,7 @@ func (s *feishuOutboundStream) patchToolCallCard(ctx context.Context, messageID,
 	return nil
 }
 
-func (s *feishuOutboundStream) lookupToolCallMessage(callID string) (string, bool) {
+func (s *feishuPreview) lookupToolCallMessage(callID string) (string, bool) {
 	if s.toolMessages == nil {
 		return "", false
 	}
@@ -479,21 +506,21 @@ func (s *feishuOutboundStream) lookupToolCallMessage(callID string) (string, boo
 	return m, ok
 }
 
-func (s *feishuOutboundStream) storeToolCallMessage(callID, messageID string) {
+func (s *feishuPreview) storeToolCallMessage(callID, messageID string) {
 	if s.toolMessages == nil {
 		s.toolMessages = make(map[string]string)
 	}
 	s.toolMessages[callID] = messageID
 }
 
-func (s *feishuOutboundStream) forgetToolCallMessage(callID string) {
+func (s *feishuPreview) forgetToolCallMessage(callID string) {
 	if s.toolMessages == nil {
 		return
 	}
 	delete(s.toolMessages, callID)
 }
 
-func (s *feishuOutboundStream) sendToolCallCard(ctx context.Context, text string) (string, error) {
+func (s *feishuPreview) sendToolCallCard(ctx context.Context, text string) (string, error) {
 	content, err := buildFeishuCardContent(text)
 	if err != nil {
 		return "", err

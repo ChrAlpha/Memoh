@@ -79,9 +79,10 @@ func (*DiscordAdapter) Descriptor() channel.Descriptor {
 			Attachments:    true,
 			Media:          true,
 			Streaming:      true,
-			NativeApproval: true,
 			BlockStreaming: true,
 			Reactions:      true,
+			Preview:        channel.PreviewEditInPlace,
+			ProactiveSend:  true,
 		},
 		ConfigSchema: channel.ConfigSchema{
 			Version: 1,
@@ -590,7 +591,8 @@ func mimeExtension(mime string) string {
 	}
 }
 
-func (a *DiscordAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+// OpenPreview opens the message that shows a reply while it is produced.
+func (a *DiscordAdapter) OpenPreview(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return nil, errors.New("discord target is required")
@@ -606,9 +608,7 @@ func (a *DiscordAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig
 		return nil, err
 	}
 
-	return &discordOutboundStream{
-		adapter: a,
-		cfg:     cfg,
+	return &discordPreview{
 		target:  target,
 		reply:   opts.Reply,
 		session: session,

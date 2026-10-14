@@ -2,7 +2,6 @@ package local
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -92,44 +91,53 @@ func (h *RouteHub) PublishEvent(routeKey string, event channel.StreamEvent) {
 	}
 }
 
-type localOutboundStream struct {
+// localPreview shows one reply by forwarding each of its events to the
+// subscribers of the route as it happens. The route hub is the stream the
+// local channel natively shows replies on, so nothing is held back or edited.
+type localPreview struct {
 	hub    *RouteHub
 	target string
-	closed atomic.Bool
+	ended  atomic.Bool
 }
 
-func newLocalOutboundStream(hub *RouteHub, target string) channel.PreparedOutboundStream {
-	return &localOutboundStream{
+var _ channel.PreparedPreview = (*localPreview)(nil)
+
+func newLocalPreview(hub *RouteHub, target string) *localPreview {
+	return &localPreview{
 		hub:    hub,
 		target: target,
 	}
 }
 
-func (s *localOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if s == nil || s.hub == nil {
-		return errors.New("route hub not configured")
+func (p *localPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
+	if p.ended.Load() {
+		return nil
 	}
-	if s.closed.Load() {
-		return errors.New("stream is closed")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.hub.PublishEvent(s.target, event.LogicalEvent())
+	p.hub.PublishEvent(p.target, event.LogicalEvent())
 	return nil
 }
 
-func (s *localOutboundStream) Close(ctx context.Context) error {
-	if s == nil {
+// Finish publishes the final, if there is one, and then the completed status
+// that closes the reply for subscribers.
+func (p *localPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !p.ended.CompareAndSwap(false, true) {
 		return nil
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if final != nil {
+		p.hub.PublishEvent(p.target, final.LogicalEvent())
 	}
-	s.closed.Store(true)
+	p.hub.PublishEvent(p.target, channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusCompleted})
+	return nil
+}
+
+// Abort ends the reply without the completed status.
+func (p *localPreview) Abort(context.Context) error {
+	p.ended.Store(true)
 	return nil
 }
