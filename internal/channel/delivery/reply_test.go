@@ -13,16 +13,20 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/i18n"
+	"github.com/felinics/memoh/internal/redact"
 )
 
 // surfaceLog is a Surface that records the calls a reply makes, in order.
 type surfaceLog struct {
 	caps channel.ChannelCapabilities
 
-	mu      sync.Mutex
-	calls   []string
-	opens   []channel.StreamOptions
-	reacted []channel.ReactRequest
+	mu       sync.Mutex
+	calls    []string
+	opens    []channel.StreamOptions
+	reacted  []channel.ReactRequest
+	attached []*channel.ReplyRef
+	// errorTexts is the text of each error event the preview received.
+	errorTexts []string
 	// failSend makes Send return the error.
 	failSend error
 	// failReact makes React return the error.
@@ -42,7 +46,10 @@ func (s *surfaceLog) Send(_ context.Context, msg channel.OutboundMessage) error 
 	return s.failSend
 }
 
-func (s *surfaceLog) Attach(_ context.Context, _ string, att channel.Attachment) error {
+func (s *surfaceLog) Attach(_ context.Context, _ string, att channel.Attachment, reply *channel.ReplyRef) error {
+	s.mu.Lock()
+	s.attached = append(s.attached, reply)
+	s.mu.Unlock()
 	s.record("attach:" + string(att.Type))
 	return nil
 }
@@ -78,6 +85,11 @@ func (p *previewLog) Update(_ context.Context, event channel.StreamEvent) error 
 	}
 	if event.Type == channel.StreamEventDelta {
 		entry += ":" + event.Delta
+	}
+	if event.Type == channel.StreamEventError {
+		p.s.mu.Lock()
+		p.s.errorTexts = append(p.s.errorTexts, event.Error)
+		p.s.mu.Unlock()
 	}
 	p.s.record(entry)
 	return nil
@@ -156,6 +168,8 @@ type runSetup struct {
 	failSend  error
 	failReact error
 	outputs   func([]turn.ModelMessage) ([]channel.Message, bool)
+	// failure renders the reply for a run error; "failed" when nil.
+	failure func(error) (channel.StreamEvent, bool)
 }
 
 // run drives a reply on a recording surface with the scripted events.
@@ -204,13 +218,17 @@ func run(t *testing.T, setup runSetup) (*surfaceLog, *observed, runResult) {
 			return out, false
 		}
 	}
+	failure := setup.failure
+	if failure == nil {
+		failure = func(error) (channel.StreamEvent, bool) {
+			return channel.StreamEvent{Type: channel.StreamEventError, Error: "failed", ErrorCode: "runtime_run_failed"}, true
+		}
+	}
 	runErr := r.Run(context.Background(), RunInput{
 		ReportsTerminal: setup.terminal,
 		Localizer:       i18n.New("en"),
 		Outputs:         outputs,
-		StreamFailure: func(error) (channel.StreamEvent, bool) {
-			return channel.StreamEvent{Type: channel.StreamEventError, Error: "failed", ErrorCode: "runtime_run_failed"}, true
-		},
+		StreamFailure:   failure,
 	}, events, errs)
 	if err := r.Close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
@@ -477,19 +495,27 @@ func TestReplyWithoutPreview(t *testing.T) {
 func TestReplyWindowExpired(t *testing.T) {
 	caps := streaming
 	caps.ReplyWindow = time.Hour
-	surface, _, res := run(t, runSetup{
-		caps: caps, received: t0, now: t0.Add(2 * time.Hour),
-		payloads: []string{deltaPayload("late"), endPayload("late")},
-	})
-	if got := apperror.CodeOf(res.err); got != apperror.CodeChannelReplyWindowExpired {
-		t.Fatalf("run error = %v (code %q)", res.err, got)
+
+	// The window closes while the preview is open: the next event ends the run.
+	clock := &steppedClock{times: []time.Time{t0, t0.Add(2 * time.Hour)}}
+	surface := &surfaceLog{caps: caps}
+	r, err := Open(context.Background(), Config{Surface: surface, Target: "chat-1", Reply: reply, ReceivedAt: t0, Now: clock.now})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := surface.snapshot(); !equalCalls(got, "open", "update:status:started", "abort") {
+	err = r.Show(context.Background(), channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "late", Phase: channel.StreamPhaseText})
+	if got := apperror.CodeOf(err); got != apperror.CodeChannelReplyWindowExpired {
+		t.Fatalf("run error = %v (code %q)", err, got)
+	}
+	if err := r.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := surface.snapshot(); !equalCalls(got, "open", "abort") {
 		t.Fatalf("calls = %v", got)
 	}
 
 	caps.ProactiveSend = true
-	surface, _, res = run(t, runSetup{
+	surface, _, res := run(t, runSetup{
 		caps: caps, received: t0, now: t0.Add(2 * time.Hour),
 		payloads: []string{deltaPayload("late"), endPayload("late")},
 	})
@@ -498,6 +524,56 @@ func TestReplyWindowExpired(t *testing.T) {
 	}
 	if got := surface.snapshot(); got[len(got)-1] != "finish:late" {
 		t.Fatalf("calls = %v", got)
+	}
+}
+
+// steppedClock returns its times in turn, then the last one.
+type steppedClock struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (c *steppedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at := c.times[0]
+	if len(c.times) > 1 {
+		c.times = c.times[1:]
+	}
+	return at
+}
+
+// The preview quotes the source message by the window's rule when it opens: as
+// is inside the window, without a reference after it when the platform accepts
+// a proactive message, and not at all when it does not.
+func TestReplyOpensThePreviewByTheWindowRule(t *testing.T) {
+	open := func(caps channel.ChannelCapabilities, now time.Time) (*surfaceLog, error) {
+		surface := &surfaceLog{caps: caps}
+		_, err := Open(context.Background(), Config{
+			Surface: surface, Target: "chat-1", Reply: reply, SourceMessageID: "m-1",
+			ReceivedAt: t0, Now: func() time.Time { return now },
+		})
+		return surface, err
+	}
+	caps := streaming
+	caps.ReplyWindow = time.Hour
+
+	surface, err := open(caps, t0.Add(time.Minute))
+	if err != nil || len(surface.opens) != 1 || surface.opens[0].Reply != reply {
+		t.Fatalf("inside the window: opens = %+v, err = %v", surface.opens, err)
+	}
+	proactive := caps
+	proactive.ProactiveSend = true
+	surface, err = open(proactive, t0.Add(2*time.Hour))
+	if err != nil || len(surface.opens) != 1 || surface.opens[0].Reply != nil || surface.opens[0].SourceMessageID != "m-1" {
+		t.Fatalf("expired, proactive send: opens = %+v, err = %v", surface.opens, err)
+	}
+	surface, err = open(caps, t0.Add(2*time.Hour))
+	if got := apperror.CodeOf(err); got != apperror.CodeChannelReplyWindowExpired {
+		t.Fatalf("expired, no proactive send: err = %v (code %q)", err, got)
+	}
+	if len(surface.opens) != 0 {
+		t.Fatalf("a preview was opened after the window closed: %+v", surface.opens)
 	}
 }
 
@@ -560,4 +636,184 @@ func TestReplyUserInputPromptCarriesLocale(t *testing.T) {
 	if got == nil || got.Locale != "zh" {
 		t.Fatalf("tool call = %+v, want locale zh", got)
 	}
+}
+
+// What a channel without a preview shows of a reply is its messages, in the
+// order the events came: the text before an attachment, the attachment, then
+// the rest.
+func TestReplyWithoutPreviewKeepsTheOrderOfAttachments(t *testing.T) {
+	caps := streaming
+	caps.Preview = channel.PreviewNone
+	attach := `{"type":"attachment_delta","attachments":[{"type":"image","url":"https://example.test/a.png"}]}`
+
+	t.Run("text, attachment, text", func(t *testing.T) {
+		surface, obs, res := run(t, runSetup{caps: caps, payloads: []string{
+			deltaPayload("see "), attach, deltaPayload("below"), endPayload("see below"),
+		}})
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if got := surface.snapshot(); !equalCalls(got, "send:see", "attach:image", "send:below") {
+			t.Fatalf("calls = %v", got)
+		}
+		if !equalCalls(obs.events, "status:started", "delta:see ", "attachment", "delta:below", "agent_end", "final:see below", "status:completed") {
+			t.Fatalf("observed = %v", obs.events)
+		}
+	})
+	t.Run("text before the attachment is the whole output", func(t *testing.T) {
+		surface, obs, res := run(t, runSetup{caps: caps, payloads: []string{deltaPayload("here"), attach, endPayload("here")}})
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if got := surface.snapshot(); !equalCalls(got, "send:here", "attach:image") {
+			t.Fatalf("calls = %v", got)
+		}
+		if !equalCalls(obs.events, "status:started", "delta:here", "attachment", "agent_end", "final:here", "status:completed") {
+			t.Fatalf("observed = %v", obs.events)
+		}
+	})
+	t.Run("text before a tool call is not a reply", func(t *testing.T) {
+		surface, _, res := run(t, runSetup{caps: caps, hide: true, payloads: []string{
+			deltaPayload("let me draw"),
+			`{"type":"tool_call_start","toolName":"generate_image","toolCallId":"c"}`,
+			`{"type":"tool_call_end","toolName":"generate_image","toolCallId":"c"}`,
+			attach, deltaPayload("done"), endPayload("done"),
+		}})
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if got := surface.snapshot(); !equalCalls(got, "attach:image", "send:done") {
+			t.Fatalf("calls = %v", got)
+		}
+	})
+	t.Run("a retry discards what the first attempt held", func(t *testing.T) {
+		surface, _, res := run(t, runSetup{caps: caps, payloads: []string{
+			deltaPayload("first try"), `{"type":"retry"}`, attach, endPayload("second try"),
+		}})
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if got := surface.snapshot(); !equalCalls(got, "attach:image", "send:second try") {
+			t.Fatalf("calls = %v", got)
+		}
+	})
+}
+
+// A channel without a preview gets the state of each finished tool call as a
+// message when the bot shows tool calls, and nothing when it hides them.
+func TestReplyWithoutPreviewSendsToolResults(t *testing.T) {
+	caps := streaming
+	caps.Preview = channel.PreviewNone
+	payloads := []string{
+		`{"type":"tool_call_start","toolName":"web_search","toolCallId":"c","input":{"query":"memoh"}}`,
+		`{"type":"tool_call_end","toolName":"web_search","toolCallId":"c","input":{"query":"memoh"},"result":{"ok":true}}`,
+		endPayload("found"),
+	}
+
+	surface, obs, res := run(t, runSetup{caps: caps, payloads: payloads})
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	got := surface.snapshot()
+	if len(got) != 2 || !strings.HasPrefix(got[0], "send:") || !strings.Contains(got[0], "web_search · completed") || got[1] != "send:found" {
+		t.Fatalf("calls = %v", got)
+	}
+	if !equalCalls(obs.events, "status:started", "tool_call_start", "tool_call_end", "agent_end", "final:found", "status:completed") {
+		t.Fatalf("observed = %v", obs.events)
+	}
+
+	surface, _, res = run(t, runSetup{caps: caps, hide: true, payloads: payloads})
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if got := surface.snapshot(); !equalCalls(got, "send:found") {
+		t.Fatalf("hidden: calls = %v", got)
+	}
+}
+
+// Attachments are messages of their own that quote the source message by the
+// same rule as every other message of the reply.
+func TestReplyAttachmentsQuoteByTheWindowRule(t *testing.T) {
+	caps := streaming
+	caps.Preview = channel.PreviewEditInPlace
+	caps.ReplyWindow = time.Hour
+	attach := `{"type":"attachment_delta","attachments":[{"type":"image","url":"https://example.test/a.png"}]}`
+
+	surface, _, res := run(t, runSetup{caps: caps, received: t0, now: t0.Add(time.Minute), payloads: []string{attach, endPayload("ok")}})
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if len(surface.attached) != 1 || surface.attached[0] != reply {
+		t.Fatalf("inside the window: attachments quote %+v, want the source message", surface.attached)
+	}
+
+	caps.ProactiveSend = true
+	surface, _, res = run(t, runSetup{caps: caps, received: t0, now: t0.Add(2 * time.Hour), payloads: []string{attach, endPayload("ok")}})
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if len(surface.attached) != 1 || surface.attached[0] != nil {
+		t.Fatalf("after the window: attachments quote %+v, want no reference", surface.attached)
+	}
+}
+
+// Error text is masked before it leaves the reply, whichever way it goes out:
+// through the preview, as a message after preview text, or as a message on a
+// channel without a preview.
+func TestReplyMasksSecretsInErrorText(t *testing.T) {
+	const secret = "sk-delivery-0123456789abcdef"
+	redact.SetSecrets("delivery-reply-test", secret)
+	t.Cleanup(func() { redact.SetSecrets("delivery-reply-test") })
+	failure := channel.StreamEvent{Type: channel.StreamEventError, Error: "upstream rejected key " + secret + " today"}
+	delta := channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "partial", Phase: channel.StreamPhaseText}
+	masked := "upstream rejected key " + strings.Repeat("*", len(secret)) + " today"
+
+	show := func(t *testing.T, caps channel.ChannelCapabilities, events ...channel.StreamEvent) (*surfaceLog, *observed) {
+		t.Helper()
+		surface := &surfaceLog{caps: caps}
+		obs := &observed{}
+		r, err := Open(context.Background(), Config{Surface: surface, Target: "chat-1", Reply: reply, Observe: obs.observe, Now: func() time.Time { return t0 }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range events {
+			if err := r.Show(context.Background(), ev); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return surface, obs
+	}
+
+	t.Run("through the preview", func(t *testing.T) {
+		surface, _ := show(t, streaming, failure)
+		if len(surface.errorTexts) != 1 || surface.errorTexts[0] != masked {
+			t.Fatalf("the preview received %q, want %q", surface.errorTexts, masked)
+		}
+	})
+	t.Run("as a message after preview text", func(t *testing.T) {
+		surface, _ := show(t, streaming, delta, failure)
+		if got := surface.snapshot(); !equalCalls(got, "open", "update:delta:partial", "send:Error: "+masked) {
+			t.Fatalf("calls = %v", got)
+		}
+	})
+	t.Run("as a message on a channel without a preview", func(t *testing.T) {
+		caps := streaming
+		caps.Preview = channel.PreviewNone
+		surface, _ := show(t, caps, failure)
+		if got := surface.snapshot(); !equalCalls(got, "send:Error: "+masked) {
+			t.Fatalf("calls = %v", got)
+		}
+	})
+	t.Run("when the run fails", func(t *testing.T) {
+		surface, _, res := run(t, runSetup{
+			caps: streaming, runErr: errors.New("boom"), payloads: []string{deltaPayload("partial")},
+			failure: func(error) (channel.StreamEvent, bool) { return failure, true },
+		})
+		if res.err == nil {
+			t.Fatal("run error was dropped")
+		}
+		if got := surface.snapshot(); got[len(got)-1] != "send:Error: "+masked {
+			t.Fatalf("calls = %v", got)
+		}
+	})
 }

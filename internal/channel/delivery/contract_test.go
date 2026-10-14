@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/dingtalk"
 	"github.com/felinics/memoh/internal/channel/adapters/discord"
@@ -45,6 +46,64 @@ func registeredAdapters() []channel.Adapter {
 // previewShown reports whether a channel shows a reply while it is produced.
 func previewShown(c channel.ChannelCapabilities) bool { return c.Preview != channel.PreviewNone }
 
+// capabilitySet is a declaration the contract is held against.
+type capabilitySet struct {
+	name string
+	caps channel.ChannelCapabilities
+}
+
+var previewModes = []struct {
+	name string
+	mode channel.PreviewMode
+}{
+	{"legacy", channel.PreviewLegacy},
+	{"none", channel.PreviewNone},
+	{"edit_in_place", channel.PreviewEditInPlace},
+	{"native_stream", channel.PreviewNativeStream},
+	{"draft", channel.PreviewDraft},
+}
+
+// declaredCapabilities are the capabilities each registered adapter declares.
+func declaredCapabilities() []capabilitySet {
+	var sets []capabilitySet
+	for _, adapter := range registeredAdapters() {
+		sets = append(sets, capabilitySet{string(adapter.Type()), adapter.Descriptor().Capabilities})
+	}
+	return sets
+}
+
+// modeCapabilities has one declaration for each preview mode, with and without
+// native prompts, so the rule for a mode no adapter declares yet is held too.
+func modeCapabilities() []capabilitySet {
+	var sets []capabilitySet
+	for _, m := range previewModes {
+		sets = append(sets,
+			capabilitySet{"mode/" + m.name, channel.ChannelCapabilities{Preview: m.mode}},
+			capabilitySet{"mode/" + m.name + "+native", channel.ChannelCapabilities{Preview: m.mode, NativeApproval: true, NativeUserInput: true}})
+	}
+	return sets
+}
+
+// windowCapabilities has one declaration for each preview mode with a reply
+// window, with and without proactive send.
+func windowCapabilities() []capabilitySet {
+	var sets []capabilitySet
+	for _, m := range previewModes {
+		sets = append(sets,
+			capabilitySet{"window/" + m.name, channel.ChannelCapabilities{Preview: m.mode, ReplyWindow: time.Hour}},
+			capabilitySet{"window/" + m.name + "+proactive", channel.ChannelCapabilities{Preview: m.mode, ReplyWindow: time.Hour, ProactiveSend: true}})
+	}
+	return sets
+}
+
+func joined(lists ...[]capabilitySet) []capabilitySet {
+	var all []capabilitySet
+	for _, l := range lists {
+		all = append(all, l...)
+	}
+	return all
+}
+
 // The actions Plan returns for each event, by what the adapter declares. The
 // expectation is a table over the declared capabilities, not over adapter
 // names, so an adapter that changes its declaration is held to the rule for
@@ -58,113 +117,138 @@ func TestAdapterCapabilitiesDecideActions(t *testing.T) {
 	react := channel.StreamEvent{Type: channel.StreamEventReaction, Reactions: []channel.ReactRequest{{Emoji: "ok"}}}
 	failure := channel.StreamEvent{Type: channel.StreamEventError, Error: "boom"}
 
+	// The state once the reply has text: the preview shows it, or a channel
+	// without a preview holds it.
+	fresh := func(channel.ChannelCapabilities) State { return state(t0) }
+	hidden := func(channel.ChannelCapabilities) State { return hiding(state(t0)) }
+	afterText := func(c channel.ChannelCapabilities) State {
+		if previewShown(c) {
+			return withStreamed(state(t0))
+		}
+		return withPending(state(t0), "text")
+	}
+	shown := func(c channel.ChannelCapabilities) []Kind {
+		if !previewShown(c) {
+			return []Kind{KindObserve}
+		}
+		return []Kind{KindUpdate}
+	}
+	prompt := func(native func(channel.ChannelCapabilities) bool, split bool) func(channel.ChannelCapabilities) []Kind {
+		return func(c channel.ChannelCapabilities) []Kind {
+			switch {
+			case !previewShown(c):
+				return []Kind{KindSend}
+			case native(c):
+				return []Kind{KindUpdate}
+			case split:
+				return []Kind{KindEndPreview, KindSend, KindOpenPreview}
+			}
+			return []Kind{KindSend}
+		}
+	}
+	nativeApproval := func(c channel.ChannelCapabilities) bool { return c.NativeApproval }
+	nativeInput := func(c channel.ChannelCapabilities) bool { return c.NativeUserInput }
+
 	events := []struct {
 		name  string
 		ev    channel.StreamEvent
-		start State
+		start func(channel.ChannelCapabilities) State
 		want  func(c channel.ChannelCapabilities) []Kind
 	}{
-		{"text", delta, state(t0), func(c channel.ChannelCapabilities) []Kind {
+		{"text", delta, fresh, shown},
+		{"status", status, fresh, shown},
+		{"tool start shown", toolStart(), fresh, shown},
+		{"tool result shown", toolEnd(), fresh, func(c channel.ChannelCapabilities) []Kind {
 			if !previewShown(c) {
-				return []Kind{KindObserve}
+				return []Kind{KindSend}
 			}
 			return []Kind{KindUpdate}
 		}},
-		{"status", status, state(t0), func(c channel.ChannelCapabilities) []Kind {
-			if !previewShown(c) {
-				return []Kind{KindObserve}
-			}
-			return []Kind{KindUpdate}
-		}},
-		{"tool status shown", toolStart(), state(t0), func(c channel.ChannelCapabilities) []Kind {
-			if !previewShown(c) {
-				return []Kind{KindObserve}
-			}
-			return []Kind{KindUpdate}
-		}},
-		{"tool status hidden", toolEnd(), hiding(state(t0)), func(channel.ChannelCapabilities) []Kind { return []Kind{KindObserve} }},
-		{"attachment", attach, state(t0), func(c channel.ChannelCapabilities) []Kind {
+		{"tool start hidden", toolStart(), hidden, func(channel.ChannelCapabilities) []Kind { return []Kind{KindObserve} }},
+		{"tool result hidden", toolEnd(), hidden, func(channel.ChannelCapabilities) []Kind { return []Kind{KindObserve} }},
+		{"attachment", attach, fresh, func(c channel.ChannelCapabilities) []Kind {
 			if c.Preview == channel.PreviewLegacy {
 				return []Kind{KindUpdate}
 			}
 			return []Kind{KindAttach}
 		}},
-		{"reaction", react, state(t0), func(channel.ChannelCapabilities) []Kind { return []Kind{KindReact} }},
-		{"error before text", failure, state(t0), func(c channel.ChannelCapabilities) []Kind {
+		{"attachment after text", attach, afterText, func(c channel.ChannelCapabilities) []Kind {
+			switch c.Preview {
+			case channel.PreviewLegacy:
+				return []Kind{KindUpdate}
+			case channel.PreviewNone:
+				return []Kind{KindSend, KindAttach}
+			}
+			return []Kind{KindAttach}
+		}},
+		{"reaction", react, fresh, func(channel.ChannelCapabilities) []Kind { return []Kind{KindReact} }},
+		{"error before text", failure, fresh, func(c channel.ChannelCapabilities) []Kind {
 			if !previewShown(c) {
 				return []Kind{KindSend}
 			}
 			return []Kind{KindUpdate}
 		}},
-		{"error after text", failure, withStreamed(state(t0)), func(channel.ChannelCapabilities) []Kind { return []Kind{KindSend} }},
-		{"approval", approval(), state(t0), func(c channel.ChannelCapabilities) []Kind {
-			if c.NativeApproval && previewShown(c) {
-				return []Kind{KindUpdate}
-			}
-			return []Kind{KindSend}
-		}},
-		{"approval after text", approval(), withStreamed(state(t0)), func(c channel.ChannelCapabilities) []Kind {
-			if c.NativeApproval {
-				return []Kind{KindUpdate}
-			}
-			return []Kind{KindEndPreview, KindSend, KindOpenPreview}
-		}},
-		{"ask_user", askUser(), state(t0), func(c channel.ChannelCapabilities) []Kind {
-			if c.NativeUserInput && previewShown(c) {
-				return []Kind{KindUpdate}
-			}
-			return []Kind{KindSend}
-		}},
-		{"ask_user after text", askUser(), withStreamed(state(t0)), func(c channel.ChannelCapabilities) []Kind {
-			if c.NativeUserInput {
-				return []Kind{KindUpdate}
-			}
-			return []Kind{KindEndPreview, KindSend, KindOpenPreview}
-		}},
+		{"error after text", failure, afterText, func(channel.ChannelCapabilities) []Kind { return []Kind{KindSend} }},
+		{"approval", approval(), fresh, prompt(nativeApproval, false)},
+		{"approval after text", approval(), afterText, prompt(nativeApproval, true)},
+		{"ask_user", askUser(), fresh, prompt(nativeInput, false)},
+		{"ask_user after text", askUser(), afterText, prompt(nativeInput, true)},
 	}
 	outputs := []struct {
 		name     string
 		outputs  []channel.Message
 		suppress bool
-		start    State
+		start    func(channel.ChannelCapabilities) State
 		want     func(c channel.ChannelCapabilities) []Kind
 	}{
-		{"final", []channel.Message{{Text: "a"}}, false, state(t0), func(c channel.ChannelCapabilities) []Kind {
+		{"final", []channel.Message{{Text: "a"}}, false, fresh, func(c channel.ChannelCapabilities) []Kind {
 			if !previewShown(c) {
 				return []Kind{KindSend}
 			}
 			return []Kind{KindFinish}
 		}},
-		{"several outputs", []channel.Message{{Text: "a"}, {Text: "b"}, {Text: "c"}}, false, state(t0), func(c channel.ChannelCapabilities) []Kind {
+		{"several outputs", []channel.Message{{Text: "a"}, {Text: "b"}, {Text: "c"}}, false, fresh, func(c channel.ChannelCapabilities) []Kind {
 			if !previewShown(c) {
 				return []Kind{KindSend, KindSend, KindSend}
 			}
 			return []Kind{KindFinish, KindSend, KindSend}
 		}},
-		{"suppressed tail", []channel.Message{{Text: "a"}}, true, withStreamed(state(t0)), func(channel.ChannelCapabilities) []Kind {
+		{"suppressed tail", []channel.Message{{Text: "a"}}, true, afterText, func(channel.ChannelCapabilities) []Kind {
 			return []Kind{KindFinish}
 		}},
-		{"no output", nil, false, state(t0), func(channel.ChannelCapabilities) []Kind { return []Kind{KindFinish} }},
+		{"no output", nil, false, fresh, func(channel.ChannelCapabilities) []Kind { return []Kind{KindFinish} }},
 	}
 
-	for _, adapter := range registeredAdapters() {
-		caps := adapter.Descriptor().Capabilities
-		t.Run(string(adapter.Type()), func(t *testing.T) {
+	for _, set := range joined(declaredCapabilities(), modeCapabilities()) {
+		t.Run(set.name, func(t *testing.T) {
 			t.Parallel()
+			caps := set.caps
 			for _, tc := range events {
-				actions, _ := Plan(tc.ev, streamingCaps(caps), tc.start)
+				actions, _ := Plan(tc.ev, streamingCaps(caps), tc.start(caps))
 				if want := tc.want(caps); !sameKinds(actions, want...) {
 					t.Errorf("%s: actions = %v, want %v", tc.name, kinds(actions), want)
 				}
 			}
 			for _, tc := range outputs {
-				actions, _ := PlanEnd(caps, tc.start, tc.outputs, tc.suppress)
+				actions, _ := PlanEnd(caps, tc.start(caps), tc.outputs, tc.suppress)
 				if want := tc.want(caps); !sameKinds(actions, want...) {
 					t.Errorf("%s: actions = %v, want %v", tc.name, kinds(actions), want)
 				}
 			}
 		})
 	}
+}
+
+// sentReplyOf is the reply reference of the message an action sends: the final
+// of a preview, a standalone message, or the reference an attachment quotes.
+func sentReplyOf(a Action) *channel.ReplyRef {
+	switch a.Kind {
+	case KindFinish:
+		return a.Final.Final.Message.Reply
+	case KindAttach:
+		return a.Reply
+	}
+	return a.Message.Message.Reply
 }
 
 // streamingCaps is caps as the reply sees them while it streams. The
@@ -175,29 +259,80 @@ func streamingCaps(c channel.ChannelCapabilities) channel.ChannelCapabilities {
 }
 
 // An adapter's reply window decides whether a reply is sent as it is, sent
-// without its reference, or fails.
+// without its reference, or fails. The rule holds for every message of the
+// reply: its outputs, its attachments, and the state of its tool calls.
 func TestAdapterReplyWindowDecidesDelivery(t *testing.T) {
 	t.Parallel()
 
-	for _, adapter := range registeredAdapters() {
-		caps := adapter.Descriptor().Capabilities
-		t.Run(string(adapter.Type()), func(t *testing.T) {
+	attach := channel.StreamEvent{Type: channel.StreamEventAttachment, Attachments: []channel.Attachment{{Type: "image"}}}
+	for _, set := range joined(declaredCapabilities(), windowCapabilities()) {
+		caps := set.caps
+		t.Run(set.name, func(t *testing.T) {
 			t.Parallel()
 			st := state(t0)
 			st.Now = t0.Add(10 * 365 * 24 * time.Hour)
-			actions, _ := PlanEnd(caps, st, []channel.Message{{Text: "late", Reply: reply}}, false)
+			check := func(what string, actions []Action) {
+				t.Helper()
+				switch {
+				case caps.ReplyWindow <= 0:
+					if len(actions) != 1 || sentReplyOf(actions[0]) != reply {
+						t.Fatalf("%s, no window: actions = %+v", what, actions)
+					}
+				case caps.ProactiveSend:
+					if len(actions) != 1 || actions[0].Kind == KindFail || sentReplyOf(actions[0]) != nil {
+						t.Fatalf("%s, proactive send: actions = %+v", what, actions)
+					}
+				default:
+					if !sameKinds(actions, KindFail) {
+						t.Fatalf("%s, expired window: actions = %v, want the run to fail", what, kinds(actions))
+					}
+				}
+			}
+			ended, _ := PlanEnd(caps, st, []channel.Message{{Text: "late", Reply: reply}}, false)
+			check("output", ended)
+			if caps.Preview != channel.PreviewLegacy {
+				attached, _ := Plan(attach, caps, st)
+				check("attachment", attached)
+			}
+			if caps.Preview == channel.PreviewNone {
+				result, _ := Plan(toolEnd(), caps, st)
+				check("tool result", result)
+			}
+		})
+	}
+}
+
+// The preview opens with the reference the window allows: the source message
+// inside it, none after it when the platform accepts a proactive message, and
+// no preview when it does not. A channel without a preview opens none.
+func TestAdapterReplyWindowDecidesThePreviewReference(t *testing.T) {
+	t.Parallel()
+
+	for _, set := range joined(declaredCapabilities(), windowCapabilities()) {
+		caps := set.caps
+		t.Run(set.name, func(t *testing.T) {
+			t.Parallel()
+			surface := &surfaceLog{caps: caps}
+			_, err := Open(context.Background(), Config{
+				Surface: surface, Target: "chat-1", Reply: reply, ReceivedAt: t0,
+				Now: func() time.Time { return t0.Add(10 * 365 * 24 * time.Hour) },
+			})
 			switch {
+			case !previewShown(caps):
+				if err != nil || len(surface.opens) != 0 {
+					t.Fatalf("no preview: opens = %+v, err = %v", surface.opens, err)
+				}
 			case caps.ReplyWindow <= 0:
-				if !sameKinds(actions, KindFinish) || actions[0].Final.Final.Message.Reply != reply {
-					t.Fatalf("no window: actions = %+v", actions)
+				if err != nil || len(surface.opens) != 1 || surface.opens[0].Reply != reply {
+					t.Fatalf("no window: opens = %+v, err = %v", surface.opens, err)
 				}
 			case caps.ProactiveSend:
-				if len(actions) == 0 || actions[0].Kind == KindFail || actions[0].Final.Final.Message.Reply != nil {
-					t.Fatalf("proactive send: actions = %+v", actions)
+				if err != nil || len(surface.opens) != 1 || surface.opens[0].Reply != nil {
+					t.Fatalf("proactive send: opens = %+v, err = %v", surface.opens, err)
 				}
 			default:
-				if !sameKinds(actions, KindFail) {
-					t.Fatalf("expired window: actions = %v, want the run to fail", kinds(actions))
+				if apperror.CodeOf(err) != apperror.CodeChannelReplyWindowExpired || len(surface.opens) != 0 {
+					t.Fatalf("expired window: opens = %+v, err = %v", surface.opens, err)
 				}
 			}
 		})
@@ -227,7 +362,7 @@ func TestAdaptersSurfaceApprovalAndUserInputPrompts(t *testing.T) {
 				rec := &transport{desc: adapter.Descriptor()}
 				rec.desc.Type = adapter.Type()
 				sender := managerSender(t, rec)
-				r, err := Open(context.Background(), Config{Surface: sender, Target: "target-1"})
+				r, err := Open(context.Background(), Config{Surface: sender, Target: "target-1", ReceivedAt: time.Now()})
 				if err != nil {
 					t.Fatalf("open: %v", err)
 				}

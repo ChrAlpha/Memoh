@@ -21,8 +21,9 @@ type StreamReplySender interface {
 	Send(ctx context.Context, msg OutboundMessage) error
 	// Capabilities returns the channel's capabilities as refined for target.
 	Capabilities(target string) ChannelCapabilities
-	// Attach sends one attachment to target as a message of its own.
-	Attach(ctx context.Context, target string, att Attachment) error
+	// Attach sends one attachment to target as a message of its own, quoting
+	// reply when it is not nil.
+	Attach(ctx context.Context, target string, att Attachment, reply *ReplyRef) error
 	// React adds or removes a reaction.
 	React(ctx context.Context, req ReactRequest) error
 	// OpenPreview opens the preview of a reply on target.

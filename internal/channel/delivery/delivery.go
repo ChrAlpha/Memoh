@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/redact"
 )
 
 // Surface is what a platform surface offers a reply. It does not decide what
@@ -22,8 +23,9 @@ type Surface interface {
 	// Send delivers a whole message. Splitting it to the platform's size and
 	// downgrading its format and buttons happen here, once, for every caller.
 	Send(ctx context.Context, msg channel.OutboundMessage) error
-	// Attach sends one attachment to target as a message of its own.
-	Attach(ctx context.Context, target string, att channel.Attachment) error
+	// Attach sends one attachment to target as a message of its own, quoting
+	// reply when it is not nil.
+	Attach(ctx context.Context, target string, att channel.Attachment, reply *channel.ReplyRef) error
 	// React adds or removes a reaction.
 	React(ctx context.Context, req channel.ReactRequest) error
 	// OpenPreview opens the preview of a reply on target.
@@ -48,7 +50,8 @@ const (
 	KindFinish
 	// KindSend sends Message as a standalone message.
 	KindSend
-	// KindAttach sends Attachments, each as a message of its own.
+	// KindAttach sends Attachments, each as a message of its own that quotes
+	// Reply.
 	KindAttach
 	// KindReact applies Reactions.
 	KindReact
@@ -65,6 +68,7 @@ type Action struct {
 	Final       *channel.StreamEvent
 	Message     channel.OutboundMessage
 	Attachments []channel.Attachment
+	Reply       *channel.ReplyRef
 	Reactions   []channel.ReactRequest
 	Code        apperror.Code
 }
@@ -98,6 +102,12 @@ type State struct {
 	proactive bool
 	// failure is the terminal failure reply, rendered at the end of the run.
 	failure *channel.StreamEvent
+	// pending is the text of the assistant output in progress that a channel
+	// without a preview has not sent yet. delivered is the text of this run that
+	// was sent ahead of an attachment, so that the end of the run does not send
+	// it again.
+	pending   string
+	delivered string
 }
 
 // Plan returns the actions for one event and the state that follows it. It
@@ -113,6 +123,11 @@ type State struct {
 // channel renders it natively. Otherwise it is sent as a plain message: the
 // preview that shows text ends first, so the prompt follows that text, and a
 // new preview carries what comes after.
+//
+// A channel without a preview gets the state of each finished tool call as a
+// message of its own, unless tool calls are hidden. It holds the reply text
+// until the run ends, except that the text before an attachment is sent ahead
+// of it.
 func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
 	if st.failed {
 		return nil, st
@@ -135,6 +150,11 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 		return []Action{{Kind: KindFail, Code: apperror.CodeChannelReplyWindowExpired}}, failed(next)
 	}
 	st = next
+	if ev.Type == channel.StreamEventToolCallStart {
+		// The assistant output that calls a tool is not a reply, so the text
+		// before the call is not sent on a channel without a preview.
+		st.pending = ""
+	}
 	switch {
 	case ev.Type == channel.StreamEventToolCallStart && ev.ToolCall != nil && needsAnswer(ev.ToolCall):
 		return planPrompt(ev, caps, st)
@@ -142,14 +162,22 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 		if st.HideToolCalls {
 			return observe(ev), st
 		}
+		if ev.Type == channel.StreamEventToolCallEnd && caps.Preview == channel.PreviewNone {
+			return planToolResult(ev, st)
+		}
 	case ev.Type == channel.StreamEventDelta:
-		if visibleText(ev) && caps.Preview != channel.PreviewNone {
-			st.streamed = true
+		if visibleText(ev) {
+			if caps.Preview == channel.PreviewNone {
+				st.pending += ev.Delta
+			} else {
+				st.streamed = true
+			}
 		}
 	case ev.Type == channel.StreamEventReset:
 		st.streamed = false
+		st.pending, st.delivered = "", ""
 	case ev.Type == channel.StreamEventAttachment && caps.Preview != channel.PreviewLegacy:
-		return []Action{{Kind: KindAttach, Event: ev, Attachments: ev.Attachments}}, st
+		return planAttach(ev, st)
 	}
 	if caps.Preview == channel.PreviewNone {
 		return observe(ev), st
@@ -209,11 +237,37 @@ func PlanEnd(caps channel.ChannelCapabilities, st State, outputs []channel.Messa
 		actions = append(actions, Action{Kind: KindFinish, Final: &first})
 		rest = outputs[1:]
 	}
+	delivered := strings.TrimSpace(st.delivered)
 	for _, out := range rest {
-		msg := st.outbound(out)
-		actions = append(actions, Action{Kind: KindSend, Message: msg, Event: finalEvent(msg)})
+		whole := st.outbound(out)
+		msg := whole
+		msg.Message.Text, delivered = withoutDelivered(out.Text, delivered)
+		kind := KindSend
+		if msg.Message.IsEmpty() {
+			kind = KindObserve
+		}
+		// Observers get the output whole, as they would from a preview's final.
+		actions = append(actions, Action{Kind: kind, Message: msg, Event: finalEvent(whole)})
 	}
 	return actions, st
+}
+
+// withoutDelivered drops from text what was already sent ahead of an attachment.
+// delivered is the text still to be matched, and the second result is what
+// remains of it for the next output. Text that does not continue from delivered
+// is kept whole: sending a line twice costs less than losing one.
+func withoutDelivered(text, delivered string) (string, string) {
+	whole := strings.TrimSpace(text)
+	if delivered == "" || whole == "" {
+		return text, delivered
+	}
+	if rest, ok := strings.CutPrefix(whole, delivered); ok {
+		return strings.TrimSpace(rest), ""
+	}
+	if rest, ok := strings.CutPrefix(delivered, whole); ok {
+		return "", strings.TrimSpace(rest)
+	}
+	return text, ""
 }
 
 // SetFailure records the terminal failure reply, sent when the run ends.
@@ -246,6 +300,31 @@ func planPrompt(ev channel.StreamEvent, caps channel.ChannelCapabilities, st Sta
 	return actions, st
 }
 
+// planAttach sends the attachments of an event. A channel without a preview
+// holds the reply text until the run ends, so the text that came before the
+// attachments is sent first and the order of the events is kept.
+func planAttach(ev channel.StreamEvent, st State) ([]Action, State) {
+	var actions []Action
+	if text := strings.TrimSpace(st.pending); text != "" {
+		actions = append(actions, Action{Kind: KindSend, Message: st.outbound(channel.Message{Text: text})})
+		st.delivered += st.pending
+	}
+	st.pending = ""
+	actions = append(actions, Action{Kind: KindAttach, Event: ev, Attachments: ev.Attachments, Reply: st.replyRef(nil)})
+	return actions, st
+}
+
+// planToolResult sends the state of a finished tool call as a message of its
+// own, for a channel that has no preview to show it in.
+func planToolResult(ev channel.StreamEvent, st State) ([]Action, State) {
+	text := strings.TrimSpace(channel.RenderToolCallMessage(channel.BuildToolCallEnd(ev.ToolCall)))
+	if text == "" {
+		return observe(ev), st
+	}
+	msg := st.outbound(channel.Message{Format: channel.MessageFormatPlain, Text: text})
+	return []Action{{Kind: KindSend, Message: msg, Event: ev}}, st
+}
+
 func needsAnswer(tc *channel.StreamToolCall) bool {
 	return tc.ApprovalID != "" || channel.HasUserInputAction(tc.Actions)
 }
@@ -272,23 +351,33 @@ func (st State) reactions(items []channel.ReactRequest) []channel.ReactRequest {
 	return out
 }
 
-// outbound addresses msg to the reply target. A message that names no reply
-// quotes the one the reply answers, unless the window has closed and the
-// platform accepts a message without one.
+// outbound addresses msg to the reply target, quoting what replyRef returns.
 func (st State) outbound(msg channel.Message) channel.OutboundMessage {
+	msg.Reply = st.replyRef(msg.Reply)
+	return channel.OutboundMessage{Target: st.Target, Message: msg}
+}
+
+// replyRef is the reference a message to the reply target quotes: its own, or
+// the one the reply answers when it names none. Once the window has closed and
+// the platform accepts a message without a reference, it is nil. The preview,
+// the messages and the attachments of a reply all follow this rule.
+func (st State) replyRef(own *channel.ReplyRef) *channel.ReplyRef {
 	switch {
 	case st.proactive:
-		msg.Reply = nil
-	case msg.Reply == nil:
-		msg.Reply = st.Reply
+		return nil
+	case own == nil:
+		return st.Reply
 	}
-	return channel.OutboundMessage{Target: st.Target, Message: msg}
+	return own
 }
 
 // sendError delivers an error. Before any text has shown, the error goes
 // through the preview, which holds nothing it could overwrite. After that, and
 // on a channel without a preview, the error is a message of its own.
 func sendError(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
+	// Every error text, whether the preview shows it or a message carries it,
+	// leaves through here, so this is the one place secrets are masked.
+	ev.Error = redact.Text(ev.Error)
 	if strings.TrimSpace(ev.Error) == "" {
 		return nil, st
 	}

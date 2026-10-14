@@ -373,21 +373,31 @@ func TestSurfaceLegacyPreviewEndsTheSession(t *testing.T) {
 }
 
 // Attach sends the attachment as a message of its own through the one send
-// path.
+// path, quoting the reply it is given.
 func TestSurfaceAttachSendsOneAttachment(t *testing.T) {
 	t.Parallel()
 
 	adapter := newPreviewAdapter(ChannelTypeTelegram, 0)
 	surface := newPreviewSurface(t, adapter)
 	att := Attachment{Type: AttachmentImage, URL: "https://example.test/a.png", Name: "a.png"}
-	if err := surface.Attach(context.Background(), "target-1", att); err != nil {
+	reply := &ReplyRef{Target: "target-1", MessageID: "m-1"}
+	if err := surface.Attach(context.Background(), "target-1", att, reply); err != nil {
 		t.Fatal(err)
 	}
-	if len(adapter.messages) != 1 || len(adapter.messages[0].Attachments) != 1 || adapter.messages[0].Attachments[0].URL != att.URL {
+	if err := surface.Attach(context.Background(), "target-1", att, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.messages) != 2 || len(adapter.messages[0].Attachments) != 1 || adapter.messages[0].Attachments[0].URL != att.URL {
 		t.Fatalf("messages = %+v", adapter.messages)
 	}
 	if adapter.messages[0].Text != "" {
 		t.Fatalf("attachment message carries text %q", adapter.messages[0].Text)
+	}
+	if adapter.messages[0].Reply == nil || adapter.messages[0].Reply.MessageID != "m-1" {
+		t.Fatalf("attachment quotes %+v, want the reply it was given", adapter.messages[0].Reply)
+	}
+	if adapter.messages[1].Reply != nil {
+		t.Fatalf("attachment without a reply quotes %+v", adapter.messages[1].Reply)
 	}
 }
 

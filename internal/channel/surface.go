@@ -64,9 +64,10 @@ func (s *managerSurface) deliver(ctx context.Context, msg OutboundMessage) error
 	return s.manager.sendAllWithConfig(ctx, s.sender, s.config, outbound, policy)
 }
 
-// Attach sends att to target as a message of its own.
-func (s *managerSurface) Attach(ctx context.Context, target string, att Attachment) error {
-	return s.Send(ctx, OutboundMessage{Target: target, Message: Message{Attachments: []Attachment{att}}})
+// Attach sends att to target as a message of its own, quoting reply when it is
+// not nil.
+func (s *managerSurface) Attach(ctx context.Context, target string, att Attachment, reply *ReplyRef) error {
+	return s.Send(ctx, OutboundMessage{Target: target, Message: Message{Attachments: []Attachment{att}, Reply: reply}})
 }
 
 // React adds or removes a reaction.

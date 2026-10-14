@@ -62,8 +62,18 @@ func Open(ctx context.Context, cfg Config) (*Reply, error) {
 		},
 	}
 	if r.caps.Preview != channel.PreviewNone {
+		// The preview quotes the source message by the window's rule at the moment
+		// it opens. A window that closes while the preview is open does not change
+		// the reference the preview already carries; what the reply sends after
+		// that follows Plan.
+		st := r.state
+		st.Now = cfg.Now()
+		reach, st := windowOK(r.caps, st)
+		if !reach {
+			return nil, apperror.Wrap(apperror.CodeChannelReplyWindowExpired, errReplyWindowExpired, nil)
+		}
 		preview, err := cfg.Surface.OpenPreview(ctx, cfg.Target, channel.StreamOptions{
-			Reply:           cfg.Reply,
+			Reply:           st.replyRef(cfg.Reply),
 			SourceMessageID: cfg.SourceMessageID,
 			Metadata:        cfg.Metadata,
 		})
@@ -283,7 +293,7 @@ func (r *Reply) perform1(ctx context.Context, action Action) error {
 	case KindAttach:
 		var err error
 		for _, att := range action.Attachments {
-			if err = r.cfg.Surface.Attach(ctx, r.cfg.Target, att); err != nil {
+			if err = r.cfg.Surface.Attach(ctx, r.cfg.Target, att, action.Reply); err != nil {
 				break
 			}
 		}

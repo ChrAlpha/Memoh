@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/redact"
 )
 
 var (
@@ -42,6 +43,16 @@ func state(now time.Time) State {
 
 func withStreamed(st State) State {
 	st.streamed = true
+	return st
+}
+
+func withPending(st State, text string) State {
+	st.pending = text
+	return st
+}
+
+func withDelivered(st State, text string) State {
+	st.delivered = text
 	return st
 }
 
@@ -269,6 +280,189 @@ func TestPlanWithoutPreview(t *testing.T) {
 			t.Fatalf("actions = %v", kinds(actions))
 		}
 	})
+	t.Run("text is held for the end of the run", func(t *testing.T) {
+		_, st := Plan(delta, caps, state(t0))
+		_, st = Plan(delta, caps, st)
+		if st.pending != "partialpartial" {
+			t.Fatalf("pending = %q", st.pending)
+		}
+		_, st = Plan(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "hmm", Phase: channel.StreamPhaseReasoning}, caps, st)
+		if st.pending != "partialpartial" {
+			t.Fatalf("reasoning joined the pending text: %q", st.pending)
+		}
+	})
+}
+
+// A channel without a preview gets the state of a finished tool call as a
+// message of its own, unless tool calls are hidden.
+func TestPlanToolResultsWithoutPreview(t *testing.T) {
+	caps := channel.ChannelCapabilities{Preview: channel.PreviewNone}
+
+	t.Run("a finished tool call is a plain message that quotes the source message", func(t *testing.T) {
+		actions, _ := Plan(toolEnd(), caps, state(t0))
+		if !sameKinds(actions, KindSend) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+		msg := actions[0].Message
+		if msg.Target != "chat-1" || msg.Message.Format != channel.MessageFormatPlain || msg.Message.Reply != reply ||
+			msg.Message.Text != "⚙️ search · completed" {
+			t.Fatalf("tool message = %+v", msg)
+		}
+		if actions[0].Event.Type != channel.StreamEventToolCallEnd {
+			t.Fatalf("observers see %+v, want the tool event", actions[0].Event)
+		}
+	})
+	t.Run("the result carries what the tool returned", func(t *testing.T) {
+		ev := channel.StreamEvent{Type: channel.StreamEventToolCallEnd, ToolCall: &channel.StreamToolCall{
+			Name: "web_search", CallID: "c", Input: map[string]any{"query": "memoh"}, Result: map[string]any{"ok": false, "error": "no network"},
+		}}
+		actions, _ := Plan(ev, caps, state(t0))
+		text := actions[0].Message.Message.Text
+		if !strings.Contains(text, "web_search · failed") || !strings.Contains(text, "memoh") {
+			t.Fatalf("tool message = %q", text)
+		}
+	})
+	t.Run("a starting tool call is seen by observers only", func(t *testing.T) {
+		actions, _ := Plan(toolStart(), caps, state(t0))
+		if !sameKinds(actions, KindObserve) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+	})
+	t.Run("hidden tool calls are seen by observers only", func(t *testing.T) {
+		actions, _ := Plan(toolEnd(), caps, hiding(state(t0)))
+		if !sameKinds(actions, KindObserve) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+	})
+	t.Run("a tool call that renders to nothing is not sent", func(t *testing.T) {
+		actions, _ := Plan(channel.StreamEvent{Type: channel.StreamEventToolCallEnd}, caps, state(t0))
+		if !sameKinds(actions, KindObserve) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+	})
+	t.Run("a preview shows the tool call itself", func(t *testing.T) {
+		actions, _ := Plan(toolEnd(), channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace}, state(t0))
+		if !sameKinds(actions, KindUpdate) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+	})
+	t.Run("after the window a proactive send drops the reference", func(t *testing.T) {
+		proactive := channel.ChannelCapabilities{Preview: channel.PreviewNone, ReplyWindow: time.Hour, ProactiveSend: true}
+		st := state(t0)
+		st.Now = t0.Add(2 * time.Hour)
+		actions, _ := Plan(toolEnd(), proactive, st)
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Reply != nil {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+}
+
+// A channel without a preview sends the text before an attachment ahead of it,
+// so the attachment does not overtake the text that came first.
+func TestPlanAttachmentsKeepTheOrderWithoutPreview(t *testing.T) {
+	caps := channel.ChannelCapabilities{Preview: channel.PreviewNone}
+	attach := channel.StreamEvent{Type: channel.StreamEventAttachment, Attachments: []channel.Attachment{{Type: "image"}}}
+
+	t.Run("the held text is sent first, as a message that quotes the source message", func(t *testing.T) {
+		actions, st := Plan(attach, caps, withPending(state(t0), " see below \n"))
+		if !sameKinds(actions, KindSend, KindAttach) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+		if msg := actions[0].Message; msg.Target != "chat-1" || msg.Message.Text != "see below" || msg.Message.Reply != reply {
+			t.Fatalf("text message = %+v", msg)
+		}
+		if actions[0].Event.Type != "" {
+			t.Fatalf("observers already saw the text as deltas, got %+v", actions[0].Event)
+		}
+		if st.pending != "" || st.delivered != " see below \n" {
+			t.Fatalf("state after the attachment: pending = %q, delivered = %q", st.pending, st.delivered)
+		}
+	})
+	t.Run("text that follows is held again", func(t *testing.T) {
+		_, st := Plan(attach, caps, withPending(state(t0), "first"))
+		_, st = Plan(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "second", Phase: channel.StreamPhaseText}, caps, st)
+		actions, st := Plan(attach, caps, st)
+		if !sameKinds(actions, KindSend, KindAttach) || actions[0].Message.Message.Text != "second" || st.delivered != "firstsecond" {
+			t.Fatalf("actions = %+v, delivered = %q", actions, st.delivered)
+		}
+	})
+	t.Run("without held text the attachment goes alone", func(t *testing.T) {
+		for _, held := range []string{"", " \n"} {
+			actions, st := Plan(attach, caps, withPending(state(t0), held))
+			if !sameKinds(actions, KindAttach) || st.pending != "" || st.delivered != "" {
+				t.Fatalf("held %q: actions = %v, pending = %q, delivered = %q", held, kinds(actions), st.pending, st.delivered)
+			}
+		}
+	})
+	t.Run("text before a tool call is not sent", func(t *testing.T) {
+		_, st := Plan(toolStart(), caps, withPending(state(t0), "let me look"))
+		if st.pending != "" {
+			t.Fatalf("pending = %q", st.pending)
+		}
+		hidden, st := Plan(toolStart(), caps, withPending(hiding(state(t0)), "let me look"))
+		if !sameKinds(hidden, KindObserve) || st.pending != "" {
+			t.Fatalf("hidden tool call: actions = %v, pending = %q", kinds(hidden), st.pending)
+		}
+		actions, _ := Plan(attach, caps, st)
+		if !sameKinds(actions, KindAttach) {
+			t.Fatalf("actions = %v", kinds(actions))
+		}
+	})
+	t.Run("a retry discards held and delivered text", func(t *testing.T) {
+		_, st := Plan(channel.StreamEvent{Type: channel.StreamEventReset}, caps, withDelivered(withPending(state(t0), "first try"), "earlier"))
+		if st.pending != "" || st.delivered != "" {
+			t.Fatalf("pending = %q, delivered = %q", st.pending, st.delivered)
+		}
+	})
+	t.Run("a channel with a preview keeps the text in the preview", func(t *testing.T) {
+		preview := channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace}
+		_, st := Plan(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "text", Phase: channel.StreamPhaseText}, preview, state(t0))
+		actions, st := Plan(attach, preview, st)
+		if !sameKinds(actions, KindAttach) || st.pending != "" || st.delivered != "" {
+			t.Fatalf("actions = %v, pending = %q, delivered = %q", kinds(actions), st.pending, st.delivered)
+		}
+	})
+}
+
+// The end of a run does not send again the text that went out ahead of an
+// attachment.
+func TestPlanEndSkipsTextDeliveredBeforeAttachments(t *testing.T) {
+	caps := channel.ChannelCapabilities{Preview: channel.PreviewNone}
+	cases := []struct {
+		name      string
+		delivered string
+		outputs   []string
+		want      []Kind
+		sent      []string
+	}{
+		{"the rest of the output follows the delivered text", "see ", []string{"see below"}, []Kind{KindSend}, []string{"below"}},
+		{"an output delivered whole is only observed", "all of it", []string{"all of it"}, []Kind{KindObserve}, []string{""}},
+		{"delivered text can span outputs", "one two", []string{"one", "two three"}, []Kind{KindObserve, KindSend}, []string{"", "three"}},
+		{"text that does not continue from it is sent whole", "other", []string{"new text"}, []Kind{KindSend}, []string{"new text"}},
+		{"nothing delivered leaves the outputs alone", "", []string{"a", "b"}, []Kind{KindSend, KindSend}, []string{"a", "b"}},
+		{"matching stops at the first output that does not continue", "start", []string{"unrelated", "start again"}, []Kind{KindSend, KindSend}, []string{"unrelated", "start again"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := make([]channel.Message, 0, len(tc.outputs))
+			for _, text := range tc.outputs {
+				outputs = append(outputs, channel.Message{Text: text})
+			}
+			actions, _ := PlanEnd(caps, withDelivered(state(t0), tc.delivered), outputs, false)
+			if !sameKinds(actions, tc.want...) {
+				t.Fatalf("actions = %v, want %v", kinds(actions), tc.want)
+			}
+			for i, a := range actions {
+				if a.Kind == KindSend && a.Message.Message.Text != tc.sent[i] {
+					t.Errorf("action %d sends %q, want %q", i, a.Message.Message.Text, tc.sent[i])
+				}
+				// Observers get each output whole.
+				if got := a.Event.Final.Message.Text; got != tc.outputs[i] {
+					t.Errorf("action %d is observed as %q, want %q", i, got, tc.outputs[i])
+				}
+			}
+		})
+	}
 }
 
 // Attachments reach a preview that is not legacy as messages of their own.
@@ -276,6 +470,7 @@ func TestPlanAttachmentsByPreviewMode(t *testing.T) {
 	attach := channel.StreamEvent{Type: channel.StreamEventAttachment, Attachments: []channel.Attachment{{Type: "image"}}}
 	for mode, want := range map[channel.PreviewMode]Kind{
 		channel.PreviewLegacy:       KindUpdate,
+		channel.PreviewNone:         KindAttach,
 		channel.PreviewEditInPlace:  KindAttach,
 		channel.PreviewNativeStream: KindAttach,
 		channel.PreviewDraft:        KindAttach,
@@ -387,11 +582,93 @@ func TestPlanReplyWindow(t *testing.T) {
 			t.Fatalf("a failed run planned %v", kinds(later))
 		}
 	})
+	t.Run("attachments follow the same rule as messages", func(t *testing.T) {
+		attach := channel.StreamEvent{Type: channel.StreamEventAttachment, Attachments: []channel.Attachment{{Type: "image"}}}
+		caps := winCaps
+		caps.Preview = channel.PreviewEditInPlace
+		st := state(t0)
+		st.Now = t0.Add(time.Minute)
+		actions, _ := Plan(attach, caps, st)
+		if !sameKinds(actions, KindAttach) || actions[0].Reply != reply {
+			t.Fatalf("inside the window: actions = %+v, want the source message quoted", actions)
+		}
+		caps.ProactiveSend = true
+		st.Now = t0.Add(2 * time.Hour)
+		actions, _ = Plan(attach, caps, st)
+		if !sameKinds(actions, KindAttach) || actions[0].Reply != nil {
+			t.Fatalf("after the window: actions = %+v, want no reference", actions)
+		}
+		caps.ProactiveSend = false
+		actions, _ = Plan(attach, caps, st)
+		if !sameKinds(actions, KindFail) {
+			t.Fatalf("after the window without proactive send: actions = %v", kinds(actions))
+		}
+	})
 	t.Run("a run that outlasts the window fails at its end", func(t *testing.T) {
 		st := state(t0)
 		st.Now = t0.Add(2 * time.Hour)
 		actions, _ := PlanEnd(winCaps, st, []channel.Message{{Text: "answer"}}, false)
 		if !sameKinds(actions, KindFail) || actions[0].Code != apperror.CodeChannelReplyWindowExpired {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+}
+
+// Error text is masked wherever it leaves Plan: in the event a preview gets and
+// in the message that carries it.
+func TestPlanMasksSecretsInErrors(t *testing.T) {
+	const secret = "sk-delivery-0123456789abcdef"
+	redact.SetSecrets("delivery-plan-test", secret)
+	t.Cleanup(func() { redact.SetSecrets("delivery-plan-test") })
+	masked := "rejected " + strings.Repeat("*", len(secret))
+	failure := channel.StreamEvent{Type: channel.StreamEventError, Error: "rejected " + secret}
+	coded := channel.StreamEvent{Type: channel.StreamEventError, Error: "rejected " + secret, ErrorCode: "runtime_run_failed"}
+	none := channel.ChannelCapabilities{Preview: channel.PreviewNone}
+
+	t.Run("an error the preview ends with", func(t *testing.T) {
+		actions, _ := Plan(failure, noCaps, state(t0))
+		if !sameKinds(actions, KindUpdate) || actions[0].Event.Error != masked {
+			t.Fatalf("actions = %+v, want the preview to get %q", actions, masked)
+		}
+	})
+	t.Run("an error message after preview text", func(t *testing.T) {
+		actions, _ := Plan(failure, noCaps, withStreamed(state(t0)))
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != "Error: "+masked || actions[0].Event.Error != masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+	t.Run("an error message on a channel without a preview", func(t *testing.T) {
+		actions, _ := Plan(failure, none, state(t0))
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != "Error: "+masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+	t.Run("an error that carries a code", func(t *testing.T) {
+		actions, _ := Plan(coded, none, state(t0))
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+	t.Run("an error held for the end of the run", func(t *testing.T) {
+		_, st := Plan(failure, none, holding(state(t0)))
+		actions, _ := PlanErrors(none, st)
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != "Error: "+masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+	t.Run("the failure reply of a run", func(t *testing.T) {
+		actions, _ := PlanErrors(noCaps, SetFailure(state(t0), failure))
+		if !sameKinds(actions, KindUpdate) || actions[0].Event.Error != masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+		actions, _ = PlanErrors(none, SetFailure(state(t0), coded))
+		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != masked {
+			t.Fatalf("actions = %+v", actions)
+		}
+	})
+	t.Run("text without a secret is left as it is", func(t *testing.T) {
+		actions, _ := Plan(channel.StreamEvent{Type: channel.StreamEventError, Error: "boom"}, none, state(t0))
+		if actions[0].Message.Message.Text != "Error: boom" {
 			t.Fatalf("actions = %+v", actions)
 		}
 	})

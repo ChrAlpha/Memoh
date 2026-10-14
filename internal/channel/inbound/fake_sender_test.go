@@ -57,8 +57,8 @@ func (s *fakeReplySender) Capabilities(string) channel.ChannelCapabilities {
 	return caps
 }
 
-func (s *fakeReplySender) Attach(_ context.Context, target string, att channel.Attachment) error {
-	s.sent = append(s.sent, channel.OutboundMessage{Target: target, Message: channel.Message{Attachments: []channel.Attachment{att}}})
+func (s *fakeReplySender) Attach(_ context.Context, target string, att channel.Attachment, reply *channel.ReplyRef) error {
+	s.sent = append(s.sent, channel.OutboundMessage{Target: target, Message: channel.Message{Attachments: []channel.Attachment{att}, Reply: reply}})
 	return nil
 }
 
@@ -75,7 +75,9 @@ func (*failingOpenStreamSender) Capabilities(string) channel.ChannelCapabilities
 	return fakeSenderCaps
 }
 
-func (*failingOpenStreamSender) Attach(context.Context, string, channel.Attachment) error { return nil }
+func (*failingOpenStreamSender) Attach(context.Context, string, channel.Attachment, *channel.ReplyRef) error {
+	return nil
+}
 
 func (*failingOpenStreamSender) React(context.Context, channel.ReactRequest) error { return nil }
 
@@ -85,7 +87,9 @@ func (s *failingOpenStreamSender) OpenPreview(ctx context.Context, target string
 
 func (*failingCloseSender) Capabilities(string) channel.ChannelCapabilities { return fakeSenderCaps }
 
-func (*failingCloseSender) Attach(context.Context, string, channel.Attachment) error { return nil }
+func (*failingCloseSender) Attach(context.Context, string, channel.Attachment, *channel.ReplyRef) error {
+	return nil
+}
 
 func (*failingCloseSender) React(context.Context, channel.ReactRequest) error { return nil }
 
