@@ -13,7 +13,7 @@ import (
 // contextIncludesUnadmittedPassive decides whether rows refused at admission
 // (sender not allowed by ACL, or refused by the external runtime driver gate)
 // are shown to the model. Default false, so chat and discuss agree. Changing it
-// is a product decision, not a per-call switch.
+// is a product decision, not a per-call switch. recordsFromMessages applies it.
 const contextIncludesUnadmittedPassive = false
 
 // contextPurpose names what an assembled context is for. The steps are the
@@ -148,22 +148,34 @@ func (s *Service) loadContextRecords(ctx context.Context, r contextRequest) ([]h
 				slog.Int64("max_bytes", maxBytes))
 		}
 	}
-	// The budget covers content only; metadata arrives undecoded. Release each
-	// row once converted so at most one row's metadata is decoded at a time.
+	result, err := s.recordsFromMessages(msgs, r.Fallback)
+	if err != nil {
+		return nil, false, err
+	}
+	return result, truncated, nil
+}
+
+// recordsFromMessages is where stored rows become context records. Every read
+// of history goes through it, the initial load and the required-row window
+// re-read alike, so the admission rule cannot be skipped by one path. The
+// budget covers content only and metadata arrives undecoded, so each source
+// row is released once converted and at most one row's metadata is decoded at
+// a time.
+func (s *Service) recordsFromMessages(msgs []messagepkg.Message, fallback historyfrag.ScopeFallback) ([]historyfrag.HistoryRecord, error) {
 	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for i := range msgs {
 		if !contextIncludesUnadmittedPassive && msgs[i].Admission() != "" {
 			msgs[i] = messagepkg.Message{}
 			continue
 		}
-		record, err := historyfrag.FromDBMessageWithLogger(s.logger, msgs[i], r.Fallback)
+		record, err := historyfrag.FromDBMessageWithLogger(s.logger, msgs[i], fallback)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		msgs[i] = messagepkg.Message{}
 		result = append(result, record)
 	}
-	return result, truncated, nil
+	return result, nil
 }
 
 // historyLoadMaxBytes converts a token budget into the byte budget used for

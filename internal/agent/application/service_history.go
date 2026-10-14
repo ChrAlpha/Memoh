@@ -133,6 +133,11 @@ func historyScopeFallbackFromToolApprovalRequest(req toolapproval.Request) histo
 	}
 }
 
+// ensureRequiredHistoryMessage keeps the request's own row in the context when
+// the load left it out (compacted away or past the byte budget) by re-reading
+// the window from that row. A required row refused at admission is not in the
+// context by the same rule as any other row, so the run fails as for a row that
+// is not visible.
 func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []historyfrag.HistoryRecord, req ChatRequest) ([]historyfrag.HistoryRecord, error) {
 	messageID := strings.TrimSpace(req.RequiredHistoryMessageID)
 	if messageID == "" || s.messageService == nil || strings.TrimSpace(req.ThreadID) == "" {
@@ -148,14 +153,9 @@ func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []h
 	if err != nil {
 		return nil, err
 	}
-	fallback := historyScopeFallbackFromChatRequest(req)
-	required := make([]historyfrag.HistoryRecord, 0, len(window))
-	for _, msg := range window {
-		record, err := historyfrag.FromDBMessage(msg, fallback)
-		if err != nil {
-			return nil, err
-		}
-		required = append(required, record)
+	required, err := s.recordsFromMessages(window, historyScopeFallbackFromChatRequest(req))
+	if err != nil {
+		return nil, err
 	}
 	required = filterMessagesBeforeID(required, req.HistoryCutoffBeforeMessageID)
 	if !containsHistoryRecord(required, messageID) {
