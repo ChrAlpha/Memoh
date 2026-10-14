@@ -106,6 +106,9 @@ func (r telegramChannelRecipient) Recipient() string { return string(r) }
 // pagination/selection (channel.MessageEditor).
 var _ channel.MessageEditor = (*TelegramAdapter)(nil)
 
+// TelegramAdapter shows a reply while it is produced (channel.PreviewOpener).
+var _ channel.PreviewOpener = (*TelegramAdapter)(nil)
+
 // NewTelegramAdapter creates a TelegramAdapter with the given logger.
 func NewTelegramAdapter(log *slog.Logger) *TelegramAdapter {
 	if log == nil {
@@ -245,6 +248,7 @@ func (*TelegramAdapter) Descriptor() channel.Descriptor {
 			Attachments:     true,
 			Media:           true,
 			Streaming:       true,
+			Preview:         channel.PreviewDraft, // Private chats stream as drafts; other chats edit one message in place.
 			NativeApproval:  true,
 			BlockStreaming:  true,
 			Edit:            true,
@@ -1398,19 +1402,19 @@ func (a *TelegramAdapter) Unsend(ctx context.Context, cfg channel.ChannelConfig,
 	return bot.Delete(&tele.StoredMessage{MessageID: strconv.Itoa(mid), ChatID: chatID})
 }
 
-// OpenStream opens a Telegram streaming session.
+// OpenPreview opens the preview of a reply.
 // For private chats, uses sendMessageDraft to stream partial content with smooth
 // animation, then sends a final permanent message via sendMessage.
 // For group/channel chats, sends one message then edits it in place as deltas
 // arrive (editMessageText), avoiding one message per delta and rate limits.
-func (a *TelegramAdapter) OpenStream(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+func (a *TelegramAdapter) OpenPreview(ctx context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return nil, errors.New("telegram target is required")
 	}
 	telegramCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
-		return nil, fmt.Errorf("telegram open stream: %w", err)
+		return nil, fmt.Errorf("telegram open preview: %w", err)
 	}
 	redact.SetSecrets("telegram:"+cfg.ID, telegramCfg.BotToken)
 	select {
@@ -1428,7 +1432,7 @@ func (a *TelegramAdapter) OpenStream(ctx context.Context, cfg channel.ChannelCon
 			}
 		}
 	}
-	return &telegramOutboundStream{
+	return &telegramPreview{
 		adapter:       a,
 		cfg:           cfg,
 		target:        target,

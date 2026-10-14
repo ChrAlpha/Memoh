@@ -10,14 +10,12 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 var (
-	_ channel.Sender       = (*MisskeyAdapter)(nil)
-	_ channel.StreamSender = (*MisskeyAdapter)(nil)
-	_ channel.Reactor      = (*MisskeyAdapter)(nil)
-	_ channel.Receiver     = (*MisskeyAdapter)(nil)
+	_ channel.Sender   = (*MisskeyAdapter)(nil)
+	_ channel.Reactor  = (*MisskeyAdapter)(nil)
+	_ channel.Receiver = (*MisskeyAdapter)(nil)
 )
 
 func withMisskeyHTTPStub(t *testing.T, handler http.HandlerFunc) (channel.ChannelConfig, *httptest.Server) {
@@ -65,42 +63,6 @@ func TestSendDeliversPreparedOutboundMessage(t *testing.T) {
 	}
 	if got.body.Text != "hello misskey" || got.body.ReplyID != "note-source" {
 		t.Fatalf("unexpected note request: %#v", got.body)
-	}
-}
-
-func TestOpenStreamReturnsPreparedOutboundStream(t *testing.T) {
-	t.Parallel()
-
-	var sent createNoteRequest
-	cfg, _ := withMisskeyHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &sent)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"createdNote":{"id":"note-2"}}`))
-	})
-
-	adapter := NewMisskeyAdapter(nil)
-	stream, err := adapter.OpenStream(context.Background(), cfg, "note-source", channel.StreamOptions{})
-	if err != nil {
-		t.Fatalf("OpenStream returned error: %v", err)
-	}
-	if err := stream.Push(context.Background(), channel.PreparedStreamEvent{
-		Type:  channel.StreamEventDelta,
-		Delta: "hello ",
-	}); err != nil {
-		t.Fatalf("Push delta: %v", err)
-	}
-	if err := stream.Push(context.Background(), channel.PreparedStreamEvent{
-		Type:  channel.StreamEventDelta,
-		Delta: "stream",
-	}); err != nil {
-		t.Fatalf("Push delta: %v", err)
-	}
-	if err := stream.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if sent.Text != "hello stream" {
-		t.Fatalf("expected buffered text 'hello stream', got %q", sent.Text)
 	}
 }
 
@@ -207,60 +169,43 @@ func TestBuildInboundMessageRenoteMapsForward(t *testing.T) {
 	}
 }
 
-func TestBlockStreamErrorReply(t *testing.T) {
-	redact.ResetForTest()
-	t.Cleanup(redact.ResetForTest)
-	const secret = "misskey-secret-value-123456"
-	redact.SetSecrets("misskey-stream-test", secret)
+func TestDescriptorDeclaresNoPreview(t *testing.T) {
+	t.Parallel()
 
-	cases := []struct {
-		name  string
-		event channel.PreparedStreamEvent
-		want  []string
-	}{
-		{
-			name:  "coded error shows the copy as it is",
-			event: channel.PreparedStreamEvent{Type: channel.StreamEventError, Error: "The workspace is unreachable.", ErrorCode: "workspace.unreachable"},
-			want:  []string{"The workspace is unreachable."},
-		},
-		{
-			name:  "uncoded error is redacted and labelled",
-			event: channel.PreparedStreamEvent{Type: channel.StreamEventError, Error: "request failed with token " + secret},
-			want:  []string{"Error: request failed with token " + strings.Repeat("*", len(secret))},
-		},
-		{
-			name:  "blank error sends nothing",
-			event: channel.PreparedStreamEvent{Type: channel.StreamEventError, Error: "  "},
-			want:  nil,
-		},
+	adapter := NewMisskeyAdapter(nil)
+	if got := adapter.Descriptor().Capabilities.Preview; got != channel.PreviewNone {
+		t.Fatalf("Preview = %v, want PreviewNone", got)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var sent []string
-			cfg, _ := withMisskeyHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
-				var note createNoteRequest
-				body, _ := io.ReadAll(r.Body)
-				_ = json.Unmarshal(body, &note)
-				sent = append(sent, note.Text)
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"createdNote":{"id":"note-3"}}`))
-			})
-			stream, err := NewMisskeyAdapter(nil).OpenStream(context.Background(), cfg, "note-source", channel.StreamOptions{})
-			if err != nil {
-				t.Fatalf("OpenStream: %v", err)
-			}
-			if err := stream.Push(context.Background(), channel.PreparedStreamEvent{Type: channel.StreamEventDelta, Delta: "draft"}); err != nil {
-				t.Fatalf("Push delta: %v", err)
-			}
-			if err := stream.Push(context.Background(), tc.event); err != nil {
-				t.Fatalf("Push error: %v", err)
-			}
-			if err := stream.Close(context.Background()); err != nil {
-				t.Fatalf("Close: %v", err)
-			}
-			if strings.Join(sent, "|") != strings.Join(tc.want, "|") || len(sent) != len(tc.want) {
-				t.Fatalf("sent notes = %q, want %q", sent, tc.want)
-			}
-		})
+	if _, ok := any(adapter).(channel.PreviewOpener); ok {
+		t.Fatal("an adapter without a preview must not open one")
+	}
+}
+
+// Misskey removes a reaction knowing only the note it is on, which is what
+// ReactionRemoveByMessageID declares.
+func TestUnreactNeedsOnlyTheNoteID(t *testing.T) {
+	t.Parallel()
+
+	var path string
+	var body map[string]string
+	cfg, _ := withMisskeyHTTPStub(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	adapter := NewMisskeyAdapter(nil)
+	if got := adapter.Descriptor().Capabilities.ReactionRemoveKey; got != channel.ReactionRemoveByMessageID {
+		t.Fatalf("ReactionRemoveKey = %v, want ReactionRemoveByMessageID", got)
+	}
+	if err := adapter.Unreact(context.Background(), cfg, "", "note-9", ":+1:"); err != nil {
+		t.Fatalf("Unreact: %v", err)
+	}
+	if !strings.HasSuffix(path, "/api/notes/reactions/delete") {
+		t.Fatalf("path = %q", path)
+	}
+	if body["noteId"] != "note-9" || len(body) != 2 {
+		t.Fatalf("body = %#v, want the credential and noteId only", body)
 	}
 }

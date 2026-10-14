@@ -14,7 +14,6 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 const (
@@ -26,7 +25,10 @@ const (
 
 var testEditFunc func(bot *tele.Bot, chatID int64, msgID int, text string, parseMode string) error
 
-type telegramOutboundStream struct {
+// telegramPreview shows one reply while it is produced. In a private chat the
+// text streams as a draft and is posted as a message when the reply ends; in
+// any other chat one message is posted and edited as the text grows.
+type telegramPreview struct {
 	adapter       *TelegramAdapter
 	cfg           channel.ChannelConfig
 	target        string
@@ -59,7 +61,7 @@ type telegramToolCallMessage struct {
 	hasActions bool
 }
 
-func (s *telegramOutboundStream) getBot(ctx context.Context) (bot *tele.Bot, err error) {
+func (s *telegramPreview) getBot(ctx context.Context) (bot *tele.Bot, err error) {
 	telegramCfg, err := parseConfig(s.cfg.Credentials)
 	if err != nil {
 		return nil, err
@@ -71,7 +73,7 @@ func (s *telegramOutboundStream) getBot(ctx context.Context) (bot *tele.Bot, err
 	return bot, nil
 }
 
-func (s *telegramOutboundStream) getBotAndReply(ctx context.Context) (bot *tele.Bot, replyTo int, err error) {
+func (s *telegramPreview) getBotAndReply(ctx context.Context) (bot *tele.Bot, replyTo int, err error) {
 	bot, err = s.getBot(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -80,7 +82,7 @@ func (s *telegramOutboundStream) getBotAndReply(ctx context.Context) (bot *tele.
 	return bot, replyTo, nil
 }
 
-func (s *telegramOutboundStream) refreshTypingAction(ctx context.Context, chatID int64) error {
+func (s *telegramPreview) refreshTypingAction(ctx context.Context, chatID int64) error {
 	if err := s.adapter.waitStreamLimit(ctx); err != nil {
 		return err
 	}
@@ -91,7 +93,7 @@ func (s *telegramOutboundStream) refreshTypingAction(ctx context.Context, chatID
 	return bot.Notify(tele.ChatID(chatID), tele.Typing)
 }
 
-func (s *telegramOutboundStream) ensureStreamMessage(ctx context.Context, text string) error {
+func (s *telegramPreview) ensureStreamMessage(ctx context.Context, text string) error {
 	s.mu.Lock()
 	typingChatID := s.streamChatID
 	s.wg.Add(1)
@@ -136,7 +138,7 @@ func normalizeStreamComparableText(value string) string {
 	return strings.TrimSpace(normalized)
 }
 
-func (s *telegramOutboundStream) editStreamMessage(ctx context.Context, text string) error {
+func (s *telegramPreview) editStreamMessage(ctx context.Context, text string) error {
 	s.mu.Lock()
 	chatID := s.streamChatID
 	msgID := s.streamMsgID
@@ -190,7 +192,7 @@ const telegramFinalEditMaxRetries = 5
 
 // editStreamMessageFinal edits the streamed message for the final content.
 // Retries on 429 with server-provided backoff to ensure delivery.
-func (s *telegramOutboundStream) editStreamMessageFinal(ctx context.Context, text string) error {
+func (s *telegramPreview) editStreamMessageFinal(ctx context.Context, text string) error {
 	s.mu.Lock()
 	chatID := s.streamChatID
 	msgID := s.streamMsgID
@@ -254,7 +256,7 @@ func (s *telegramOutboundStream) editStreamMessageFinal(ctx context.Context, tex
 
 // sendDraft sends a partial message via sendMessageDraft with throttling.
 // Only used for private chats.
-func (s *telegramOutboundStream) sendDraft(ctx context.Context, text string) error {
+func (s *telegramPreview) sendDraft(ctx context.Context, text string) error {
 	s.mu.Lock()
 	lastEditedAt := s.lastEditedAt
 	s.mu.Unlock()
@@ -297,10 +299,20 @@ func (s *telegramOutboundStream) sendDraft(ctx context.Context, text string) err
 
 // sendPermanentMessage sends a final, permanent message via sendMessage.
 // Used in draft mode to commit text after streaming is complete for a phase.
-func (s *telegramOutboundStream) sendPermanentMessage(ctx context.Context, text string, parseMode string) error {
+func (s *telegramPreview) sendPermanentMessage(ctx context.Context, text string, parseMode string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
+	if err := s.postMessage(ctx, text, parseMode); err != nil {
+		return err
+	}
+	s.markDraftPermanentSent()
+	return nil
+}
+
+// postMessage sends text as a new message, in as many as the platform's size
+// needs.
+func (s *telegramPreview) postMessage(ctx context.Context, text string, parseMode string) error {
 	if err := s.adapter.waitStreamLimit(ctx); err != nil {
 		return err
 	}
@@ -308,20 +320,13 @@ func (s *telegramOutboundStream) sendPermanentMessage(ctx context.Context, text 
 	if err != nil {
 		return err
 	}
-	var sendErr error
 	if parseMode == "" && runeLenTelegramText(text) > telegramMaxMessageLength {
-		sendErr = sendTelegramTextChunksWithActions(bot, s.target, text, replyTo, parseMode, nil)
-	} else {
-		sendErr = sendTelegramText(bot, s.target, text, replyTo, parseMode)
+		return sendTelegramTextChunksWithActions(bot, s.target, text, replyTo, parseMode, nil)
 	}
-	if sendErr != nil {
-		return sendErr
-	}
-	s.markDraftPermanentSent()
-	return nil
+	return sendTelegramText(bot, s.target, text, replyTo, parseMode)
 }
 
-func (s *telegramOutboundStream) markDraftPermanentSent() {
+func (s *telegramPreview) markDraftPermanentSent() {
 	if s.isPrivateChat {
 		s.mu.Lock()
 		s.draftPermanentSent = true
@@ -331,7 +336,7 @@ func (s *telegramOutboundStream) markDraftPermanentSent() {
 
 // resetStreamState clears the streaming message state so a fresh message will
 // be created on the next delta. Must be called without holding s.mu.
-func (s *telegramOutboundStream) resetStreamState() {
+func (s *telegramPreview) resetStreamState() {
 	s.mu.Lock()
 	s.streamMsgID = 0
 	if !s.isPrivateChat {
@@ -344,7 +349,7 @@ func (s *telegramOutboundStream) resetStreamState() {
 }
 
 // deliverFinalText sends or edits the final text depending on chat mode.
-func (s *telegramOutboundStream) deliverFinalText(ctx context.Context, text, parseMode string) error {
+func (s *telegramPreview) deliverFinalText(ctx context.Context, text, parseMode string) error {
 	if s.isPrivateChat {
 		return s.sendPermanentMessage(ctx, text, parseMode)
 	}
@@ -359,7 +364,7 @@ func (s *telegramOutboundStream) deliverFinalText(ctx context.Context, text, par
 	return s.editStreamMessageFinal(ctx, text)
 }
 
-func (s *telegramOutboundStream) deliverFinalTextWithActions(ctx context.Context, text, parseMode string, actions []channel.Action) error {
+func (s *telegramPreview) deliverFinalTextWithActions(ctx context.Context, text, parseMode string, actions []channel.Action) error {
 	if len(actions) == 0 {
 		return s.deliverFinalText(ctx, text, parseMode)
 	}
@@ -398,7 +403,7 @@ func (s *telegramOutboundStream) deliverFinalTextWithActions(ctx context.Context
 	return sendTelegramTextWithActions(bot, s.target, text, replyTo, parseMode, actions)
 }
 
-func (s *telegramOutboundStream) pushToolCallStart(ctx context.Context, tc *channel.StreamToolCall) error {
+func (s *telegramPreview) pushToolCallStart(ctx context.Context, tc *channel.StreamToolCall) error {
 	s.mu.Lock()
 	bufText := strings.TrimSpace(s.buf.String())
 	hasMsg := s.streamMsgID != 0
@@ -422,7 +427,7 @@ func (s *telegramOutboundStream) pushToolCallStart(ctx context.Context, tc *chan
 	return s.sendToolCallMessage(ctx, tc, channel.BuildToolCallStart(tc))
 }
 
-func (s *telegramOutboundStream) pushToolCallEnd(ctx context.Context, tc *channel.StreamToolCall) error {
+func (s *telegramPreview) pushToolCallEnd(ctx context.Context, tc *channel.StreamToolCall) error {
 	s.resetStreamState()
 	return s.sendToolCallMessage(ctx, tc, channel.BuildToolCallEnd(tc))
 }
@@ -460,7 +465,7 @@ func isTelegramAskUser(tc *channel.StreamToolCall) bool {
 // tool_call_end it edits the previously-posted message to flip the status to
 // completed/failed. If no prior message is tracked (or editing fails), it
 // falls back to sending a fresh message.
-func (s *telegramOutboundStream) sendToolCallMessage(
+func (s *telegramPreview) sendToolCallMessage(
 	ctx context.Context,
 	tc *channel.StreamToolCall,
 	p channel.ToolCallPresentation,
@@ -584,7 +589,7 @@ func tcActions(tc *channel.StreamToolCall) []channel.Action {
 	return tc.Actions
 }
 
-func (s *telegramOutboundStream) lookupToolCallMessage(callID string) (telegramToolCallMessage, bool) {
+func (s *telegramPreview) lookupToolCallMessage(callID string) (telegramToolCallMessage, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -594,7 +599,7 @@ func (s *telegramOutboundStream) lookupToolCallMessage(callID string) (telegramT
 	return m, ok
 }
 
-func (s *telegramOutboundStream) storeToolCallMessage(callID string, m telegramToolCallMessage) {
+func (s *telegramPreview) storeToolCallMessage(callID string, m telegramToolCallMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -603,7 +608,7 @@ func (s *telegramOutboundStream) storeToolCallMessage(callID string, m telegramT
 	s.toolMessages[callID] = m
 }
 
-func (s *telegramOutboundStream) forgetToolCallMessage(callID string) {
+func (s *telegramPreview) forgetToolCallMessage(callID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.toolMessages == nil {
@@ -612,29 +617,7 @@ func (s *telegramOutboundStream) forgetToolCallMessage(callID string) {
 	delete(s.toolMessages, callID)
 }
 
-func (s *telegramOutboundStream) pushAttachment(ctx context.Context, event channel.PreparedStreamEvent) error {
-	if len(event.Attachments) == 0 {
-		return nil
-	}
-	bot, replyTo, err := s.getBotAndReply(ctx)
-	if err != nil {
-		return err
-	}
-	for _, att := range event.Attachments {
-		if sendErr := sendTelegramAttachmentWithAssets(ctx, bot, s.target, att, "", replyTo, "", nil); sendErr != nil {
-			if s.adapter != nil && s.adapter.logger != nil {
-				s.adapter.logger.WarnContext(ctx, "telegram: stream attachment send failed",
-					slog.String("config_id", s.cfg.ID),
-					slog.String("type", string(att.Logical.Type)),
-					slog.Any("error", sendErr),
-				)
-			}
-		}
-	}
-	return nil
-}
-
-func (s *telegramOutboundStream) pushPhaseEnd(ctx context.Context, event channel.PreparedStreamEvent) error {
+func (s *telegramPreview) pushPhaseEnd(ctx context.Context, event channel.PreparedStreamEvent) error {
 	if event.Phase != channel.StreamPhaseText {
 		return nil
 	}
@@ -656,7 +639,7 @@ func (s *telegramOutboundStream) pushPhaseEnd(ctx context.Context, event channel
 	return nil
 }
 
-func (s *telegramOutboundStream) pushDelta(ctx context.Context, event channel.PreparedStreamEvent) error {
+func (s *telegramPreview) pushDelta(ctx context.Context, event channel.PreparedStreamEvent) error {
 	if event.Delta == "" || event.Phase == channel.StreamPhaseReasoning {
 		return nil
 	}
@@ -674,10 +657,11 @@ func (s *telegramOutboundStream) pushDelta(ctx context.Context, event channel.Pr
 	return s.editStreamMessage(ctx, content)
 }
 
-func (s *telegramOutboundStream) pushFinal(ctx context.Context, event channel.PreparedStreamEvent) error {
-	// In draft mode, read and reset buffer atomically to prevent duplicate
-	// permanent messages when multiple StreamEventFinal events fire
-	// (one per assistant output in multi-tool-call responses).
+// pushFinal ends the reply with its final message. A final without a message
+// ends it as it stands: the buffered text is posted or committed.
+func (s *telegramPreview) pushFinal(ctx context.Context, event channel.PreparedStreamEvent) error {
+	// In draft mode the buffer is cleared here: the text is posted below, and a
+	// draft is not a message.
 	s.mu.Lock()
 	bufText := strings.TrimSpace(s.buf.String())
 	draftPermanentSent := s.draftPermanentSent
@@ -779,7 +763,7 @@ func (s *telegramOutboundStream) pushFinal(ctx context.Context, event channel.Pr
 // being collapsed to markdown text. Edits an existing stream message in place
 // when one was opened during delta streaming; otherwise sends a fresh rich
 // message.
-func (s *telegramOutboundStream) pushFinalRich(ctx context.Context, msg channel.PreparedMessage) error {
+func (s *telegramPreview) pushFinalRich(ctx context.Context, msg channel.PreparedMessage) error {
 	rich, fallbackText, fallbackParseMode := renderTelegramOutboundBody(msg.Message)
 	if !rich.hasContent() {
 		if fallbackParseMode == "" && runeLenTelegramText(fallbackText) > telegramMaxMessageLength {
@@ -829,7 +813,7 @@ func shouldUseTelegramFinalRichMessage(msg channel.Message) bool {
 	return len(msg.Parts) > 0 || renderTelegramMarkdownMathRichMessage(msg).hasContent()
 }
 
-func (s *telegramOutboundStream) deliverLongPlainFallback(ctx context.Context, text string, actions []channel.Action) error {
+func (s *telegramPreview) deliverLongPlainFallback(ctx context.Context, text string, actions []channel.Action) error {
 	if err := validateTelegramActions(actions); err != nil {
 		return err
 	}
@@ -868,7 +852,7 @@ func (s *telegramOutboundStream) deliverLongPlainFallback(ctx context.Context, t
 	return nil
 }
 
-func (s *telegramOutboundStream) editStreamMessageFinalWithParseMode(ctx context.Context, text string, parseMode string) error {
+func (s *telegramPreview) editStreamMessageFinalWithParseMode(ctx context.Context, text string, parseMode string) error {
 	s.mu.Lock()
 	previousParseMode := s.parseMode
 	s.parseMode = parseMode
@@ -885,7 +869,7 @@ func (s *telegramOutboundStream) editStreamMessageFinalWithParseMode(ctx context
 // pushFinalAttachments delivers the attachment tail after a rich-final send.
 // Extracted so the rich path can reuse the same logic as the existing text
 // final path.
-func (s *telegramOutboundStream) pushFinalAttachments(ctx context.Context, msg channel.PreparedMessage) error {
+func (s *telegramPreview) pushFinalAttachments(ctx context.Context, msg channel.PreparedMessage) error {
 	bot, err := s.getBot(ctx)
 	if err != nil {
 		return err
@@ -904,8 +888,12 @@ func (s *telegramOutboundStream) pushFinalAttachments(ctx context.Context, msg c
 	return nil
 }
 
-func (s *telegramOutboundStream) pushError(ctx context.Context, event channel.PreparedStreamEvent) error {
-	errText := redact.Text(strings.TrimSpace(event.Error))
+// showError ends the reply with an error. Nothing has been shown to the user
+// that the error would overwrite, so it takes the place of whatever a reset
+// left in the preview message. What follows starts from a clean state and does
+// not edit the error.
+func (s *telegramPreview) showError(ctx context.Context, event channel.PreparedStreamEvent) error {
+	errText := strings.TrimSpace(event.Error)
 	if errText == "" {
 		return nil
 	}
@@ -914,35 +902,35 @@ func (s *telegramOutboundStream) pushError(ctx context.Context, event channel.Pr
 	// left over from earlier deltas does not corrupt the output.
 	s.mu.Lock()
 	s.parseMode = ""
+	hasMessage := s.streamMsgID != 0
 	s.mu.Unlock()
-	if s.isPrivateChat {
-		return s.sendPermanentMessage(ctx, display, "")
+	var err error
+	if !s.isPrivateChat && hasMessage {
+		err = s.editStreamMessageFinal(ctx, display)
+	} else {
+		err = s.postMessage(ctx, display, "")
 	}
-	if err := s.ensureStreamMessage(ctx, display); err != nil {
-		return err
-	}
-	return s.editStreamMessage(ctx, display)
+	s.resetStreamState()
+	return err
 }
 
-func (s *telegramOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
+// Update shows an event of the reply. Attachments never reach it: the mapping
+// layer sends them as messages of their own.
+func (s *telegramPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
 	if s == nil || s.adapter == nil {
-		return errors.New("telegram stream not configured")
+		return errors.New("telegram preview not configured")
 	}
 	if s.closed.Load() {
-		return errors.New("telegram stream is closed")
+		return errors.New("telegram preview is closed")
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	switch event.Type {
 	case channel.StreamEventToolCallStart:
 		return s.pushToolCallStart(ctx, event.ToolCall)
 	case channel.StreamEventToolCallEnd:
 		return s.pushToolCallEnd(ctx, event.ToolCall)
-	case channel.StreamEventAttachment:
-		return s.pushAttachment(ctx, event)
 	case channel.StreamEventPhaseEnd:
 		return s.pushPhaseEnd(ctx, event)
 	case channel.StreamEventDelta:
@@ -954,19 +942,65 @@ func (s *telegramOutboundStream) Push(ctx context.Context, event channel.Prepare
 		s.buf.Reset()
 		s.mu.Unlock()
 		return nil
-	case channel.StreamEventFinal:
-		return s.pushFinal(ctx, event)
 	case channel.StreamEventError:
-		return s.pushError(ctx, event)
+		return s.showError(ctx, event)
 	default:
 		return nil
 	}
 }
 
+// Finish ends the reply, once. A nil final means the run said nothing.
+func (s *telegramPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if s == nil || s.adapter == nil {
+		return errors.New("telegram preview not configured")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.closed.Swap(true) {
+		return nil
+	}
+	if final == nil {
+		return s.discardPending(ctx)
+	}
+	return s.pushFinal(ctx, *final)
+}
+
+// Abort ends the reply that has no final. The text it shows stays, and nothing
+// is added to it.
+func (s *telegramPreview) Abort(context.Context) error {
+	if s != nil {
+		s.closed.Store(true)
+	}
+	return nil
+}
+
+// discardPending deletes the preview message while it still ends in the
+// pending marker: it is a placeholder of a reply that turned out to be empty.
+// A draft needs no removal, it expires on its own.
+func (s *telegramPreview) discardPending(ctx context.Context) error {
+	s.mu.Lock()
+	chatID := s.streamChatID
+	msgID := s.streamMsgID
+	pending := strings.HasSuffix(s.lastEdited, telegramStreamPendingSuffix)
+	s.mu.Unlock()
+	if s.isPrivateChat || msgID == 0 || !pending {
+		return nil
+	}
+	bot, err := s.getBot(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.adapter.waitStreamLimit(ctx); err != nil {
+		return err
+	}
+	return bot.Delete(&tele.StoredMessage{MessageID: strconv.Itoa(msgID), ChatID: chatID})
+}
+
 // formatStreamContent applies markdown-to-HTML conversion for the accumulated
 // stream buffer text and updates parseMode accordingly. Safe for incomplete
 // markdown — unclosed constructs are left as plain text.
-func (s *telegramOutboundStream) formatStreamContent(text string) string {
+func (s *telegramPreview) formatStreamContent(text string) string {
 	if channel.ContainsMarkdown(text) {
 		formatted, pm := formatTelegramOutput(text, channel.MessageFormatMarkdown)
 		if pm != "" {
@@ -977,17 +1011,4 @@ func (s *telegramOutboundStream) formatStreamContent(text string) string {
 		}
 	}
 	return text
-}
-
-func (s *telegramOutboundStream) Close(ctx context.Context) error {
-	if s == nil {
-		return nil
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.closed.Store(true)
-	return nil
 }

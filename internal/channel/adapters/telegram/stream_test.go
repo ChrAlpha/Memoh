@@ -3,11 +3,12 @@ package telegram
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -15,7 +16,6 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 func mustPreparedTelegramEvent(t *testing.T, event channel.StreamEvent) channel.PreparedStreamEvent {
@@ -30,27 +30,40 @@ func mustPreparedTelegramEvent(t *testing.T, event channel.StreamEvent) channel.
 	return prepared
 }
 
-func TestTelegramOutboundStream_CloseNil(t *testing.T) {
-	t.Parallel()
-
-	var s *telegramOutboundStream
-	ctx := context.Background()
-	if err := s.Close(ctx); err != nil {
-		t.Fatalf("Close on nil stream should return nil: %v", err)
+// drive delivers an event the way the manager does: a final ends the preview
+// with Finish, a completed status ends it with no final, and anything else
+// updates it.
+func (s *telegramPreview) drive(ctx context.Context, event channel.PreparedStreamEvent) error {
+	switch {
+	case event.Type == channel.StreamEventFinal && event.Final != nil:
+		return s.Finish(ctx, &event)
+	case event.Type == channel.StreamEventStatus && event.Status == channel.StreamStatusCompleted:
+		return s.Finish(ctx, nil)
+	default:
+		return s.Update(ctx, event)
 	}
 }
 
-func TestTelegramOutboundStream_PushClosed(t *testing.T) {
+func TestTelegramPreview_AbortNil(t *testing.T) {
+	t.Parallel()
+
+	var s *telegramPreview
+	if err := s.Abort(context.Background()); err != nil {
+		t.Fatalf("Abort on nil preview should return nil: %v", err)
+	}
+}
+
+func TestTelegramPreview_UpdateClosed(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter}
+	s := &telegramPreview{adapter: adapter}
 	s.closed.Store(true)
 
 	ctx := context.Background()
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "x"}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "x"}))
 	if err == nil {
-		t.Fatal("Push on closed stream should return error")
+		t.Fatal("Update on a closed preview should return error")
 	}
 	if !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("expected closed error: %v", err)
@@ -61,10 +74,10 @@ func TestTelegramOutboundStream_PushStatusNoOp(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter}
+	s := &telegramPreview{adapter: adapter}
 
 	ctx := context.Background()
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventStatus}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventStatus}))
 	if err != nil {
 		t.Fatalf("StreamEventStatus should be no-op: %v", err)
 	}
@@ -73,9 +86,9 @@ func TestTelegramOutboundStream_PushStatusNoOp(t *testing.T) {
 func TestTelegramOutboundStream_PushNilAdapter(t *testing.T) {
 	t.Parallel()
 
-	s := &telegramOutboundStream{adapter: nil}
+	s := &telegramPreview{adapter: nil}
 	ctx := context.Background()
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "x"}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "x"}))
 	if err == nil {
 		t.Fatal("Push with nil adapter should return error")
 	}
@@ -88,10 +101,10 @@ func TestTelegramOutboundStream_PushUnknownEventTypeSkipped(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter}
+	s := &telegramPreview{adapter: adapter}
 	ctx := context.Background()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventType("unknown")}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventType("unknown")}))
 	if err != nil {
 		t.Fatalf("Push with unknown event type should be silently skipped: %v", err)
 	}
@@ -101,27 +114,21 @@ func TestTelegramOutboundStream_PushEmptyDeltaNoOp(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter}
+	s := &telegramPreview{adapter: adapter}
 	ctx := context.Background()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: ""}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: ""}))
 	if err != nil {
 		t.Fatalf("empty delta should be no-op: %v", err)
 	}
 }
 
-func TestTelegramOutboundStream_PushErrorEventReply(t *testing.T) {
-	redact.ResetForTest()
-	t.Cleanup(redact.ResetForTest)
-
-	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	prefixHalf := botToken[:len(botToken)/2]
-
+func TestTelegramPreview_UpdateErrorReply(t *testing.T) {
 	var sent []string
 	origGetBot := getOrCreateBotForTest
 	origSendText := sendTextForTest
 	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
-		return &tele.Bot{Token: botToken}, nil
+		return &tele.Bot{Token: "fake"}, nil
 	}
 	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
 		sent = append(sent, text)
@@ -143,9 +150,9 @@ func TestTelegramOutboundStream_PushErrorEventReply(t *testing.T) {
 			want:  []string{"The workspace is unreachable."},
 		},
 		{
-			name:  "uncoded error is redacted and labelled",
-			event: channel.StreamEvent{Type: channel.StreamEventError, Error: "request failed: " + prefixHalf},
-			want:  []string{"Error: request failed: " + strings.Repeat("*", len(prefixHalf))},
+			name:  "uncoded error is labelled",
+			event: channel.StreamEvent{Type: channel.StreamEventError, Error: "request failed"},
+			want:  []string{"Error: request failed"},
 		},
 		{
 			name:  "blank error sends nothing",
@@ -157,15 +164,15 @@ func TestTelegramOutboundStream_PushErrorEventReply(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sent = nil
 			adapter := NewTelegramAdapter(nil)
-			stream, err := adapter.OpenStream(context.Background(), channel.ChannelConfig{
+			preview, err := adapter.OpenPreview(context.Background(), channel.ChannelConfig{
 				ID:          "cfg-1",
-				Credentials: map[string]any{"botToken": botToken},
+				Credentials: map[string]any{"botToken": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
 			}, "12345", channel.StreamOptions{Metadata: map[string]any{"conversation_type": "private"}})
 			if err != nil {
-				t.Fatalf("open stream: %v", err)
+				t.Fatalf("open preview: %v", err)
 			}
-			if err := stream.Push(context.Background(), mustPreparedTelegramEvent(t, tc.event)); err != nil {
-				t.Fatalf("push error event: %v", err)
+			if err := preview.Update(context.Background(), mustPreparedTelegramEvent(t, tc.event)); err != nil {
+				t.Fatalf("update with error event: %v", err)
 			}
 			if len(sent) != len(tc.want) || strings.Join(sent, "|") != strings.Join(tc.want, "|") {
 				t.Fatalf("sent messages = %q, want %q", sent, tc.want)
@@ -174,17 +181,19 @@ func TestTelegramOutboundStream_PushErrorEventReply(t *testing.T) {
 	}
 }
 
-func TestTelegramOutboundStream_CloseContextCanceled(t *testing.T) {
+func TestTelegramPreview_AbortIgnoresCanceledContext(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter}
+	s := &telegramPreview{adapter: adapter}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := s.Close(ctx)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Close with canceled context should return context.Canceled: %v", err)
+	if err := s.Abort(ctx); err != nil {
+		t.Fatalf("Abort must not fail: %v", err)
+	}
+	if err := s.Update(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "x"})); err == nil {
+		t.Fatal("an aborted preview shows nothing more")
 	}
 }
 
@@ -193,7 +202,7 @@ func TestEditStreamMessage_NoEditWhenSameContent(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		streamChatID: 1,
 		streamMsgID:  1,
@@ -225,7 +234,7 @@ func TestEditStreamMessage_NoEditWhenMessageNotSent(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter, streamMsgID: 0}
+	s := &telegramPreview{adapter: adapter, streamMsgID: 0}
 	ctx := context.Background()
 
 	err := s.editStreamMessage(ctx, "any")
@@ -238,7 +247,7 @@ func TestEditStreamMessage_NoEditWhenThrottled(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		streamChatID: 1,
 		streamMsgID:  1,
@@ -256,7 +265,7 @@ func TestEditStreamMessage_NoEditWhenThrottled(t *testing.T) {
 func TestEditStreamMessage_429SetsBackoffAndReturnsNil(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
 	before := time.Now().Add(-time.Minute)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		streamChatID: 1,
@@ -297,7 +306,7 @@ func TestEditStreamMessage_429SetsBackoffAndReturnsNil(t *testing.T) {
 
 func TestEditStreamMessageFinal_Success(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		streamChatID: 1,
@@ -338,7 +347,7 @@ func TestEditStreamMessageFinal_Success(t *testing.T) {
 // no-op-on-unrecoverable behavior) the stream posts it as a NEW message.
 func TestEditStreamMessageFinal_UnrecoverableFallsBackToNewMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -383,7 +392,7 @@ func TestEditStreamMessageFinal_SameContentNoOp(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		streamChatID: 1,
 		streamMsgID:  1,
@@ -402,7 +411,7 @@ func TestEditStreamMessageFinal_NoMessageNoOp(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{adapter: adapter, streamMsgID: 0}
+	s := &telegramPreview{adapter: adapter, streamMsgID: 0}
 	ctx := context.Background()
 
 	err := s.editStreamMessageFinal(ctx, "any")
@@ -417,7 +426,7 @@ func TestSendDraft_ThrottleSkip(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		isPrivateChat: true,
@@ -437,7 +446,7 @@ func TestSendDraft_EmptyTextSkip(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		isPrivateChat: true,
 		draftID:       1,
@@ -454,7 +463,7 @@ func TestSendDraft_EmptyTextSkip(t *testing.T) {
 
 func TestSendDraft_Success(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		isPrivateChat: true,
@@ -501,7 +510,7 @@ func TestSendDraft_Success(t *testing.T) {
 func TestSendDraft_429Backoff(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
 	before := time.Now().Add(-time.Minute)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		isPrivateChat: true,
@@ -538,7 +547,7 @@ func TestSendDraft_429Backoff(t *testing.T) {
 
 func TestDraftMode_DeltaUsesSendDraft(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		isPrivateChat: true,
@@ -562,7 +571,7 @@ func TestDraftMode_DeltaUsesSendDraft(t *testing.T) {
 		sendDraftForTest = origDraft
 	}()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hello "}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hello "}))
 	if err != nil {
 		t.Fatalf("Push delta should succeed: %v", err)
 	}
@@ -581,7 +590,7 @@ func TestDraftMode_DeltaUsesSendDraft(t *testing.T) {
 // agent retrying a failed attempt) the draft shows only the regenerated text.
 func TestDraftMode_ResetStartsDraftFromEmpty(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		isPrivateChat: true,
@@ -614,7 +623,7 @@ func TestDraftMode_ResetStartsDraftFromEmpty(t *testing.T) {
 		s.mu.Lock()
 		s.lastEditedAt = time.Time{}
 		s.mu.Unlock()
-		if err := s.Push(ctx, mustPreparedTelegramEvent(t, event)); err != nil {
+		if err := s.drive(ctx, mustPreparedTelegramEvent(t, event)); err != nil {
 			t.Fatalf("push %s: %v", event.Type, err)
 		}
 	}
@@ -630,7 +639,7 @@ func TestDraftMode_ResetStartsDraftFromEmpty(t *testing.T) {
 // attempt's text in it.
 func TestEditMode_ResetEditsSameMessageFromEmpty(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -672,10 +681,10 @@ func TestEditMode_ResetEditsSameMessageFromEmpty(t *testing.T) {
 		testEditFunc = origEdit
 	}()
 
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventReset})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventReset})); err != nil {
 		t.Fatalf("push reset: %v", err)
 	}
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hello "})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hello "})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
 	s.wg.Wait()
@@ -692,7 +701,7 @@ func TestDraftMode_PhaseEndTextIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		isPrivateChat: true,
 		draftID:       1,
@@ -701,7 +710,7 @@ func TestDraftMode_PhaseEndTextIsNoOp(t *testing.T) {
 	s.buf.WriteString("some content")
 	ctx := context.Background()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type:  channel.StreamEventPhaseEnd,
 		Phase: channel.StreamPhaseText,
 	}))
@@ -720,7 +729,7 @@ func TestDraftMode_PhaseEndTextIsNoOp(t *testing.T) {
 // message in place so one tool call produces exactly one tool-call message.
 func TestToolCallFlow_FlushPreTextAndEditRunning(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -757,7 +766,7 @@ func TestToolCallFlow_FlushPreTextAndEditRunning(t *testing.T) {
 	tcStart := &channel.StreamToolCall{Name: "read", CallID: "call_1", Input: map[string]any{"path": "/tmp/a"}}
 	tcEnd := &channel.StreamToolCall{Name: "read", CallID: "call_1", Input: map[string]any{"path": "/tmp/a"}, Result: map[string]any{"ok": true}}
 
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart, ToolCall: tcStart})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart, ToolCall: tcStart})); err != nil {
 		t.Fatalf("push start: %v", err)
 	}
 
@@ -772,7 +781,7 @@ func TestToolCallFlow_FlushPreTextAndEditRunning(t *testing.T) {
 		t.Fatalf("buf should be reset after tool_call_start, got %q", bufAfterStart)
 	}
 
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallEnd, ToolCall: tcEnd})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallEnd, ToolCall: tcEnd})); err != nil {
 		t.Fatalf("push end: %v", err)
 	}
 
@@ -799,7 +808,7 @@ func TestToolCallFlow_FlushPreTextAndEditRunning(t *testing.T) {
 // tool_call_end edits it in place — no pre-text flush, one send, one edit.
 func TestToolCallFlow_NoPreTextEditsRunningInPlace(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -834,10 +843,10 @@ func TestToolCallFlow_NoPreTextEditsRunningInPlace(t *testing.T) {
 	tcStart := &channel.StreamToolCall{Name: "read", CallID: "call_1", Input: map[string]any{"path": "/tmp/a"}}
 	tcEnd := &channel.StreamToolCall{Name: "read", CallID: "call_1", Result: map[string]any{"ok": true}}
 
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart, ToolCall: tcStart})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart, ToolCall: tcStart})); err != nil {
 		t.Fatalf("push start: %v", err)
 	}
-	if err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallEnd, ToolCall: tcEnd})); err != nil {
+	if err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallEnd, ToolCall: tcEnd})); err != nil {
 		t.Fatalf("push end: %v", err)
 	}
 
@@ -857,7 +866,7 @@ func TestToolCallFlow_NoPreTextEditsRunningInPlace(t *testing.T) {
 
 func TestDraftMode_ToolCallStartSendsPermanentMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:        "123",
@@ -889,7 +898,7 @@ func TestDraftMode_ToolCallStartSendsPermanentMessage(t *testing.T) {
 		sendTextForTest = origSendText
 	}()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart}))
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventToolCallStart}))
 	if err != nil {
 		t.Fatalf("Push ToolCallStart should succeed: %v", err)
 	}
@@ -912,7 +921,7 @@ func TestDraftMode_ToolCallStartSendsPermanentMessage(t *testing.T) {
 
 func TestDraftMode_FinalEmptyBufferSkipsDuplicate(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:            adapter,
 		cfg:                channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:             "123",
@@ -939,7 +948,7 @@ func TestDraftMode_FinalEmptyBufferSkipsDuplicate(t *testing.T) {
 		sendTextForTest = origSendText
 	}()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{Text: "already sent text"},
@@ -952,7 +961,7 @@ func TestDraftMode_FinalEmptyBufferSkipsDuplicate(t *testing.T) {
 
 func TestDraftMode_FinalOnlyPayloadSendsPermanentMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:        "123",
@@ -977,7 +986,7 @@ func TestDraftMode_FinalOnlyPayloadSendsPermanentMessage(t *testing.T) {
 		sendTextForTest = origSendText
 	}()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{Text: "final answer"},
@@ -994,56 +1003,52 @@ func TestDraftMode_FinalOnlyPayloadSendsPermanentMessage(t *testing.T) {
 	}
 }
 
-// TestDraftMode_MultipleFinalEventsOnlyOneSend verifies that when multiple
-// StreamEventFinal events fire (one per assistant output in multi-tool-call
-// responses), only the first one sends the buffer text as a permanent message.
-// Subsequent finals find the buffer empty and skip sending.
-func TestDraftMode_MultipleFinalEventsOnlyOneSend(t *testing.T) {
-	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
-		adapter:       adapter,
-		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
-		target:        "123",
-		isPrivateChat: true,
-		draftID:       1,
-		streamChatID:  123,
-	}
-	ctx := context.Background()
-
-	// Simulate buffer containing the final summary text
-	s.buf.WriteString("final summary")
-
+// TestPreview_FinishEndsTheReplyOnce verifies that a second Finish, and an
+// Abort after the reply has ended, add nothing to what the first Finish showed.
+func TestPreview_FinishEndsTheReplyOnce(t *testing.T) {
+	bot, _ := recordTelegramCalls(t)
 	origGetBot := getOrCreateBotForTest
 	origSendText := sendTextForTest
-	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
-		return &tele.Bot{Token: "fake"}, nil
+	origEdit := testEditFunc
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) { return bot, nil }
+	var sends []string
+	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
+		sends = append(sends, text)
+		return 42, 8, nil
 	}
-	sendCount := 0
-	sendTextForTest = func(_ *tele.Bot, _ string, _ string, _ int, _ string) (int64, int, error) {
-		sendCount++
-		return 123, 1, nil
+	var edits []string
+	testEditFunc = func(_ *tele.Bot, _ int64, _ int, text string, _ string) error {
+		edits = append(edits, text)
+		return nil
 	}
 	defer func() {
 		getOrCreateBotForTest = origGetBot
 		sendTextForTest = origSendText
+		testEditFunc = origEdit
 	}()
 
-	// Push 3 StreamEventFinal events (simulating 3 assistant outputs).
-	// Only the first should actually send a message.
-	for i, text := range []string{"intermediate 1", "intermediate 2", "final summary"} {
-		err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
-			Type: channel.StreamEventFinal,
-			Final: &channel.StreamFinalizePayload{
-				Message: channel.Message{Text: text},
-			},
-		}))
-		if err != nil {
-			t.Fatalf("StreamEventFinal #%d should succeed: %v", i+1, err)
+	s := &telegramPreview{
+		adapter: NewTelegramAdapter(nil),
+		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+		target:  "42",
+	}
+	ctx := context.Background()
+	for i, text := range []string{"first", "second"} {
+		final := mustPreparedTelegramEvent(t, channel.StreamEvent{
+			Type:  channel.StreamEventFinal,
+			Final: &channel.StreamFinalizePayload{Message: channel.Message{Text: text}},
+		})
+		if err := s.Finish(ctx, &final); err != nil {
+			t.Fatalf("Finish #%d: %v", i+1, err)
 		}
 	}
+	if err := s.Abort(ctx); err != nil {
+		t.Fatalf("Abort after Finish: %v", err)
+	}
+	s.wg.Wait()
 
-	if sendCount != 1 {
-		t.Fatalf("expected exactly 1 sendTelegramText call, got %d", sendCount)
+	if len(sends) != 1 || len(edits) != 1 || edits[0] != "first" {
+		t.Fatalf("sends = %q, edits = %q, want the first final only", sends, edits)
 	}
 }
 
@@ -1054,7 +1059,7 @@ func TestDraftMode_MultipleFinalEventsOnlyOneSend(t *testing.T) {
 // in the streaming-final boundary get silently degraded to markdown text.
 func TestStreamFinal_RichPartsUseSendRichMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1080,7 +1085,7 @@ func TestStreamFinal_RichPartsUseSendRichMessage(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1101,7 +1106,7 @@ func TestStreamFinal_RichPartsUseSendRichMessage(t *testing.T) {
 
 func TestStreamFinal_MarkdownMathUsesRichMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1129,7 +1134,7 @@ func TestStreamFinal_MarkdownMathUsesRichMessage(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1148,7 +1153,7 @@ func TestStreamFinal_MarkdownMathUsesRichMessage(t *testing.T) {
 
 func TestStreamFinal_PlainMathUsesRichMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1177,7 +1182,7 @@ func TestStreamFinal_PlainMathUsesRichMessage(t *testing.T) {
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
 	text := "麦克斯韦方程组：\n\n$$\n\\nabla \\cdot \\mathbf{E} = \\frac{\\rho}{\\varepsilon_0}\n$$"
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1196,7 +1201,7 @@ func TestStreamFinal_PlainMathUsesRichMessage(t *testing.T) {
 
 func TestStreamFinal_MediumRichPartsUseSendRichMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1225,7 +1230,7 @@ func TestStreamFinal_MediumRichPartsUseSendRichMessage(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1246,7 +1251,7 @@ func TestStreamFinal_MediumRichPartsUseSendRichMessage(t *testing.T) {
 
 func TestStreamFinal_RichEditUnrecoverableFallsBackToNewRichMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -1283,7 +1288,7 @@ func TestStreamFinal_RichEditUnrecoverableFallsBackToNewRichMessage(t *testing.T
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1306,7 +1311,7 @@ func TestStreamFinal_RichEditUnrecoverableFallsBackToNewRichMessage(t *testing.T
 
 func TestStreamFinal_RichSendFallbackPreservesParseMode(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1359,7 +1364,7 @@ func TestStreamFinal_RichSendFallbackPreservesParseMode(t *testing.T) {
 	}
 	defer func() { s.wg.Wait(); getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1386,7 +1391,7 @@ func TestStreamFinal_RichSendFallbackPreservesParseMode(t *testing.T) {
 
 func TestStreamFinal_RichSendFallbackPreservesActions(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1427,7 +1432,7 @@ func TestStreamFinal_RichSendFallbackPreservesActions(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1455,7 +1460,7 @@ func TestStreamFinal_RichSendFallbackPreservesActions(t *testing.T) {
 
 func TestStreamFinal_LongRichPartsFallbacksToPlainText(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:  "123",
@@ -1495,7 +1500,7 @@ func TestStreamFinal_LongRichPartsFallbacksToPlainText(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1523,7 +1528,7 @@ func TestStreamFinal_LongRichPartsFallbacksToPlainText(t *testing.T) {
 
 func TestStreamFinal_RichHTMLOverflowFallbackSplitsPlainText(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:        "123",
@@ -1554,7 +1559,7 @@ func TestStreamFinal_RichHTMLOverflowFallbackSplitsPlainText(t *testing.T) {
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1584,7 +1589,7 @@ func TestStreamFinal_RichHTMLOverflowFallbackSplitsPlainText(t *testing.T) {
 
 func TestStreamFinal_RichHTMLOverflowRejectsInvalidActionsBeforeFallbackChunks(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:       adapter,
 		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:        "123",
@@ -1602,7 +1607,7 @@ func TestStreamFinal_RichHTMLOverflowRejectsInvalidActionsBeforeFallbackChunks(t
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1622,7 +1627,7 @@ func TestStreamFinal_RichHTMLOverflowRejectsInvalidActionsBeforeFallbackChunks(t
 
 func TestStreamFinal_RichHTMLOverflowFallbackClearsParseModeOnExistingMessage(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter:      adapter,
 		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
 		target:       "123",
@@ -1664,7 +1669,7 @@ func TestStreamFinal_RichHTMLOverflowFallbackClearsParseModeOnExistingMessage(t 
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1691,7 +1696,7 @@ func TestStreamFinal_RichHTMLOverflowFallbackClearsParseModeOnExistingMessage(t 
 
 func TestStreamFinal_AttachmentOnlyWithActionsDoesNotSendPlaceholderText(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg: channel.ChannelConfig{
 			ID:          "test",
@@ -1726,7 +1731,7 @@ func TestStreamFinal_AttachmentOnlyWithActionsDoesNotSendPlaceholderText(t *test
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1754,7 +1759,7 @@ func TestStreamFinal_AttachmentOnlyWithActionsDoesNotSendPlaceholderText(t *test
 
 func TestStreamFinal_AttachmentActionsRejectInvalidBeforeTextOrUpload(t *testing.T) {
 	adapter := NewTelegramAdapter(nil)
-	s := &telegramOutboundStream{
+	s := &telegramPreview{
 		adapter: adapter,
 		cfg: channel.ChannelConfig{
 			ID:          "test",
@@ -1776,7 +1781,7 @@ func TestStreamFinal_AttachmentActionsRejectInvalidBeforeTextOrUpload(t *testing
 	}
 	defer func() { getOrCreateBotForTest = origGetBot }()
 
-	err := s.Push(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
+	err := s.drive(context.Background(), mustPreparedTelegramEvent(t, channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{
 			Message: channel.Message{
@@ -1794,5 +1799,231 @@ func TestStreamFinal_AttachmentActionsRejectInvalidBeforeTextOrUpload(t *testing
 	}))
 	if err == nil || !strings.Contains(err.Error(), "callback data") {
 		t.Fatalf("expected invalid attachment action error before send, got %v", err)
+	}
+}
+
+func TestDescriptorDeclaresDraftPreview(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewTelegramAdapter(nil)
+	caps := adapter.Descriptor().Capabilities
+	if caps.Preview != channel.PreviewDraft {
+		t.Fatalf("Preview = %v, want PreviewDraft", caps.Preview)
+	}
+	if caps.ReplyWindow != 0 {
+		t.Fatalf("ReplyWindow = %v, the Bot API sets no window on replying to a message", caps.ReplyWindow)
+	}
+}
+
+// A private chat streams as a draft, any other chat edits one message.
+func TestOpenPreviewChoosesTheModeByChatType(t *testing.T) {
+	t.Parallel()
+
+	cfg := channel.ChannelConfig{ID: "cfg-1", Credentials: map[string]any{"botToken": "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ"}}
+	cases := []struct {
+		name        string
+		target      string
+		opts        channel.StreamOptions
+		wantPrivate bool
+	}{
+		{"private chat", "12345", channel.StreamOptions{Metadata: map[string]any{"conversation_type": "private"}}, true},
+		{"group chat", "-100123", channel.StreamOptions{Metadata: map[string]any{"conversation_type": "group"}}, false},
+		{"channel username", "@news", channel.StreamOptions{Metadata: map[string]any{"conversation_type": "private"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			preview, err := NewTelegramAdapter(nil).OpenPreview(context.Background(), cfg, tc.target, tc.opts)
+			if err != nil {
+				t.Fatalf("OpenPreview: %v", err)
+			}
+			got, ok := preview.(*telegramPreview)
+			if !ok {
+				t.Fatalf("preview is %T, want *telegramPreview", preview)
+			}
+			if got.isPrivateChat != tc.wantPrivate {
+				t.Fatalf("isPrivateChat = %v, want %v", got.isPrivateChat, tc.wantPrivate)
+			}
+		})
+	}
+}
+
+// recordTelegramCalls answers every Bot API call with success and records the
+// method and the parameters it was called with.
+func recordTelegramCalls(t *testing.T) (*tele.Bot, func() []string) {
+	t.Helper()
+	var calls []string
+	var mu sync.Mutex
+	bot := newTestTelegramBot(telegramRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(req.Body)
+		params := decodeTelegramBody(t, body)
+		mu.Lock()
+		calls = append(calls, req.URL.Path[strings.LastIndex(req.URL.Path, "/")+1:]+" "+fmt.Sprint(params["chat_id"])+" "+fmt.Sprint(params["message_id"]))
+		mu.Unlock()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)),
+		}, nil
+	}))
+	return bot, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string{}, calls...)
+	}
+}
+
+// A reply that turns out to be empty must not leave the preview message with
+// its pending marker behind. A message the preview already completed, and a
+// draft, stay as they are.
+func TestPreview_FinishWithNoFinalRemovesOnlyAPendingMessage(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(s *telegramPreview)
+		want  []string
+	}{
+		{
+			name: "pending message",
+			setup: func(s *telegramPreview) {
+				s.streamChatID, s.streamMsgID, s.lastEdited = 42, 7, "NO_REPLY"+telegramStreamPendingSuffix
+			},
+			want: []string{"deleteMessage 42 7"},
+		},
+		{
+			name: "completed message",
+			setup: func(s *telegramPreview) {
+				s.streamChatID, s.streamMsgID, s.lastEdited = 42, 7, "done"
+			},
+		},
+		{
+			name:  "no message yet",
+			setup: func(*telegramPreview) {},
+		},
+		{
+			name: "draft",
+			setup: func(s *telegramPreview) {
+				s.isPrivateChat = true
+				s.streamChatID, s.streamMsgID, s.lastEdited = 42, 7, "text"+telegramStreamPendingSuffix
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, calls := recordTelegramCalls(t)
+			origGetBot := getOrCreateBotForTest
+			getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) { return bot, nil }
+			defer func() { getOrCreateBotForTest = origGetBot }()
+
+			s := &telegramPreview{
+				adapter: NewTelegramAdapter(nil),
+				cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+			}
+			tc.setup(s)
+			if err := s.Finish(context.Background(), nil); err != nil {
+				t.Fatalf("Finish(nil): %v", err)
+			}
+			if got := calls(); strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("API calls = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// An error is the reply's terminal state: it takes the place of the text a
+// reset left in the preview message, and the final that may follow does not
+// edit it away.
+func TestPreview_ErrorReplacesResetTextAndIsNotEditedAway(t *testing.T) {
+	bot, _ := recordTelegramCalls(t)
+	origGetBot := getOrCreateBotForTest
+	origSendText := sendTextForTest
+	origEdit := testEditFunc
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) { return bot, nil }
+	var sends []string
+	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
+		sends = append(sends, text)
+		return 42, 8, nil
+	}
+	type edit struct {
+		msgID int
+		text  string
+	}
+	var edits []edit
+	testEditFunc = func(_ *tele.Bot, _ int64, msgID int, text string, _ string) error {
+		edits = append(edits, edit{msgID, text})
+		return nil
+	}
+	defer func() {
+		getOrCreateBotForTest = origGetBot
+		sendTextForTest = origSendText
+		testEditFunc = origEdit
+	}()
+
+	s := &telegramPreview{
+		adapter:      NewTelegramAdapter(nil),
+		cfg:          channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+		target:       "42",
+		streamChatID: 42,
+		streamMsgID:  7,
+		lastEdited:   "failed attempt" + telegramStreamPendingSuffix,
+	}
+	ctx := context.Background()
+	if err := s.Update(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventError, Error: "Something went wrong.", ErrorCode: "internal"})); err != nil {
+		t.Fatalf("Update(error): %v", err)
+	}
+	final := mustPreparedTelegramEvent(t, channel.StreamEvent{
+		Type:  channel.StreamEventFinal,
+		Final: &channel.StreamFinalizePayload{Message: channel.Message{Text: "answer"}},
+	})
+	if err := s.Finish(ctx, &final); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	s.wg.Wait()
+
+	want := []edit{{7, "Something went wrong."}, {8, "answer"}}
+	if !reflect.DeepEqual(edits, want) {
+		t.Fatalf("edits = %+v, want %+v", edits, want)
+	}
+	if len(sends) != 1 {
+		t.Fatalf("sends = %q, want the final posted as one new message", sends)
+	}
+}
+
+// In a private chat the error is a message of its own and does not count as
+// the reply's text, so a final after it is still posted.
+func TestPreview_PrivateErrorDoesNotSwallowTheFinal(t *testing.T) {
+	origGetBot := getOrCreateBotForTest
+	origSendText := sendTextForTest
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) { return &tele.Bot{Token: "fake"}, nil }
+	var sent []string
+	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
+		sent = append(sent, text)
+		return 123, 1, nil
+	}
+	defer func() {
+		getOrCreateBotForTest = origGetBot
+		sendTextForTest = origSendText
+	}()
+
+	s := &telegramPreview{
+		adapter:       NewTelegramAdapter(nil),
+		cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+		target:        "123",
+		isPrivateChat: true,
+		draftID:       1,
+		streamChatID:  123,
+	}
+	ctx := context.Background()
+	if err := s.Update(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventError, Error: "Something went wrong.", ErrorCode: "internal"})); err != nil {
+		t.Fatalf("Update(error): %v", err)
+	}
+	final := mustPreparedTelegramEvent(t, channel.StreamEvent{
+		Type:  channel.StreamEventFinal,
+		Final: &channel.StreamFinalizePayload{Message: channel.Message{Text: "answer"}},
+	})
+	if err := s.Finish(ctx, &final); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if want := []string{"Something went wrong.", "answer"}; !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %q, want %q", sent, want)
 	}
 }

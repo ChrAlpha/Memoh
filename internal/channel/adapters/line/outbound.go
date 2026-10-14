@@ -23,24 +23,19 @@ const (
 )
 
 func (a *Adapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg channel.PreparedOutboundMessage) error {
-	_, err := a.sendPrepared(ctx, cfg, msg)
-	return err
-}
-
-func (a *Adapter) sendPrepared(ctx context.Context, cfg channel.ChannelConfig, msg channel.PreparedOutboundMessage) (int, error) {
 	creds, err := parseConfigForUse(cfg.Credentials)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	target := normalizeTarget(msg.Target)
 	if target == "" {
-		return 0, errors.New("line target is required")
+		return errors.New("line target is required")
 	}
 	callCtx, cancel := context.WithTimeout(ctx, lineAPITimeout)
 	defer cancel()
 	client, err := a.client.NewMessagingClient(callCtx, creds.ChannelAccessToken)
 	if err != nil {
-		return 0, sanitizeLineError("line create messaging client failed", err)
+		return sanitizeLineError("line create messaging client failed", err)
 	}
 
 	text := strings.TrimSpace(msg.Message.Message.PlainText())
@@ -55,31 +50,31 @@ func (a *Adapter) sendPrepared(ctx context.Context, cfg channel.ChannelConfig, m
 		imageMessages = append(imageMessages, image)
 	}
 	if skippedAttachments > 0 {
-		return 0, errors.New("line message has unsupported attachments")
+		return errors.New("line message has unsupported attachments")
 	}
 
 	var sent int
 	if text != "" {
 		for _, batch := range batchLineMessages(lineTextMessages(text), 5) {
 			if err := a.pushMessages(client, target, batch); err != nil {
-				return sent, err
+				return err
 			}
 			sent++
 		}
 	}
 	for _, batch := range batchLineMessages(imageMessages, 5) {
 		if err := a.pushMessages(client, target, batch); err != nil {
-			return sent, err
+			return err
 		}
 		sent++
 	}
 	if sent == 0 {
 		if text == "" && len(msg.Message.Attachments) == 0 && msg.Message.Message.IsEmpty() {
-			return 0, errors.New("line message is required")
+			return errors.New("line message is required")
 		}
-		return 0, errors.New("line message has no supported content")
+		return errors.New("line message has no supported content")
 	}
-	return sent, nil
+	return nil
 }
 
 func (a *Adapter) pushMessages(client messagingClient, target string, messages []messaging_api.MessageInterface) error {
@@ -344,15 +339,4 @@ func splitLINETextByUTF16CodeUnits(text string, limit int) []string {
 		chunks = append(chunks, chunk)
 	}
 	return chunks
-}
-
-func lineLogicalAttachments(attachments []channel.PreparedAttachment) []channel.Attachment {
-	if len(attachments) == 0 {
-		return nil
-	}
-	items := make([]channel.Attachment, 0, len(attachments))
-	for _, att := range attachments {
-		items = append(items, att.Logical)
-	}
-	return items
 }

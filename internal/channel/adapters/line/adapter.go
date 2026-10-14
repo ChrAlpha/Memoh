@@ -95,6 +95,7 @@ func (*Adapter) Descriptor() channel.Descriptor {
 			Media:          true, // v1 supports LINE-hosted inbound images/files and outbound PNG/JPEG images, not every LINE media type.
 			Reply:          true, // Framework reply target support; outbound delivery uses PushMessage, not LINE native ReplyMessage.
 			BlockStreaming: true,
+			Preview:        channel.PreviewNone, // The reply is pushed once, when it is complete.
 			ChatTypes:      []string{channel.ConversationTypePrivate},
 		},
 		OutboundPolicy: channel.OutboundPolicy{

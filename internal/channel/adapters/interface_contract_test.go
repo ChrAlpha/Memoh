@@ -33,9 +33,6 @@ var (
 	_ channel.Sender = (*weixin.WeixinAdapter)(nil)
 
 	_ channel.StreamSender = (*dingtalk.DingTalkAdapter)(nil)
-	_ channel.StreamSender = (*misskey.MisskeyAdapter)(nil)
-	_ channel.StreamSender = (*qq.QQAdapter)(nil)
-	_ channel.StreamSender = (*telegram.TelegramAdapter)(nil)
 	_ channel.StreamSender = (*wechatoa.WeChatOAAdapter)(nil)
 	_ channel.StreamSender = (*wecom.WeComAdapter)(nil)
 	_ channel.StreamSender = (*weixin.WeixinAdapter)(nil)

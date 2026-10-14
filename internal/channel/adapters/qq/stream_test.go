@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 func preparedQQEvent(event channel.StreamEvent) channel.PreparedStreamEvent {
@@ -37,18 +36,42 @@ func preparedQQEvent(event channel.StreamEvent) channel.PreparedStreamEvent {
 		}
 	}
 	if event.Final != nil {
-		prepared.Final = &channel.PreparedStreamFinalizePayload{
-			Message: channel.PreparedMessage{Message: event.Final.Message},
+		final := channel.PreparedMessage{Message: event.Final.Message}
+		for _, att := range event.Final.Message.Attachments {
+			final.Attachments = append(final.Attachments, channel.PreparedAttachment{
+				Logical: att,
+				Kind:    channel.PreparedAttachmentUpload,
+				Name:    att.Name,
+				Mime:    att.Mime,
+				Open: func(context.Context) (io.ReadCloser, error) {
+					return io.NopCloser(strings.NewReader("test")), nil
+				},
+			})
 		}
+		prepared.Final = &channel.PreparedStreamFinalizePayload{Message: final}
 	}
 	return prepared
 }
 
-func TestQQOutboundStreamFlushesBufferedTextOnFinal(t *testing.T) {
+// drive delivers an event the way the manager does: a final ends the preview
+// with Finish, a completed status ends it with no final, and anything else
+// updates it.
+func (s *qqPreview) drive(ctx context.Context, event channel.PreparedStreamEvent) error {
+	switch {
+	case event.Type == channel.StreamEventFinal && event.Final != nil:
+		return s.Finish(ctx, &event)
+	case event.Type == channel.StreamEventStatus && event.Status == channel.StreamStatusCompleted:
+		return s.Finish(ctx, nil)
+	default:
+		return s.Update(ctx, event)
+	}
+}
+
+func TestQQPreviewFlushesBufferedTextOnFinal(t *testing.T) {
 	t.Parallel()
 
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target: "c2c:user-openid",
 		send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
 			sent = append(sent, msg.LogicalMessage())
@@ -57,16 +80,16 @@ func TestQQOutboundStreamFlushesBufferedTextOnFinal(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusStarted})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusStarted})); err != nil {
 		t.Fatalf("push status: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hi "})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Hi "})); err != nil {
 		t.Fatalf("push delta1: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "there"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "there"})); err != nil {
 		t.Fatalf("push delta2: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
@@ -81,11 +104,11 @@ func TestQQOutboundStreamFlushesBufferedTextOnFinal(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamFinalUsesExplicitMessageAndBufferedAttachments(t *testing.T) {
+func TestQQPreviewFinalSendsTextAndAttachments(t *testing.T) {
 	t.Parallel()
 
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target: "group:group-openid",
 		send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
 			sent = append(sent, msg.LogicalMessage())
@@ -93,17 +116,11 @@ func TestQQOutboundStreamFinalUsesExplicitMessageAndBufferedAttachments(t *testi
 		},
 	}
 
-	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{
-		Type:        channel.StreamEventAttachment,
-		Attachments: []channel.Attachment{{Type: channel.AttachmentImage, URL: "https://example.com/a.png"}},
-	})); err != nil {
-		t.Fatalf("push attachment: %v", err)
-	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{
+	if err := stream.drive(context.Background(), preparedQQEvent(channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{Message: channel.Message{
-			Text: "done",
+			Text:        "done",
+			Attachments: []channel.Attachment{{Type: channel.AttachmentImage, URL: "https://example.com/a.png"}},
 		}},
 	})); err != nil {
 		t.Fatalf("push final: %v", err)
@@ -120,11 +137,11 @@ func TestQQOutboundStreamFinalUsesExplicitMessageAndBufferedAttachments(t *testi
 	}
 }
 
-func TestQQOutboundStreamFinalPrefersBufferedVisibleText(t *testing.T) {
+func TestQQPreviewFinalPrefersBufferedVisibleText(t *testing.T) {
 	t.Parallel()
 
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target: "c2c:user-openid",
 		send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
 			sent = append(sent, msg.LogicalMessage())
@@ -133,13 +150,13 @@ func TestQQOutboundStreamFinalPrefersBufferedVisibleText(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "visible "})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "visible "})); err != nil {
 		t.Fatalf("push delta1: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "answer"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "answer"})); err != nil {
 		t.Fatalf("push delta2: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{
 		Type: channel.StreamEventFinal,
 		Final: &channel.StreamFinalizePayload{Message: channel.Message{
 			Text: "internal trace\nvisible answer",
@@ -156,11 +173,12 @@ func TestQQOutboundStreamFinalPrefersBufferedVisibleText(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamIgnoresLaterTextOnlyFinalAfterBufferedReply(t *testing.T) {
+// A second Finish, and an Abort after the reply has ended, send nothing more.
+func TestQQPreviewFinishEndsTheReplyOnce(t *testing.T) {
 	t.Parallel()
 
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target: "c2c:user-openid",
 		send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
 			sent = append(sent, msg.LogicalMessage())
@@ -169,19 +187,19 @@ func TestQQOutboundStreamIgnoresLaterTextOnlyFinalAfterBufferedReply(t *testing.
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "visible answer"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "visible answer"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
-		t.Fatalf("push first final: %v", err)
+	for _, text := range []string{"", "a later final"} {
+		if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{
+			Type:  channel.StreamEventFinal,
+			Final: &channel.StreamFinalizePayload{Message: channel.Message{Text: text}},
+		})); err != nil {
+			t.Fatalf("push final: %v", err)
+		}
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{
-		Type: channel.StreamEventFinal,
-		Final: &channel.StreamFinalizePayload{Message: channel.Message{
-			Text: "我需要按照用户的要求，在工具调用后完整复述。",
-		}},
-	})); err != nil {
-		t.Fatalf("push second final: %v", err)
+	if err := stream.Abort(ctx); err != nil {
+		t.Fatalf("abort: %v", err)
 	}
 
 	if len(sent) != 1 {
@@ -192,14 +210,14 @@ func TestQQOutboundStreamIgnoresLaterTextOnlyFinalAfterBufferedReply(t *testing.
 	}
 }
 
-func TestQQOutboundStreamRejectsAfterClose(t *testing.T) {
+func TestQQPreviewRejectsUpdateAfterAbort(t *testing.T) {
 	t.Parallel()
 
-	stream := &qqOutboundStream{}
-	if err := stream.Close(context.Background()); err != nil {
-		t.Fatalf("close: %v", err)
+	stream := &qqPreview{send: func(context.Context, channel.PreparedOutboundMessage) error { return nil }}
+	if err := stream.Abort(context.Background()); err != nil {
+		t.Fatalf("abort: %v", err)
 	}
-	if err := stream.Push(context.Background(), preparedQQEvent(channel.StreamEvent{
+	if err := stream.drive(context.Background(), preparedQQEvent(channel.StreamEvent{
 		Type:  channel.StreamEventDelta,
 		Delta: "x",
 	})); err == nil {
@@ -207,13 +225,8 @@ func TestQQOutboundStreamRejectsAfterClose(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamErrorReply(t *testing.T) {
-	redact.ResetForTest()
-	t.Cleanup(redact.ResetForTest)
-
-	const token = "qq-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	redact.SetSecrets("test", token)
-	prefixHalf := token[:len(token)/2]
+func TestQQPreviewErrorReply(t *testing.T) {
+	t.Parallel()
 
 	cases := []struct {
 		name  string
@@ -226,9 +239,9 @@ func TestQQOutboundStreamErrorReply(t *testing.T) {
 			want:  []string{"The workspace is unreachable."},
 		},
 		{
-			name:  "uncoded error is redacted and labelled",
-			event: channel.StreamEvent{Type: channel.StreamEventError, Error: "failed: " + prefixHalf},
-			want:  []string{"Error: failed: " + strings.Repeat("*", len(prefixHalf))},
+			name:  "uncoded error is labelled",
+			event: channel.StreamEvent{Type: channel.StreamEventError, Error: "request failed"},
+			want:  []string{"Error: request failed"},
 		},
 		{
 			name:  "blank error sends nothing",
@@ -239,14 +252,14 @@ func TestQQOutboundStreamErrorReply(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var sent []string
-			stream := &qqOutboundStream{
+			stream := &qqPreview{
 				target: "c2c:user-openid",
 				send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
 					sent = append(sent, msg.LogicalMessage().Message.PlainText())
 					return nil
 				},
 			}
-			if err := stream.Push(context.Background(), preparedQQEvent(tc.event)); err != nil {
+			if err := stream.drive(context.Background(), preparedQQEvent(tc.event)); err != nil {
 				t.Fatalf("push error: %v", err)
 			}
 			if len(sent) != len(tc.want) || strings.Join(sent, "|") != strings.Join(tc.want, "|") {
@@ -256,12 +269,12 @@ func TestQQOutboundStreamErrorReply(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamC2CStreamsCumulativeShards(t *testing.T) {
+func TestQQPreviewC2CStreamsCumulativeShards(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
@@ -277,16 +290,16 @@ func TestQQOutboundStreamC2CStreamsCumulativeShards(t *testing.T) {
 
 	ctx := context.Background()
 	for _, delta := range []string{"你好", "，世界"} {
-		if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: delta})); err != nil {
+		if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: delta})); err != nil {
 			t.Fatalf("push delta: %v", err)
 		}
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
 	if len(sent) != 0 {
-		t.Fatalf("expected no legacy sends, got %d", len(sent))
+		t.Fatalf("expected no regular sends, got %d", len(sent))
 	}
 	if len(shards) != 3 {
 		t.Fatalf("expected 3 shards, got %d", len(shards))
@@ -310,11 +323,11 @@ func TestQQOutboundStreamC2CStreamsCumulativeShards(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamC2CShardFailureFallsBackToLegacySend(t *testing.T) {
+func TestQQPreviewC2CShardFailureFallsBackToRegularSend(t *testing.T) {
 	t.Parallel()
 
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
@@ -328,31 +341,31 @@ func TestQQOutboundStreamC2CShardFailureFallsBackToLegacySend(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "完整回复"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "完整回复"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
 	if len(sent) != 1 {
-		t.Fatalf("expected one legacy send, got %d", len(sent))
+		t.Fatalf("expected one regular send, got %d", len(sent))
 	}
 	if got := sent[0].Message.PlainText(); got != "完整回复" {
 		t.Fatalf("unexpected text: %q", got)
 	}
 }
 
-func TestQQOutboundStreamC2CSingleShardForShortReply(t *testing.T) {
+func TestQQPreviewC2CSingleShardForShortReply(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: time.Hour,
 		now:            time.Now,
 		send: func(context.Context, channel.PreparedOutboundMessage) error {
-			t.Fatal("legacy send must not run")
+			t.Fatal("regular send must not run")
 			return nil
 		},
 		streamSend: func(_ context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
@@ -362,10 +375,10 @@ func TestQQOutboundStreamC2CSingleShardForShortReply(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "短回复"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "短回复"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
@@ -380,18 +393,18 @@ func TestQQOutboundStreamC2CSingleShardForShortReply(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamC2CThrottlesMiddleShards(t *testing.T) {
+func TestQQPreviewC2CThrottlesMiddleShards(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
 	base := time.Now()
 	current := base
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: time.Second,
 		now:            func() time.Time { return current },
 		send: func(context.Context, channel.PreparedOutboundMessage) error {
-			t.Fatal("legacy send must not run")
+			t.Fatal("regular send must not run")
 			return nil
 		},
 		streamSend: func(_ context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
@@ -403,7 +416,7 @@ func TestQQOutboundStreamC2CThrottlesMiddleShards(t *testing.T) {
 	ctx := context.Background()
 	push := func(delta string) {
 		t.Helper()
-		if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: delta})); err != nil {
+		if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: delta})); err != nil {
 			t.Fatalf("push delta: %v", err)
 		}
 	}
@@ -412,7 +425,7 @@ func TestQQOutboundStreamC2CThrottlesMiddleShards(t *testing.T) {
 	current = base.Add(2 * time.Second)
 	push("三")
 	push("四") // within interval: dropped
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
@@ -427,16 +440,16 @@ func TestQQOutboundStreamC2CThrottlesMiddleShards(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamCloseRetiresUnfinishedStream(t *testing.T) {
+func TestQQPreviewAbortRetiresUnfinishedStream(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
 		send: func(context.Context, channel.PreparedOutboundMessage) error {
-			t.Fatal("legacy send must not run for a retired stream")
+			t.Fatal("regular send must not run for a retired stream")
 			return nil
 		},
 		streamSend: func(_ context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
@@ -446,15 +459,15 @@ func TestQQOutboundStreamCloseRetiresUnfinishedStream(t *testing.T) {
 	}
 
 	// A turn that dies before StreamEventFinal: its context is already gone
-	// by the time Close runs, which is exactly when the client would be left
+	// by the time Abort runs, which is exactly when the client would be left
 	// rendering a permanently unfinished message.
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "半截回复"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "半截回复"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
 	cancel()
-	if err := stream.Close(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Close error = %v, want context.Canceled", err)
+	if err := stream.Abort(ctx); err != nil {
+		t.Fatalf("Abort must not fail on a canceled context: %v", err)
 	}
 
 	if len(shards) != 2 {
@@ -472,11 +485,11 @@ func TestQQOutboundStreamCloseRetiresUnfinishedStream(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamCloseSkipsRetireAfterNormalFinal(t *testing.T) {
+func TestQQPreviewAbortSkipsRetireAfterNormalFinal(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
@@ -488,14 +501,14 @@ func TestQQOutboundStreamCloseSkipsRetireAfterNormalFinal(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "完整回复"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "完整回复"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 	before := len(shards)
-	if err := stream.Close(ctx); err != nil {
+	if err := stream.Abort(ctx); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if len(shards) != before {
@@ -503,13 +516,13 @@ func TestQQOutboundStreamCloseSkipsRetireAfterNormalFinal(t *testing.T) {
 	}
 }
 
-func TestQQOutboundStreamFinalShardFailureRetiresStreamBeforeFallback(t *testing.T) {
+func TestQQPreviewFinalShardFailureRetiresStreamBeforeFallback(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
 	var sent []channel.OutboundMessage
 	finalFailed := false
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
@@ -531,13 +544,13 @@ func TestQQOutboundStreamFinalShardFailureRetiresStreamBeforeFallback(t *testing
 	}
 
 	ctx := context.Background()
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "半截回复"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "半截回复"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "，完整结尾"})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "，完整结尾"})); err != nil {
 		t.Fatalf("push delta: %v", err)
 	}
-	if err := stream.Push(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})); err != nil {
 		t.Fatalf("push final: %v", err)
 	}
 
@@ -553,12 +566,12 @@ func TestQQOutboundStreamFinalShardFailureRetiresStreamBeforeFallback(t *testing
 	}
 }
 
-func TestQQOutboundStreamC2CResetRetiresStreamAndSendsRegeneratedReply(t *testing.T) {
+func TestQQPreviewC2CResetRetiresStreamAndSendsRegeneratedReply(t *testing.T) {
 	t.Parallel()
 
 	var shards []qqStreamShardRequest
 	var sent []channel.OutboundMessage
-	stream := &qqOutboundStream{
+	stream := &qqPreview{
 		target:         "c2c:user-openid",
 		streamInterval: 0,
 		now:            time.Now,
@@ -580,11 +593,11 @@ func TestQQOutboundStreamC2CResetRetiresStreamAndSendsRegeneratedReply(t *testin
 		{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}},
 	}
 	for _, event := range events {
-		if err := stream.Push(ctx, preparedQQEvent(event)); err != nil {
+		if err := stream.drive(ctx, preparedQQEvent(event)); err != nil {
 			t.Fatalf("push %s: %v", event.Type, err)
 		}
 	}
-	if err := stream.Close(ctx); err != nil {
+	if err := stream.Abort(ctx); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
@@ -599,5 +612,177 @@ func TestQQOutboundStreamC2CResetRetiresStreamAndSendsRegeneratedReply(t *testin
 	}
 	if got := sent[0].Message.PlainText(); got != "重试后的回复" {
 		t.Fatalf("regenerated reply = %q, want only the surviving attempt's text", got)
+	}
+}
+
+// Finish with no final is a run that said nothing: the text held back is not
+// sent, and a stream that is open is retired where it stands.
+func TestQQPreviewFinishWithNoFinalSendsNothing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("text held until the end", func(t *testing.T) {
+		t.Parallel()
+		stream := &qqPreview{
+			target: "group:group-openid",
+			send: func(context.Context, channel.PreparedOutboundMessage) error {
+				t.Fatal("a reply that said nothing must not send")
+				return nil
+			},
+		}
+		ctx := context.Background()
+		if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "NO_REPLY"})); err != nil {
+			t.Fatalf("push delta: %v", err)
+		}
+		if err := stream.Finish(ctx, nil); err != nil {
+			t.Fatalf("finish: %v", err)
+		}
+	})
+
+	t.Run("open stream", func(t *testing.T) {
+		t.Parallel()
+		var shards []qqStreamShardRequest
+		stream := &qqPreview{
+			target:         "c2c:user-openid",
+			streamInterval: 0,
+			now:            time.Now,
+			send: func(context.Context, channel.PreparedOutboundMessage) error {
+				t.Fatal("a reply that said nothing must not send")
+				return nil
+			},
+			streamSend: func(_ context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
+				shards = append(shards, req)
+				return qqStreamShardResponse{ID: "sm-1"}, nil
+			},
+		}
+		ctx := context.Background()
+		if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "NO_REPLY"})); err != nil {
+			t.Fatalf("push delta: %v", err)
+		}
+		if err := stream.Finish(ctx, nil); err != nil {
+			t.Fatalf("finish: %v", err)
+		}
+		if len(shards) != 2 || shards[1].InputState != qqStreamInputDone || shards[1].ContentRaw != "NO_REPLY" {
+			t.Fatalf("shards = %+v, want the open stream retired at its last content", shards)
+		}
+	})
+}
+
+// A tool that finishes while the reply is still being produced is reported at
+// once; the text waits for the end.
+func TestQQPreviewSendsAToolResultWhenItFinishes(t *testing.T) {
+	t.Parallel()
+
+	var sent []channel.OutboundMessage
+	stream := &qqPreview{
+		target: "group:group-openid",
+		reply:  &channel.ReplyRef{MessageID: "src-1"},
+		send: func(_ context.Context, msg channel.PreparedOutboundMessage) error {
+			sent = append(sent, msg.LogicalMessage())
+			return nil
+		},
+	}
+	if err := stream.Update(context.Background(), channel.PreparedStreamEvent{
+		Type:     channel.StreamEventToolCallEnd,
+		ToolCall: &channel.StreamToolCall{Name: "search", CallID: "call-1"},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if len(sent) != 1 || !strings.Contains(sent[0].Message.PlainText(), "search") {
+		t.Fatalf("sent = %+v, want one message naming the tool", sent)
+	}
+	if sent[0].Message.Reply == nil || sent[0].Message.Reply.MessageID != "src-1" {
+		t.Fatalf("the tool result must reply to the source message: %+v", sent[0].Message.Reply)
+	}
+}
+
+// Only a direct chat with streaming enabled streams; the rest hold the text.
+func TestOpenPreviewStreamsOnlyInADirectChat(t *testing.T) {
+	t.Parallel()
+
+	creds := func(streaming bool) map[string]any {
+		return map[string]any{"appId": "app-1", "clientSecret": "secret-1", "markdownSupport": true, "enableStreaming": streaming}
+	}
+	cases := []struct {
+		name       string
+		streaming  bool
+		target     string
+		wantStream bool
+	}{
+		{"direct chat", true, "c2c:user-openid", true},
+		{"direct chat, streaming off", false, "c2c:user-openid", false},
+		{"group", true, "group:group-openid", false},
+		{"channel", true, "channel:12345", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			preview, err := NewQQAdapter(nil).OpenPreview(context.Background(),
+				channel.ChannelConfig{ID: "cfg-1", Credentials: creds(tc.streaming)}, tc.target,
+				channel.StreamOptions{Reply: &channel.ReplyRef{MessageID: "src-1"}})
+			if err != nil {
+				t.Fatalf("OpenPreview: %v", err)
+			}
+			got, ok := preview.(*qqPreview)
+			if !ok {
+				t.Fatalf("preview is %T, want *qqPreview", preview)
+			}
+			if (got.streamSend != nil) != tc.wantStream {
+				t.Fatalf("streams = %v, want %v", got.streamSend != nil, tc.wantStream)
+			}
+		})
+	}
+}
+
+// The reply window is the one QQ documents for each kind of conversation, and
+// a message sent after it is an active message.
+func TestReplyWindowFollowsTheConversation(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewQQAdapter(nil)
+	base := adapter.Descriptor().Capabilities
+	if base.Preview != channel.PreviewNativeStream || !base.ProactiveSend {
+		t.Fatalf("capabilities = %+v, want a native stream that can send proactively", base)
+	}
+	cfg := channel.ChannelConfig{Credentials: map[string]any{"appId": "app-1", "clientSecret": "secret-1"}}
+	cases := map[string]time.Duration{
+		"c2c:user-openid":    60 * time.Minute,
+		"group:group-openid": 5 * time.Minute,
+		"channel:12345":      5 * time.Minute,
+	}
+	for target, want := range cases {
+		if got := adapter.ResolveOutboundCapabilities(cfg, target, base).ReplyWindow; got != want {
+			t.Errorf("%s: ReplyWindow = %v, want %v", target, got, want)
+		}
+	}
+}
+
+// A final that arrives after the turn's context is gone still retires the
+// stream: nothing calls Abort once Finish has run.
+func TestQQPreviewFinishOnCanceledContextRetiresTheStream(t *testing.T) {
+	t.Parallel()
+
+	var shards []qqStreamShardRequest
+	stream := &qqPreview{
+		target:         "c2c:user-openid",
+		streamInterval: 0,
+		now:            time.Now,
+		send:           func(context.Context, channel.PreparedOutboundMessage) error { return context.Canceled },
+		streamSend: func(ctx context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
+			if ctx.Err() != nil {
+				return qqStreamShardResponse{}, ctx.Err()
+			}
+			shards = append(shards, req)
+			return qqStreamShardResponse{ID: "sm-1"}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "半截回复"})); err != nil {
+		t.Fatalf("push delta: %v", err)
+	}
+	cancel()
+	_ = stream.drive(ctx, preparedQQEvent(channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}))
+
+	if last := shards[len(shards)-1]; last.InputState != qqStreamInputDone || last.ContentRaw != "半截回复" {
+		t.Fatalf("the stream must be retired at its last content, got %+v", shards)
 	}
 }

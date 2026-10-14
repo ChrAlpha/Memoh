@@ -23,24 +23,26 @@ const defaultStreamShardInterval = time.Second
 // aborted or the final shard fails.
 const streamCloseTimeout = 5 * time.Second
 
-type qqOutboundStream struct {
+// qqPreview shows one reply while it is produced. A direct chat with streaming
+// enabled shows it through QQ's stream messages; every other target holds the
+// text until the reply ends. Results of tools that finish in between are sent
+// as they come.
+type qqPreview struct {
 	target string
 	reply  *channel.ReplyRef
 	send   func(context.Context, channel.PreparedOutboundMessage) error
 
 	// C2C streaming via /v2/users/{openid}/stream_messages. A nil streamSend
-	// keeps the legacy buffer-till-final behavior (group/channel targets,
-	// streaming disabled, or no passive-reply anchor message).
+	// keeps the buffer-till-final behavior (group/channel targets, streaming
+	// disabled, or no passive-reply anchor message).
 	streamSend     func(context.Context, qqStreamShardRequest) (qqStreamShardResponse, error)
 	streamInterval time.Duration
 	now            func() time.Time
 	logger         *slog.Logger
 
-	closed      atomic.Bool
-	mu          sync.Mutex
-	buffer      strings.Builder
-	attachments []channel.PreparedAttachment
-	sentText    bool
+	closed atomic.Bool
+	mu     sync.Mutex
+	buffer strings.Builder
 
 	streamMsgID  string
 	streamIndex  int
@@ -53,13 +55,16 @@ type qqOutboundStream struct {
 	streamDone       bool
 }
 
-func (a *QQAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+var _ channel.PreviewOpener = (*QQAdapter)(nil)
+
+// OpenPreview opens the preview of a reply.
+func (a *QQAdapter) OpenPreview(_ context.Context, cfg channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	parsed, err := parseConfig(cfg.Credentials)
 	if err != nil {
-		return nil, fmt.Errorf("qq open stream: %w", err)
+		return nil, fmt.Errorf("qq open preview: %w", err)
 	}
 	redact.SetSecrets("qq:"+parsed.AppID, parsed.AppSecret)
-	stream := &qqOutboundStream{
+	preview := &qqPreview{
 		target: target,
 		reply:  opts.Reply,
 		send: func(ctx context.Context, msg channel.PreparedOutboundMessage) error {
@@ -77,18 +82,18 @@ func (a *QQAdapter) OpenStream(_ context.Context, cfg channel.ChannelConfig, tar
 	}
 	// Streamed shards are markdown payloads (QQ markdown messages), so the
 	// C2C stream is only wired when markdown rendering is enabled; otherwise
-	// the legacy path keeps its inline-markup stripping semantics.
+	// the buffered path keeps its inline-markup stripping.
 	if parsed.EnableStreaming && parsed.MarkdownSupport {
 		if parsedTarget, targetErr := parseTarget(target); targetErr == nil && parsedTarget.Kind == qqTargetC2C {
 			if replyTo := streamReplyMessageID(opts); replyTo != "" {
 				client := a.getOrCreateClient(cfg, parsed)
-				stream.streamSend = func(ctx context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
+				preview.streamSend = func(ctx context.Context, req qqStreamShardRequest) (qqStreamShardResponse, error) {
 					return client.sendStreamShard(ctx, parsedTarget.ID, replyTo, req)
 				}
 			}
 		}
 	}
-	return stream, nil
+	return preview, nil
 }
 
 func streamReplyMessageID(opts channel.StreamOptions) string {
@@ -98,12 +103,14 @@ func streamReplyMessageID(opts channel.StreamOptions) string {
 	return strings.TrimSpace(opts.SourceMessageID)
 }
 
-func (s *qqOutboundStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
+// Update shows an event of the reply. Attachments never reach it: the mapping
+// layer sends them as messages of their own.
+func (s *qqPreview) Update(ctx context.Context, event channel.PreparedStreamEvent) error {
 	if s == nil || s.send == nil {
-		return errors.New("qq stream not configured")
+		return errors.New("qq preview not configured")
 	}
 	if s.closed.Load() {
-		return errors.New("qq stream is closed")
+		return errors.New("qq preview is closed")
 	}
 	select {
 	case <-ctx.Done():
@@ -112,16 +119,6 @@ func (s *qqOutboundStream) Push(ctx context.Context, event channel.PreparedStrea
 	}
 
 	switch event.Type {
-	case channel.StreamEventStatus,
-		channel.StreamEventPhaseStart,
-		channel.StreamEventPhaseEnd,
-		channel.StreamEventToolCallStart,
-		channel.StreamEventAgentStart,
-		channel.StreamEventAgentEnd,
-		channel.StreamEventProcessingStarted,
-		channel.StreamEventProcessingCompleted,
-		channel.StreamEventProcessingFailed:
-		return nil
 	case channel.StreamEventToolCallEnd:
 		text := strings.TrimSpace(channel.RenderToolCallMessage(channel.BuildToolCallEnd(event.ToolCall)))
 		if text == "" {
@@ -165,55 +162,62 @@ func (s *qqOutboundStream) Push(ctx context.Context, event channel.PreparedStrea
 			s.mu.Unlock()
 		}
 		return nil
-	case channel.StreamEventAttachment:
-		if len(event.Attachments) == 0 {
-			return nil
-		}
-		s.mu.Lock()
-		s.attachments = append(s.attachments, event.Attachments...)
-		s.mu.Unlock()
-		return nil
 	case channel.StreamEventError:
-		errText := redact.Text(strings.TrimSpace(event.Error))
+		// Nothing has been shown that the error would overwrite, so it is the
+		// reply's message.
+		errText := strings.TrimSpace(event.Error)
 		if errText == "" {
 			return nil
 		}
-		return s.flush(ctx, channel.PreparedMessage{
-			Message: channel.Message{
-				Text: channel.ErrorReplyText(event.ErrorCode, errText),
-			},
+		return s.sendMessage(ctx, channel.PreparedMessage{
+			Message: channel.Message{Text: channel.ErrorReplyText(event.ErrorCode, errText)},
 		})
-	case channel.StreamEventFinal:
-		if event.Final == nil {
-			return errors.New("qq stream final payload is required")
-		}
-		return s.flush(ctx, event.Final.Message)
 	default:
 		return nil
 	}
 }
 
-func (s *qqOutboundStream) Close(ctx context.Context) error {
+// Finish ends the reply, once. A nil final means the run said nothing: text
+// that was held back is dropped and a stream that is open is retired.
+func (s *qqPreview) Finish(ctx context.Context, final *channel.PreparedStreamEvent) error {
+	if s == nil || s.send == nil {
+		return errors.New("qq preview not configured")
+	}
+	// A canceled ctx does not return early: Abort is not called after Finish, so
+	// an open stream is retired here, by flush when its final shard fails.
+	if s.closed.Swap(true) {
+		return nil
+	}
+	if final == nil {
+		s.finishStream(context.WithoutCancel(ctx))
+		return nil
+	}
+	var msg channel.PreparedMessage
+	if final.Final != nil {
+		msg = final.Final.Message
+	}
+	return s.flush(ctx, msg)
+}
+
+// Abort ends the reply that has no final. A stream that is open is retired so
+// QQ stops rendering it as unfinished; nothing is added to it.
+func (s *qqPreview) Abort(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	s.closed.Store(true)
-	// An aborted turn still has to retire the stream, and its context is
-	// usually already canceled by the time Close runs, so the closing shard
-	// gets a cancellation-free context of its own.
-	s.finishStream(context.WithoutCancel(ctx))
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
+	if s.closed.Swap(true) {
+		return nil
 	}
+	// The turn's context is usually already canceled by now, so the closing
+	// shard gets a cancellation-free context of its own.
+	s.finishStream(context.WithoutCancel(ctx))
 	return nil
 }
 
 // pushShard sends one replace-mode shard carrying the full text so far.
 // Cumulative content keeps the server-side prefix valid even when QQ drops
 // middle shards, so a stream can always be completed by the final shard.
-func (s *qqOutboundStream) pushShard(ctx context.Context, state int, content string) error {
+func (s *qqPreview) pushShard(ctx context.Context, state int, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -260,7 +264,7 @@ func (s *qqOutboundStream) pushShard(ctx context.Context, state int, content str
 // finishStream retires an open stream with input_state=10 carrying the last
 // content QQ accepted. Without it the QQ client renders the message as
 // forever "generating" — an unfinished stream never times out on its own.
-func (s *qqOutboundStream) finishStream(ctx context.Context) {
+func (s *qqPreview) finishStream(ctx context.Context) {
 	s.mu.Lock()
 	content := s.lastShardContent
 	pending := s.streamSend != nil && s.streamIndex > 0 && !s.streamDone && content != ""
@@ -273,14 +277,13 @@ func (s *qqOutboundStream) finishStream(ctx context.Context) {
 	_ = s.pushShard(closeCtx, qqStreamInputDone, content)
 }
 
-func (s *qqOutboundStream) flush(ctx context.Context, msg channel.PreparedMessage) error {
+// flush ends the reply with msg. The text the preview held back or streamed is
+// what the user was shown, so it is the text of the end.
+func (s *qqPreview) flush(ctx context.Context, msg channel.PreparedMessage) error {
 	s.mu.Lock()
 	bufferedText := strings.TrimSpace(s.buffer.String())
-	bufferedAttachments := append([]channel.PreparedAttachment(nil), s.attachments...)
-	alreadySentText := s.sentText
 	canStream := s.streamSend != nil
 	s.buffer.Reset()
-	s.attachments = nil
 	s.mu.Unlock()
 
 	logicalMsg := msg.LogicalMessage()
@@ -290,18 +293,6 @@ func (s *qqOutboundStream) flush(ctx context.Context, msg channel.PreparedMessag
 		if logicalMsg.Format == "" {
 			logicalMsg.Format = channel.MessageFormatPlain
 		}
-	} else if alreadySentText && len(bufferedAttachments) == 0 && len(msg.Attachments) == 0 && strings.TrimSpace(logicalMsg.PlainText()) != "" {
-		return nil
-	}
-	preparedAttachments := append([]channel.PreparedAttachment(nil), bufferedAttachments...)
-	if len(bufferedAttachments) > 0 {
-		logicalMsg.Attachments = append(preparedAttachmentLogicals(bufferedAttachments), logicalMsg.Attachments...)
-		preparedAttachments = append(preparedAttachments, msg.Attachments...)
-	} else {
-		preparedAttachments = append(preparedAttachments, msg.Attachments...)
-	}
-	if logicalMsg.Reply == nil && s.reply != nil {
-		logicalMsg.Reply = s.reply
 	}
 
 	text := strings.TrimSpace(logicalMsg.PlainText())
@@ -310,15 +301,9 @@ func (s *qqOutboundStream) flush(ctx context.Context, msg channel.PreparedMessag
 		// mode heals any middle shards QQ dropped. Only a failed final shard
 		// falls back to a regular message.
 		if err := s.pushShard(ctx, qqStreamInputDone, text); err == nil {
-			s.mu.Lock()
-			s.sentText = true
-			s.mu.Unlock()
 			logicalMsg.Text = ""
 			logicalMsg.Parts = nil
 			logicalMsg.Format = ""
-			if logicalMsg.IsEmpty() && len(preparedAttachments) == 0 {
-				return nil
-			}
 		} else {
 			// Earlier shards already put partial text on screen. Retire the
 			// stream at that point so it stops rendering as unfinished; the
@@ -326,33 +311,17 @@ func (s *qqOutboundStream) flush(ctx context.Context, msg channel.PreparedMessag
 			s.finishStream(context.WithoutCancel(ctx))
 		}
 	}
-	if logicalMsg.IsEmpty() && len(preparedAttachments) == 0 {
-		return nil
-	}
-	if err := s.send(ctx, channel.PreparedOutboundMessage{
-		Target: s.target,
-		Message: channel.PreparedMessage{
-			Message:     logicalMsg,
-			Attachments: preparedAttachments,
-		},
-	}); err != nil {
-		return err
-	}
-	if strings.TrimSpace(logicalMsg.PlainText()) != "" {
-		s.mu.Lock()
-		s.sentText = true
-		s.mu.Unlock()
-	}
-	return nil
+	return s.sendMessage(ctx, channel.PreparedMessage{Message: logicalMsg, Attachments: msg.Attachments})
 }
 
-func preparedAttachmentLogicals(attachments []channel.PreparedAttachment) []channel.Attachment {
-	if len(attachments) == 0 {
+// sendMessage sends msg to the reply's target, as a reply to the message the
+// reply answers unless msg names another. An empty message is not sent.
+func (s *qqPreview) sendMessage(ctx context.Context, msg channel.PreparedMessage) error {
+	if msg.Message.Reply == nil && s.reply != nil {
+		msg.Message.Reply = s.reply
+	}
+	if msg.Message.IsEmpty() && len(msg.Attachments) == 0 {
 		return nil
 	}
-	logical := make([]channel.Attachment, 0, len(attachments))
-	for _, att := range attachments {
-		logical = append(logical, att.Logical)
-	}
-	return logical
+	return s.send(ctx, channel.PreparedOutboundMessage{Target: s.target, Message: msg})
 }

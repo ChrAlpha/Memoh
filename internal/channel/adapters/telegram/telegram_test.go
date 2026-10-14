@@ -658,13 +658,13 @@ func TestTelegramAdapter_Type(t *testing.T) {
 	}
 }
 
-func TestTelegramAdapter_OpenStreamEmptyTarget(t *testing.T) {
+func TestTelegramAdapter_OpenPreviewEmptyTarget(t *testing.T) {
 	t.Parallel()
 
 	adapter := NewTelegramAdapter(nil)
 	ctx := context.Background()
 	cfg := channel.ChannelConfig{}
-	_, err := adapter.OpenStream(ctx, cfg, "", channel.StreamOptions{})
+	_, err := adapter.OpenPreview(ctx, cfg, "", channel.StreamOptions{})
 	if err == nil {
 		t.Fatal("empty target should return error")
 	}

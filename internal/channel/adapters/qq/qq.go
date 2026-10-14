@@ -28,6 +28,14 @@ const (
 	qqVerificationTimeout = 15 * time.Second
 )
 
+// A passive reply carries the msg_id of the message it answers, and QQ rejects
+// it once that message is too old. A direct chat allows 60 minutes, a group
+// and a channel 5. https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html
+const (
+	qqC2CReplyWindow   = 60 * time.Minute
+	qqGroupReplyWindow = 5 * time.Minute
+)
+
 type assetOpener interface {
 	Open(ctx context.Context, botID, contentHash string) (io.ReadCloser, media.Asset, error)
 }
@@ -100,6 +108,9 @@ func (*QQAdapter) Descriptor() channel.Descriptor {
 			Media:          true,
 			Reply:          true,
 			BlockStreaming: true,
+			Preview:        channel.PreviewNativeStream, // Stream messages in a direct chat with streaming enabled; elsewhere the text is held until the end.
+			ReplyWindow:    qqGroupReplyWindow,          // The shortest; ResolveOutboundCapabilities widens it for a direct chat.
+			ProactiveSend:  true,                        // Without msg_id QQ still accepts the message, as an active one with its own limits.
 			ChatTypes:      []string{channel.ConversationTypePrivate, channel.ConversationTypeGroup, channel.ConversationTypeThread},
 		},
 		OutboundPolicy: channel.OutboundPolicy{
@@ -219,6 +230,9 @@ func (*QQAdapter) ResolveOutboundCapabilities(cfg channel.ChannelConfig, target 
 		return caps
 	}
 	caps.Markdown = parsed.MarkdownSupport && parsedTarget.Kind != qqTargetChannel
+	if parsedTarget.Kind == qqTargetC2C {
+		caps.ReplyWindow = qqC2CReplyWindow
+	}
 	if parsedTarget.Kind == qqTargetChannel {
 		caps.Attachments = false
 		caps.Media = false

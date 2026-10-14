@@ -2,6 +2,7 @@ package line
 
 import (
 	"context"
+	"errors"
 	neturl "net/url"
 	"strings"
 	"testing"
@@ -191,14 +192,14 @@ func TestLineImageMessageRejectsPersistedImageWithNonHexContentHash(t *testing.T
 	}
 }
 
-func TestSendPreparedReturnsErrorWhenOnlyUnsupportedAttachments(t *testing.T) {
+func TestSendReturnsErrorWhenOnlyUnsupportedAttachments(t *testing.T) {
 	t.Parallel()
 
 	client := &testMessagingClient{}
 	adapter := NewAdapter(nil)
 	adapter.client = testLineClientFactory{messaging: client}
 
-	_, err := adapter.sendPrepared(context.Background(), testLineConfig(), channel.PreparedOutboundMessage{
+	err := adapter.Send(context.Background(), testLineConfig(), channel.PreparedOutboundMessage{
 		Target: "Uuser",
 		Message: channel.PreparedMessage{
 			Message: channel.Message{
@@ -223,14 +224,14 @@ func TestSendPreparedReturnsErrorWhenOnlyUnsupportedAttachments(t *testing.T) {
 	}
 }
 
-func TestSendPreparedDoesNotPushTextWhenAttachmentsUnsupported(t *testing.T) {
+func TestSendDoesNotPushTextWhenAttachmentsUnsupported(t *testing.T) {
 	t.Parallel()
 
 	client := &testMessagingClient{}
 	adapter := NewAdapter(nil)
 	adapter.client = testLineClientFactory{messaging: client}
 
-	_, err := adapter.sendPrepared(context.Background(), testLineConfig(), channel.PreparedOutboundMessage{
+	err := adapter.Send(context.Background(), testLineConfig(), channel.PreparedOutboundMessage{
 		Target: "Uuser",
 		Message: channel.PreparedMessage{
 			Message: channel.Message{
@@ -254,6 +255,53 @@ func TestSendPreparedDoesNotPushTextWhenAttachmentsUnsupported(t *testing.T) {
 	}
 	if client.pushCalls != 0 {
 		t.Fatalf("push calls = %d, want 0", client.pushCalls)
+	}
+}
+
+// A reply is pushed whole by Send, so a failure after part of it went out is
+// the caller's to see.
+func TestSendReturnsErrorAfterPartialPush(t *testing.T) {
+	t.Parallel()
+
+	client := &testMessagingClient{pushErrOnCall: 2, pushErr: errors.New("network failure")}
+	adapter := NewAdapter(nil)
+	adapter.client = testLineClientFactory{messaging: client}
+
+	err := adapter.Send(context.Background(), testLineConfig(), channel.PreparedOutboundMessage{
+		Target: "Uuser",
+		Message: channel.PreparedMessage{
+			Message: channel.Message{Format: channel.MessageFormatPlain, Text: "hello"},
+			Attachments: []channel.PreparedAttachment{{
+				Kind:      channel.PreparedAttachmentPublicURL,
+				PublicURL: "https://cdn.example.com/image.png",
+				Mime:      "image/png",
+				Size:      1024,
+				Logical: channel.Attachment{
+					Type: channel.AttachmentImage,
+					URL:  "https://cdn.example.com/image.png",
+					Mime: "image/png",
+					Size: 1024,
+				},
+			}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected the failed image push to be returned")
+	}
+	if client.pushCalls != 2 {
+		t.Fatalf("push calls = %d, want 2", client.pushCalls)
+	}
+}
+
+func TestDescriptorDeclaresNoPreview(t *testing.T) {
+	t.Parallel()
+
+	adapter := NewAdapter(nil)
+	if got := adapter.Descriptor().Capabilities.Preview; got != channel.PreviewNone {
+		t.Fatalf("Preview = %v, want PreviewNone", got)
+	}
+	if _, ok := any(adapter).(channel.PreviewOpener); ok {
+		t.Fatal("an adapter without a preview must not open one")
 	}
 }
 
