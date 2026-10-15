@@ -46,6 +46,7 @@ func (s *Service) startDiscussTurn(runCtx context.Context, cmd turn.StartTurnCom
 		return nil, errors.New("turn: discuss runtime not configured")
 	}
 	h := newDiscussHandle(runCtx, cmd, cancel, admission.RunID, s.turnRunFinisher(runCtx, admission, string(cmd.Mode)))
+	h.admission = admission
 	h.publishAgentEvent = s.turnAgentEventPublisher(admission.Handle)
 	go s.pumpDiscuss(runCtx, cmd, h)
 	return h, nil
@@ -78,6 +79,7 @@ func (*discussHandle) Inject(context.Context, turn.InjectMessage) error {
 // discussHandle reuses runHandle's channel pair with manual event emission.
 type discussHandle struct {
 	runHandle
+	admission            sessionruntime.Admission
 	teamID               string
 	sessionID            string
 	seq                  int64
@@ -270,7 +272,12 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	defer outcome.finishLifecycle(terminal)
 
 	reasoningTiming := newReasoningTimingTracker(nil)
-	configureNativeReasoningTiming(&runConfig, reasoningTiming, nil)
+	stepCommitter, err := s.newDiscussStepCommitter(ctx, cmd, h, runConfig, resolved.ModelID)
+	if err != nil {
+		h.emitErr(runtimeHistoryError(err))
+		return
+	}
+	configureNativeReasoningTiming(&runConfig, reasoningTiming, stepCommitter)
 	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(runConfig))
 	defer idleCancel.Stop()
 	outcome.watchIdle(idleCtx, idleCancel)
@@ -287,6 +294,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	var finalReasoningTiming []messagepkg.ReasoningTimingSegment
 	var terminalEvent native.StreamEvent
 	var terminalPayload []byte
+	var partialText uncommittedStepText
 	for event := range eventCh {
 		if event.Type == native.EventContextRecompose {
 			if h.emit(turn.DiscussEventRecompose, nil) {
@@ -298,6 +306,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			return
 		}
 		idleCancel.Observe(event)
+		partialText.observe(event)
 		_ = outcome.observe(event)
 		if event.IsTerminal() {
 			finalMessages = event.Messages
@@ -306,9 +315,15 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 			terminalPayload, _ = json.Marshal(terminalEvent)
 			continue
 		}
+		if ctx.Err() != nil && stepCommitter != nil {
+			continue
+		}
 		if h.publishAgentEvent != nil {
 			if publishErr := h.publishAgentEvent(ctx, publicAgentStreamEvent(event)); publishErr != nil {
 				outcome.setCause(publishErr)
+				if stepCommitter != nil && ctx.Err() != nil {
+					continue
+				}
 				h.emitErr(publishErr)
 				return
 			}
@@ -319,6 +334,9 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		}
 		if !h.emit(string(event.Type), payload) {
 			outcome.recordCause(context.Cause(ctx))
+			if stepCommitter != nil {
+				continue
+			}
 			return
 		}
 	}
@@ -326,6 +344,21 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	timedOut := idleCancel.DidFire()
 	if timedOut {
 		outcome.setCause(context.Cause(idleCtx))
+	}
+	if stepCommitter != nil {
+		if commitErr := stepCommitter.err(); commitErr != nil && ctx.Err() == nil {
+			outcome.setCause(runtimeHistoryError(commitErr))
+		}
+		_, storeErr := stepCommitter.recordFailure(ctx, partialText.String(), snapshotFailureCode(timedOut, outcome.cause))
+		if storeErr == nil {
+			storeErr = stepCommitter.finish(ctx, 0)
+		}
+		if storeErr != nil {
+			historyErr := runtimeHistoryError(storeErr)
+			outcome.setCause(historyErr)
+			h.emitErr(historyErr)
+			return
+		}
 	}
 	if !hasTerminalEvent && !timedOut {
 		if ctx.Err() != nil {
@@ -344,7 +377,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	// detaching cancellation so that terminal history and runtime publication
 	// can cross the same durable boundary as the main chat stream.
 	terminalCtx := context.WithoutCancel(ctx)
-	if hasTerminalEvent || timedOut {
+	if stepCommitter == nil && (hasTerminalEvent || timedOut) {
 		var failureCode apperror.Code
 		if timedOut {
 			failureCode = snapshotFailureCode(true, outcome.cause)

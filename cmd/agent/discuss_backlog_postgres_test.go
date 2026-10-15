@@ -41,11 +41,15 @@ import (
 
 type recordingFailureBroadcaster struct {
 	failures chan string
+	deltas   chan string
 }
 
 func (b *recordingFailureBroadcaster) PublishEvent(_ string, event channel.StreamEvent) {
 	if event.Type == channel.StreamEventError {
 		b.failures <- event.ErrorCode
+	}
+	if event.Type == channel.StreamEventDelta && b.deltas != nil {
+		b.deltas <- event.Delta
 	}
 }
 
