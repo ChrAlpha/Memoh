@@ -98,6 +98,7 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 	if c == nil || cfg == nil {
 		return
 	}
+	c.bindContextSwitch(cfg)
 	if c.queueStep != nil && c.queueStep.steerEnabled {
 		cfg.SteerWake = c.service.sessionManager.SteerWake(c.req.RunHandle)
 		cfg.PendingSteer = func(ctx context.Context) (bool, error) {

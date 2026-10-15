@@ -26,6 +26,13 @@ type chatHistoryLayout struct {
 }
 
 func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) native.RunConfig {
+	if switchContext := cfg.SwitchContext; switchContext != nil {
+		cfg.SwitchContext = func(ctx context.Context, input native.ContextSwitchInput) (native.ContextSwitchResult, error) {
+			idle.Pause()
+			defer idle.Resume()
+			return switchContext(ctx, input)
+		}
+	}
 	if recoverBudget := cfg.RecoverContextBudget; recoverBudget != nil {
 		cfg.RecoverContextBudget = func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 			idle.Pause()

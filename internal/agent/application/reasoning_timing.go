@@ -169,6 +169,7 @@ func configureNativeReasoningTiming(
 		tracker.observe(event)
 	}
 	if stepCommitter != nil {
+		stepCommitter.bindContextSwitch(cfg)
 		stepCommitter.reasoningTiming = tracker
 		cfg.OnStepCommitted = stepCommitter.commit
 		cfg.OnStepInterrupted = stepCommitter.interrupt
