@@ -27,7 +27,8 @@ type ChannelCapabilities struct {
 	BlockStreaming bool     `json:"block_streaming"`
 	ChatTypes      []string `json:"chat_types,omitempty"`
 	// Preview selects how a streamed reply is shown. The zero value is
-	// PreviewLegacy, the behavior every adapter has today.
+	// PreviewNone: an adapter that does not declare a mode gets its reply in one
+	// message when the reply is complete.
 	Preview PreviewMode `json:"preview,omitempty"`
 	// ReplyWindow is how long after an inbound message the platform accepts a
 	// passive reply to it. Zero means the platform imposes no such window.
@@ -44,10 +45,8 @@ type ChannelCapabilities struct {
 type PreviewMode int
 
 const (
-	// PreviewLegacy is the Push/Close stream every adapter implements today.
-	PreviewLegacy PreviewMode = iota
 	// PreviewNone sends the reply only when it is complete.
-	PreviewNone
+	PreviewNone PreviewMode = iota
 	// PreviewEditInPlace shows the reply by editing one message.
 	PreviewEditInPlace
 	// PreviewNativeStream shows the reply through the platform's own streaming

@@ -71,7 +71,6 @@ func PrepareStreamEvent(
 		ToolCall:  event.ToolCall,
 		Phase:     event.Phase,
 		Reactions: event.Reactions,
-		Speeches:  event.Speeches,
 		Metadata:  event.Metadata,
 	}
 

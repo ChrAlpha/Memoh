@@ -246,16 +246,6 @@ func (r *Registry) GetSender(channelType ChannelType) (Sender, bool) {
 	return sender, ok
 }
 
-// GetStreamSender returns the StreamSender for the given channel type, or nil if unsupported.
-func (r *Registry) GetStreamSender(channelType ChannelType) (StreamSender, bool) {
-	adapter, ok := r.Get(channelType)
-	if !ok {
-		return nil, false
-	}
-	streamSender, ok := adapter.(StreamSender)
-	return streamSender, ok
-}
-
 // GetMessageEditor returns the MessageEditor for the given channel type, or nil if unsupported.
 func (r *Registry) GetMessageEditor(channelType ChannelType) (MessageEditor, bool) {
 	adapter, ok := r.Get(channelType)

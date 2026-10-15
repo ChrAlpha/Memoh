@@ -20,7 +20,7 @@ type transport struct {
 	mu       sync.Mutex
 	log      []string
 	messages []channel.Message
-	// finals holds the final each preview or stream ended with.
+	// finals holds the final each preview ended with.
 	finals []*channel.Message
 	opens  int
 }
@@ -43,13 +43,6 @@ func (t *transport) Send(_ context.Context, _ channel.ChannelConfig, msg channel
 	return nil
 }
 
-func (t *transport) OpenStream(context.Context, channel.ChannelConfig, string, channel.StreamOptions) (channel.PreparedOutboundStream, error) {
-	t.mu.Lock()
-	t.opens++
-	t.mu.Unlock()
-	return &transportStream{t: t}, nil
-}
-
 func (t *transport) OpenPreview(context.Context, channel.ChannelConfig, string, channel.StreamOptions) (channel.PreparedPreview, error) {
 	t.mu.Lock()
 	t.opens++
@@ -70,24 +63,6 @@ func (t *transport) snapshot() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]string{}, t.log...)
-}
-
-type transportStream struct{ t *transport }
-
-func (s *transportStream) Push(_ context.Context, event channel.PreparedStreamEvent) error {
-	s.t.record("push:" + string(event.Type))
-	if event.Type == channel.StreamEventFinal && event.Final != nil {
-		msg := event.Final.Message.LogicalMessage()
-		s.t.mu.Lock()
-		s.t.finals = append(s.t.finals, &msg)
-		s.t.mu.Unlock()
-	}
-	return nil
-}
-
-func (s *transportStream) Close(context.Context) error {
-	s.t.record("close")
-	return nil
 }
 
 type transportPreview struct{ t *transport }

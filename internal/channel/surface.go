@@ -11,22 +11,19 @@ import (
 // for one config. It satisfies delivery.Surface and StreamReplySender, and is
 // the only place that turns a reply into adapter calls.
 type managerSurface struct {
-	manager      *Manager
-	sender       Sender
-	streamSender StreamSender
-	channelType  ChannelType
-	config       ChannelConfig
+	manager     *Manager
+	sender      Sender
+	channelType ChannelType
+	config      ChannelConfig
 }
 
 func (m *Manager) newSurface(cfg ChannelConfig, channelType ChannelType) *managerSurface {
 	sender, _ := m.registry.GetSender(channelType)
-	streamSender, _ := m.registry.GetStreamSender(channelType)
 	return &managerSurface{
-		manager:      m,
-		sender:       sender,
-		streamSender: streamSender,
-		channelType:  channelType,
-		config:       cfg,
+		manager:     m,
+		sender:      sender,
+		channelType: channelType,
+		config:      cfg,
 	}
 }
 
@@ -79,55 +76,56 @@ func (s *managerSurface) React(ctx context.Context, req ReactRequest) error {
 	return s.manager.react(ctx, reactor, s.config, s.channelType, req)
 }
 
-// OpenPreview opens the reply's preview on target: the Push/Close session of
-// an adapter that declares PreviewLegacy, the adapter's PreviewOpener
-// otherwise.
+// OpenPreview opens the reply's preview on target through the adapter's
+// PreviewOpener, wrapped in the manager's chunking and stream splitting.
 func (s *managerSurface) OpenPreview(ctx context.Context, target string, opts StreamOptions) (Preview, error) {
-	target, caps, err := s.previewTarget(ctx, target)
+	target, err := s.previewTarget(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	var stream *managerOutboundStream
-	if caps.Preview == PreviewLegacy {
-		stream, err = s.openLegacyStream(ctx, target, opts)
-	} else {
-		stream, err = s.openAdapterPreview(ctx, target, opts)
+	adapter, _ := s.manager.registry.Get(s.channelType)
+	opener, ok := adapter.(PreviewOpener)
+	if !ok {
+		return nil, errors.New("channel adapter does not open previews")
 	}
+	raw, err := opener.OpenPreview(ctx, s.config, target, opts)
 	if err != nil {
 		return nil, err
 	}
-	return stream, nil
+	return s.newOutboundStream(target, opts, raw, func(ctx context.Context) (PreparedPreview, error) {
+		return opener.OpenPreview(ctx, s.config, target, continuation(opts))
+	}), nil
 }
 
-// previewTarget resolves target's alias and returns the capabilities a stream
-// to it needs: a channel that cannot stream has no preview.
-func (s *managerSurface) previewTarget(ctx context.Context, target string) (string, ChannelCapabilities, error) {
+// previewTarget resolves target's alias: a channel that cannot stream has no
+// preview.
+func (s *managerSurface) previewTarget(ctx context.Context, target string) (string, error) {
 	if s.manager == nil {
-		return "", ChannelCapabilities{}, errors.New("channel manager not configured")
+		return "", errors.New("channel manager not configured")
 	}
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return "", ChannelCapabilities{}, errors.New("target is required")
+		return "", errors.New("target is required")
 	}
 	target, err := s.manager.resolveOutboundTarget(ctx, s.channelType, s.config, target)
 	if err != nil {
-		return "", ChannelCapabilities{}, err
+		return "", err
 	}
 	caps := s.Capabilities(target)
 	if !caps.Streaming && !caps.BlockStreaming {
-		return "", ChannelCapabilities{}, errors.New("channel does not support streaming")
+		return "", errors.New("channel does not support streaming")
 	}
-	return target, caps, nil
+	return target, nil
 }
 
-// newOutboundStream wraps an adapter session in the manager's chunking and
+// newOutboundStream wraps an adapter preview in the manager's chunking and
 // stream splitting. A continuation stream carries the rest of a reply whose
 // earlier text is already delivered, so its final does not repeat that text.
-func (s *managerSurface) newOutboundStream(target string, opts StreamOptions, session PreparedOutboundStream, reopen func(context.Context) (PreparedOutboundStream, error)) *managerOutboundStream {
+func (s *managerSurface) newOutboundStream(target string, opts StreamOptions, preview PreparedPreview, reopen func(context.Context) (PreparedPreview, error)) *managerOutboundStream {
 	stream := &managerOutboundStream{
 		manager:     s.manager,
 		config:      s.config,
-		stream:      session,
+		preview:     preview,
 		channelType: s.channelType,
 		target:      target,
 		policy:      s.manager.resolveOutboundPolicy(s.channelType),

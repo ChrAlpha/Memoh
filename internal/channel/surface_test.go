@@ -283,8 +283,7 @@ func TestSurfacePreviewFinishWithoutFinal(t *testing.T) {
 	}
 }
 
-// An adapter that declares a preview mode other than legacy has to implement
-// PreviewOpener.
+// An adapter that declares a preview mode has to implement PreviewOpener.
 func TestSurfaceOpenPreviewNeedsOpener(t *testing.T) {
 	t.Parallel()
 
@@ -299,76 +298,6 @@ func TestSurfaceOpenPreviewNeedsOpener(t *testing.T) {
 		OpenPreview(context.Background(), "target-1", StreamOptions{})
 	if err == nil || !strings.Contains(err.Error(), "does not open previews") {
 		t.Fatalf("err = %v", err)
-	}
-}
-
-// legacyAdapter is an adapter on the Push/Close session that PreviewLegacy
-// names.
-type legacyAdapter struct {
-	channelType ChannelType
-	stream      *closableStream
-}
-
-func (a *legacyAdapter) Type() ChannelType { return a.channelType }
-
-func (a *legacyAdapter) Descriptor() Descriptor {
-	return Descriptor{Type: a.channelType, Capabilities: ChannelCapabilities{Text: true, Markdown: true, Streaming: true}}
-}
-
-func (*legacyAdapter) Send(context.Context, ChannelConfig, PreparedOutboundMessage) error { return nil }
-
-func (a *legacyAdapter) OpenStream(context.Context, ChannelConfig, string, StreamOptions) (PreparedOutboundStream, error) {
-	a.stream = &closableStream{}
-	return a.stream, nil
-}
-
-type closableStream struct {
-	recordingStream
-	closed bool
-}
-
-func (s *closableStream) Close(context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.closed = true
-	return nil
-}
-
-// A legacy adapter's preview is its Push/Close session: events are pushed, and
-// the end of the reply is the final, the completed status and the close.
-func TestSurfaceLegacyPreviewEndsTheSession(t *testing.T) {
-	t.Parallel()
-
-	channelType := ChannelType("preview-legacy")
-	registry := NewRegistry()
-	adapter := &legacyAdapter{channelType: channelType}
-	registry.MustRegister(adapter)
-	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	preview, err := manager.newSurface(ChannelConfig{BotID: "bot-1", ChannelType: channelType}, channelType).
-		OpenPreview(context.Background(), "target-1", StreamOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	_ = preview.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: "hello", Phase: StreamPhaseText})
-	if err := preview.Finish(ctx, finalOf("hello")); err != nil {
-		t.Fatal(err)
-	}
-	var types []StreamEventType
-	for _, event := range adapter.stream.Events() {
-		types = append(types, event.Type)
-	}
-	want := []StreamEventType{StreamEventDelta, StreamEventFinal, StreamEventStatus}
-	if len(types) != len(want) {
-		t.Fatalf("events = %v, want %v", types, want)
-	}
-	for i := range want {
-		if types[i] != want[i] {
-			t.Fatalf("events = %v, want %v", types, want)
-		}
-	}
-	if !adapter.stream.closed {
-		t.Fatal("session was not closed")
 	}
 }
 

@@ -23,6 +23,7 @@ func (*mockAdapter) Descriptor() Descriptor {
 			Text:      true,
 			Reply:     true,
 			Streaming: true,
+			Preview:   PreviewEditInPlace,
 		},
 	}
 }
@@ -32,22 +33,30 @@ func (m *mockAdapter) Send(_ context.Context, _ ChannelConfig, msg PreparedOutbo
 	return nil
 }
 
-func (m *mockAdapter) OpenStream(_ context.Context, _ ChannelConfig, _ string, _ StreamOptions) (PreparedOutboundStream, error) {
-	return &mockAdapterStream{adapter: m}, nil
+func (m *mockAdapter) OpenPreview(_ context.Context, _ ChannelConfig, _ string, _ StreamOptions) (PreparedPreview, error) {
+	return &mockAdapterPreview{adapter: m}, nil
 }
 
-type mockAdapterStream struct {
+type mockAdapterPreview struct {
 	adapter *mockAdapter
 }
 
-func (s *mockAdapterStream) Push(_ context.Context, event PreparedStreamEvent) error {
-	if s == nil || s.adapter == nil {
+func (p *mockAdapterPreview) Update(_ context.Context, event PreparedStreamEvent) error {
+	if p == nil || p.adapter == nil {
 		return nil
 	}
-	logical := event.LogicalEvent()
-	s.adapter.streamEvents = append(s.adapter.streamEvents, logical)
-	if logical.Type == StreamEventFinal && logical.Final != nil && !logical.Final.Message.IsEmpty() {
-		s.adapter.sentMessages = append(s.adapter.sentMessages, OutboundMessage{
+	p.adapter.streamEvents = append(p.adapter.streamEvents, event.LogicalEvent())
+	return nil
+}
+
+func (p *mockAdapterPreview) Finish(_ context.Context, final *PreparedStreamEvent) error {
+	if p == nil || p.adapter == nil || final == nil {
+		return nil
+	}
+	logical := final.LogicalEvent()
+	p.adapter.streamEvents = append(p.adapter.streamEvents, logical)
+	if logical.Final != nil && !logical.Final.Message.IsEmpty() {
+		p.adapter.sentMessages = append(p.adapter.sentMessages, OutboundMessage{
 			Target:  "stream-target",
 			Message: logical.Final.Message,
 		})
@@ -55,7 +64,7 @@ func (s *mockAdapterStream) Push(_ context.Context, event PreparedStreamEvent) e
 	return nil
 }
 
-func (*mockAdapterStream) Close(_ context.Context) error {
+func (*mockAdapterPreview) Abort(_ context.Context) error {
 	return nil
 }
 

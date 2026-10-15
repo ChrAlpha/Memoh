@@ -176,7 +176,7 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 	case ev.Type == channel.StreamEventReset:
 		st.streamed = false
 		st.pending, st.delivered = "", ""
-	case ev.Type == channel.StreamEventAttachment && caps.Preview != channel.PreviewLegacy:
+	case ev.Type == channel.StreamEventAttachment:
 		return planAttach(ev, st)
 	}
 	if caps.Preview == channel.PreviewNone {

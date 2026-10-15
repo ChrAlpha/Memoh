@@ -79,7 +79,6 @@ type PreparedStreamEvent struct {
 	Phase       StreamPhase
 	Attachments []PreparedAttachment
 	Reactions   []ReactRequest
-	Speeches    []SpeechRequest
 	Metadata    map[string]any
 }
 
@@ -104,7 +103,6 @@ func (e PreparedStreamEvent) LogicalEvent() StreamEvent {
 		ToolCall:  e.ToolCall,
 		Phase:     e.Phase,
 		Reactions: e.Reactions,
-		Speeches:  e.Speeches,
 		Metadata:  e.Metadata,
 	}
 	if len(e.Attachments) > 0 {

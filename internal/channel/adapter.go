@@ -30,12 +30,6 @@ type StreamReplySender interface {
 	OpenPreview(ctx context.Context, target string, opts StreamOptions) (Preview, error)
 }
 
-// PreparedOutboundStream is the adapter-facing stream session.
-type PreparedOutboundStream interface {
-	Push(ctx context.Context, event PreparedStreamEvent) error
-	Close(ctx context.Context) error
-}
-
 // OutboundStream is a live stream session for emitting outbound events.
 // Implementations are not required to be safe for concurrent use; callers
 // must serialize Push and Close calls within a single goroutine.
@@ -152,11 +146,6 @@ type OutboundCapabilityResolver interface {
 // target before outbound capability checks run.
 type OutboundTargetResolver interface {
 	ResolveOutboundTarget(ctx context.Context, cfg ChannelConfig, target string) (string, error)
-}
-
-// StreamSender is an adapter capable of opening outbound stream sessions.
-type StreamSender interface {
-	OpenStream(ctx context.Context, cfg ChannelConfig, target string, opts StreamOptions) (PreparedOutboundStream, error)
 }
 
 // MessageEditor updates and deletes already-sent messages when supported.

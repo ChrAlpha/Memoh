@@ -6,8 +6,10 @@ package inbound
 // receives below the manager's chunking and stream splitting.
 //
 // The same scenario definitions were run on the code before the delivery layer
-// (4b97f4d95) and recorded into ../delivery/testdata/baseline.
-// TestDeliveryMatchesBaseline replays them.
+// (4b97f4d95), on an adapter that implemented the Push/Close stream session,
+// and recorded into ../delivery/testdata/baseline. The recording adapter here
+// shows replies through a preview, so TestDeliveryMatchesBaseline maps the
+// baseline's calls onto the preview's before it compares them.
 
 import (
 	"context"
@@ -62,7 +64,9 @@ type recordedEvent struct {
 	Attachments []recordedAttachment `json:"attachments,omitempty"`
 }
 
-// recordedCall is one call the adapter received.
+// recordedCall is one call the adapter received. Op is open, update, finish,
+// abort, send, react or unreact. The baseline fixtures name the calls of the
+// stream session push and close in place of update, finish and abort.
 type recordedCall struct {
 	Op        string           `json:"op"`
 	Stream    int              `json:"stream,omitempty"`
@@ -203,7 +207,7 @@ func (a *recordingAdapter) Send(_ context.Context, _ channel.ChannelConfig, msg 
 	return nil
 }
 
-func (a *recordingAdapter) OpenStream(_ context.Context, _ channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedOutboundStream, error) {
+func (a *recordingAdapter) OpenPreview(_ context.Context, _ channel.ChannelConfig, target string, opts channel.StreamOptions) (channel.PreparedPreview, error) {
 	a.mu.Lock()
 	a.streams++
 	id := a.streams
@@ -213,7 +217,7 @@ func (a *recordingAdapter) OpenStream(_ context.Context, _ channel.ChannelConfig
 		reply = opts.Reply.MessageID
 	}
 	a.record(recordedCall{Op: "open", Stream: id, Target: target, ReplyTo: reply})
-	return &recordingStream{adapter: a, id: id}, nil
+	return &recordingPreview{adapter: a, id: id}, nil
 }
 
 func (a *recordingAdapter) React(_ context.Context, _ channel.ChannelConfig, target, messageID, emoji string) error {
@@ -226,18 +230,28 @@ func (a *recordingAdapter) Unreact(_ context.Context, _ channel.ChannelConfig, t
 	return nil
 }
 
-type recordingStream struct {
+type recordingPreview struct {
 	adapter *recordingAdapter
 	id      int
 }
 
-func (s *recordingStream) Push(_ context.Context, event channel.PreparedStreamEvent) error {
-	s.adapter.record(recordedCall{Op: "push", Stream: s.id, Event: recordPreparedEvent(event)})
+func (p *recordingPreview) Update(_ context.Context, event channel.PreparedStreamEvent) error {
+	p.adapter.record(recordedCall{Op: "update", Stream: p.id, Event: recordPreparedEvent(event)})
 	return nil
 }
 
-func (s *recordingStream) Close(context.Context) error {
-	s.adapter.record(recordedCall{Op: "close", Stream: s.id})
+// Finish records the final it ends the preview with, or none.
+func (p *recordingPreview) Finish(_ context.Context, final *channel.PreparedStreamEvent) error {
+	call := recordedCall{Op: "finish", Stream: p.id}
+	if final != nil {
+		call.Event = recordPreparedEvent(*final)
+	}
+	p.adapter.record(call)
+	return nil
+}
+
+func (p *recordingPreview) Abort(context.Context) error {
+	p.adapter.record(recordedCall{Op: "abort", Stream: p.id})
 	return nil
 }
 
@@ -295,7 +309,7 @@ type deliveryScenario struct {
 func scenarioCaps(mutate func(*channel.ChannelCapabilities)) channel.ChannelCapabilities {
 	caps := channel.ChannelCapabilities{
 		Text: true, Markdown: true, Attachments: true, Media: true, Reactions: true,
-		Buttons: true, Reply: true, Streaming: true,
+		Buttons: true, Reply: true, Streaming: true, Preview: channel.PreviewEditInPlace,
 	}
 	if mutate != nil {
 		mutate(&caps)

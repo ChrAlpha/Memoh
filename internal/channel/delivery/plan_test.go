@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	t0      = time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	reply   = &channel.ReplyRef{Target: "chat-1", MessageID: "m-1"}
-	noCaps  = channel.ChannelCapabilities{}
-	winCaps = channel.ChannelCapabilities{ReplyWindow: time.Hour}
+	t0    = time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	reply = &channel.ReplyRef{Target: "chat-1", MessageID: "m-1"}
+	// previewCaps declares a channel that shows a reply while it is produced.
+	previewCaps = channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace}
+	winCaps     = channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace, ReplyWindow: time.Hour}
 )
 
 func kinds(actions []Action) []Kind {
@@ -112,7 +113,7 @@ func TestPlanEventActions(t *testing.T) {
 		want  []Kind
 	}{
 		{"status is forwarded to the preview", status, state(t0), []Kind{KindUpdate}},
-		{"attachment is forwarded to a legacy preview", attach, state(t0), []Kind{KindUpdate}},
+		{"attachment is a message of its own", attach, state(t0), []Kind{KindAttach}},
 		{"delta is forwarded to the preview", delta, state(t0), []Kind{KindUpdate}},
 		{"error before any text goes through the preview", errEv, state(t0), []Kind{KindUpdate}},
 		{"error after streamed text is a new message", errEv, withStreamed(state(t0)), []Kind{KindSend}},
@@ -126,7 +127,7 @@ func TestPlanEventActions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			actions, _ := Plan(tc.ev, noCaps, tc.start)
+			actions, _ := Plan(tc.ev, previewCaps, tc.start)
 			if !sameKinds(actions, tc.want...) {
 				t.Fatalf("actions = %v, want %v", kinds(actions), tc.want)
 			}
@@ -134,29 +135,29 @@ func TestPlanEventActions(t *testing.T) {
 	}
 
 	t.Run("reasoning text is not preview text", func(t *testing.T) {
-		_, st := Plan(thinking, noCaps, state(t0))
-		actions, _ := Plan(errEv, noCaps, st)
+		_, st := Plan(thinking, previewCaps, state(t0))
+		actions, _ := Plan(errEv, previewCaps, st)
 		if !sameKinds(actions, KindUpdate) {
 			t.Fatalf("error after reasoning = %v, want the preview to end with it", kinds(actions))
 		}
 	})
 	t.Run("visible text makes a later error a message", func(t *testing.T) {
-		_, st := Plan(delta, noCaps, state(t0))
-		actions, _ := Plan(errEv, noCaps, st)
+		_, st := Plan(delta, previewCaps, state(t0))
+		actions, _ := Plan(errEv, previewCaps, st)
 		if !sameKinds(actions, KindSend) {
 			t.Fatalf("error after text = %v, want a message", kinds(actions))
 		}
 	})
 	t.Run("a reset discards the text the preview shows", func(t *testing.T) {
-		_, st := Plan(delta, noCaps, state(t0))
-		_, st = Plan(reset, noCaps, st)
-		actions, _ := Plan(errEv, noCaps, st)
+		_, st := Plan(delta, previewCaps, state(t0))
+		_, st = Plan(reset, previewCaps, st)
+		actions, _ := Plan(errEv, previewCaps, st)
 		if !sameKinds(actions, KindUpdate) {
 			t.Fatalf("error after reset = %v, want the preview to end with it", kinds(actions))
 		}
 	})
 	t.Run("an error is a message that quotes the source message", func(t *testing.T) {
-		actions, _ := Plan(errEv, noCaps, withStreamed(state(t0)))
+		actions, _ := Plan(errEv, previewCaps, withStreamed(state(t0)))
 		got := actions[0].Message
 		if got.Target != "chat-1" || got.Message.Text != "Error: boom" || got.Message.Reply != reply {
 			t.Fatalf("error message = %+v", got)
@@ -166,7 +167,7 @@ func TestPlanEventActions(t *testing.T) {
 		}
 	})
 	t.Run("reactions are addressed to the source message", func(t *testing.T) {
-		actions, _ := Plan(react, noCaps, state(t0))
+		actions, _ := Plan(react, previewCaps, state(t0))
 		got := actions[0].Reactions
 		if len(got) != 1 || got[0].Target != "chat-1" || got[0].MessageID != "m-1" || got[0].Emoji != "ok" {
 			t.Fatalf("reactions = %+v", got)
@@ -178,9 +179,9 @@ func TestPlanEventActions(t *testing.T) {
 // them to the preview; any other channel gets a plain message. When the
 // preview shows text, it ends first and a new preview carries what follows.
 func TestPlanPrompts(t *testing.T) {
-	native := channel.ChannelCapabilities{NativeApproval: true, NativeUserInput: true}
-	approvalOnly := channel.ChannelCapabilities{NativeApproval: true}
-	inputOnly := channel.ChannelCapabilities{NativeUserInput: true}
+	native := channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace, NativeApproval: true, NativeUserInput: true}
+	approvalOnly := channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace, NativeApproval: true}
+	inputOnly := channel.ChannelCapabilities{Preview: channel.PreviewEditInPlace, NativeUserInput: true}
 
 	cases := []struct {
 		name  string
@@ -193,11 +194,11 @@ func TestPlanPrompts(t *testing.T) {
 		{"native ask_user goes to the preview", askUser(), native, withStreamed(state(t0)), []Kind{KindUpdate}},
 		{"approval needs the approval capability", approval(), inputOnly, state(t0), []Kind{KindSend}},
 		{"ask_user needs the input capability", askUser(), approvalOnly, state(t0), []Kind{KindSend}},
-		{"plain approval without preview text is a message", approval(), noCaps, state(t0), []Kind{KindSend}},
-		{"plain ask_user without preview text is a message", askUser(), noCaps, state(t0), []Kind{KindSend}},
-		{"plain approval after preview text splits the preview", approval(), noCaps, withStreamed(state(t0)), []Kind{KindEndPreview, KindSend, KindOpenPreview}},
-		{"plain ask_user after preview text splits the preview", askUser(), noCaps, withStreamed(state(t0)), []Kind{KindEndPreview, KindSend, KindOpenPreview}},
-		{"approval is never hidden", approval(), noCaps, hiding(state(t0)), []Kind{KindSend}},
+		{"plain approval without preview text is a message", approval(), previewCaps, state(t0), []Kind{KindSend}},
+		{"plain ask_user without preview text is a message", askUser(), previewCaps, state(t0), []Kind{KindSend}},
+		{"plain approval after preview text splits the preview", approval(), previewCaps, withStreamed(state(t0)), []Kind{KindEndPreview, KindSend, KindOpenPreview}},
+		{"plain ask_user after preview text splits the preview", askUser(), previewCaps, withStreamed(state(t0)), []Kind{KindEndPreview, KindSend, KindOpenPreview}},
+		{"approval is never hidden", approval(), previewCaps, hiding(state(t0)), []Kind{KindSend}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,7 +210,7 @@ func TestPlanPrompts(t *testing.T) {
 	}
 
 	t.Run("the prompt is a plain message that quotes the source message", func(t *testing.T) {
-		actions, _ := Plan(approval(), noCaps, state(t0))
+		actions, _ := Plan(approval(), previewCaps, state(t0))
 		msg := actions[0].Message
 		if msg.Target != "chat-1" || msg.Message.Format != channel.MessageFormatPlain || msg.Message.Reply != reply {
 			t.Fatalf("prompt = %+v", msg)
@@ -224,7 +225,7 @@ func TestPlanPrompts(t *testing.T) {
 		}
 	})
 	t.Run("the ask_user prompt shows the question and its options", func(t *testing.T) {
-		actions, _ := Plan(askUser(), noCaps, state(t0))
+		actions, _ := Plan(askUser(), previewCaps, state(t0))
 		text := actions[0].Message.Message.Text
 		for _, want := range []string{"Pick one", "1) A"} {
 			if !strings.Contains(text, want) {
@@ -233,11 +234,11 @@ func TestPlanPrompts(t *testing.T) {
 		}
 	})
 	t.Run("the split preview ends with a flush, and the new preview has no text", func(t *testing.T) {
-		actions, st := Plan(approval(), noCaps, withStreamed(state(t0)))
+		actions, st := Plan(approval(), previewCaps, withStreamed(state(t0)))
 		if actions[0].Final == nil || actions[0].Final.Type != channel.StreamEventFinal || !actions[0].Final.Final.Message.IsEmpty() {
 			t.Fatalf("split final = %+v", actions[0].Final)
 		}
-		next, _ := Plan(channel.StreamEvent{Type: channel.StreamEventError, Error: "boom"}, noCaps, st)
+		next, _ := Plan(channel.StreamEvent{Type: channel.StreamEventError, Error: "boom"}, previewCaps, st)
 		if !sameKinds(next, KindUpdate) {
 			t.Fatalf("error on the new preview = %v, want the preview to end with it", kinds(next))
 		}
@@ -465,11 +466,28 @@ func TestPlanEndSkipsTextDeliveredBeforeAttachments(t *testing.T) {
 	}
 }
 
-// Attachments reach a preview that is not legacy as messages of their own.
+// A channel that declares no preview mode shows no preview: its reply is held
+// until the run ends and sent once.
+func TestUndeclaredPreviewShowsNone(t *testing.T) {
+	var caps channel.ChannelCapabilities
+	if caps.Preview != channel.PreviewNone {
+		t.Fatalf("zero preview mode = %d, want PreviewNone", caps.Preview)
+	}
+	delta := channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "partial", Phase: channel.StreamPhaseText}
+	actions, st := Plan(delta, caps, state(t0))
+	if !sameKinds(actions, KindObserve) {
+		t.Fatalf("delta: actions = %v, want the observers only", kinds(actions))
+	}
+	ended, _ := PlanEnd(caps, st, []channel.Message{{Text: "partial"}}, false)
+	if !sameKinds(ended, KindSend) {
+		t.Fatalf("end: actions = %v, want one message", kinds(ended))
+	}
+}
+
+// Attachments reach every preview mode as messages of their own.
 func TestPlanAttachmentsByPreviewMode(t *testing.T) {
 	attach := channel.StreamEvent{Type: channel.StreamEventAttachment, Attachments: []channel.Attachment{{Type: "image"}}}
 	for mode, want := range map[channel.PreviewMode]Kind{
-		channel.PreviewLegacy:       KindUpdate,
 		channel.PreviewNone:         KindAttach,
 		channel.PreviewEditInPlace:  KindAttach,
 		channel.PreviewNativeStream: KindAttach,
@@ -490,13 +508,13 @@ func TestPlanEndActions(t *testing.T) {
 	failure := channel.StreamEvent{Type: channel.StreamEventError, Error: "failed", ErrorCode: "runtime_run_failed"}
 
 	t.Run("no output finishes without a final", func(t *testing.T) {
-		actions, _ := PlanEnd(noCaps, state(t0), nil, false)
+		actions, _ := PlanEnd(previewCaps, state(t0), nil, false)
 		if !sameKinds(actions, KindFinish) || actions[0].Final != nil {
 			t.Fatalf("actions = %+v", actions)
 		}
 	})
 	t.Run("first output is the preview's final, later outputs are new messages", func(t *testing.T) {
-		actions, _ := PlanEnd(noCaps, state(t0), []channel.Message{first, second}, false)
+		actions, _ := PlanEnd(previewCaps, state(t0), []channel.Message{first, second}, false)
 		if !sameKinds(actions, KindFinish, KindSend) {
 			t.Fatalf("actions = %v", kinds(actions))
 		}
@@ -508,34 +526,34 @@ func TestPlanEndActions(t *testing.T) {
 		}
 	})
 	t.Run("suppressed run flushes the text the preview shows and sends nothing", func(t *testing.T) {
-		actions, _ := PlanEnd(noCaps, withStreamed(state(t0)), []channel.Message{first}, true)
+		actions, _ := PlanEnd(previewCaps, withStreamed(state(t0)), []channel.Message{first}, true)
 		if !sameKinds(actions, KindFinish) || actions[0].Final == nil || actions[0].Final.Type != channel.StreamEventFinal {
 			t.Fatalf("actions = %+v", actions)
 		}
 	})
 	t.Run("suppressed run without preview text finishes without a final", func(t *testing.T) {
-		actions, _ := PlanEnd(noCaps, state(t0), []channel.Message{first}, true)
+		actions, _ := PlanEnd(previewCaps, state(t0), []channel.Message{first}, true)
 		if !sameKinds(actions, KindFinish) || actions[0].Final != nil {
 			t.Fatalf("actions = %+v", actions)
 		}
 	})
 	t.Run("failure reply precedes the finish", func(t *testing.T) {
-		actions, _ := PlanEnd(noCaps, withStreamed(SetFailure(state(t0), failure)), nil, false)
+		actions, _ := PlanEnd(previewCaps, withStreamed(SetFailure(state(t0), failure)), nil, false)
 		if !sameKinds(actions, KindSend, KindFinish) {
 			t.Fatalf("actions = %v", kinds(actions))
 		}
 	})
 	t.Run("held errors are released before the failure reply", func(t *testing.T) {
 		held := channel.StreamEvent{Type: channel.StreamEventError, Error: "held"}
-		_, st := Plan(held, noCaps, withStreamed(holding(state(t0))))
-		actions, _ := PlanErrors(noCaps, SetFailure(st, failure))
+		_, st := Plan(held, previewCaps, withStreamed(holding(state(t0))))
+		actions, _ := PlanErrors(previewCaps, SetFailure(st, failure))
 		if !sameKinds(actions, KindSend, KindSend) ||
 			!strings.Contains(actions[0].Message.Message.Text, "held") || actions[1].Message.Message.Text != "failed" {
 			t.Fatalf("actions = %+v", actions)
 		}
 	})
 	t.Run("errors alone leave the preview to the caller", func(t *testing.T) {
-		actions, _ := PlanErrors(noCaps, SetFailure(state(t0), failure))
+		actions, _ := PlanErrors(previewCaps, SetFailure(state(t0), failure))
 		if !sameKinds(actions, KindUpdate) {
 			t.Fatalf("actions = %v", kinds(actions))
 		}
@@ -626,13 +644,13 @@ func TestPlanMasksSecretsInErrors(t *testing.T) {
 	none := channel.ChannelCapabilities{Preview: channel.PreviewNone}
 
 	t.Run("an error the preview ends with", func(t *testing.T) {
-		actions, _ := Plan(failure, noCaps, state(t0))
+		actions, _ := Plan(failure, previewCaps, state(t0))
 		if !sameKinds(actions, KindUpdate) || actions[0].Event.Error != masked {
 			t.Fatalf("actions = %+v, want the preview to get %q", actions, masked)
 		}
 	})
 	t.Run("an error message after preview text", func(t *testing.T) {
-		actions, _ := Plan(failure, noCaps, withStreamed(state(t0)))
+		actions, _ := Plan(failure, previewCaps, withStreamed(state(t0)))
 		if !sameKinds(actions, KindSend) || actions[0].Message.Message.Text != "Error: "+masked || actions[0].Event.Error != masked {
 			t.Fatalf("actions = %+v", actions)
 		}
@@ -657,7 +675,7 @@ func TestPlanMasksSecretsInErrors(t *testing.T) {
 		}
 	})
 	t.Run("the failure reply of a run", func(t *testing.T) {
-		actions, _ := PlanErrors(noCaps, SetFailure(state(t0), failure))
+		actions, _ := PlanErrors(previewCaps, SetFailure(state(t0), failure))
 		if !sameKinds(actions, KindUpdate) || actions[0].Event.Error != masked {
 			t.Fatalf("actions = %+v", actions)
 		}

@@ -56,7 +56,6 @@ var previewModes = []struct {
 	name string
 	mode channel.PreviewMode
 }{
-	{"legacy", channel.PreviewLegacy},
 	{"none", channel.PreviewNone},
 	{"edit_in_place", channel.PreviewEditInPlace},
 	{"native_stream", channel.PreviewNativeStream},
@@ -166,17 +165,9 @@ func TestAdapterCapabilitiesDecideActions(t *testing.T) {
 		}},
 		{"tool start hidden", toolStart(), hidden, func(channel.ChannelCapabilities) []Kind { return []Kind{KindObserve} }},
 		{"tool result hidden", toolEnd(), hidden, func(channel.ChannelCapabilities) []Kind { return []Kind{KindObserve} }},
-		{"attachment", attach, fresh, func(c channel.ChannelCapabilities) []Kind {
-			if c.Preview == channel.PreviewLegacy {
-				return []Kind{KindUpdate}
-			}
-			return []Kind{KindAttach}
-		}},
+		{"attachment", attach, fresh, func(channel.ChannelCapabilities) []Kind { return []Kind{KindAttach} }},
 		{"attachment after text", attach, afterText, func(c channel.ChannelCapabilities) []Kind {
-			switch c.Preview {
-			case channel.PreviewLegacy:
-				return []Kind{KindUpdate}
-			case channel.PreviewNone:
+			if c.Preview == channel.PreviewNone {
 				return []Kind{KindSend, KindAttach}
 			}
 			return []Kind{KindAttach}
@@ -290,10 +281,8 @@ func TestAdapterReplyWindowDecidesDelivery(t *testing.T) {
 			}
 			ended, _ := PlanEnd(caps, st, []channel.Message{{Text: "late", Reply: reply}}, false)
 			check("output", ended)
-			if caps.Preview != channel.PreviewLegacy {
-				attached, _ := Plan(attach, caps, st)
-				check("attachment", attached)
-			}
+			attached, _ := Plan(attach, caps, st)
+			check("attachment", attached)
 			if caps.Preview == channel.PreviewNone {
 				result, _ := Plan(toolEnd(), caps, st)
 				check("tool result", result)
@@ -339,6 +328,28 @@ func TestAdapterReplyWindowDecidesThePreviewReference(t *testing.T) {
 	}
 }
 
+// An adapter shows a reply through a preview exactly when it declares a preview
+// mode and opens previews. The zero mode is PreviewNone, so an adapter that
+// leaves the declaration out reads as one that shows none, and the check fails
+// when it implements PreviewOpener all the same.
+func TestAdaptersDeclareThePreviewTheyImplement(t *testing.T) {
+	t.Parallel()
+
+	for _, adapter := range registeredAdapters() {
+		t.Run(string(adapter.Type()), func(t *testing.T) {
+			t.Parallel()
+			_, opens := adapter.(channel.PreviewOpener)
+			declared := adapter.Descriptor().Capabilities.Preview != channel.PreviewNone
+			switch {
+			case opens && !declared:
+				t.Error("implements PreviewOpener but declares no preview mode")
+			case declared && !opens:
+				t.Error("declares a preview mode but does not implement PreviewOpener")
+			}
+		})
+	}
+}
+
 // Every adapter gets a request for approval or an answer it can act on: the
 // event itself when it declares the native capability, a plain message that
 // carries the instructions otherwise. Run through a real manager over the
@@ -371,12 +382,12 @@ func TestAdaptersSurfaceApprovalAndUserInputPrompts(t *testing.T) {
 				}
 				log := rec.snapshot()
 				if tc.native(adapter.Descriptor().Capabilities) && previewShown(adapter.Descriptor().Capabilities) {
-					if !hasEntry(log, "push:tool_call_start") && !hasEntry(log, "update:tool_call_start") || hasEntry(log, "send") {
+					if !hasEntry(log, "update:tool_call_start") || hasEntry(log, "send") {
 						t.Fatalf("native adapter: log = %v, want the event forwarded and no plain message", log)
 					}
 					return
 				}
-				if hasEntry(log, "push:") || hasEntry(log, "update:") || len(rec.messages) != 1 {
+				if hasEntry(log, "update:") || len(rec.messages) != 1 {
 					t.Fatalf("plain adapter: log = %v messages = %v, want one plain message", log, rec.messages)
 				}
 				text := rec.messages[0].PlainText()

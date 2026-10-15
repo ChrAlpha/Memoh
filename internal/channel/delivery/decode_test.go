@@ -322,7 +322,7 @@ func TestDecode_UserInputMultiQuestionKeepsActions(t *testing.T) {
 		t.Fatalf("multi-question must keep user_input actions, got %#v", actions)
 	}
 	// A prompt the user has to answer is shown even when tool calls are hidden in IM.
-	planned, _ := Plan(events[0], channel.ChannelCapabilities{}, hiding(state(t0)))
+	planned, _ := Plan(events[0], previewCaps, hiding(state(t0)))
 	if !sameKinds(planned, KindSend) {
 		t.Fatalf("multi-question ask_user was not shown: %v", kinds(planned))
 	}

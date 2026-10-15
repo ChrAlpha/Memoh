@@ -71,7 +71,7 @@ type targetResolvingAdapter struct {
 	outboundPolicy OutboundPolicy
 	sent           []OutboundMessage
 	openedTarget   string
-	openedStream   *recordingStream
+	openedPreview  *recordingPreview
 	dynamicCaps    *ChannelCapabilities
 	validate       func(PreparedOutboundMessage) error
 }
@@ -89,6 +89,7 @@ func (a *targetResolvingAdapter) Descriptor() Descriptor {
 			Attachments:    true,
 			Streaming:      true,
 			BlockStreaming: true,
+			Preview:        PreviewEditInPlace,
 		},
 		OutboundPolicy: a.outboundPolicy,
 	}
@@ -131,10 +132,10 @@ func (a *targetResolvingAdapter) ValidatePreparedOutbound(_ context.Context, _ C
 	return a.validate(msg)
 }
 
-func (a *targetResolvingAdapter) OpenStream(_ context.Context, _ ChannelConfig, target string, _ StreamOptions) (PreparedOutboundStream, error) {
+func (a *targetResolvingAdapter) OpenPreview(_ context.Context, _ ChannelConfig, target string, _ StreamOptions) (PreparedPreview, error) {
 	a.openedTarget = target
-	a.openedStream = &recordingStream{}
-	return a.openedStream, nil
+	a.openedPreview = &recordingPreview{}
+	return a.openedPreview, nil
 }
 
 func TestValidateStreamEventSupportedTypes(t *testing.T) {
@@ -239,13 +240,13 @@ func TestManagerStreamAttachmentUsesDynamicOutboundCapabilities(t *testing.T) {
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      &recordingStream{},
+		preview:     &recordingPreview{},
 		channelType: channelType,
 		target:      "chat-1",
 		policy:      manager.resolveOutboundPolicy(channelType),
 	}
 
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type:        StreamEventAttachment,
 		Attachments: []Attachment{{Type: AttachmentImage, URL: "https://example.com/img.png"}},
 	})
@@ -284,16 +285,16 @@ func TestManagerStreamErrorReplyText(t *testing.T) {
 				t.Fatalf("register adapter failed: %v", err)
 			}
 			manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-			recorder := &recordingStream{}
+			recorder := &recordingPreview{}
 			stream := &managerOutboundStream{
 				manager:     manager,
 				config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-				stream:      recorder,
+				preview:     recorder,
 				channelType: channelType,
 				target:      "chat-1",
 				policy:      manager.resolveOutboundPolicy(channelType),
 			}
-			if err := stream.Push(context.Background(), tt.event); err != nil {
+			if err := stream.push(context.Background(), tt.event); err != nil {
 				t.Fatalf("Push returned error: %v", err)
 			}
 			got := recorder.Events()
@@ -504,8 +505,8 @@ func TestReplySenderValidatesAllSplitMessagesBeforeSending(t *testing.T) {
 	}
 }
 
-// openSessionForTest opens the preview of a surface as the Push/Close session
-// the manager's chunking and splitting are written against.
+// openSessionForTest opens the preview of a surface as the manager's stream,
+// where the chunking and splitting are.
 func openSessionForTest(t *testing.T, surface *managerSurface, target string) *managerOutboundStream {
 	t.Helper()
 	preview, err := surface.OpenPreview(context.Background(), target, StreamOptions{})
@@ -538,7 +539,7 @@ func TestReplyStreamResolvesOutboundTargetBeforeCapabilities(t *testing.T) {
 		t.Fatalf("expected stream opened on resolved target, got %q", adapter.openedTarget)
 	}
 
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{
 			Message: Message{
@@ -550,7 +551,7 @@ func TestReplyStreamResolvesOutboundTargetBeforeCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
-	events := adapter.openedStream.Events()
+	events := adapter.openedPreview.Events()
 	if len(events) != 1 {
 		t.Fatalf("expected one stream event, got %d", len(events))
 	}
@@ -577,7 +578,7 @@ func TestReplyStreamFinalAttachmentActionsSurviveSendBoundary(t *testing.T) {
 	sender := manager.newSurface(ChannelConfig{BotID: "bot-1", ChannelType: channelType}, channelType)
 
 	stream := openSessionForTest(t, sender, "chat-1")
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{
 			Message: Message{
@@ -697,22 +698,43 @@ func TestManagerSendPreflightsAdapterValidationBeforeSplitSends(t *testing.T) {
 	}
 }
 
-// recordingStream captures events pushed to it.
-type recordingStream struct {
-	mu     sync.Mutex
-	events []StreamEvent
+// recordingPreview captures the events a preview is given. A final is recorded
+// as the final event, and a preview finished without one as the completed
+// status.
+type recordingPreview struct {
+	mu      sync.Mutex
+	events  []StreamEvent
+	aborted bool
 }
 
-func (r *recordingStream) Push(_ context.Context, event PreparedStreamEvent) error {
+func (r *recordingPreview) record(event PreparedStreamEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, event.LogicalEvent())
+}
+
+func (r *recordingPreview) Update(_ context.Context, event PreparedStreamEvent) error {
+	r.record(event)
 	return nil
 }
 
-func (*recordingStream) Close(_ context.Context) error { return nil }
+func (r *recordingPreview) Finish(_ context.Context, final *PreparedStreamEvent) error {
+	if final == nil {
+		r.record(PreparedStreamEvent{Type: StreamEventStatus, Status: StreamStatusCompleted})
+		return nil
+	}
+	r.record(*final)
+	return nil
+}
 
-func (r *recordingStream) Events() []StreamEvent {
+func (r *recordingPreview) Abort(context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.aborted = true
+	return nil
+}
+
+func (r *recordingPreview) Events() []StreamEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]StreamEvent, len(r.events))
@@ -720,18 +742,18 @@ func (r *recordingStream) Events() []StreamEvent {
 	return out
 }
 
-type failingFinalStream struct {
-	recordingStream
+type failingFinalPreview struct {
+	recordingPreview
 }
 
-func (f *failingFinalStream) Push(ctx context.Context, event PreparedStreamEvent) error {
-	if event.Type == StreamEventFinal {
+func (f *failingFinalPreview) Finish(ctx context.Context, final *PreparedStreamEvent) error {
+	if final != nil {
 		return context.DeadlineExceeded
 	}
-	return f.recordingStream.Push(ctx, event)
+	return f.recordingPreview.Finish(ctx, nil)
 }
 
-func newChunkingTestStream(t *testing.T, chunkLimit int) (*managerOutboundStream, *recordingStream, *[]OutboundMessage) {
+func newChunkingTestStream(t *testing.T, chunkLimit int) (*managerOutboundStream, *recordingPreview, *[]OutboundMessage) {
 	t.Helper()
 	channelType := ChannelType("telegram")
 	registry := NewRegistry()
@@ -744,14 +766,14 @@ func newChunkingTestStream(t *testing.T, chunkLimit int) (*managerOutboundStream
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
 
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	var sent []OutboundMessage
 	var mu sync.Mutex
 
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -829,7 +851,7 @@ func TestPushFinalWithChunking_ShortText(t *testing.T) {
 			Message: Message{Text: "short text", Format: MessageFormatPlain},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -862,16 +884,16 @@ func TestManagerStreamFinalUsesDynamicOutboundCapabilities(t *testing.T) {
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 	}
 
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{
 			Message: Message{
@@ -916,7 +938,7 @@ func TestPushFinalWithChunking_LongText(t *testing.T) {
 			Message: Message{Text: longText, Format: MessageFormatPlain},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -965,7 +987,7 @@ func TestPushFinalWithChunking_AttachmentsSeparated(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1004,18 +1026,18 @@ func TestPushFinalWithChunking_PreflightsOverflowBeforeFirstChunk(t *testing.T) 
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		target:      "chat-1",
 		policy:      manager.resolveOutboundPolicy(channelType),
 		sender:      adapter,
 	}
 
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{Message: Message{
 			Text:   strings.Repeat("a", 30) + "\n" + strings.Repeat("b", 30),
@@ -1184,7 +1206,7 @@ func TestPushFinalWithChunking_NonFinalPassthrough(t *testing.T) {
 		Type:   StreamEventStatus,
 		Status: StreamStatusStarted,
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1214,7 +1236,7 @@ func TestPushFinalWithChunking_MarkdownFormat(t *testing.T) {
 			Message: Message{Text: longText, Format: MessageFormatMarkdown},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1247,12 +1269,12 @@ func TestPushFinalWithChunking_ShortRichPartsStayOnPreparedStream(t *testing.T) 
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	var sent []OutboundMessage
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -1272,7 +1294,7 @@ func TestPushFinalWithChunking_ShortRichPartsStayOnPreparedStream(t *testing.T) 
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1302,12 +1324,12 @@ func TestPushFinalWithChunking_OversizedRichPartsDegradeToMarkdownChunks(t *test
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	var sent []OutboundMessage
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -1329,7 +1351,7 @@ func TestPushFinalWithChunking_OversizedRichPartsDegradeToMarkdownChunks(t *test
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1365,11 +1387,11 @@ func TestPushFinal_CoercesMarkdownToPlainForNoMarkdownChannel(t *testing.T) {
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 	}
@@ -1378,7 +1400,7 @@ func TestPushFinal_CoercesMarkdownToPlainForNoMarkdownChannel(t *testing.T) {
 		Type:  StreamEventFinal,
 		Final: &StreamFinalizePayload{Message: Message{Text: "**bold** and `code`", Format: MessageFormatMarkdown}},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1409,11 +1431,11 @@ func TestPushFinal_NormalizesMixedTextAndPartsBeforePlainDowngrade(t *testing.T)
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	rec := &recordingStream{}
+	rec := &recordingPreview{}
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 	}
@@ -1429,7 +1451,7 @@ func TestPushFinal_NormalizesMixedTextAndPartsBeforePlainDowngrade(t *testing.T)
 			},
 		}},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1470,7 +1492,7 @@ func TestPushFinalWithChunking_ActionsOnLastChunk(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1509,7 +1531,7 @@ func TestPushFinalWithChunking_ActionsOnAttachmentMsg(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1556,7 +1578,7 @@ func TestPushFinalWithChunking_ThreadPropagated(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1589,12 +1611,12 @@ func TestPushFinalWithChunking_FirstChunkPushFailureFallback(t *testing.T) {
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
 
-	rec := &failingFinalStream{}
+	rec := &failingFinalPreview{}
 	var sent []OutboundMessage
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      rec,
+		preview:     rec,
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -1610,7 +1632,7 @@ func TestPushFinalWithChunking_FirstChunkPushFailureFallback(t *testing.T) {
 			Message: Message{Text: longText, Format: MessageFormatPlain},
 		},
 	}
-	if err := stream.Push(context.Background(), event); err != nil {
+	if err := stream.push(context.Background(), event); err != nil {
 		t.Fatalf("Push failed: %v", err)
 	}
 
@@ -1633,20 +1655,20 @@ func TestPushFinalWithChunking_FirstChunkPushFailureFallback(t *testing.T) {
 	}
 }
 
-// reopenableStream wraps a list of recordingStreams; each reopen returns the next.
-type reopenableStream struct {
-	streams []*recordingStream
+// reopenablePreview wraps a list of recordingPreviews; each reopen returns the next.
+type reopenablePreview struct {
+	streams []*recordingPreview
 	idx     int
 }
 
-func (r *reopenableStream) current() *recordingStream {
+func (r *reopenablePreview) current() *recordingPreview {
 	if r.idx >= len(r.streams) {
 		return nil
 	}
 	return r.streams[r.idx]
 }
 
-func (r *reopenableStream) reopen(_ context.Context) (PreparedOutboundStream, error) {
+func (r *reopenablePreview) reopen(_ context.Context) (PreparedPreview, error) {
 	r.idx++
 	if r.idx >= len(r.streams) {
 		return nil, errors.New("no more streams")
@@ -1654,7 +1676,7 @@ func (r *reopenableStream) reopen(_ context.Context) (PreparedOutboundStream, er
 	return r.streams[r.idx], nil
 }
 
-func newDeltaSplitTestStream(t *testing.T, chunkLimit int, streamCount int) (*managerOutboundStream, *reopenableStream, *[]OutboundMessage) {
+func newDeltaSplitTestStream(t *testing.T, chunkLimit int, streamCount int) (*managerOutboundStream, *reopenablePreview, *[]OutboundMessage) {
 	t.Helper()
 	channelType := ChannelType("telegram")
 	registry := NewRegistry()
@@ -1667,11 +1689,11 @@ func newDeltaSplitTestStream(t *testing.T, chunkLimit int, streamCount int) (*ma
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
 
-	streams := make([]*recordingStream, streamCount)
+	streams := make([]*recordingPreview, streamCount)
 	for i := range streams {
-		streams[i] = &recordingStream{}
+		streams[i] = &recordingPreview{}
 	}
-	reo := &reopenableStream{streams: streams}
+	reo := &reopenablePreview{streams: streams}
 
 	var sent []OutboundMessage
 	var mu sync.Mutex
@@ -1679,7 +1701,7 @@ func newDeltaSplitTestStream(t *testing.T, chunkLimit int, streamCount int) (*ma
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      streams[0],
+		preview:     streams[0],
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -1699,7 +1721,7 @@ func TestPushDelta_NoSplitUnderLimit(t *testing.T) {
 
 	for i := range 5 {
 		_ = i
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("a", 10),
 		}); err != nil {
@@ -1721,7 +1743,7 @@ func TestPushDelta_SplitsAtLimit(t *testing.T) {
 	stream, reo, _ := newDeltaSplitTestStream(t, 100, 3)
 
 	for range 12 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("x", 10),
 		}); err != nil {
@@ -1776,7 +1798,7 @@ func TestPushDelta_ResetRestartsSplitWindow(t *testing.T) {
 
 	push := func(event StreamEvent) {
 		t.Helper()
-		if err := stream.Push(context.Background(), event); err != nil {
+		if err := stream.push(context.Background(), event); err != nil {
 			t.Fatalf("Push %s failed: %v", event.Type, err)
 		}
 	}
@@ -1803,7 +1825,7 @@ func TestPushDelta_MultipleSplits(t *testing.T) {
 	stream, reo, _ := newDeltaSplitTestStream(t, 50, 5)
 
 	for range 15 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("y", 10),
 		}); err != nil {
@@ -1828,7 +1850,7 @@ func TestPushDelta_FinalAfterSplitUsesBuffer(t *testing.T) {
 	stream, reo, sent := newDeltaSplitTestStream(t, 50, 3)
 
 	for range 8 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("z", 10),
 		}); err != nil {
@@ -1849,7 +1871,7 @@ func TestPushDelta_FinalAfterSplitUsesBuffer(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), finalEvent); err != nil {
+	if err := stream.push(context.Background(), finalEvent); err != nil {
 		t.Fatalf("Final Push failed: %v", err)
 	}
 
@@ -1875,7 +1897,7 @@ func TestPushDelta_FinalWithAttachmentsAfterSplit(t *testing.T) {
 	stream, _, sent := newDeltaSplitTestStream(t, 50, 3)
 
 	for range 8 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("w", 10),
 		}); err != nil {
@@ -1896,7 +1918,7 @@ func TestPushDelta_FinalWithAttachmentsAfterSplit(t *testing.T) {
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), finalEvent); err != nil {
+	if err := stream.push(context.Background(), finalEvent); err != nil {
 		t.Fatalf("Final Push failed: %v", err)
 	}
 
@@ -1916,7 +1938,7 @@ func TestPushDelta_FinalWithActionsAfterSplitStaysOnBufferedFinal(t *testing.T) 
 	stream, reo, sent := newDeltaSplitTestStream(t, 50, 3)
 
 	for range 8 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("a", 10),
 		}); err != nil {
@@ -1935,7 +1957,7 @@ func TestPushDelta_FinalWithActionsAfterSplitStaysOnBufferedFinal(t *testing.T) 
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), finalEvent); err != nil {
+	if err := stream.push(context.Background(), finalEvent); err != nil {
 		t.Fatalf("Final Push failed: %v", err)
 	}
 
@@ -1974,13 +1996,13 @@ func TestPushDelta_FinalWithDowngradedURLActionsAfterSplitSendsLinks(t *testing.
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	streams := []*recordingStream{{}, {}, {}}
-	reo := &reopenableStream{streams: streams}
+	streams := []*recordingPreview{{}, {}, {}}
+	reo := &reopenablePreview{streams: streams}
 	var sent []OutboundMessage
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      streams[0],
+		preview:     streams[0],
 		channelType: channelType,
 		target:      "chat-1",
 		policy:      manager.resolveOutboundPolicy(channelType),
@@ -1992,7 +2014,7 @@ func TestPushDelta_FinalWithDowngradedURLActionsAfterSplitSendsLinks(t *testing.
 	}
 
 	for range 8 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("a", 10),
 		}); err != nil {
@@ -2004,7 +2026,7 @@ func TestPushDelta_FinalWithDowngradedURLActionsAfterSplitSendsLinks(t *testing.
 	}
 
 	finalText := strings.Repeat("a", 80)
-	err := stream.Push(context.Background(), StreamEvent{
+	err := stream.push(context.Background(), StreamEvent{
 		Type: StreamEventFinal,
 		Final: &StreamFinalizePayload{
 			Message: Message{
@@ -2047,13 +2069,13 @@ func TestPushDelta_FinalWithPartsAfterSplitDoesNotDuplicateStreamedBody(t *testi
 		t.Fatalf("register adapter failed: %v", err)
 	}
 	manager := &Manager{registry: registry, attachmentStore: channeltest.NewMemoryAttachmentStore()}
-	streams := []*recordingStream{{}, {}, {}}
-	reo := &reopenableStream{streams: streams}
+	streams := []*recordingPreview{{}, {}, {}}
+	reo := &reopenablePreview{streams: streams}
 	var sent []OutboundMessage
 	stream := &managerOutboundStream{
 		manager:     manager,
 		config:      ChannelConfig{BotID: "bot-1", ChannelType: channelType},
-		stream:      streams[0],
+		preview:     streams[0],
 		channelType: channelType,
 		policy:      manager.resolveOutboundPolicy(channelType),
 		send: func(_ context.Context, msg OutboundMessage) error {
@@ -2064,7 +2086,7 @@ func TestPushDelta_FinalWithPartsAfterSplitDoesNotDuplicateStreamedBody(t *testi
 	}
 
 	for range 8 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("r", 10),
 		}); err != nil {
@@ -2086,7 +2108,7 @@ func TestPushDelta_FinalWithPartsAfterSplitDoesNotDuplicateStreamedBody(t *testi
 			},
 		},
 	}
-	if err := stream.Push(context.Background(), finalEvent); err != nil {
+	if err := stream.push(context.Background(), finalEvent); err != nil {
 		t.Fatalf("Final Push failed: %v", err)
 	}
 
@@ -2100,7 +2122,7 @@ func TestPushDelta_NoSplitWhenNoLimit(t *testing.T) {
 	stream, reo, _ := newDeltaSplitTestStream(t, 0, 2)
 
 	for range 20 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("a", 100),
 		}); err != nil {
@@ -2123,7 +2145,7 @@ func TestPushDelta_ReasoningPhaseNotCounted(t *testing.T) {
 	stream, _, _ := newDeltaSplitTestStream(t, 50, 2)
 
 	for range 10 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("r", 100),
 			Phase: StreamPhaseReasoning,
@@ -2146,7 +2168,7 @@ func TestPushDelta_SplitsAtNaturalBreak(t *testing.T) {
 	stream, reo, _ := newDeltaSplitTestStream(t, 100, 3)
 
 	// Push 70 runes — under soft limit.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: strings.Repeat("a", 70),
 	}); err != nil {
@@ -2158,7 +2180,7 @@ func TestPushDelta_SplitsAtNaturalBreak(t *testing.T) {
 
 	// Push 10 runes ending with a sentence period → 80 runes total,
 	// above soft (75) but under hard (100). Text ends with "." → natural break.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: strings.Repeat("b", 9) + ".",
 	}); err != nil {
@@ -2191,7 +2213,7 @@ func TestPushDelta_SplitsAtNaturalBreak(t *testing.T) {
 	}
 
 	// Push more content to the continuation stream.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: "continuation text",
 	}); err != nil {
@@ -2216,7 +2238,7 @@ func TestPushDelta_NoEarlySplitWithoutBreakPoint(t *testing.T) {
 
 	// Push 90 runes of plain text (no break point) — above soft, under hard.
 	for range 9 {
-		if err := stream.Push(context.Background(), StreamEvent{
+		if err := stream.push(context.Background(), StreamEvent{
 			Type:  StreamEventDelta,
 			Delta: strings.Repeat("x", 10),
 		}); err != nil {
@@ -2231,7 +2253,7 @@ func TestPushDelta_NoEarlySplitWithoutBreakPoint(t *testing.T) {
 	}
 
 	// Push 20 more runes → 110 total → exceeds hard limit → force split.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: strings.Repeat("x", 20),
 	}); err != nil {
@@ -2247,7 +2269,7 @@ func TestPushDelta_NewlineTriggersBreak(t *testing.T) {
 	stream, _, _ := newDeltaSplitTestStream(t, 100, 3)
 
 	// 76 runes — just past soft limit (75).
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: strings.Repeat("w", 76),
 	}); err != nil {
@@ -2258,7 +2280,7 @@ func TestPushDelta_NewlineTriggersBreak(t *testing.T) {
 	}
 
 	// Newline → natural break.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: "\n",
 	}); err != nil {
@@ -2273,7 +2295,7 @@ func TestPushDelta_ChinesePunctuationBreak(t *testing.T) {
 	t.Parallel()
 	stream, _, _ := newDeltaSplitTestStream(t, 100, 3)
 
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: strings.Repeat("字", 76),
 	}); err != nil {
@@ -2281,7 +2303,7 @@ func TestPushDelta_ChinesePunctuationBreak(t *testing.T) {
 	}
 
 	// Chinese period → natural break.
-	if err := stream.Push(context.Background(), StreamEvent{
+	if err := stream.push(context.Background(), StreamEvent{
 		Type:  StreamEventDelta,
 		Delta: "。",
 	}); err != nil {

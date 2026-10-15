@@ -654,7 +654,7 @@ func validateStreamEvent(registry *Registry, channelType ChannelType, event Stre
 		// NOT mutate event.Final here: the event may be fanned out to other
 		// channels (tee), and coercing the shared payload would strip markup for
 		// a later Markdown-capable channel. The real downgrade is applied to a
-		// local copy in Push.
+		// local copy in push.
 		final := event.Final.Message
 		final = normalizeOutboundMessage(final)
 		if caps, ok := registry.GetCapabilities(channelType); ok {
@@ -667,7 +667,7 @@ func validateStreamEvent(registry *Registry, channelType ChannelType, event Stre
 			return err
 		}
 	case StreamEventError:
-		// A blank error has nothing to show; Push drops it instead of sending
+		// A blank error has nothing to show; push drops it instead of sending
 		// an empty reply.
 	default:
 		return fmt.Errorf("unsupported stream event type: %s", event.Type)
@@ -675,28 +675,33 @@ func validateStreamEvent(registry *Registry, channelType ChannelType, event Stre
 	return nil
 }
 
-// managerOutboundStream wraps a PreparedOutboundStream and adds text-chunking,
-// stream-splitting, and attachment fallback on top of the raw adapter stream.
+// managerOutboundStream wraps an adapter's PreparedPreview and adds
+// text-chunking, stream-splitting, and attachment fallback on top of it.
+// Events enter through Update, Finish and Abort; a final, or the completed
+// status, ends the adapter's preview.
 //
-// Push and Close must be called from a single goroutine; this type is not
-// safe for concurrent use.
+// It must be used from a single goroutine; this type is not safe for
+// concurrent use.
 type managerOutboundStream struct {
 	manager     *Manager
 	config      ChannelConfig
-	stream      PreparedOutboundStream
+	preview     PreparedPreview
 	channelType ChannelType
 	target      string
 	policy      OutboundPolicy // cached at open time; immutable after creation
 	sender      Sender
 	send        func(ctx context.Context, msg OutboundMessage) error
-	reopen      func(ctx context.Context) (PreparedOutboundStream, error)
+	reopen      func(ctx context.Context) (PreparedPreview, error)
 	deltaRunes  int
 	deltaText   strings.Builder
 	splitCount  int
+	// ended is set once the adapter's preview was finished or aborted. What
+	// follows is dropped until a split opens the next preview.
+	ended bool
 }
 
-func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) error {
-	if s.manager == nil || s.stream == nil {
+func (s *managerOutboundStream) push(ctx context.Context, event StreamEvent) error {
+	if s.manager == nil || s.preview == nil {
 		return errors.New("stream is not configured")
 	}
 	if err := validateStreamEvent(s.manager.registry, s.channelType, event); err != nil {
@@ -801,8 +806,8 @@ func (s *managerOutboundStream) pushDelta(ctx context.Context, event StreamEvent
 	return s.pushPrepared(ctx, event)
 }
 
-// splitStream finalizes the current adapter stream, opens a continuation
-// stream, and sends Status(Started) so the adapter creates a new platform
+// splitStream finishes the current adapter preview, opens a continuation
+// preview, and sends Status(Started) so the adapter creates a new platform
 // message before the first delta arrives.
 func (s *managerOutboundStream) splitStream(ctx context.Context) error {
 	if err := s.pushPrepared(ctx, StreamEvent{
@@ -811,15 +816,13 @@ func (s *managerOutboundStream) splitStream(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.stream.Close(ctx); err != nil {
-		return err
-	}
 
-	newStream, err := s.reopen(ctx)
+	next, err := s.reopen(ctx)
 	if err != nil {
 		return err
 	}
-	s.stream = newStream
+	s.preview = next
+	s.ended = false
 	s.splitCount++
 
 	return s.pushPrepared(ctx, StreamEvent{
@@ -1014,15 +1017,30 @@ func (s *managerOutboundStream) pushFinalWithChunking(ctx context.Context, event
 	return s.sendPreparedChunkedFinal(ctx, preparedOverflow, 1, len(chunks), hasAttachments)
 }
 
+// pushPrepared prepares event and hands it to the adapter's preview: a final
+// ends the preview with it, the completed status ends it with none, anything
+// else updates it. Nothing reaches a preview that has ended.
 func (s *managerOutboundStream) pushPrepared(ctx context.Context, event StreamEvent) error {
-	if s.manager == nil || s.stream == nil {
+	if s.manager == nil || s.preview == nil {
 		return errors.New("stream is not configured")
 	}
 	prepared, err := PrepareStreamEvent(ctx, s.manager.attachmentStore, s.config, event)
 	if err != nil {
 		return err
 	}
-	return s.stream.Push(ctx, prepared)
+	if s.ended {
+		return nil
+	}
+	switch {
+	case prepared.Type == StreamEventFinal && prepared.Final != nil:
+		s.ended = true
+		return s.preview.Finish(ctx, &prepared)
+	case prepared.Type == StreamEventStatus && prepared.Status == StreamStatusCompleted:
+		s.ended = true
+		return s.preview.Finish(ctx, nil)
+	default:
+		return s.preview.Update(ctx, prepared)
+	}
 }
 
 func (s *managerOutboundStream) sendChunkedFinal(ctx context.Context, msg Message, chunks []string, startIndex int, hasAttachments bool) error {
@@ -1130,11 +1148,17 @@ func (s *managerOutboundStream) prepareChunkedFinalSends(ctx context.Context, ms
 	return prepared, nil
 }
 
-func (s *managerOutboundStream) Close(ctx context.Context) error {
-	if s.stream == nil {
+// end aborts the adapter's preview unless a final or the completed status
+// already ended it.
+func (s *managerOutboundStream) end(ctx context.Context) error {
+	if s.preview == nil {
 		return errors.New("stream is not configured")
 	}
-	return s.stream.Close(ctx)
+	if s.ended {
+		return nil
+	}
+	s.ended = true
+	return s.preview.Abort(ctx)
 }
 
 // sleepWithContext waits for d or until ctx is cancelled.

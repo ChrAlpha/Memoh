@@ -19,6 +19,11 @@ import (
 // other scenario must match exactly, and so must what observers saw in all of
 // them.
 //
+// The baseline was recorded on an adapter with a Push/Close stream session, and
+// the adapter that runs now opens a preview. previewShape maps the one onto the
+// other, and nothing else: the content and the order of the calls stay as
+// recorded.
+//
 // The changes:
 //
 //   - later assistant outputs are new messages: the first output is the
@@ -32,6 +37,9 @@ import (
 //     plain message between two previews: the preview with text now ends with
 //     the completed status that every ended preview gets, and the message is
 //     sent before the next preview opens rather than after.
+//   - an attachment is a message of its own that quotes the source message: the
+//     stream session took it as an event, and a preview is never handed
+//     attachments.
 var allowedDifferences = map[string]func(t *testing.T, calls []recordedCall, sc deliveryScenario) []recordedCall{
 	"multi_assistant":            laterOutputsAreMessages,
 	"multi_assistant_with_tool":  laterOutputsAreMessages,
@@ -44,6 +52,8 @@ var allowedDifferences = map[string]func(t *testing.T, calls []recordedCall, sc 
 	"approval_text_only":         promptBetweenPreviews,
 	"approval_text_twice":        promptBetweenPreviews,
 	"askuser_text_after_text":    promptBetweenPreviews,
+	"attachment_event":           attachmentsAreMessages,
+	"attachment_only":            attachmentsAreMessages,
 }
 
 func isPush(call recordedCall, eventType string) bool {
@@ -196,6 +206,56 @@ func promptBetweenPreviews(t *testing.T, calls []recordedCall, _ deliveryScenari
 	return out
 }
 
+// previewShape maps a recording of the Push/Close session onto the calls the
+// same session makes on a preview:
+//
+//   - open stays open;
+//   - a push of a final with a message is the preview's Finish with that final,
+//     and a push of the completed status is its Finish with none;
+//   - any other push is an Update;
+//   - a close of a session that no final or completed status ended is an Abort.
+//
+// A preview ends once. What the session was pushed after that point, and the
+// close that follows an ended session, are not calls on a preview and are left
+// out.
+func previewShape(calls []recordedCall) []recordedCall {
+	ended := map[int]bool{}
+	var out []recordedCall
+	for _, call := range calls {
+		switch {
+		case call.Op == "push" && ended[call.Stream]:
+		case isPush(call, "final") && call.Event.Final != nil:
+			ended[call.Stream] = true
+			out = append(out, recordedCall{Op: "finish", Stream: call.Stream, Event: call.Event})
+		case isCompletedPush(call):
+			ended[call.Stream] = true
+			out = append(out, recordedCall{Op: "finish", Stream: call.Stream})
+		case call.Op == "push":
+			out = append(out, recordedCall{Op: "update", Stream: call.Stream, Event: call.Event})
+		case call.Op == "close":
+			if !ended[call.Stream] {
+				ended[call.Stream] = true
+				out = append(out, recordedCall{Op: "abort", Stream: call.Stream})
+			}
+		default:
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
+func attachmentsAreMessages(t *testing.T, calls []recordedCall, _ deliveryScenario) []recordedCall {
+	t.Helper()
+	var out []recordedCall
+	for _, call := range calls {
+		if isPush(call, "attachment") {
+			call = recordedCall{Op: "send", Target: targetOf(calls), Message: &recordedMessage{ReplyTo: replyOf(calls), Attachments: call.Event.Attachments}}
+		}
+		out = append(out, call)
+	}
+	return out
+}
+
 func TestDeliveryMatchesBaseline(t *testing.T) {
 	dir := filepath.Join("..", "delivery", "testdata", "baseline")
 	scenarios := deliveryScenarios()
@@ -230,6 +290,7 @@ func TestDeliveryMatchesBaseline(t *testing.T) {
 			if rewrite := allowedDifferences[sc.name]; rewrite != nil {
 				want.Calls = rewrite(t, want.Calls, sc)
 			}
+			want.Calls = previewShape(want.Calls)
 			got := runDeliveryScenario(t, sc)
 			if reflect.DeepEqual(got, want) {
 				return

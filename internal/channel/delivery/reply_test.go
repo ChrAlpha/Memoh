@@ -248,7 +248,7 @@ func equalCalls(got []string, want ...string) bool {
 	return true
 }
 
-var streaming = channel.ChannelCapabilities{Text: true, Markdown: true, Streaming: true, Attachments: true, Reactions: true}
+var streaming = channel.ChannelCapabilities{Text: true, Markdown: true, Streaming: true, Attachments: true, Reactions: true, Preview: channel.PreviewEditInPlace}
 
 func TestReplyEndsWithItsFirstOutputAndSendsTheRest(t *testing.T) {
 	surface, obs, res := run(t, runSetup{caps: streaming, payloads: []string{deltaPayload("hi"), endPayload("first", "second")}})
@@ -447,11 +447,10 @@ func TestReplyHiddenToolEventsReachObserversOnly(t *testing.T) {
 	}
 }
 
-// A channel whose preview is not legacy gets attachments as messages of their
-// own, one each, in the order they came.
-func TestReplyAttachmentsOnAnEditedPreview(t *testing.T) {
+// A channel with a preview gets attachments as messages of their own, one
+// each, in the order they came.
+func TestReplyAttachmentsOnAPreview(t *testing.T) {
 	caps := streaming
-	caps.Preview = channel.PreviewEditInPlace
 	attach := `{"type":"attachment_delta","attachments":[{"type":"image","url":"https://example.test/a.png"},{"type":"file","url":"https://example.test/b.txt"}]}`
 	surface, _, res := run(t, runSetup{caps: caps, payloads: []string{deltaPayload("see "), attach, endPayload("see")}})
 	if res.err != nil {

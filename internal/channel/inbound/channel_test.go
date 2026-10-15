@@ -2752,15 +2752,15 @@ func TestChannelInboundProcessorGroupMentionTriggersReply(t *testing.T) {
 	}
 }
 
-type failingOpenStreamSender struct {
+type failingOpenPreviewSender struct {
 	err error
 }
 
-func (*failingOpenStreamSender) Send(_ context.Context, _ channel.OutboundMessage) error {
+func (*failingOpenPreviewSender) Send(_ context.Context, _ channel.OutboundMessage) error {
 	return nil
 }
 
-func (s *failingOpenStreamSender) OpenStream(_ context.Context, _ string, _ channel.StreamOptions) (channel.OutboundStream, error) {
+func (s *failingOpenPreviewSender) OpenStream(_ context.Context, _ string, _ channel.StreamOptions) (channel.OutboundStream, error) {
 	if s != nil && s.err != nil {
 		return nil, s.err
 	}
@@ -2801,7 +2801,7 @@ func TestChannelInboundProcessorDoesNotPersistBeforeOpenStream(t *testing.T) {
 	chatSvc := &fakeChatService{resolveResult: route.ResolveConversationResult{BotID: "chat-openstream", RouteID: "route-openstream"}}
 	gateway := &fakeChatGateway{}
 	processor := NewChannelInboundProcessor(slog.Default(), nil, chatSvc, chatSvc, gateway, channelIdentitySvc, policySvc, "", 0)
-	sender := &failingOpenStreamSender{err: errors.New("stream unavailable")}
+	sender := &failingOpenPreviewSender{err: errors.New("stream unavailable")}
 
 	cfg := channel.ChannelConfig{TeamID: "team-test", ID: "cfg-openstream", BotID: "bot-1", ChannelType: channel.ChannelType("qq")}
 	msg := channel.InboundMessage{

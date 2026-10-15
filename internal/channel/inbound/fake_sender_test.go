@@ -10,7 +10,7 @@ import (
 // layer can hand over reaches their stream.
 var fakeSenderCaps = channel.ChannelCapabilities{
 	Text: true, Markdown: true, Streaming: true, Attachments: true, Reactions: true,
-	NativeApproval: true, NativeUserInput: true,
+	NativeApproval: true, NativeUserInput: true, Preview: channel.PreviewEditInPlace,
 }
 
 type openStreamer interface {
@@ -71,17 +71,17 @@ func (s *fakeReplySender) OpenPreview(ctx context.Context, target string, opts c
 	return openStreamPreview(ctx, s, target, opts)
 }
 
-func (*failingOpenStreamSender) Capabilities(string) channel.ChannelCapabilities {
+func (*failingOpenPreviewSender) Capabilities(string) channel.ChannelCapabilities {
 	return fakeSenderCaps
 }
 
-func (*failingOpenStreamSender) Attach(context.Context, string, channel.Attachment, *channel.ReplyRef) error {
+func (*failingOpenPreviewSender) Attach(context.Context, string, channel.Attachment, *channel.ReplyRef) error {
 	return nil
 }
 
-func (*failingOpenStreamSender) React(context.Context, channel.ReactRequest) error { return nil }
+func (*failingOpenPreviewSender) React(context.Context, channel.ReactRequest) error { return nil }
 
-func (s *failingOpenStreamSender) OpenPreview(ctx context.Context, target string, opts channel.StreamOptions) (channel.Preview, error) {
+func (s *failingOpenPreviewSender) OpenPreview(ctx context.Context, target string, opts channel.StreamOptions) (channel.Preview, error) {
 	return openStreamPreview(ctx, s, target, opts)
 }
 
