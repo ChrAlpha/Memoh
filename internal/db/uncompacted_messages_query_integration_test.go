@@ -295,6 +295,11 @@ func assertScopedUncompactedRead(t *testing.T, ctx context.Context, tx pgx.Tx, q
 		t.Fatalf("ordinary prefix semantics changed: rows=%d error=%v", len(ordinary), err)
 	}
 	args.EligibleMessageIds = eligible
+	var foreign pgtype.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM bot_visible_history_messages WHERE bot_id=$1 AND session_id<>$2 LIMIT 1`, botID, sessionID).Scan(&foreign); err != nil {
+		t.Fatal(err)
+	}
+	args.EligibleMessageIds = append(append([]pgtype.UUID(nil), eligible...), foreign)
 	scoped, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, args)
 	if err != nil || len(scoped) != 3 {
 		t.Fatalf("scoped tail blocked: rows=%d error=%v", len(scoped), err)
