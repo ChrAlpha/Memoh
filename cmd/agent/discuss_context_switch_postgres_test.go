@@ -38,6 +38,7 @@ type contextSwitchScript struct {
 	mu       sync.Mutex
 	requests []string
 	steer    bool
+	summary  func(http.ResponseWriter, *http.Request, []byte)
 }
 
 func (s *contextSwitchScript) Tools(context.Context, tools.SessionContext) ([]toolexec.Tool, error) {
@@ -71,8 +72,12 @@ func (s *contextSwitchScript) output(index int) string {
 	return fmt.Sprintf("TOOL_RESULT_%03d ", index) + strings.Repeat(fmt.Sprintf("finding %03d. ", index), s.size/13)
 }
 
-func (s *contextSwitchScript) serve(w http.ResponseWriter, _ *http.Request, body []byte, stream bool) {
+func (s *contextSwitchScript) serve(w http.ResponseWriter, r *http.Request, body []byte, stream bool) {
 	if !stream {
+		if s.summary != nil {
+			s.summary(w, r, body)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"SWITCH_SUMMARY_%03d: earlier numbered effects completed."},"finish_reason":"stop"}]}`, s.f.summaries.Load())
 		return
@@ -126,7 +131,20 @@ func (s *contextSwitchScript) assertEffects(t *testing.T) {
 }
 
 func TestPostgresDiscussSameRunCompactionContinuesLongToolLoop(t *testing.T) {
-	s := newContextSwitchScript(t, 24, 4200)
+	assertDiscussContextSwitch(t, 24, 4200)
+}
+
+func TestPostgresDiscussSameRunCompactionBoundedGrowth(t *testing.T) {
+	for _, size := range []int{2600, 6200} {
+		t.Run(fmt.Sprintf("output_bytes=%d", size), func(t *testing.T) {
+			assertDiscussContextSwitch(t, 96, size)
+		})
+	}
+}
+
+func assertDiscussContextSwitch(t *testing.T, steps, size int) {
+	t.Helper()
+	s := newContextSwitchScript(t, steps, size)
 	f := s.f
 	f.appendMessage("original-input", switchOriginalInput)
 	if code := f.trigger(); code != "" {
