@@ -435,6 +435,7 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 	if err != nil {
 		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "placement_error", "context view placement invalid after render", err), nil
 	}
+	cfg.ContextMessageSources = providerContextSwitchSources(ordered, cfg.Messages)
 	currentIndex, memoryIndex := renderedSpecialMessageIndexes(ordered)
 	cfg.ContextMemoryMessageIndex = memoryIndex
 	switch {
