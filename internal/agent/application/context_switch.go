@@ -94,9 +94,7 @@ func (s *Service) prepareContextSwitch(ctx context.Context, req ChatRequest, mod
 		cfg.HistoryBudgetTokens = budget
 		cfg.TargetTokens = compactionTargetTokens(botSettings.CompactionTargetPercent, budget)
 		previous := candidate
-		done := s.enterSessionCompactionForRun(req.BotID, req.ThreadID, req.RunID)
 		result, compactErr := s.compactionService.RunCompactionSync(ctx, cfg)
-		done()
 		if ctx.Err() != nil {
 			return native.ContextSwitchResult{}, ctx.Err()
 		}

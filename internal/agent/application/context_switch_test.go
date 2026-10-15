@@ -103,3 +103,44 @@ func TestContextSwitchDoesNotCompactAcrossTransientInput(t *testing.T) {
 		t.Fatalf("one summary could move evidence across a provider-only input: %+v", refs)
 	}
 }
+
+func TestContextSwitchCancellationDoesNotWaitForMaintenanceGate(t *testing.T) {
+	service, _, runner, cfg := chatRecoveryFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	committer := &agentStepCommitter{service: service, ownerContext: ctx, req: ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: cfg.RunID}}
+	committer.bindContinuation(&cfg)
+	release := service.enterSessionCompaction(syncCompactBotID, syncCompactThreadID)
+	defer release()
+	started := make(chan struct{})
+	runner.run = func() (compaction.Result, error) {
+		close(started)
+		<-ctx.Done()
+		return compaction.Result{}, ctx.Err()
+	}
+	input := native.ContextSwitchInput{RunID: cfg.RunID,
+		Request: sdk.Request{Messages: []sdk.Message{sdk.UserMessage("current"), sdk.AssistantMessage(strings.Repeat("old", 2000)), sdk.AssistantMessage("latest")}},
+		Sources: []native.ContextSwitchSource{{}, {Ref: switchProjectionSource(t, "old", "durable")}, {}}, Protected: []bool{true, false, true}, InputAllowanceTokens: 12000,
+	}
+	returned := make(chan error, 1)
+	go func() { _, err := cfg.SwitchContext(ctx, input); returned <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		cancel()
+		release()
+		<-returned
+		t.Fatal("run-owned recovery waited on the non-cancellable maintenance gate")
+	}
+	cancel()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel cause = %v", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		<-returned
+		t.Fatal("cancelled recovery did not return while maintenance gate remained held")
+	}
+}
