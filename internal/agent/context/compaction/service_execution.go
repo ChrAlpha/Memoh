@@ -237,7 +237,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	replayBudget, retainedTokens := 0, 0
 	if cfg.HistoryBudgetTokens > 0 {
-		retainedTokens = retainedReplayTokens(messages, compactedMessageIDs, frontier.Artifacts, fusing, cfg.ProtectedSources)
+		retainedTokens = retainedReplayTokens(messages, compactedMessageIDs, frontier.Artifacts, fusing, cfg.ProtectedSources, scope)
 		replayBudget = cfg.TargetTokens
 		if replayBudget <= 0 {
 			replayBudget = cfg.HistoryBudgetTokens

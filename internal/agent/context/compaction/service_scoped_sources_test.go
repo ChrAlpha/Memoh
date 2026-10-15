@@ -2,7 +2,11 @@ package compaction
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -13,6 +17,79 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
+
+func TestScopedCompactionDoesNotRechargeFixedContext(t *testing.T) {
+	for _, mode := range []string{"latest_tool", "unseen_history", "unseen_summary", "eligible_tail", "eligible_summary"} {
+		t.Run(mode, func(t *testing.T) {
+			const summary = "summary: "
+			text := summary + strings.Repeat("s", 800)
+			var calls, outputLimit atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					MaxTokens           int `json:"max_tokens"`
+					MaxCompletionTokens int `json:"max_completion_tokens"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				calls.Add(1)
+				limit := max(request.MaxTokens, request.MaxCompletionTokens)
+				outputLimit.Store(int32(limit))
+				finishReason := "stop"
+				if limit < 210 {
+					finishReason = "length"
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "summary", "object": "chat.completion", "model": "scripted",
+					"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": finishReason}},
+				})
+			}))
+			defer server.Close()
+			eligible := mkRow(t, "assistant", jsonStr(strings.Repeat("completed step ", 500)), 2000)
+			rows := []sqlc.ListUncompactedMessagesBySessionRow{eligible}
+			if mode == "latest_tool" {
+				call, result := toolCallRow(t, 100), toolResultRow(t, 400)
+				result.Content = []byte(`[{"type":"tool-result","toolName":"calc","toolCallId":"c1","result":` + jsonStr(strings.Repeat("f", 1200)) + `}]`)
+				rows = append(rows, call, result)
+			} else if mode == "unseen_history" {
+				rows = append([]sqlc.ListUncompactedMessagesBySessionRow{mkRow(t, "assistant", jsonStr(strings.Repeat("unseen", 200)), 400)}, rows...)
+			}
+			cfg := machineryConfig(nil, 500)
+			cfg.BaseURL, cfg.HTTPClient = server.URL, server.Client()
+			cfg.HistoryBudgetTokens = 600
+			cfg.EligibleSources = []contextfrag.ContextRef{scopedRowRef(t, eligible)}
+			q := &fakeQueries{uncompacted: rows}
+			if mode == "unseen_summary" || mode == "eligible_summary" {
+				q.priorLogs = fusionParentLogs(t, cfg, strings.Repeat("unseen", 200))
+				if mode == "eligible_summary" {
+					cfg.EligibleSources = append(cfg.EligibleSources, fusionArtifacts(t, q.priorLogs)[0].Coverage[0].Ref)
+				}
+			}
+			if mode == "eligible_tail" {
+				tail := mkRow(t, "assistant", jsonStr(strings.Repeat("retained", 150)), 400)
+				q.uncompacted = append(q.uncompacted, mkRow(t, "user", `"protected barrier"`, 10), tail)
+				cfg.EligibleSources = append(cfg.EligibleSources, scopedRowRef(t, tail))
+			}
+			result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+			t.Logf("scope_budget=%d target=%d max_tokens=%d provider_calls=%d", cfg.HistoryBudgetTokens, cfg.TargetTokens, outputLimit.Load(), calls.Load())
+			if mode == "eligible_tail" || mode == "eligible_summary" {
+				if err == nil || calls.Load() != 1 || q.completed.Status != "error" || len(q.markedIDs) != 1 || q.markedIDs[0] != eligible.ID {
+					t.Fatalf("eligible retained context was not budgeted: result=%+v err=%v calls=%d max_tokens=%d", result, err, calls.Load(), outputLimit.Load())
+				}
+				return
+			}
+			if err != nil || result.Status != StatusOK || calls.Load() != 1 || outputLimit.Load() < 210 {
+				t.Fatalf("fixed context charged twice: result=%+v err=%v calls=%d max_tokens=%d", result, err, calls.Load(), outputLimit.Load())
+			}
+			if len(q.markedIDs) != 1 || q.markedIDs[0] != eligible.ID || q.completed.Status != "ok" {
+				t.Fatalf("scope or commit changed: marked=%v status=%s", q.markedIDs, q.completed.Status)
+			}
+		})
+	}
+}
 
 func TestScopedCompactionReplacesCommittedMiddleBehindCurrentInput(t *testing.T) {
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{

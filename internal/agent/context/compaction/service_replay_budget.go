@@ -15,14 +15,14 @@ func summaryProviderReplayTokens(summary string) int {
 	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")}))
 }
 
-func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, frontier []Artifact, fusing bool, sources []turn.ContextMessageSource) int {
+func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, frontier []Artifact, fusing bool, sources []turn.ContextMessageSource, scope compactionSourceScope) int {
 	selected := make(map[pgtype.UUID]bool, len(compacted))
 	for _, id := range compacted {
 		selected[id] = true
 	}
 	tokens := 0
 	for _, message := range messages {
-		if selected[message.ID] || isProtectedSource(message, sources) {
+		if selected[message.ID] || isProtectedSource(message, sources) || (scope != nil && !scope.includes(message.Record.Ref)) {
 			continue
 		}
 		sdkMessage := messageconv.ModelMessageToSDKMessage(message.Record.ModelMessage)
@@ -34,6 +34,9 @@ func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUI
 	}
 	if !fusing {
 		for _, artifact := range frontier {
+			if scope != nil && !scope.permitsFusion([]Artifact{artifact}, sources) {
+				continue
+			}
 			tokens += summaryProviderReplayTokens(artifact.Summary)
 		}
 	}
