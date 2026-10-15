@@ -121,7 +121,8 @@ type ContextStepReselector func(context.Context, ContextStepSelectionInput) Cont
 // NextInputs become the next model request; a would-be-final step continues
 // instead of ending the loop when this slice is non-empty.
 type StepDirective struct {
-	NextInputs []DirectiveInput
+	NextInputs       []DirectiveInput
+	CommittedSources []contextfrag.ContextRef
 }
 
 // DirectiveInput is one user input admitted at a step commit boundary.
@@ -188,6 +189,9 @@ type RunConfig struct {
 	// ModelMaxOutputTokens is the model's configured output cap; zero means unknown.
 	ModelMaxOutputTokens         int
 	RecoverContextBudget         func(context.Context, RunConfig) (RunConfig, bool, error)
+	SwitchContext                func(context.Context, ContextSwitchInput) (ContextSwitchResult, error)
+	ContextMessageSources        []ContextSwitchSource
+	contextSwitch                *contextSwitchState
 	ContextRecentProtectTokens   *int
 	ContextHistoryTokenEstimates []int
 	ContextTrimmableMessages     int
