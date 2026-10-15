@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
@@ -66,7 +67,9 @@ type TriggerConfig struct {
 	SummaryWindowTokens int
 	// ContextWindowTokens is the chat model's context window. It is separate
 	// from SummaryWindowTokens, which belongs to the summarizer model.
-	ProtectedSources    []turn.ContextMessageSource
+	ProtectedSources []turn.ContextMessageSource
+	// Nil uses ordinary history selection; non-nil permits only these source versions.
+	EligibleSources     []contextfrag.ContextRef
 	HistoryBudgetTokens int
 	ContextWindowTokens int
 	PromptCacheTTL      string

@@ -62,7 +62,16 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 
 	messages, barrierCount := itemsFromRows(rows)
-	protectCurrentSources(messages, cfg.ProtectedSources)
+	scope := newCompactionSourceScope(cfg.EligibleSources)
+	if scope == nil {
+		protectCurrentSources(messages, cfg.ProtectedSources)
+	} else {
+		messages, err = s.loadScopedCandidateAssets(ctx, scope, messages, rows)
+		if err != nil {
+			return Result{}, err
+		}
+		scope.protect(messages, cfg.ProtectedSources)
+	}
 	if barrierCount > 0 {
 		s.logger.WarnContext(ctx, "compaction: kept unparseable history rows as span barriers",
 			slog.Int("barrier_count", barrierCount),
@@ -112,7 +121,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	for _, issue := range frontier.Issues {
 		s.logger.WarnContext(ctx, "compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
 	}
-	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens)
+	fusing := shouldFuseFrontier(cfg, frontier.Artifacts, maxCompactTokens) && scope.permitsFusion(frontier.Artifacts, cfg.ProtectedSources)
 	if fusing && !frontierHasPersistedCoverage(frontier.Artifacts) {
 		s.logger.WarnContext(ctx, "compaction: frontier fusion skipped",
 			slog.String("reason", "legacy_parent_missing_coverage"),
@@ -135,6 +144,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	var toCompact []CompactionCandidate
 	switch {
+	case scope != nil:
+		toCompact = messages
 	case truncatedRead:
 		// Rows are an oldest-first prefix. When more history exists outside the
 		// database admission boundary, compact the admitted prefix and let the
@@ -297,6 +308,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	toCompact, err = candidatesWithAssets(toCompact, rows, assetRows)
 	if err != nil {
+		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
+		return Result{}, err
+	}
+	if !scope.permitsClaimed(toCompact, compactedMessageIDs) {
+		err = fmt.Errorf("compaction: claimed source no longer matches eligible source")
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
