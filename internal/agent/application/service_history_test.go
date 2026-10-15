@@ -220,3 +220,18 @@ func TestEstimateMessageTokensCountsReplayedReasoningAndToolInput(t *testing.T) 
 		t.Fatalf("estimateMessageTokens = %d, want at least %d for the replayed reasoning and tool input", got, floor)
 	}
 }
+
+func TestEstimateMessageTokensLeavesInlineImagesToTheSelector(t *testing.T) {
+	t.Parallel()
+
+	content, err := json.Marshal([]map[string]any{
+		{"type": "text", "text": "look at this"},
+		{"type": "image", "image": "data:image/png;base64," + strings.Repeat("A", 1<<20)},
+	})
+	if err != nil {
+		t.Fatalf("marshal content: %v", err)
+	}
+	if got := estimateMessageTokens(ModelMessage{Role: "user", Content: content}); got > 10 {
+		t.Fatalf("estimateMessageTokens = %d, want the text-only estimate; image cost belongs to the selector", got)
+	}
+}
