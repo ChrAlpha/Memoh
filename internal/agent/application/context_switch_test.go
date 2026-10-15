@@ -82,3 +82,24 @@ func TestDecisionContinuationPausesIdleDuringContextSwitch(t *testing.T) {
 		}
 	})
 }
+
+func TestContextSwitchDoesNotCompactAcrossTransientInput(t *testing.T) {
+	service, _, runner, cfg := chatRecoveryFixture(t)
+	committer := &agentStepCommitter{service: service, ownerContext: t.Context(), req: ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: cfg.RunID}}
+	committer.bindContinuation(&cfg)
+	left := switchProjectionSource(t, "left", "first")
+	right := switchProjectionSource(t, "right", "second")
+	input := native.ContextSwitchInput{RunID: cfg.RunID,
+		Request: sdk.Request{Messages: []sdk.Message{sdk.AssistantMessage(strings.Repeat("a", 4000)), sdk.UserMessage("transient hook, absent from database"), sdk.AssistantMessage(strings.Repeat("b", 1000)), sdk.AssistantMessage("latest")}},
+		Sources: []native.ContextSwitchSource{{Ref: left}, {}, {Ref: right}, {}}, Protected: []bool{false, true, false, true}, InputAllowanceTokens: 12000,
+	}
+	if _, err := cfg.SwitchContext(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.configs) != 1 {
+		t.Fatalf("compaction calls = %d, want one", len(runner.configs))
+	}
+	if refs := runner.configs[0].EligibleSources; len(refs) != 1 || refs[0] != left {
+		t.Fatalf("one summary could move evidence across a provider-only input: %+v", refs)
+	}
+}

@@ -6,8 +6,6 @@ import (
 	"reflect"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -46,23 +44,6 @@ func (s *Service) prepareContextSwitch(ctx context.Context, req ChatRequest, mod
 	if len(input.Sources) != len(input.Request.Messages) || len(input.Protected) != len(input.Sources) || input.InputAllowanceTokens <= 0 {
 		return native.ContextSwitchResult{}, fmt.Errorf("%w: invalid context switch basis", contextfrag.ErrBudgetUnsatisfied)
 	}
-	eligible := make([]contextfrag.ContextRef, 0, len(input.Sources))
-	var fixed []sdk.Message
-	for i, source := range input.Sources {
-		refs := contextSwitchSourceCoverage(source)
-		if input.Protected[i] || len(refs) == 0 {
-			fixed = append(fixed, input.Request.Messages[i])
-			continue
-		}
-		eligible = append(eligible, refs...)
-	}
-	if len(eligible) == 0 {
-		return native.ContextSwitchResult{}, nil
-	}
-	budget := input.InputAllowanceTokens - contextfrag.ProviderEnvelopeTokens(input.Request.System, fixed, input.Request.Tools)
-	if budget <= 0 {
-		return native.ContextSwitchResult{}, fmt.Errorf("%w: protected context leaves no summary allowance", contextfrag.ErrProtectedContextOverflow)
-	}
 	loadCandidate := func() (native.ContextSwitchResult, error) {
 		frontier, err := s.loadActiveCompactionFrontier(ctx, req.BotID, req.ThreadID)
 		if err != nil {
@@ -93,13 +74,25 @@ func (s *Service) prepareContextSwitch(ctx context.Context, req ChatRequest, mod
 	if err != nil || cfg.ModelID == "" {
 		return native.ContextSwitchResult{}, err
 	}
-	cfg.EligibleSources = eligible
 	cfg.AllowFrontierFusion = true
 	cfg.HardPressure = true
-	cfg.HistoryBudgetTokens = budget
-	cfg.TargetTokens = compactionTargetTokens(botSettings.CompactionTargetPercent, budget)
 	cfg.ContextWindowTokens = input.InputAllowanceTokens
 	for range 3 {
+		current := input
+		if candidate.Messages != nil && contextfrag.ProviderEnvelopeTokens(input.Request.System, candidate.Messages, input.Request.Tools) < pressure {
+			current.Request.Messages, current.Sources = candidate.Messages, candidate.Sources
+			current.Protected = make([]bool, len(candidate.Messages))
+			for i, source := range candidate.SourceIndexes {
+				current.Protected[i] = source >= 0 && input.Protected[source]
+			}
+		}
+		eligible, budget, scopeErr := contextSwitchCompactionScope(current)
+		if scopeErr != nil || len(eligible) == 0 {
+			return native.ContextSwitchResult{}, scopeErr
+		}
+		cfg.EligibleSources = eligible
+		cfg.HistoryBudgetTokens = budget
+		cfg.TargetTokens = compactionTargetTokens(botSettings.CompactionTargetPercent, budget)
 		previous := candidate
 		done := s.enterSessionCompactionForRun(req.BotID, req.ThreadID, req.RunID)
 		result, compactErr := s.compactionService.RunCompactionSync(ctx, cfg)
