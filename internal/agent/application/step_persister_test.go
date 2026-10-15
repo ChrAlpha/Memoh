@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -18,6 +19,7 @@ import (
 type recordingStepPersister struct {
 	*recordingMessageService
 	steps   []messagepkg.AgentStep
+	rows    []messagepkg.Message
 	stepErr error
 }
 
@@ -63,7 +65,17 @@ func (s *recordingStepPersister) PersistAgentStep(_ context.Context, step messag
 	for i, input := range step.Messages {
 		result[i] = messagepkg.Message{ID: "committed", Role: input.Role, BotID: input.BotID, SessionID: input.SessionID, Metadata: input.Metadata, Content: input.Content}
 	}
+	s.rows = append(s.rows, result...)
 	return result, nil
+}
+
+func (s *recordingStepPersister) GetByIDBySession(_ context.Context, sessionID, messageID string) (messagepkg.Message, error) {
+	for i := len(s.rows) - 1; i >= 0; i-- {
+		if row := s.rows[i]; row.SessionID == sessionID && row.ID == messageID {
+			return row, nil
+		}
+	}
+	return messagepkg.Message{}, fmt.Errorf("committed source %s not found", messageID)
 }
 
 func (s *recordingStepPersister) PersistAgentReplacementStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {

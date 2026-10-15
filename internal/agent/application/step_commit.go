@@ -315,7 +315,10 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	if queueErr != nil {
 		return fail(queueErr)
 	}
-	dir.CommittedSources = committedContextSources(len(record.Messages), origins, persisted)
+	dir.CommittedSources, err = c.committedContextSources(ctx, len(record.Messages), origins, persisted)
+	if err != nil {
+		return fail(err)
+	}
 	return dir, nil
 }
 
