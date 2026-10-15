@@ -15,8 +15,10 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/event"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
@@ -181,4 +183,100 @@ func TestPostgresDiscussSameRunCompactionContinuesLongToolLoop(t *testing.T) {
 	f.answer("next round", "next-round after the long tool loop")
 	s.assertEffects(t)
 	t.Logf("steps=%d switches=%d summary_calls=%d provider_calls=%d single_run=1 effects_exact=1 next_round=answered", s.steps, switches, f.summaries.Load(), f.modelCalls.Load())
+}
+
+func (s *contextSwitchScript) chat(t *testing.T, text string) (string, []int) {
+	t.Helper()
+	f := s.f
+	handle, err := f.service.StartTurn(f.ctx, turn.StartTurnCommand{
+		SchemaVersion: 1, TeamID: f.cfg.TeamID, Mode: turn.ModeChat,
+		BotID: f.botID, ChatID: f.botID, ThreadID: f.sessionID,
+		Query: text, UserVisibleText: text, CurrentChannel: "local",
+		SkipMemoryExtraction: true, SkipTitleGeneration: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Cancel()
+	var steps []int
+	var terminal string
+	for frame := range handle.Events() {
+		if frame.RunID != handle.RunID() {
+			t.Fatalf("run changed during the tool loop: %s -> %s", handle.RunID(), frame.RunID)
+		}
+		var data event.StreamEvent
+		if err := json.Unmarshal(frame.Payload, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.Type == event.StepEnd {
+			steps = append(steps, data.StepNumber)
+		}
+		if result, ok := turn.RunTerminalFrom(frame); ok {
+			terminal = string(result.State)
+		}
+		if data.Type == event.Error {
+			t.Errorf("chat emitted error: %s", data.Code)
+		}
+	}
+	for err := range handle.Errs() {
+		if err != nil {
+			t.Errorf("chat: %v", err)
+		}
+	}
+	if terminal != "completed" {
+		t.Fatalf("chat did not complete: terminal=%q model_calls=%d summaries=%d", terminal, f.modelCalls.Load(), f.summaries.Load())
+	}
+	return handle.RunID(), steps
+}
+
+func TestPostgresChatSameRunCompactionPreservesSteerAndStepOrder(t *testing.T) {
+	s := newContextSwitchScript(t, 24, 4200)
+	s.steer = true
+	f := s.f
+	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_sessions SET type='chat' WHERE id=$1`, f.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	runID, steps := s.chat(t, switchOriginalInput)
+	s.assertEffects(t)
+	if len(steps) != s.steps+1 {
+		t.Fatalf("step markers=%v, want %d", steps, s.steps+1)
+	}
+	for index, step := range steps {
+		if step != index {
+			t.Fatalf("step indexes restarted or skipped: %v", steps)
+		}
+	}
+	s.mu.Lock()
+	requests := append([]string(nil), s.requests...)
+	s.mu.Unlock()
+	for i, request := range requests {
+		if strings.Count(request, switchOriginalInput) != 1 {
+			t.Fatalf("request %d lost or duplicated original input", i+1)
+		}
+		if i >= 2 && strings.Count(request, switchSteerInput) != 1 {
+			t.Fatalf("request %d lost or duplicated the applied steer", i+1)
+		}
+		if i > 0 && (!strings.Contains(request, s.output(i)) || !strings.Contains(request, fmt.Sprintf("REASONING_%03d", i))) {
+			t.Fatalf("request %d lost the latest tool result or provider reasoning", i+1)
+		}
+	}
+	if f.summaries.Load() < 2 {
+		t.Fatalf("tool loop did not cross two summary switches: %d", f.summaries.Load())
+	}
+	var runs, originalRows, steerRows int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM session_runs WHERE session_id=$1`, f.sessionID).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE content::text LIKE $2),count(*) FILTER (WHERE content::text LIKE $3) FROM bot_history_messages WHERE session_id=$1 AND role='user' AND compact_id IS NULL`, f.sessionID, "%"+switchOriginalInput+"%", "%"+switchSteerInput+"%").Scan(&originalRows, &steerRows); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 1 || originalRows != 1 || steerRows != 1 {
+		t.Fatalf("input persistence: runs=%d original=%d steer=%d", runs, originalRows, steerRows)
+	}
+	_, nextSteps := s.chat(t, "next-round after the steered loop")
+	if len(nextSteps) != 1 || nextSteps[0] != 0 {
+		t.Fatalf("next run did not start at step zero: %v", nextSteps)
+	}
+	s.assertEffects(t)
+	t.Logf("run=%s steps=%d summaries=%d original=1 steer=1 effects_exact=1 next_round=answered", runID, len(steps), f.summaries.Load())
 }
