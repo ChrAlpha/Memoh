@@ -71,6 +71,8 @@ type backlogFixture struct {
 	summaries   atomic.Int32
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
+	agent       *native.Agent
+	provider    func(http.ResponseWriter, *http.Request, []byte, bool)
 }
 
 func newBacklogFixture(t *testing.T) *backlogFixture {
@@ -101,11 +103,19 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 		if request.Stream {
 			f.modelCalls.Add(1)
 			f.lastRequest.Store(string(body))
+			if f.provider != nil {
+				f.provider(w, r, body, true)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = fmt.Fprint(w, "data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"BACKLOG_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			return
 		}
 		f.summaries.Add(1)
+		if f.provider != nil {
+			f.provider(w, r, body, false)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"Earlier backlog summarized."},"finish_reason":"stop"}]}`)
 	}))
@@ -134,7 +144,8 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.base = time.Now().Add(time.Minute).Truncate(time.Millisecond)
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{OwnerID: uuid.NewString(), Ledger: ledger.NewPostgres(sqlc.New(f.pool), f.pool), Fence: runtimefence.NewActivator(queries)})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)}), time.UTC, time.Minute)
+	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
+	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
 	service.SetCompactionService(compaction.NewService(logger, queries))
 	service.SetContextAbsoluteMaxTokens(16000)
