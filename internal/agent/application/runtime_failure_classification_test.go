@@ -15,6 +15,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
@@ -324,6 +325,90 @@ func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
 	}
 	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != string(apperror.CodeAgentDependencyMissing) {
 		t.Fatalf("history error_code = %q, want %q", got, apperror.CodeAgentDependencyMissing)
+	}
+}
+
+// A user's Stop that lands before the runtime did anything leaves no round to
+// write, and what happens to the user's message follows who holds the input. An
+// IM message has left the sender's hands, so it stays, with no failure row and
+// no assistant row, and the run is a stop. A Web draft is still the composer's,
+// so it is handed back, and the run is a stop too. Which way the driver reports
+// its cancellation does not matter: one that reports it as a configuration
+// error is not a refused turn, because the stop was already raised.
+func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
+	cancellations := []struct {
+		name   string
+		result func() (external.PromptResult, error)
+	}{
+		{name: "driver returns the cancellation", result: func() (external.PromptResult, error) {
+			return external.PromptResult{}, nil
+		}},
+		{name: "driver reports it as a configuration error", result: func() (external.PromptResult, error) {
+			return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
+		}},
+	}
+	for _, cancellation := range cancellations {
+		for _, entry := range []string{"im", "web"} {
+			t.Run(entry+"/"+cancellation.name, func(t *testing.T) {
+				messages := &recordingMessageService{}
+				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+				admitter := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+				service.sessionRuntime = admitter
+				service.SetAllowedTeam(driveTeamID)
+				started := make(chan struct{})
+				driver := noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(ctx context.Context, _ external.PromptInput) (external.PromptResult, error) {
+					close(started)
+					<-ctx.Done()
+					return cancellation.result()
+				}}
+
+				switch entry {
+				case "im":
+					service.SetExternalRuntimes(driver)
+					handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
+						SchemaVersion: 1, TeamID: driveTeamID, Mode: turn.ModeChat,
+						BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+						Query: "inspect", ExternalMessageID: "im-message-1",
+						CurrentChannel: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
+					})
+					if err != nil {
+						t.Fatalf("StartTurn() error = %v", err)
+					}
+					awaitStarted(t, started)
+					handle.Cancel()
+					drainDriveHandle(t, handle)
+				case "web":
+					abort := make(chan struct{})
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						_, _ = service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+							BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
+						}, make(chan WSStreamEvent, 64), abort)
+					}()
+					awaitStarted(t, started)
+					close(abort)
+					awaitEntryReturned(t, done)
+				}
+
+				if len(messages.persisted) != 1 || messages.persisted[0].Role != "user" {
+					t.Fatalf("persisted = %+v, want only the user message", messages.persisted)
+				}
+				if _, failed := messages.persisted[0].Metadata["error_code"]; failed {
+					t.Fatalf("user message metadata = %#v, want no failure", messages.persisted[0].Metadata)
+				}
+				wantDeleted := 0
+				if entry == "web" {
+					wantDeleted = 1
+				}
+				if len(messages.deleted) != wantDeleted {
+					t.Fatalf("deleted = %v, want %d batches: an IM message stays, a Web draft goes back", messages.deleted, wantDeleted)
+				}
+				if len(admitter.finishes) != 1 || admitter.finishes[0].status != sessionruntime.RunStatusAborted || admitter.finishes[0].message != "" {
+					t.Fatalf("terminal writes = %+v, want one aborted run with no failure code", admitter.finishes)
+				}
+			})
+		}
 	}
 }
 

@@ -41,14 +41,16 @@ func (s *runPublisherSet) retire() {
 
 // drive executes one run from the moment it is admitted to the moment its
 // terminal state is written. It is the single driver for every entry: Web,
-// channel, follow-up, retry, edit, decision continuation, and schedule. Each
-// entry decides only what runSpec carries; the ordering below is the same for
-// all of them.
+// channel, follow-up, retry, edit, decision continuation, discuss, resume, and
+// schedule. Each entry decides only what runSpec carries; the ordering below is
+// the same for all of them, and so is the run's turn span, which is why it is
+// opened here and not by an entry.
 //
 // The run has three goroutines: this one, the consumer that publishes and
 // queues the producer's events, and the delivery queue that hands them to the
 // caller. Only this one writes history.
 func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
+	ctx, endTurn := startTurnSpan(ctx, spec.Req)
 	if spec.Delivery == nil {
 		spec.Delivery = noDelivery{}
 	}
@@ -150,7 +152,9 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 		return plan, &done
 	}()
 
-	return s.settleRun(execCtx, spec, plan, pub, obs, queue, phase, ending)
+	result := s.settleRun(execCtx, spec, plan, pub, obs, queue, phase, ending)
+	endTurn(runSpanCause(result))
+	return result
 }
 
 // panickedRunCause is how a panic inside a run is reported to its failure
@@ -175,6 +179,20 @@ func (s *Service) logPanickedRun(ctx context.Context, spec runSpec, phase runPha
 		slog.Any("panic", r),
 		slog.String("stack", string(debug.Stack())),
 	)
+}
+
+// logStoppedCommitFailure records a stopped run's history write that failed.
+// Nothing else reports it: the run ended as a stop, so it has no failure for
+// the result record to carry.
+func (s *Service) logStoppedCommitFailure(ctx context.Context, spec runSpec, err error) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.ErrorContext(ctx, "stopped run's history was not written",
+		slog.String("bot_id", spec.Req.BotID),
+		slog.String("session_id", spec.Req.ThreadID),
+		slog.String("run_id", spec.Run.Handle.RunID),
+		slog.Any("error", err))
 }
 
 func phaseName(phase runPhase) string {
@@ -232,12 +250,24 @@ func (s *Service) settleRun(
 		end, failure = endFailed, named
 	}
 
-	// A stop and a lost run write no history: nothing is being reported, and
-	// another owner names a lost run's outcome.
+	// A lost run writes no history: another owner names its outcome. A stop
+	// reports nothing and leaves no failure, but it keeps what the user already
+	// saw, so the executor writes that.
 	var summary commitSummary
 	switch {
-	case end == endStopped || end == endOwnershipLost:
-		// Nothing is being reported, and another owner names a lost run.
+	case end == endOwnershipLost:
+		// Another owner names a lost run.
+	case end == endStopped:
+		if ending != nil && ending.CommitStopped != nil {
+			var err error
+			summary, err = ending.CommitStopped(context.WithoutCancel(runCtx))
+			if err != nil {
+				// The run was stopped, so it reports no failure: its terminal
+				// names the stop. A transcript that could not be written is
+				// found in the log.
+				s.logStoppedCommitFailure(runCtx, spec, err)
+			}
+		}
 	case ending != nil && ending.Commit != nil:
 		row := wantsFailureRow(spec.Input, end, failure, facts.Hook, spec.Replacement != nil)
 		summary, facts.Commit = ending.Commit(context.WithoutCancel(runCtx), failure, row)

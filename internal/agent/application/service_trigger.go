@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -161,7 +160,7 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 			return runPlan{}, err
 		}
 		if dispatch.kind == dispatchExternal {
-			return s.externalSchedulePlan(setupCtx, req, payload, dispatch.driver)
+			return s.externalSchedulePlan(setupCtx, req, spec, payload, dispatch.driver)
 		}
 		return s.nativeSchedulePlan(setupCtx, req, payload)
 	}
@@ -225,47 +224,16 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, paylo
 // externalSchedulePlan resolves a scheduled run an External Agent runtime
 // executes. It prompts with the generated schedule prompt rather than the raw
 // command, and nobody is there to answer a decision.
-func (s *Service) externalSchedulePlan(ctx context.Context, req ChatRequest, payload schedule.TriggerPayload, driver external.Driver) (runPlan, error) {
-	plan, req, err := s.prepareExternal(ctx, req, driver)
-	if err != nil {
-		return runPlan{}, err
-	}
-	lifecycle := contextfrag.NewLifecycleHolder()
-	if plan.contextManifest != nil {
-		lifecycle.SetManifest(*plan.contextManifest)
-	}
-	if plan.memoryTrace != nil {
-		lifecycle.SetMemoryRecall(*plan.memoryTrace)
-	}
-	return runPlan{
-		Exec: &externalExecutor{
-			service: s,
-			plan:    plan,
-			req:     req,
-			rc: resolvedContext{runConfig: native.RunConfig{
-				RunID:            req.RunID,
-				Identity:         native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID},
-				ContextLifecycle: lifecycle,
-			}},
-			prompt: native.GenerateSchedulePrompt(native.Schedule{
-				ID:          payload.ID,
-				Name:        payload.Name,
-				Description: payload.Description,
-				Pattern:     payload.Pattern,
-				MaxCalls:    payload.MaxCalls,
-				Command:     payload.Command,
-			}),
-			unattended: true,
-			lifecycle:  lifecycle,
-			timing:     newReasoningTimingTracker(nil),
-		},
-		Req: req,
-		Lifecycle: s.contextLifecycleTerminal(ctx, native.RunConfig{
-			RunID:            req.RunID,
-			Identity:         native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID},
-			ContextLifecycle: lifecycle,
-		}),
-	}, nil
+func (s *Service) externalSchedulePlan(ctx context.Context, req ChatRequest, spec runSpec, payload schedule.TriggerPayload, driver external.Driver) (runPlan, error) {
+	prompt := native.GenerateSchedulePrompt(native.Schedule{
+		ID:          payload.ID,
+		Name:        payload.Name,
+		Description: payload.Description,
+		Pattern:     payload.Pattern,
+		MaxCalls:    payload.MaxCalls,
+		Command:     payload.Command,
+	})
+	return s.externalRunPlan(ctx, req, spec, driver, prompt)
 }
 
 // scheduleSubmission is the canonical fingerprint input for a triggered turn.

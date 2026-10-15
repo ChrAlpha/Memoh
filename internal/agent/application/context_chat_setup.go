@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -42,31 +44,7 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 		if spec.Replacement != nil {
 			return runPlan{}, apperror.New(apperror.CodeExternalAgentTurnReplacementUnsupported, nil)
 		}
-
-		plan, req, err := s.prepareExternal(ctx, req, dispatch.driver)
-		if err != nil {
-			return runPlan{}, err
-		}
-
-		exec := &externalExecutor{
-			service:    s,
-			plan:       plan,
-			req:        req,
-			prompt:     req.Query,
-			unattended: spec.Unattended,
-			timing:     newReasoningTimingTracker(nil),
-			rc: resolvedContext{runConfig: native.RunConfig{
-				RunID:    req.RunID,
-				Identity: native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID},
-			}},
-		}
-
-		return runPlan{
-			Exec:       exec,
-			Req:        req,
-			IdleEffort: req.ReasoningEffort,
-			Lifecycle:  nil, // External runtimes have no context lifecycle owned by us.
-		}, nil
+		return s.externalRunPlan(ctx, req, spec, dispatch.driver, "")
 	}
 
 	ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
@@ -146,6 +124,47 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 		Exec:       exec,
 		Req:        req,
 		IdleEffort: reasoningEffortForIdle(cfg),
+		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+	}, nil
+}
+
+// externalRunPlan resolves a run an External Agent runtime executes, for every
+// entry that has one: the chat entries and the schedule fire. prompt is what
+// the driver is prompted with, empty for the request's own query. The plan
+// carries the context lifecycle the run's context sections build, so the
+// lifecycle row of a runtime's turn records what the runtime was given, whoever
+// started it.
+func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec runSpec, driver external.Driver, prompt string) (runPlan, error) {
+	plan, req, err := s.prepareExternal(ctx, req, driver)
+	if err != nil {
+		return runPlan{}, err
+	}
+	lifecycle := contextfrag.NewLifecycleHolder()
+	if plan.contextManifest != nil {
+		lifecycle.SetManifest(*plan.contextManifest)
+	}
+	if plan.memoryTrace != nil {
+		lifecycle.SetMemoryRecall(*plan.memoryTrace)
+	}
+	cfg := native.RunConfig{
+		RunID:            req.RunID,
+		Identity:         native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID},
+		ContextLifecycle: lifecycle,
+	}
+	return runPlan{
+		Exec: &externalExecutor{
+			service:    s,
+			plan:       plan,
+			req:        req,
+			prompt:     prompt,
+			unattended: spec.Unattended,
+			input:      spec.Input,
+			lifecycle:  lifecycle,
+			timing:     newReasoningTimingTracker(nil),
+			rc:         resolvedContext{runConfig: cfg},
+		},
+		Req:        req,
+		IdleEffort: req.ReasoningEffort,
 		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
 	}, nil
 }

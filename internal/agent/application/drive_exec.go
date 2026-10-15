@@ -40,8 +40,16 @@ type execEnding struct {
 	// keeps it from writing a failure row.
 	Phase runPhase
 	// Commit writes this ending's history. The driver calls it at most once,
-	// after naming the run's failure, never after ownership loss.
+	// after naming the run's failure, never after a stop or ownership loss.
 	Commit func(ctx context.Context, f *RunFailure, row bool) (commitSummary, error)
+	// CommitStopped writes what the user already saw of a run that was stopped:
+	// no failure, no failure row, no memory extraction. The driver calls it at
+	// most once, in place of Commit, when the run ended as a stop. An executor
+	// that writes its history while it runs (the native agent checkpoints the
+	// step it was in when the stop arrived) has nothing left to write and leaves
+	// it nil; one that learns what the turn produced only when it returns writes
+	// that here.
+	CommitStopped func(ctx context.Context) (commitSummary, error)
 	// Deferred is set when the run parked awaiting a decision.
 	Deferred bool
 	// Cleanup removes state this ending's history write does not own. The

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/codes"
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -908,6 +909,57 @@ func TestDiscussCommitsStepsAndRecordsFailure(t *testing.T) {
 			t.Fatalf("history after failure: user rows = %d, failure rows = %d, want 1 and 1", users, failures)
 		}
 	})
+}
+
+// A discuss batch runs through the driver like every other entry, so it has a
+// turn span of its own that says how the batch ended.
+func TestDiscussRunHasOneTurnSpan(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PostgreSQL integration")
+	}
+	cases := []struct {
+		name    string
+		step    *discussStep
+		state   string
+		outcome string
+		status  codes.Code
+	}{
+		{name: "completed", step: &discussStep{send: "The freeze is Friday."}, state: "completed", outcome: "completed", status: codes.Unset},
+		{name: "failed", step: &discussStep{fail: true}, state: "failed", outcome: "errored", status: codes.Error},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := recordTurnSpans(t)
+			env := newDiscussEnv(t, "group")
+			alice := env.participant(t, true)
+			proc := newDiscussProcess(t, env, tc.step)
+			hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "is the freeze on this week?"})
+
+			outcome, done := proc.admit(t, env)
+			if outcome != DiscussAdmitted {
+				t.Fatalf("outcome = %v, want admitted", outcome)
+			}
+			waitDiscussRun(t, done)
+			env.waitRunState(t, env.invocation(hw), tc.state)
+
+			span := turnSpan(t, recorder)
+			var spans int
+			for _, ended := range recorder.Ended() {
+				if ended.Name() == "agent.turn" {
+					spans++
+				}
+			}
+			if spans != 1 {
+				t.Fatalf("agent.turn spans = %d, want exactly one", spans)
+			}
+			if got := spanAttr(span, "agent.turn.outcome").AsString(); got != tc.outcome {
+				t.Errorf("outcome = %q, want %q", got, tc.outcome)
+			}
+			if got := span.Status().Code; got != tc.status {
+				t.Errorf("status = %v, want %v", got, tc.status)
+			}
+		})
+	}
 }
 
 // A discuss run interrupted by a shutdown continues as a resume run that

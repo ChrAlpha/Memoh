@@ -74,7 +74,7 @@ than either keeping or dropping them whole.
 | gRPC, remote runtime | Client spans, server → runtime over the WebSocket tunnel | `otelgrpc` client handler in `internal/userruntime` |
 | PostgreSQL | One span per query, on all three pools | `telemetry.PgxTracer` |
 | Channel inbound | One span per queued message, linked to the request that enqueued it | `Manager.runInboundTask` |
-| Agent turn | One span per turn, with its outcome | `startTurnSpan`, on both entry points |
+| Agent turn | One span per turn, with its outcome | `startTurnSpan`, opened by the run driver for every entry |
 | Model call | One span per provider call | `providerCallObserver`, in `internal/agent/runtime/native` |
 | Tool call | One span per tool execution | `wrapToolTracing`, in `assembleTools` |
 

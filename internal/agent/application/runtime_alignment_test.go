@@ -227,11 +227,14 @@ func assertACPCommitFailureEvents(t *testing.T, events []native.StreamEvent, wan
 
 // reconcileOutcomeQueries fakes the commit-unknown reconciliation store: it
 // answers LockSessionForCommitReconciliation + GetRuntimeRoundOutcome inside a
-// pass-through transaction.
+// pass-through transaction, can fail a configurable number of attempts first,
+// and signals when a projection sweep runs.
 type reconcileOutcomeQueries struct {
 	dbstore.Queries
-	mu      sync.Mutex
-	outcome string // "" means no committed round (proven rollback)
+	mu               sync.Mutex
+	outcome          string // "" means no committed round (proven rollback)
+	failFirst        int    // reconcile attempts to fail before answering
+	projectionsSwept chan struct{}
 }
 
 func (*reconcileOutcomeQueries) SupportsTransactions() bool { return true }
@@ -241,6 +244,13 @@ func (*reconcileOutcomeQueries) ListCompactionArtifactLineageBySession(context.C
 }
 
 func (q *reconcileOutcomeQueries) InTx(_ context.Context, fn func(dbstore.Queries) error) error {
+	q.mu.Lock()
+	if q.failFirst > 0 {
+		q.failFirst--
+		q.mu.Unlock()
+		return errors.New("reconciliation store temporarily unavailable")
+	}
+	q.mu.Unlock()
 	return fn(q)
 }
 
@@ -264,16 +274,22 @@ func (q *reconcileOutcomeQueries) GetRuntimeRoundOutcome(context.Context, sqlc.G
 	return q.outcome, nil
 }
 
-func (*reconcileOutcomeQueries) DeleteRuntimeDecisionProjectionsByRun(
+func (q *reconcileOutcomeQueries) DeleteRuntimeDecisionProjectionsByRun(
 	context.Context, sqlc.DeleteRuntimeDecisionProjectionsByRunParams,
 ) (int64, error) {
+	select {
+	case q.projectionsSwept <- struct{}{}:
+	default:
+	}
 	return 0, nil
 }
 
-// TestACPCommitUnknownResolutionMatrix pins the commit-unknown resolution of
-// resolveRuntimeRoundPersistFailure for a round proven committed and for the
-// incomplete-abort rollback path. The eagerly persisted leading user message
-// is never deleted in either, and the warm runtime is kept.
+// TestACPCommitUnknownResolutionMatrix pins the three-way commit-unknown
+// resolution contract of resolveRuntimeRoundPersistFailure through the
+// completed-turn path, plus the incomplete-abort rollback path. Two invariants
+// hold in every cell: the eagerly persisted leading user message is never
+// deleted, and the warm runtime is only discarded on a PROVEN rollback of a
+// completed turn.
 func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 	assertUserMessageKept := func(t *testing.T, messages *recordingMessageService) {
 		t.Helper()
@@ -305,6 +321,63 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		}
 		if len(pool.closed) != 0 {
 			t.Fatalf("proven-committed round closed the runtime: %v", pool.closed)
+		}
+		assertUserMessageKept(t, messages)
+	})
+
+	t.Run("rolled back", func(t *testing.T) {
+		messages := &recordingMessageService{roundPersistErr: db.ErrCommitOutcomeUnknown}
+		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
+		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		service.queries = &reconcileOutcomeQueries{outcome: ""}
+		eventCh := make(chan WSStreamEvent, 16)
+
+		outcome, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+			RunID: lifecycleTestRunID, Query: "inspect",
+		}, eventCh, make(chan struct{}))
+		if err != nil || apperror.CodeOf(outcome.Cause) != apperror.CodeSessionHistoryInconsistent {
+			t.Fatalf("streamACPAgentWS() = %v, %v, want the run to fail with %s", outcome.Cause, err, apperror.CodeSessionHistoryInconsistent)
+		}
+		events := drainAgentEvents(t, eventCh)
+		if !containsStreamEvent(events, native.EventError) || containsStreamEvent(events, native.EventEnd) {
+			t.Fatalf("proven rollback of a completed turn must surface a sanitized error: %#v", events)
+		}
+		if len(pool.closed) != 1 || pool.closed[0] != lifecycleTestSessionID {
+			t.Fatalf("proven rollback must discard the diverged warm runtime once: %v", pool.closed)
+		}
+		assertUserMessageKept(t, messages)
+	})
+
+	t.Run("unresolved", func(t *testing.T) {
+		messages := &recordingMessageService{roundPersistErr: db.ErrCommitOutcomeUnknown}
+		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
+		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		queries := &reconcileOutcomeQueries{
+			outcome:          "succeeded",
+			failFirst:        1, // the in-turn reconcile fails; the background retry succeeds
+			projectionsSwept: make(chan struct{}, 1),
+		}
+		service.queries = queries
+		eventCh := make(chan WSStreamEvent, 16)
+
+		outcome, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+			RunID: lifecycleTestRunID, Query: "inspect",
+		}, eventCh, make(chan struct{}))
+		if err != nil || apperror.CodeOf(outcome.Cause) != apperror.CodeSessionHistoryInconsistent {
+			t.Fatalf("unresolved outcome must fail closed, got %v, %v", outcome.Cause, err)
+		}
+		if len(pool.closed) != 0 {
+			t.Fatalf("unresolved outcome must not touch the runtime: %v", pool.closed)
+		}
+		assertUserMessageKept(t, messages)
+		// The projections are swept, by the run's own cleanup or by the
+		// reconciliation that resolves the round, whichever comes first.
+		select {
+		case <-queries.projectionsSwept:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the decision projections were never swept")
 		}
 		assertUserMessageKept(t, messages)
 	})

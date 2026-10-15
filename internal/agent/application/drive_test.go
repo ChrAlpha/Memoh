@@ -37,6 +37,12 @@ type scriptedExecutor struct {
 	commitErr error
 	// commitRows records the row flag each commit was called with.
 	commitRows *[]bool
+	// stoppedWrites, when non-nil, gives the ending a CommitStopped hook that
+	// counts its calls into it; nil models an executor that has nothing left to
+	// write when its run is stopped.
+	stoppedWrites *int
+	// stoppedErr is what that hook returns.
+	stoppedErr error
 	// emitErr, when set, is what execute hands back as its cause.
 	emitErr error
 	// blockUntil, when non-nil, holds execute open until it is closed.
@@ -70,6 +76,12 @@ func (e *scriptedExecutor) execute(ctx context.Context, emit func(native.StreamE
 			*e.commitRows = append(*e.commitRows, row)
 		}
 		return commitSummary{}, e.commitErr
+	}
+	if e.stoppedWrites != nil {
+		ending.CommitStopped = func(context.Context) (commitSummary, error) {
+			*e.stoppedWrites++
+			return commitSummary{Text: "kept"}, e.stoppedErr
+		}
 	}
 	return ending
 }
@@ -381,6 +393,87 @@ func TestDriveStopEndsWithoutAFailure(t *testing.T) {
 	}
 	if len(ended) != 1 || ended[0].Failure != nil {
 		t.Fatalf("Ended = %#v, want a stop without a failure", ended)
+	}
+}
+
+// A stop keeps what the user already saw. The driver asks the executor to write
+// it, for every executor alike: the history write of a completed run is not
+// asked for, and neither is anything for a run another owner took. A stop whose
+// write failed is still a stop: it reports no failure, and its terminal is
+// published.
+func TestDriveStopKeepsWhatTheUserSaw(t *testing.T) {
+	t.Parallel()
+
+	stopped := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}
+	completed := native.StreamEvent{Type: native.EventAgentEnd}
+
+	cases := []struct {
+		name       string
+		terminal   native.StreamEvent
+		stopped    bool
+		lost       bool
+		stoppedErr error
+		noHook     bool
+		wantEnd    runEnd
+		wantWrites int
+	}{
+		{name: "stopped run writes once", terminal: stopped, stopped: true, wantEnd: endStopped, wantWrites: 1},
+		{name: "failed write leaves a stop", terminal: stopped, stopped: true, stoppedErr: errors.New("database down"), wantEnd: endStopped, wantWrites: 1},
+		{name: "executor with nothing left to write", terminal: stopped, stopped: true, noHook: true, wantEnd: endStopped},
+		{name: "completed run is not asked", terminal: completed, wantEnd: endCompleted},
+		{name: "lost run is not asked", terminal: completed, lost: true, wantEnd: endOwnershipLost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var writes int
+			var commits []bool
+			terminal := tc.terminal
+			exec := &scriptedExecutor{terminal: &terminal, stoppedErr: tc.stoppedErr, commitRows: &commits}
+			if !tc.noHook {
+				exec.stoppedWrites = &writes
+			}
+			pub := &recordingTurnEventPublisher{}
+			if tc.lost {
+				pub = &recordingTurnEventPublisher{errAt: 1, err: sessionruntime.ErrRunOwnershipLost}
+			}
+			svc := newDriveService(pub, &scriptedAdmitter{started: true})
+			delivery := &recordingDelivery{}
+			runCtx, stop := context.WithCancelCause(context.Background())
+			if tc.stopped {
+				stop(errRunStopped)
+			}
+			defer stop(nil)
+
+			result := svc.drive(runCtx, scheduledSpec(exec, delivery))
+
+			if result.End != tc.wantEnd {
+				t.Fatalf("end = %s, want %s (failure %#v)", result.End, tc.wantEnd, result.Failure)
+			}
+			if writes != tc.wantWrites {
+				t.Fatalf("stopped-run writes = %d, want %d", writes, tc.wantWrites)
+			}
+			if tc.stopped && len(commits) != 0 {
+				t.Fatalf("a stop called Commit %v, want only the stopped write", commits)
+			}
+			if tc.wantEnd != endStopped {
+				return
+			}
+			if result.Failure != nil {
+				t.Fatalf("failure = %#v, a stop reports none", result.Failure)
+			}
+			events, ended, _ := delivery.snapshot()
+			if len(ended) != 1 || ended[0].Failure != nil {
+				t.Fatalf("Ended = %#v, want a stop without a failure", ended)
+			}
+			if len(events) == 0 || !events[len(events)-1].Event.IsTerminal() {
+				t.Fatalf("delivered %#v, want the terminal published after the stopped write", events)
+			}
+			if tc.wantWrites > 0 && result.Summary.Text != "kept" {
+				t.Fatalf("summary = %#v, want what the stopped write produced", result.Summary)
+			}
+		})
 	}
 }
 

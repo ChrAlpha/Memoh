@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,8 +140,9 @@ func TestStreamACPAgentWSPassesTheAdmittedRunAndRecordsACompletedLifecycle(t *te
 	t.Parallel()
 
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
+	messages := &recordingMessageService{}
 	lifecycles := &recordingContextLifecycleStore{}
-	service := newACPLifecycleService(t, pool, &recordingMessageService{}, lifecycles)
+	service := newACPLifecycleService(t, pool, messages, lifecycles)
 
 	_, err := service.streamACPAgentWS(context.Background(), ChatRequest{
 		BotID:    lifecycleTestBotID,
@@ -154,12 +156,25 @@ func TestStreamACPAgentWSPassesTheAdmittedRunAndRecordsACompletedLifecycle(t *te
 	if pool.input.RunID != lifecycleTestRunID {
 		t.Fatalf("ACP prompt RunID = %q, want admitted RunID %q", pool.input.RunID, lifecycleTestRunID)
 	}
-	row, _ := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
+	row, snapshot := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
 	if row.ErrorCode.Valid {
 		t.Fatalf("completed lifecycle error code = %#v, want none", row.ErrorCode)
 	}
+	if snapshot.Version != contextfrag.LifecycleSnapshotVersion || snapshot.View != contextfrag.ViewExternalAgentPrompt || snapshot.Counts.Fragments == 0 {
+		t.Fatalf("ACP context-view snapshot = %#v, want populated ACP manifest", snapshot)
+	}
+	if len(snapshot.SelectionDecisions) == 0 {
+		t.Fatalf("ACP context-view snapshot omitted selection decisions: %#v", snapshot)
+	}
+	if snapshot.AssistantMessageID != "message-id" {
+		t.Fatalf("assistant message ID = %q, want message-id", snapshot.AssistantMessageID)
+	}
 	if strings.Contains(string(row.Snapshot), "PRIVATE_ACP_PROMPT") {
 		t.Fatalf("content-light lifecycle leaked prompt: %s", row.Snapshot)
+	}
+	last := messages.persisted[len(messages.persisted)-1]
+	if _, ok := last.Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot); !ok {
+		t.Fatalf("assistant lifecycle metadata = %#v, want snapshot", last.Metadata)
 	}
 }
 
@@ -1520,10 +1535,16 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	}
 }
 
+// A user's Stop keeps what the runtime had produced: the user message and the
+// partial answer are in history, with no failure on either and no memory
+// extracted from the turn.
 func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 	t.Parallel()
 
 	messages := &recordingMessageService{}
+	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(storeRoundMemoryProviderID, memory)
 	started := make(chan struct{})
 	pool := &recordingACPPrompter{
 		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
@@ -1536,6 +1557,7 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 	}
 	resolver := &Service{
 		messageService:  messages,
+		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
 		sessionService: &fakeBackgroundSessionService{
@@ -1570,6 +1592,12 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
 	}
 
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + partial assistant", len(messages.persisted))
+	}
+	if got := persistedText(t, messages.persisted[1].Content); got != "partial answer" {
+		t.Fatalf("assistant text = %q, want the partial answer", got)
+	}
 	for _, row := range messages.persisted {
 		if _, exists := row.Metadata["error"]; exists {
 			t.Fatalf("stopped run persisted a failure marker: %#v", row.Metadata)
@@ -1578,11 +1606,16 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 			t.Fatalf("stopped run persisted a failure code: %#v", row.Metadata)
 		}
 	}
+	select {
+	case got := <-memory.afterChat:
+		t.Fatalf("memory extraction ran on a stopped turn: %#v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 // A prompt can complete in the same instant the user stops it. Stop wins: the
-// run ends with EventAbort instead of EventEnd and extracts no memory, so a stop
-// is never recorded as a completed turn.
+// output is kept, but the run ends with EventAbort instead of EventEnd and
+// extracts no memory, so a stop is never recorded as a completed turn.
 func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 	t.Parallel()
 
@@ -1639,6 +1672,12 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
 	}
 
+	if len(messages.persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + assistant output", len(messages.persisted))
+	}
+	if got := persistedText(t, messages.persisted[1].Content); got != "done" {
+		t.Fatalf("assistant text = %q, want completed output kept", got)
+	}
 	for _, row := range messages.persisted {
 		if _, exists := row.Metadata["error"]; exists {
 			t.Fatalf("stopped run persisted a failure marker: %#v", row.Metadata)
@@ -1800,6 +1839,25 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("memory was not called for successful ACP stream")
+	}
+
+	var snapshot *contextfrag.LifecycleSnapshot
+	for i := len(messages.persisted) - 1; i >= 0; i-- {
+		if messages.persisted[i].Role != "assistant" {
+			continue
+		}
+		value, ok := messages.persisted[i].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
+		if ok {
+			snapshot = &value
+		}
+		break
+	}
+	if snapshot == nil || snapshot.MemoryRecall == nil {
+		t.Fatalf("ACP lifecycle missing memory trace: %#v", snapshot)
+	}
+	if snapshot.MemoryRecall.ProviderID != storeRoundMemoryProviderID || snapshot.MemoryRecall.CacheState != "miss" ||
+		snapshot.MemoryRecall.Result.Count != 1 || !slices.Equal(snapshot.MemoryRecall.Result.Refs, []string{"memory-1"}) {
+		t.Fatalf("ACP memory trace = %#v", snapshot.MemoryRecall)
 	}
 }
 

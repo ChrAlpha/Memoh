@@ -175,26 +175,6 @@ func (s *Service) startWebRun(admission *WebAdmission, spec runSpec) {
 		defer admission.stop(errRunStopped)
 		defer close(admission.injectCh)
 		defer releaseCompaction()
-		ctx, endTurn := startTurnSpan(admission.ctx, spec.Req)
-		endTurn(runSpanCause(s.drive(ctx, spec)))
+		s.drive(admission.ctx, spec)
 	}()
-}
-
-// runSpanCause is what a driven run's turn span records: the failure's public
-// error, a cancellation for a stop (a run someone stopped is not a failure),
-// and nothing for a run that completed or parked on a decision.
-func runSpanCause(result runResult) error {
-	switch result.End {
-	case endFailed:
-		if result.Failure != nil {
-			return result.Failure.Public()
-		}
-		return errs.New("agent run failed")
-	case endStopped:
-		return context.Canceled
-	case endOwnershipLost:
-		return sessionruntime.ErrRunOwnershipLost
-	default:
-		return nil
-	}
 }

@@ -113,6 +113,9 @@ type externalExecutor struct {
 	prompt string
 	// unattended says nobody can answer a decision for this run.
 	unattended bool
+	// input says who holds the run's input, which decides whether the leading
+	// user message may be taken back when the turn leaves nothing to write.
+	input inputOwnership
 
 	lifecycle *contextfrag.LifecycleHolder
 	timing    *reasoningTimingTracker
@@ -131,22 +134,15 @@ type externalExecutor struct {
 	failure   *RunFailure
 	completed bool
 	// roundUnwritable records that this ending has no round to write: the
-	// runtime never accepted the turn, or the anchor the round must not commit
-	// past could not be stored.
+	// runtime never accepted the turn, the run was stopped before the runtime
+	// did anything, or the anchor the round must not commit past could not be
+	// stored.
 	roundUnwritable bool
-	// finishedInFlight records that the runtime completed its turn in the same
-	// instant the run was stopped, so a rollback still has to repair the
-	// driver's head.
-	finishedInFlight bool
-	// projectionsCleaned records that this turn's decision rows were already
-	// removed, so the reconciliation of an unknown round does not delete them
-	// again.
-	projectionsCleaned bool
-	// leadingUserKept records that this ending wrote history anchored to the
-	// leading user message — a round, or a failure row. Cleanup then leaves the
-	// message alone; a turn the runtime refused outright wrote none, and the
-	// message goes back to its submitter instead of staying as an orphan.
-	leadingUserKept bool
+	// projectionsCleanup makes the removal of this turn's decision rows happen
+	// once. The run's own cleanup and the background reconciliation of an
+	// unknown round both ask for it, from different goroutines, and the rows
+	// are gone after the first.
+	projectionsCleanup sync.Once
 }
 
 // execute prompts the driver once and reports how its turn ended. Every event
@@ -183,6 +179,12 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 		configurationFailure = false
 	}
 	e.result = result
+	// A stop that arrives before the runtime did anything leaves no transcript
+	// for a round to carry. Whatever the runtime's driver called its
+	// cancellation, the run driver names the ending a stop, because the stop
+	// was raised first.
+	stopped := runStopped(ctx)
+	nothingRan := !runtimeTurnRan(result) && len(result.Notices) == 0
 
 	// Persist the driver-owned session keys before anything else. History must
 	// never advance past this anchor: committing the round while its new
@@ -208,7 +210,7 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 	switch {
 	case promptErr != nil:
 		phase := phaseExecution
-		if configurationFailure && !runtimeTurnRan(result) && len(result.Notices) == 0 {
+		if configurationFailure && nothingRan {
 			// Nothing ran: the driver refused the turn before it started.
 			phase = phaseSetup
 		}
@@ -216,13 +218,13 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 		e.failure = &RunFailure{Code: code, Args: args, Cause: promptErr, Phase: phase}
 		// Nothing ran means there is no transcript for a round to carry. A
 		// failure the runtime reported after it started produced one.
-		e.roundUnwritable = phase == phaseSetup
+		e.roundUnwritable = phase == phaseSetup || (stopped && nothingRan)
 		return e.ending(emit, native.EventAgentAbort, event.EndFailed)
 	case ctx.Err() != nil || !result.TurnCompleted:
 		// Either the interrupt landed, or the runtime finished in the same
 		// instant the run was stopped. Both end the turn as a stop, keeping the
 		// partial transcript.
-		e.finishedInFlight = result.TurnCompleted
+		e.roundUnwritable = nothingRan && stopped
 		return e.ending(emit, native.EventAgentAbort, event.EndCanceled)
 	}
 	e.completed = true
@@ -235,10 +237,11 @@ func (e *externalExecutor) ending(emit func(native.StreamEvent), eventType nativ
 	emit(native.StreamEvent{Type: native.EventTextEnd})
 	t := e.terminalFor(eventType, reason)
 	return execEnding{
-		Terminal: &t,
-		Failure:  e.failure,
-		Commit:   e.commit,
-		Cleanup:  e.cleanup,
+		Terminal:      &t,
+		Failure:       e.failure,
+		Commit:        e.commit,
+		CommitStopped: e.commitStopped,
+		Cleanup:       e.cleanup,
 	}
 }
 
@@ -277,9 +280,24 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 }
 
 // commit writes the run's one round. An External Agent runtime reports a whole
-// turn at once, so this is the run's only history write: the partial transcript
-// of an interrupted turn, or the completed round.
+// turn at once, so this is the run's only history write: the completed round,
+// or the failure row of a turn that wrote none.
 func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+	return e.writeRound(ctx, e.req, f, row)
+}
+
+// commitStopped writes the partial transcript of a turn the user stopped. The
+// round carries no failure, and no memory is extracted from it: a stop is not a
+// completed turn, even when the runtime finished in the same instant.
+func (e *externalExecutor) commitStopped(ctx context.Context) (commitSummary, error) {
+	req := e.req
+	req.SkipMemoryExtraction = true
+	return e.writeRound(ctx, req, nil, false)
+}
+
+// writeRound is the one history write of an External Agent run, for req as the
+// ending wants it written.
+func (e *externalExecutor) writeRound(ctx context.Context, req ChatRequest, f *RunFailure, row bool) (commitSummary, error) {
 	summary := commitSummary{ModelID: strings.TrimSpace(e.req.Model)}
 	ctx = context.WithoutCancel(ctx)
 	if e.roundUnwritable {
@@ -293,24 +311,18 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 				return summary, runtimeHistoryError(err)
 			}
 			summary.Persisted = persisted
-			// The failure row is anchored to the leading user message; it stays.
-			e.leadingUserKept = true
 		}
 		return summary, nil
 	}
-	lifecycle := e.lifecycle
-	if lifecycle == nil {
-		lifecycle = contextfrag.NewLifecycleHolder()
-	}
 	err := e.service.persistExternalRound(
 		ctx,
-		e.req,
+		req,
 		e.plan.runtimeType,
 		e.plan.projectPath,
 		e.result,
 		f,
 		e.result.TurnCompleted,
-		lifecycle,
+		e.lifecycle,
 		takeTerminalReasoningTiming(e.timing, terminalEventTypeOf(e.completed)),
 	)
 	if err != nil {
@@ -318,15 +330,12 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 		case runtimeRoundCommitted:
 			// The round landed after all; the failure was in the bookkeeping
 			// that followed it, and the run's own outcome stands.
-			e.leadingUserKept = true
 			return summary, nil
 		case runtimeRoundRolledBack:
 			e.rollback(ctx)
 		}
 		return summary, runtimeHistoryError(err)
 	}
-	// The round is written, so its leading user message is part of history.
-	e.leadingUserKept = true
 	if e.result.Usage != nil {
 		summary.Usage, _ = json.Marshal(e.result.Usage)
 	}
@@ -340,21 +349,23 @@ func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) 
 // rollback repairs a driver whose runtime remembers a round the visible history
 // lost. A driver with a repair policy discards its warm process; a runtime whose
 // durable state is authoritative keeps its session, and the divergence is
-// logged.
+// logged. Only a turn the runtime completed moved it past the history's head: an
+// interrupted one did not, so there is nothing to repair.
 func (e *externalExecutor) rollback(ctx context.Context) {
-	e.service.handleRuntimeRoundRollback(ctx, e.plan.driver, e.req, e.plan.runtimeType, e.finishedInFlight)
+	e.service.handleRuntimeRoundRollback(ctx, e.plan.driver, e.req, e.plan.runtimeType, e.result.TurnCompleted)
 }
 
 // cleanup removes what this turn left behind that no history write owns: the
 // decision rows it projected, the approvals nobody answered, and the leading
-// user message a refused turn left behind. Once history is written the message
-// stays — the user watched it send, and a round or a failure row is anchored to
-// it. A run another owner took is not cleaned up at all: nothing here speaks for
-// it.
+// user message of a turn that came to nothing. That message goes back to its
+// submitter only when the input was still theirs to take back: an input that
+// has left their hands (an IM message, a follow-up) stays, because nowhere else
+// records it, and a round or a failure row is anchored to it besides. A run
+// another owner took is not cleaned up at all: nothing here speaks for it.
 func (e *externalExecutor) cleanup(ctx context.Context) {
 	e.service.cancelPendingRuntimeApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
-	if e.roundUnwritable && !e.leadingUserKept && e.plan.leadingUser != nil {
+	if e.roundUnwritable && e.input != inputAccepted && e.plan.leadingUser != nil {
 		e.service.cleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
 	}
 }
@@ -368,12 +379,10 @@ func (e *externalExecutor) cleanupProjections(ctx context.Context) {
 	// unknown is cleaned again by the reconciliation that resolves it. The rows
 	// are temporary either way, so the second pass is a no-op rather than a
 	// second delete of the same row.
-	if e.projectionsCleaned {
-		return
-	}
-	e.projectionsCleaned = true
-	e.service.cleanupReplacementMessages(ctx, e.projections.snapshot())
-	e.service.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
+	e.projectionsCleanup.Do(func() {
+		e.service.cleanupReplacementMessages(ctx, e.projections.snapshot())
+		e.service.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
+	})
 }
 
 func (e *externalExecutor) cleanupProjectionsIn(ctx context.Context) { e.cleanupProjections(ctx) }

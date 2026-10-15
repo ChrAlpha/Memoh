@@ -54,3 +54,25 @@ func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 		t.Fatalf("ReplaceTurn calls = %d to turn %q, want one to new-turn", messages.replaced, messages.replacementTurnID)
 	}
 }
+
+// The native agent writes the step it was in when a stop arrived, as the stop
+// unwinds the stream, so its ending has nothing left for the driver's stopped
+// write. A hook here would write that step a second time.
+func TestNativeExecutorLeavesTheStoppedWriteToTheRuntime(t *testing.T) {
+	t.Parallel()
+
+	exec := &nativeExecutor{
+		agent: fixedStream{
+			{Type: native.EventAgentStart},
+			{Type: native.EventTextDelta, Delta: "partial"},
+			{Type: native.EventAgentAbort, EndReason: event.EndCanceled},
+		},
+		timing:  newReasoningTimingTracker(nil),
+		service: &Service{logger: slog.New(slog.DiscardHandler)},
+	}
+
+	ending := exec.execute(context.Background(), func(native.StreamEvent) {})
+	if ending.CommitStopped != nil {
+		t.Fatal("the native ending offers a stopped write, want the runtime's own step checkpoint to be the only one")
+	}
+}
