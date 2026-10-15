@@ -83,6 +83,8 @@ type StartTurn struct {
 	SkipMemoryExtraction bool                  `json:"SkipMemoryExtraction"`
 	SkipTitleGeneration  bool                  `json:"SkipTitleGeneration"`
 	UserMessagePersisted bool                  `json:"UserMessagePersisted"`
+
+	Preceding []turn.PrecedingMessage `json:"Preceding,omitempty"`
 }
 
 // RequestedSkill is the serialized turn.RequestedSkillContext, skill body
@@ -147,6 +149,7 @@ func FromStartTurn(cmd turn.StartTurnCommand) StartTurn {
 		SkipMemoryExtraction:      cmd.SkipMemoryExtraction,
 		SkipTitleGeneration:       cmd.SkipTitleGeneration,
 		UserMessagePersisted:      cmd.UserMessagePersisted,
+		Preceding:                 cmd.Preceding,
 	}
 }
 
@@ -203,6 +206,7 @@ func (w StartTurn) Command() (turn.StartTurnCommand, error) {
 		SkipMemoryExtraction:      w.SkipMemoryExtraction,
 		SkipTitleGeneration:       w.SkipTitleGeneration,
 		UserMessagePersisted:      w.UserMessagePersisted,
+		Preceding:                 w.Preceding,
 	}, nil
 }
 

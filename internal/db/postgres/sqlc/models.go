@@ -808,6 +808,28 @@ type SearchProvider struct {
 	TeamID    pgtype.UUID        `json:"team_id"`
 }
 
+type SessionQueuedInput struct {
+	ID                  pgtype.UUID        `json:"id"`
+	TeamID              pgtype.UUID        `json:"team_id"`
+	BotID               pgtype.UUID        `json:"bot_id"`
+	SessionID           pgtype.UUID        `json:"session_id"`
+	Origin              string             `json:"origin"`
+	InvocationID        string             `json:"invocation_id"`
+	MergeKey            string             `json:"merge_key"`
+	Payload             []byte             `json:"payload"`
+	Position            int64              `json:"position"`
+	EnqueuedDuringRunID string             `json:"enqueued_during_run_id"`
+	State               string             `json:"state"`
+	BatchID             pgtype.UUID        `json:"batch_id"`
+	ClaimToken          pgtype.UUID        `json:"claim_token"`
+	ClaimedUntil        pgtype.Timestamptz `json:"claimed_until"`
+	RunInvocationID     pgtype.Text        `json:"run_invocation_id"`
+	ErrorCode           pgtype.Text        `json:"error_code"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	SettledAt           pgtype.Timestamptz `json:"settled_at"`
+}
+
 type SessionRun struct {
 	RunID                 pgtype.UUID        `json:"run_id"`
 	TeamID                pgtype.UUID        `json:"team_id"`

@@ -87,31 +87,9 @@ func (d *DiscussSweep) run(ctx context.Context, ticks <-chan time.Time, now func
 // sweep checks, in every database scope, each discuss session whose newest
 // external input within the window is not covered yet.
 func (d *DiscussSweep) sweep(ctx context.Context, now time.Time) {
-	s := d.service
-	scopes := s.sessionResumeScopes()
-	cursor := ""
-	for ctx.Err() == nil {
-		page, err := scopes.ListScopePage(ctx, cursor, 16)
-		if err == nil {
-			err = validateResumeScopePage(page, cursor)
-		}
-		if err != nil {
-			s.logger.WarnContext(ctx, "list discuss sweep scopes failed", slog.Any("error", err))
-			return
-		}
-		for _, scope := range page.Scopes {
-			scopeCtx, err := bindSessionResumeScope(ctx, scopes, scope)
-			if err != nil {
-				s.logger.WarnContext(ctx, "bind discuss sweep scope failed", slog.Any("error", err))
-				continue
-			}
-			d.sweepScope(scopeCtx, now.Add(-discussSweepWindow))
-		}
-		if page.Complete {
-			return
-		}
-		cursor = page.NextCursor
-	}
+	d.service.eachScope(ctx, "discuss sweep", func(scopeCtx context.Context, _ string) {
+		d.sweepScope(scopeCtx, now.Add(-discussSweepWindow))
+	})
 }
 
 func (d *DiscussSweep) sweepScope(ctx context.Context, since time.Time) {

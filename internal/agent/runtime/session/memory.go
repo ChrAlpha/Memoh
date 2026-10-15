@@ -88,7 +88,6 @@ type MemoryBackend struct {
 	decisionOutputExpiresAt map[string]time.Time
 	historyResets           map[string]ResetLease
 	steerQueues             map[string]steerQueueState
-	followUpQueues          map[string]followUpQueueState
 	subscribers             *subscriberSet[Event]
 	closed                  bool
 	// generation is this process's liveness incarnation. It is minted once and
@@ -112,7 +111,6 @@ func NewMemoryBackendWithTTL(stateTTL time.Duration) *MemoryBackend {
 		decisionOutputExpiresAt: make(map[string]time.Time),
 		historyResets:           make(map[string]ResetLease),
 		steerQueues:             make(map[string]steerQueueState),
-		followUpQueues:          make(map[string]followUpQueueState),
 		subscribers:             newSubscriberSet[Event](),
 		generation:              uuid.NewString(),
 	}

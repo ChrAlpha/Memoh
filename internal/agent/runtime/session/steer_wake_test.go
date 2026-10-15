@@ -48,7 +48,7 @@ func TestSteerWakeRetainsQueueAndFencesOwner(t *testing.T) {
 	if err := f.manager.applyRoutedCommand(ctx, cmd); !errors.Is(err, ErrCommandTargetNotActive) {
 		t.Fatalf("stale owner wake: %v", err)
 	}
-	steers, _, err := f.manager.PendingQueues(ctx, key, 0)
+	steers, err := f.manager.PendingSteers(ctx, key, 0)
 	if err != nil || len(steers) != 1 || steers[0].ID != item.ID || steers[0].Status != QueueAccepted {
 		t.Fatalf("wake applied or lost input: %+v, %v", steers, err)
 	}
@@ -57,7 +57,7 @@ func TestSteerWakeRetainsQueueAndFencesOwner(t *testing.T) {
 	if err := f.manager.CancelSteer(ctx, key, item.ID); err != nil {
 		t.Fatal(err)
 	}
-	steers, _, err = f.manager.PendingQueues(ctx, key, 0)
+	steers, err = f.manager.PendingSteers(ctx, key, 0)
 	if err != nil || len(steers) != 0 {
 		t.Fatalf("cancelled input survived: %+v %v", steers, err)
 	}

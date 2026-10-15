@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -1013,6 +1014,36 @@ func mustWaitRunState(
 		t.Fatalf("wait for session_runs row: %v", err)
 	}
 	return run
+}
+
+// mustWaitQueuedRun waits for the run that answers a queued input. The run is
+// admitted under the id of the batch the input was claimed in, so the input's
+// own id reaches the run through the queue row.
+func mustWaitQueuedRun(
+	t *testing.T,
+	sessionID string,
+	itemID string,
+	predicate func(sessionRunRecord) bool,
+) sessionRunRecord {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), databaseTimeout)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		invocation, err := requireLedger(t).queuedRunInvocation(ctx, sessionID, itemID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("read queued input %s: %v", itemID, err)
+		}
+		if invocation != "" {
+			return mustWaitRunState(t, sessionID, invocation, predicate)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("queued input %s was not taken by a run: %v", itemID, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func mustReadRunTerminal(t *testing.T, connection *websocket.Conn, runID string) ([]wsEvent, wsEvent) {

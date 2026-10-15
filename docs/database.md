@@ -39,6 +39,7 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 - `bots` — Bot definitions with model references and settings
 - `bot_sessions` — Bot conversation sessions
 - `bot_session_events` — Session event log
+- `session_queued_inputs` — Input that met a session with a run in flight (Web/CLI follow-ups, platform messages), waiting to be claimed in batches
 - `bot_channel_configs` — Per-bot channel configurations
 - `bot_channel_routes` — Conversation route mapping (inbound thread → bot history)
 - `bot_acl_rules` — Source-aware chat access control lists

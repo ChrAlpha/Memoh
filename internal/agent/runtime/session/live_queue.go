@@ -38,18 +38,15 @@ const (
 )
 
 const (
-	// MaxPendingQueueItems bounds accepted items per queue and session. Queue
-	// state is one serialized document per queue, so an unbounded pending set
-	// would grow every mutation's read and write linearly.
+	// MaxPendingQueueItems bounds accepted items per queue and session. A steer
+	// queue is one serialized document, so an unbounded pending set would grow
+	// every mutation's read and write linearly. The follow-up queue is a table
+	// and takes the same bound so a flood of input cannot starve the drain.
 	MaxPendingQueueItems = 64
 	// queueTerminalRetention is how many applied, rejected, and canceled
 	// items each queue keeps for invocation replay and status lookups. Older
 	// terminal items are dropped by compaction after every mutation.
 	queueTerminalRetention = 64
-	// terminalClaimRetention bounds the follow-up per-run claim record. It is
-	// deliberately larger than the item retention so the record outlives the
-	// items it points at.
-	terminalClaimRetention = 4 * queueTerminalRetention
 )
 
 var (
@@ -85,12 +82,6 @@ type SteerClaimRef struct {
 	ClaimToken   string
 }
 
-type FollowUpClaimRef struct {
-	ItemID       FollowUpItemID
-	TriggerRunID string
-	ClaimToken   string
-}
-
 type SteerItem struct {
 	ID                            SteerItemID
 	BotID, SessionID, TargetRunID string
@@ -104,6 +95,9 @@ type SteerItem struct {
 	CreatedAt time.Time
 }
 
+// FollowUpItem is one input waiting in a session's follow-up queue. Only
+// accepted items are listed: the queue keeps the others as records, not as
+// something to show.
 type FollowUpItem struct {
 	ID                  FollowUpItemID
 	BotID, SessionID    string
@@ -112,10 +106,7 @@ type FollowUpItem struct {
 	Payload             []byte
 	Status              QueueStatus
 	Position            int64
-	Claim               *FollowUpClaimRef
-	// ErrorCode is set when Status is rejected.
-	ErrorCode string
-	CreatedAt time.Time
+	CreatedAt           time.Time
 }
 
 type PromoteFollowUpResult struct {
@@ -123,19 +114,19 @@ type PromoteFollowUpResult struct {
 	Steer    SteerItem
 }
 
-// LiveQueueBackend is transient session coordination. Implementations must
+// LiveQueueBackend is transient session coordination for steers: input aimed
+// at the run in flight, which dies with the run. Implementations must
 // serialize each operation with the live run state for the same session.
+// Follow-ups outlive their run and are a table, see QueuedInputs.
 type LiveQueueBackend interface {
 	EnqueueSteer(context.Context, Key, string, string, []byte) (SteerItem, error)
-	EnqueueFollowUp(context.Context, Key, string, string, []byte) (FollowUpItem, error)
-	PendingQueues(context.Context, Key, int) ([]SteerItem, []FollowUpItem, error)
+	PendingSteers(context.Context, Key, int) ([]SteerItem, error)
+	// LookupSteer reads one steer in any status. ok is false once the queue no
+	// longer holds it.
+	LookupSteer(context.Context, Key, SteerItemID) (SteerItem, bool, error)
 	ReorderSteer(context.Context, Key, SteerPendingRef, SteerPendingRef) ([]SteerItem, error)
-	ReorderFollowUp(context.Context, Key, FollowUpPendingRef, FollowUpPendingRef) ([]FollowUpItem, error)
 	UpdateSteer(context.Context, Key, SteerItemID, []byte) (SteerItem, error)
-	UpdateFollowUp(context.Context, Key, FollowUpItemID, []byte) (FollowUpItem, error)
 	CancelSteer(context.Context, Key, SteerItemID) error
-	CancelFollowUp(context.Context, Key, FollowUpItemID) error
-	PromoteFollowUpToSteer(context.Context, Key, FollowUpPendingRef) (PromoteFollowUpResult, error)
 	ClaimNextSteer(context.Context, RunHandle, bool) (SteerItem, SteerClaimRef, bool, error)
 	ApplySteer(context.Context, Key, SteerClaimRef) error
 	ReleaseSteer(context.Context, Key, SteerClaimRef) error
@@ -144,28 +135,12 @@ type LiveQueueBackend interface {
 	// once the run is durably terminal; a steer is bound to its run and has no
 	// meaning for any later run of the session.
 	CloseSteerRun(context.Context, Key, string) error
-	ClaimNextFollowUp(context.Context, Key, string) (FollowUpItem, FollowUpClaimRef, bool, error)
-	ApplyFollowUp(context.Context, Key, FollowUpClaimRef) error
-	ReleaseFollowUp(context.Context, Key, FollowUpClaimRef) error
-	// RejectFollowUp moves a claimed follow-up to rejected with the given
-	// error code and frees its trigger run's claim slot, so the same terminal
-	// boundary can go on to the next accepted item. It is for items the
-	// continuation cannot start at all; a transient start failure releases
-	// the item instead.
-	RejectFollowUp(context.Context, Key, FollowUpClaimRef, string) error
 }
 
 type steerQueueState struct {
-	Items                 []SteerItem       `json:"items"`
-	PromotedFollowUpItems map[string]string `json:"promoted_follow_up_items,omitempty"`
-	ClosedRunID           string            `json:"closed_run_id,omitempty"`
-	UpdatedAt             time.Time         `json:"updated_at"`
-}
-
-type followUpQueueState struct {
-	Items          []FollowUpItem    `json:"items"`
-	TerminalClaims map[string]string `json:"terminal_claims,omitempty"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	Items       []SteerItem `json:"items"`
+	ClosedRunID string      `json:"closed_run_id,omitempty"`
+	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
 // SteerRunAvailable reports whether the current executor accepts new step inputs.
@@ -200,16 +175,6 @@ func validateSteerClaim(key Key, ref SteerClaimRef) error {
 	}
 	if ref.ItemID == "" || strings.TrimSpace(ref.RunID) == "" || strings.TrimSpace(ref.OwnerID) == "" ||
 		strings.TrimSpace(ref.Generation) == "" || ref.FencingToken <= 0 || strings.TrimSpace(ref.ClaimToken) == "" {
-		return ErrQueueInvalidReference
-	}
-	return nil
-}
-
-func validateFollowUpClaim(key Key, ref FollowUpClaimRef) error {
-	if err := validateQueueKey(key); err != nil {
-		return err
-	}
-	if ref.ItemID == "" || strings.TrimSpace(ref.TriggerRunID) == "" || strings.TrimSpace(ref.ClaimToken) == "" {
 		return ErrQueueInvalidReference
 	}
 	return nil
@@ -258,15 +223,6 @@ func cloneSteerItem(item SteerItem) SteerItem {
 	return item
 }
 
-func cloneFollowUpItem(item FollowUpItem) FollowUpItem {
-	item.Payload = append([]byte(nil), item.Payload...)
-	if item.Claim != nil {
-		claim := *item.Claim
-		item.Claim = &claim
-	}
-	return item
-}
-
 func pendingSteers(state steerQueueState, limit int) []SteerItem {
 	items := make([]SteerItem, 0, len(state.Items))
 	for _, item := range state.Items {
@@ -281,31 +237,7 @@ func pendingSteers(state steerQueueState, limit int) []SteerItem {
 	return items
 }
 
-func pendingFollowUps(state followUpQueueState, limit int) []FollowUpItem {
-	items := make([]FollowUpItem, 0, len(state.Items))
-	for _, item := range state.Items {
-		if item.Status == QueueAccepted {
-			items = append(items, cloneFollowUpItem(item))
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Position < items[j].Position })
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	return items
-}
-
 func countPendingSteers(state steerQueueState) int {
-	count := 0
-	for _, item := range state.Items {
-		if item.Status == QueueAccepted {
-			count++
-		}
-	}
-	return count
-}
-
-func countPendingFollowUps(state followUpQueueState) int {
 	count := 0
 	for _, item := range state.Items {
 		if item.Status == QueueAccepted {
@@ -351,8 +283,7 @@ func (s QueueStatus) terminal() bool {
 }
 
 // compact keeps every accepted or claimed item and only the newest terminal
-// items, so a long-lived session's queue document stays bounded. Map entries
-// that point at dropped items are removed with them.
+// items, so a long-lived session's queue document stays bounded.
 func (state *steerQueueState) compact() {
 	if state == nil {
 		return
@@ -360,44 +291,6 @@ func (state *steerQueueState) compact() {
 	state.Items = compactQueueItems(state.Items, func(item SteerItem) (QueueStatus, time.Time, int64) {
 		return item.Status, item.CreatedAt, item.Position
 	})
-	if len(state.PromotedFollowUpItems) == 0 {
-		return
-	}
-	present := make(map[string]struct{}, len(state.Items))
-	for _, item := range state.Items {
-		present[string(item.ID)] = struct{}{}
-	}
-	for followUpID, steerID := range state.PromotedFollowUpItems {
-		if _, ok := present[steerID]; !ok {
-			delete(state.PromotedFollowUpItems, followUpID)
-		}
-	}
-}
-
-func (state *followUpQueueState) compact() {
-	if state == nil {
-		return
-	}
-	state.Items = compactQueueItems(state.Items, func(item FollowUpItem) (QueueStatus, time.Time, int64) {
-		return item.Status, item.CreatedAt, item.Position
-	})
-	// TerminalClaims is the per-trigger-run idempotency record: a repeated
-	// terminal observation for the same run must find its entry and claim
-	// nothing more, even after retention dropped the applied item. Entries
-	// therefore outlive their items and are only pruned once the map itself
-	// grows past its bound.
-	if len(state.TerminalClaims) <= terminalClaimRetention {
-		return
-	}
-	present := make(map[string]struct{}, len(state.Items))
-	for _, item := range state.Items {
-		present[string(item.ID)] = struct{}{}
-	}
-	for runID, itemID := range state.TerminalClaims {
-		if _, ok := present[itemID]; !ok {
-			delete(state.TerminalClaims, runID)
-		}
-	}
 }
 
 func compactQueueItems[T any](items []T, describe func(T) (QueueStatus, time.Time, int64)) []T {
@@ -442,16 +335,6 @@ func compactQueueItems[T any](items []T, describe func(T) (QueueStatus, time.Tim
 }
 
 func nextSteerPosition(state steerQueueState) int64 {
-	var position int64
-	for _, item := range state.Items {
-		if item.Position > position {
-			position = item.Position
-		}
-	}
-	return position + 1
-}
-
-func nextFollowUpPosition(state followUpQueueState) int64 {
 	var position int64
 	for _, item := range state.Items {
 		if item.Position > position {
@@ -521,19 +404,6 @@ func reorderSteerState(state *steerQueueState, itemRef, beforeRef SteerPendingRe
 	return pendingSteers(*state, 0), nil
 }
 
-func reorderFollowUpState(state *followUpQueueState, itemRef, beforeRef FollowUpPendingRef) ([]FollowUpItem, error) {
-	if state == nil {
-		return nil, ErrQueueInvalidReference
-	}
-	err := reorderQueuePositions(state.Items, itemRef.ItemID, beforeRef.ItemID, func(item *FollowUpItem) (FollowUpItemID, QueueStatus, *int64) {
-		return item.ID, item.Status, &item.Position
-	})
-	if err != nil {
-		return nil, err
-	}
-	return pendingFollowUps(*state, 0), nil
-}
-
 func replaySteer(state steerQueueState, invocationID string, payload []byte) (SteerItem, bool, error) {
 	for _, item := range state.Items {
 		if item.InvocationID != invocationID {
@@ -547,15 +417,11 @@ func replaySteer(state steerQueueState, invocationID string, payload []byte) (St
 	return SteerItem{}, false, nil
 }
 
-func replayFollowUp(state followUpQueueState, invocationID string, payload []byte) (FollowUpItem, bool, error) {
+func findSteer(state steerQueueState, itemID SteerItemID) (SteerItem, bool) {
 	for _, item := range state.Items {
-		if item.InvocationID != invocationID {
-			continue
+		if item.ID == itemID {
+			return cloneSteerItem(item), true
 		}
-		if !bytes.Equal(item.Payload, payload) {
-			return FollowUpItem{}, true, ErrQueueInvocationConflict
-		}
-		return cloneFollowUpItem(item), true, nil
 	}
-	return FollowUpItem{}, false, nil
+	return SteerItem{}, false
 }

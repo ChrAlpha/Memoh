@@ -20,10 +20,12 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/acl"
 	acpprofileadapter "github.com/felinics/memoh/internal/agent/adapter/acpprofile"
+	"github.com/felinics/memoh/internal/agent/adapter/channelbusyqueue"
 	"github.com/felinics/memoh/internal/agent/adapter/channelqueue"
 	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	audiopkg "github.com/felinics/memoh/internal/audio"
 	"github.com/felinics/memoh/internal/botagents"
@@ -275,7 +277,13 @@ func provideCommandHandler(
 	return cmdHandler
 }
 
-func provideChannelManager(log *slog.Logger, registry *channel.Registry, channelStore *channel.Store, channelRouter *inbound.ChannelInboundProcessor, mediaService *media.Service) *channel.Manager {
+// provideBusyQueue is where a message that meets a busy session waits: the
+// session input queue, in the database both processes share.
+func provideBusyQueue(queue *sessionruntime.QueuedInputs) inbound.BusyQueue {
+	return channelbusyqueue.New(queue)
+}
+
+func provideChannelManager(log *slog.Logger, registry *channel.Registry, channelStore *channel.Store, channelRouter *inbound.ChannelInboundProcessor, mediaService *media.Service, busyQueue inbound.BusyQueue) *channel.Manager {
 	if adapter, ok := registry.Get(matrix.Type); ok {
 		if matrixAdapter, ok := adapter.(*matrix.MatrixAdapter); ok {
 			matrixAdapter.SetSyncStateSaver(channelStore.SaveMatrixSyncSinceToken)
@@ -287,7 +295,22 @@ func provideChannelManager(log *slog.Logger, registry *channel.Registry, channel
 		mgr.Use(mw)
 	}
 	channelRouter.SetReactor(mgr)
+	channelRouter.SetBusyQueue(busyQueue, mgr)
 	return mgr
+}
+
+// startBusyQueueSweep starts the platform messages that waited for a busy
+// session and that no run ending in this process has started. It belongs to
+// the process that runs the channels: the one that delivers the reply.
+func startBusyQueueSweep(lc fx.Lifecycle, processor *inbound.ChannelInboundProcessor) {
+	sweep := inbound.NewBusyQueueSweep(processor)
+	lc.Append(fx.Hook{
+		OnStart: sweep.Start,
+		OnStop: func(context.Context) error {
+			sweep.Stop()
+			return nil
+		},
+	})
 }
 
 func provideChannelLifecycleService(channelStore *channel.Store, channelManager *channel.Manager) *channel.Lifecycle {

@@ -3871,6 +3871,33 @@ describe('chat-list store', () => {
       expect(h.abortedWSRuns).toEqual(['run-late'])
     })
 
+  it('settles a send the server queued behind the run in flight', async () => {
+      h.sendUpdates = []
+      h.acceptRuns = false
+      const store = useChatStore()
+
+      await store.selectBot('bot-1')
+      const sending = store.sendMessage('hello')
+      await flushPromises()
+      const invocationId = wsInvocationId(0)
+
+      h.streamHandler?.({
+        type: 'run_queued',
+        invocation_id: invocationId,
+        session_id: 'session-1',
+        queue_item_id: 'item-1',
+      })
+
+      // The send is not a failure and not yet a run: it is sent, the composer
+      // does not get its input back, and the user's message stays on screen
+      // without the assistant placeholder the run will bring.
+      await expect(sending).resolves.toMatchObject({ ok: true, messageSent: true })
+      expect(store.startupSendFailure).toBeNull()
+      expect(store.messages.map(turn => turn.role)).toEqual(['user'])
+      expect(store.messages[0]).toMatchObject({ role: 'user', text: 'hello' })
+      expect(store.streaming).toBe(false)
+    })
+
   it('fails a rejected submission with the code the server refused it by', async () => {
       h.sendUpdates = []
       h.acceptRuns = false

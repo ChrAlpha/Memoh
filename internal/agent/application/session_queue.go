@@ -12,7 +12,8 @@ import (
 )
 
 // SessionQueues is the application surface for user-facing queue operations.
-// Items are transient and live in the configured memory or Redis runtime.
+// Steers are transient and live in the configured memory or Redis runtime;
+// follow-ups are rows of the session input queue.
 type SessionQueues struct {
 	SteerSupported bool
 	Steer          []sessionruntime.SteerItem
@@ -84,42 +85,11 @@ func (s *Service) EnqueueSteer(ctx context.Context, input QueueInput) (sessionru
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
 	}
-	payload, err := encodeQueueCommand(cmd)
+	payload, err := encodeQueueCommand(cmd, nil)
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
 	}
 	return runtime.EnqueueSteer(ctx, sessionruntime.Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}, uuid.NewString(), strings.TrimSpace(input.InvocationID), payload)
-}
-
-func (s *Service) EnqueueFollowUp(ctx context.Context, input QueueInput) (sessionruntime.FollowUpItem, error) {
-	cmd, err := queueTurnCommand(input)
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	return s.enqueueFollowUpCommand(ctx, strings.TrimSpace(input.InvocationID), cmd)
-}
-
-// enqueueFollowUpCommand is the single write path into the follow-up queue.
-// Text inputs from the queue panel and complete turns deferred by a busy
-// channel both arrive here as a StartTurnCommand, so the queue holds one
-// payload shape and the continuation has one way to read it.
-func (s *Service) enqueueFollowUpCommand(ctx context.Context, invocationID string, cmd turn.StartTurnCommand) (sessionruntime.FollowUpItem, error) {
-	runtime, err := s.liveQueueRuntime()
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	payload, err := encodeQueueCommand(cmd)
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	item, err := runtime.EnqueueFollowUp(ctx, sessionruntime.Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}, uuid.NewString(), invocationID, payload)
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	if item.Status == sessionruntime.QueueAccepted {
-		s.kickFollowUpIfIdle(ctx, cmd.BotID, cmd.ThreadID, item.EnqueuedDuringRunID)
-	}
-	return item, nil
 }
 
 func (s *Service) ListSessionQueues(ctx context.Context, botID, sessionID string) (SessionQueues, error) {
@@ -127,7 +97,12 @@ func (s *Service) ListSessionQueues(ctx context.Context, botID, sessionID string
 	if err != nil {
 		return SessionQueues{}, err
 	}
-	steers, followUps, err := runtime.PendingQueues(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, 0)
+	key := sessionruntime.Key{BotID: botID, SessionID: sessionID}
+	steers, err := runtime.PendingSteers(ctx, key, 0)
+	if err != nil {
+		return SessionQueues{}, err
+	}
+	followUps, err := s.pendingFollowUps(ctx, key)
 	if err != nil {
 		return SessionQueues{}, err
 	}
@@ -146,14 +121,6 @@ func (s *Service) ReorderSteer(ctx context.Context, botID, sessionID string, ite
 	return runtime.ReorderSteer(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, item, before)
 }
 
-func (s *Service) ReorderFollowUp(ctx context.Context, botID, sessionID string, item, before sessionruntime.FollowUpPendingRef) ([]sessionruntime.FollowUpItem, error) {
-	runtime, err := s.liveQueueRuntime()
-	if err != nil {
-		return nil, err
-	}
-	return runtime.ReorderFollowUp(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, item, before)
-}
-
 // UpdateSteer replaces the text of an accepted steer on behalf of editorUserID,
 // who must be the sender the item recorded. Sender, routing, and attachment
 // metadata are immutable for a queued command; only the text is rewritten, and
@@ -164,7 +131,7 @@ func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, edi
 		return sessionruntime.SteerItem{}, err
 	}
 	key := sessionruntime.Key{BotID: botID, SessionID: sessionID}
-	items, _, err := runtime.PendingQueues(ctx, key, 0)
+	items, err := runtime.PendingSteers(ctx, key, 0)
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
 	}
@@ -181,50 +148,10 @@ func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, edi
 	return sessionruntime.SteerItem{}, sessionruntime.ErrQueueNotPending
 }
 
-// UpdateFollowUp replaces the text of an accepted follow-up. See UpdateSteer.
-func (s *Service) UpdateFollowUp(ctx context.Context, botID, sessionID, itemID, editorUserID, text string) (sessionruntime.FollowUpItem, error) {
-	runtime, err := s.liveQueueRuntime()
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	key := sessionruntime.Key{BotID: botID, SessionID: sessionID}
-	_, items, err := runtime.PendingQueues(ctx, key, 0)
-	if err != nil {
-		return sessionruntime.FollowUpItem{}, err
-	}
-	for _, item := range items {
-		if string(item.ID) != itemID {
-			continue
-		}
-		payload, err := rewriteQueuePayloadText(item.Payload, editorUserID, text)
-		if err != nil {
-			return sessionruntime.FollowUpItem{}, err
-		}
-		return runtime.UpdateFollowUp(ctx, key, item.ID, payload)
-	}
-	return sessionruntime.FollowUpItem{}, sessionruntime.ErrQueueNotPending
-}
-
 func (s *Service) CancelSteer(ctx context.Context, botID, sessionID, itemID string) error {
 	runtime, err := s.liveQueueRuntime()
 	if err != nil {
 		return err
 	}
 	return runtime.CancelSteer(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, sessionruntime.SteerItemID(itemID))
-}
-
-func (s *Service) CancelFollowUp(ctx context.Context, botID, sessionID, itemID string) error {
-	runtime, err := s.liveQueueRuntime()
-	if err != nil {
-		return err
-	}
-	return runtime.CancelFollowUp(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, sessionruntime.FollowUpItemID(itemID))
-}
-
-func (s *Service) PromoteFollowUpToSteer(ctx context.Context, botID, sessionID string, followUp sessionruntime.FollowUpPendingRef) (sessionruntime.PromoteFollowUpResult, error) {
-	runtime, err := s.liveQueueRuntime()
-	if err != nil {
-		return sessionruntime.PromoteFollowUpResult{}, err
-	}
-	return runtime.PromoteFollowUpToSteer(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID}, followUp)
 }

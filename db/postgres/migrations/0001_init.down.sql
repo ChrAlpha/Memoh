@@ -37,6 +37,7 @@ DROP TABLE IF EXISTS bot_history_messages CASCADE;
 DROP TABLE IF EXISTS bot_session_events CASCADE;
 DROP TABLE IF EXISTS bot_session_discuss_cursors CASCADE;
 DROP TABLE IF EXISTS agent_session_publications CASCADE;
+DROP TABLE IF EXISTS session_queued_inputs CASCADE;
 DROP TABLE IF EXISTS session_runs CASCADE;
 DROP TABLE IF EXISTS bot_sessions CASCADE;
 DROP SEQUENCE IF EXISTS session_runtime_fencing_token_seq;

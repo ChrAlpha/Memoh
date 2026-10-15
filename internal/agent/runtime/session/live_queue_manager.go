@@ -63,20 +63,20 @@ func (m *Manager) EnqueueSteer(ctx context.Context, key Key, itemID, invocationI
 	return item, err
 }
 
-func (m *Manager) EnqueueFollowUp(ctx context.Context, key Key, itemID, invocationID string, payload []byte) (FollowUpItem, error) {
+func (m *Manager) PendingSteers(ctx context.Context, key Key, limit int) ([]SteerItem, error) {
 	queue, err := m.liveQueueBackend()
 	if err != nil {
-		return FollowUpItem{}, err
+		return nil, err
 	}
-	return queue.EnqueueFollowUp(ctx, key, itemID, invocationID, payload)
+	return queue.PendingSteers(ctx, key, limit)
 }
 
-func (m *Manager) PendingQueues(ctx context.Context, key Key, limit int) ([]SteerItem, []FollowUpItem, error) {
+func (m *Manager) LookupSteer(ctx context.Context, key Key, itemID SteerItemID) (SteerItem, bool, error) {
 	queue, err := m.liveQueueBackend()
 	if err != nil {
-		return nil, nil, err
+		return SteerItem{}, false, err
 	}
-	return queue.PendingQueues(ctx, key, limit)
+	return queue.LookupSteer(ctx, key, itemID)
 }
 
 func (m *Manager) ReorderSteer(ctx context.Context, key Key, item, before SteerPendingRef) ([]SteerItem, error) {
@@ -87,14 +87,6 @@ func (m *Manager) ReorderSteer(ctx context.Context, key Key, item, before SteerP
 	return queue.ReorderSteer(ctx, key, item, before)
 }
 
-func (m *Manager) ReorderFollowUp(ctx context.Context, key Key, item, before FollowUpPendingRef) ([]FollowUpItem, error) {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return nil, err
-	}
-	return queue.ReorderFollowUp(ctx, key, item, before)
-}
-
 func (m *Manager) UpdateSteer(ctx context.Context, key Key, itemID SteerItemID, payload []byte) (SteerItem, error) {
 	queue, err := m.liveQueueBackend()
 	if err != nil {
@@ -103,40 +95,12 @@ func (m *Manager) UpdateSteer(ctx context.Context, key Key, itemID SteerItemID, 
 	return queue.UpdateSteer(ctx, key, itemID, payload)
 }
 
-func (m *Manager) UpdateFollowUp(ctx context.Context, key Key, itemID FollowUpItemID, payload []byte) (FollowUpItem, error) {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return FollowUpItem{}, err
-	}
-	return queue.UpdateFollowUp(ctx, key, itemID, payload)
-}
-
 func (m *Manager) CancelSteer(ctx context.Context, key Key, itemID SteerItemID) error {
 	queue, err := m.liveQueueBackend()
 	if err != nil {
 		return err
 	}
 	return queue.CancelSteer(ctx, key, itemID)
-}
-
-func (m *Manager) CancelFollowUp(ctx context.Context, key Key, itemID FollowUpItemID) error {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return err
-	}
-	return queue.CancelFollowUp(ctx, key, itemID)
-}
-
-func (m *Manager) PromoteFollowUpToSteer(ctx context.Context, key Key, ref FollowUpPendingRef) (PromoteFollowUpResult, error) {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return PromoteFollowUpResult{}, err
-	}
-	result, err := queue.PromoteFollowUpToSteer(ctx, key, ref)
-	if err == nil && result.Steer.Status == QueueAccepted {
-		m.notifySteer(ctx, key, result.Steer.TargetRunID)
-	}
-	return result, err
 }
 
 // SteerWake is an owner-local, coalesced notification. The queue remains the
@@ -225,36 +189,4 @@ func (m *Manager) CloseSteerRun(ctx context.Context, key Key, runID string) erro
 		return err
 	}
 	return queue.CloseSteerRun(ctx, key, runID)
-}
-
-func (m *Manager) ClaimNextFollowUp(ctx context.Context, key Key, triggerRunID string) (FollowUpItem, FollowUpClaimRef, bool, error) {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return FollowUpItem{}, FollowUpClaimRef{}, false, err
-	}
-	return queue.ClaimNextFollowUp(ctx, key, triggerRunID)
-}
-
-func (m *Manager) ApplyFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return err
-	}
-	return queue.ApplyFollowUp(ctx, key, ref)
-}
-
-func (m *Manager) ReleaseFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return err
-	}
-	return queue.ReleaseFollowUp(ctx, key, ref)
-}
-
-func (m *Manager) RejectFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef, errorCode string) error {
-	queue, err := m.liveQueueBackend()
-	if err != nil {
-		return err
-	}
-	return queue.RejectFollowUp(ctx, key, ref, errorCode)
 }

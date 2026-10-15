@@ -160,8 +160,11 @@ type Service struct {
 	// attachments. Both are optional.
 	outputMedia  outputMediaStore
 	outputSpeech outputSpeech
-	// followUpStarts holds one in-flight follow-up starter per session key.
-	followUpStarts sync.Map
+	// queue is the durable queue of input that met a busy session. It is nil
+	// where the deployment has no database, and then nothing queues.
+	queue queuedInputStore
+	// pendingSessions serializes the admission of what waits on one session.
+	pendingSessions sessionLocks
 }
 
 // NewService creates an application service backed by the native agent.

@@ -54,15 +54,20 @@ func (s *fakeReplySender) Capabilities(string) channel.ChannelCapabilities {
 	if s.plainPrompts {
 		caps.NativeApproval, caps.NativeUserInput = false, false
 	}
+	caps.ReplyWindow = s.replyWindow
 	return caps
 }
 
 func (s *fakeReplySender) Attach(_ context.Context, target string, att channel.Attachment, reply *channel.ReplyRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.sent = append(s.sent, channel.OutboundMessage{Target: target, Message: channel.Message{Attachments: []channel.Attachment{att}, Reply: reply}})
 	return nil
 }
 
 func (s *fakeReplySender) React(_ context.Context, req channel.ReactRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.reactions = append(s.reactions, req)
 	return nil
 }

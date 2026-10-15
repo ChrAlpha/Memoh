@@ -38,9 +38,9 @@ func runServe() {
 // endpoints keep working with a single binary and an unchanged config.
 func optionsFor(cfg config.Config) fx.Option {
 	if cfg.SplitChannelRuntime() {
-		return fx.Options(commonOptions(), splitOptions(), fx.Invoke(startSessionResume, startDiscussSweep))
+		return fx.Options(commonOptions(), splitOptions(), fx.Invoke(startSessionResume, startDiscussSweep, startQueueSweep))
 	}
-	return fx.Options(commonOptions(), embeddedOptions(), fx.Invoke(startSessionResume, startDiscussSweep))
+	return fx.Options(commonOptions(), embeddedOptions(), fx.Invoke(startSessionResume, startDiscussSweep, startQueueSweep))
 }
 
 func splitOptions() fx.Option {
@@ -159,6 +159,22 @@ func startSessionResume(lc fx.Lifecycle, service *application.Service, manager *
 // no new run is admitted while the manager interrupts the active ones.
 func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
 	sweep := application.NewDiscussSweep(service)
+	lc.Append(fx.Hook{
+		OnStart: sweep.Start,
+		OnStop: func(context.Context) error {
+			sweep.Stop()
+			return nil
+		},
+	})
+}
+
+// startQueueSweep runs in the server process only, in either deployment shape.
+// It starts the follow-ups that nothing started, settles promotions that lost
+// their process, and takes in the follow-ups servers of the previous release
+// left in Redis. Registered with the discuss sweep, so that it stops before
+// the manager interrupts the active runs.
+func startQueueSweep(lc fx.Lifecycle, service *application.Service) {
+	sweep := application.NewQueueSweep(service)
 	lc.Append(fx.Hook{
 		OnStart: sweep.Start,
 		OnStop: func(context.Context) error {

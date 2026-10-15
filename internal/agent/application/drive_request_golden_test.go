@@ -23,6 +23,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
@@ -410,28 +411,14 @@ func awaitDriveLifecycle(t *testing.T, fixture directLifecycleFixture) {
 func driveFollowUp(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	backend := sessionruntime.NewMemoryBackend()
 	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
-	setRun := func(status string) {
-		t.Helper()
-		if _, _, err := backend.Update(context.Background(), key, func(snapshot sessionruntime.Snapshot, _ bool) (sessionruntime.Snapshot, bool, error) {
-			snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
-			snapshot.CurrentRunView = &sessionruntime.CurrentRunView{
-				RunID: "running-run", TurnID: "running-turn", Generation: "gen-1", OwnerID: "owner-1", Status: status,
-			}
-			return snapshot, true, nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	setRun(sessionruntime.RunStatusRunning)
-	manager := sessionruntime.NewManager(backend, sessionruntime.Options{})
-	t.Cleanup(func() { _ = manager.Close() })
-	fixture.service.sessionManager = manager
 	fixture.service.SetAllowedTeam(driveTeamID)
 
+	queue := &memoryQueuedInputs{}
+	fixture.service.queue = queue
+
 	ctx := context.Background()
-	if err := fixture.service.EnqueueDeferredTurn(ctx, turn.StartTurnCommand{
+	payload, err := turnwire.NewQueuedInput(turn.StartTurnCommand{
 		SchemaVersion:           1,
 		TeamID:                  driveTeamID,
 		Mode:                    turn.ModeChat,
@@ -449,11 +436,18 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 		Channels:                []string{"telegram"},
 		ReplyTarget:             "im-chat-1",
 		ConversationType:        "private",
-	}); err != nil {
-		t.Fatalf("EnqueueDeferredTurn() error = %v", err)
+	}, nil, time.Time{}).Marshal()
+	if err != nil {
+		t.Fatal(err)
 	}
-	setRun(sessionruntime.RunStatusCompleted)
-	fixture.service.startFollowUp(ctx, sessionruntime.TerminalRun{RunID: "running-run", BotID: key.BotID, SessionID: key.SessionID})
+	if _, err := queue.Enqueue(ctx, sessionruntime.QueueEnqueue{
+		Key: key, Origin: sessionruntime.QueueOriginFollowUp, InvocationID: "im-message-2", Payload: payload,
+	}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if started, err := fixture.service.drainFollowUps(ctx, key); err != nil || !started {
+		t.Fatalf("drainFollowUps() = %v, %v, want a started batch", started, err)
+	}
 	awaitDriveLifecycle(t, fixture)
 	return requireDriveRequests(t, recorder)
 }

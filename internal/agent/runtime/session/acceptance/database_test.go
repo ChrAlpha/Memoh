@@ -233,6 +233,21 @@ func (p *ledgerProbe) waitRun(
 	}
 }
 
+// queuedRunInvocation is the invocation id of the run that took a queued input,
+// empty while the input waits.
+func (p *ledgerProbe) queuedRunInvocation(ctx context.Context, sessionID, itemID string) (string, error) {
+	var invocation *string
+	err := p.pool.QueryRow(ctx, `
+SELECT run_invocation_id
+FROM session_queued_inputs
+WHERE session_id = $1::uuid
+  AND id = $2::uuid`, sessionID, itemID).Scan(&invocation)
+	if err != nil || invocation == nil {
+		return "", err
+	}
+	return *invocation, nil
+}
+
 func (p *ledgerProbe) runCount(ctx context.Context, sessionID, invocationID string) (int, error) {
 	var count int
 	err := p.pool.QueryRow(ctx, `

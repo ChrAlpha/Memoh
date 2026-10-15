@@ -400,7 +400,6 @@
     },
     "userInput": {
       "forbidden": "You do not have permission to answer this question.",
-      "busy": "The bot is still busy. Answer the pending question, or use /stop and send your message again.",
       "submitFailed": "Your answer could not be submitted. Please try again.",
       "unavailable": "⚠️ User input responses aren't available here right now.",
       "parseFailed": "Couldn't read that. Reply with /respond <request> <answer>.",

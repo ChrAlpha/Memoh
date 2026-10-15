@@ -104,6 +104,7 @@ function reliableRequestKey(message: WSClientMessage): string {
 function acknowledgedRequestKey(event: UIStreamEvent): string {
   if (
     event.type === 'run_accepted'
+    || event.type === 'run_queued'
     || event.type === 'run_rejected'
     || event.type === 'command_result'
     || event.type === 'command_error'
@@ -234,6 +235,7 @@ export function connectWebSocket(
         const eventType = String(parsed.type ?? '').trim()
         if (
           eventType !== 'run_accepted'
+          && eventType !== 'run_queued'
           && eventType !== 'model_preference_settled'
           && eventType !== 'run_rejected'
           && eventType !== 'error'

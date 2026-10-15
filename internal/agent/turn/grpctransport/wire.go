@@ -21,7 +21,6 @@ var turnReasons = rpc.Reasons{
 	// A deferred turn is an accepted admission result, not a failure. It
 	// crosses the process boundary so channel adapters can acknowledge the
 	// queued message.
-	{Err: turn.ErrTurnDeferred, Reason: "turn.deferred", Code: codes.ResourceExhausted, Message: "turn deferred"},
 	{Err: turn.ErrTeamNotServed, Reason: "turn.team_not_served", Code: codes.PermissionDenied, Message: "team is not served"},
 }
 

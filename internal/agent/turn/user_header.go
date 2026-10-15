@@ -154,6 +154,22 @@ func (m UserMessageMeta) ToMap() map[string]any {
 	return result
 }
 
+// ForwardedFromHeader names where a forwarded message came from for the
+// forwarded_from attribute: the forward's sender, else its user or conversation,
+// else "unknown". Every writer of a user row renders a forward the same way.
+func ForwardedFromHeader(sender, fromUserID, fromConversationID string) string {
+	switch {
+	case strings.TrimSpace(sender) != "":
+		return strings.TrimSpace(sender)
+	case strings.TrimSpace(fromUserID) != "":
+		return "user:" + strings.TrimSpace(fromUserID)
+	case strings.TrimSpace(fromConversationID) != "":
+		return "conversation:" + strings.TrimSpace(fromConversationID)
+	default:
+		return "unknown"
+	}
+}
+
 // FormatUserHeader wraps a user query in an XML <message> tag so the LLM sees
 // structured context (sender, channel, conversation, time, attachments)
 // alongside the raw message. This must be the single source of truth for

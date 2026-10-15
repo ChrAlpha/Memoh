@@ -30,6 +30,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
@@ -972,9 +973,11 @@ type wsOutboundEvent struct {
 	Seq   int64  `json:"seq,omitempty"`
 	// Duplicate marks an acceptance that named a run the invocation had already
 	// started, which is what makes a redelivered send safe to answer.
-	Duplicate bool   `json:"duplicate,omitempty"`
-	Data      any    `json:"data,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Duplicate bool `json:"duplicate,omitempty"`
+	// QueueItemID names a send that waits in the session's queue (run_queued).
+	QueueItemID string `json:"queue_item_id,omitempty"`
+	Data        any    `json:"data,omitempty"`
+	Message     string `json:"message,omitempty"`
 	// Args are the public parameters of Code, for the client's copy of it.
 	Args map[string]string `json:"args,omitempty"`
 	// Fault is who an error frame's failure is attributed to, for a client
@@ -1307,6 +1310,30 @@ func sendWSRunAccepted(writer *wsWriter, ref wsTurnRef, accepted wsRunAcceptance
 	})
 }
 
+// wsRunQueued is what a client is told of a send that was not run but queued.
+type wsRunQueued struct {
+	// ItemID names the send in the session's queue; empty for a send the queue
+	// already held or had taken.
+	ItemID string
+	// Duplicate marks a send the queue already held, which is what makes a
+	// redelivered send safe to answer.
+	Duplicate bool
+}
+
+// sendWSRunQueued tells the client its send waits for the run in flight and
+// the input queued before it, and starts a run of its own in its turn. It is
+// the answer in place of run_accepted: the send has no run and no turn yet, so
+// the frame names it by the invocation the client sent.
+func sendWSRunQueued(writer *wsWriter, ref wsTurnRef, queued wsRunQueued) {
+	writer.SendJSON(wsOutboundEvent{
+		Type:         "run_queued",
+		InvocationID: ref.InvocationID,
+		SessionID:    ref.SessionID,
+		QueueItemID:  queued.ItemID,
+		Duplicate:    queued.Duplicate,
+	})
+}
+
 // sendWSRunRejected answers a submission that will not become a run. The code is
 // a stable apperror code rather than prose because the client branches on it: one
 // of these two is worth retrying unchanged and the other never is. The message is
@@ -1508,7 +1535,7 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 // there is nothing to execute. release is called once whatever this call
 // reserved for the session is no longer needed: here when nothing runs, and
 // by the run's delivery end otherwise.
-func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), release func()) (*application.WebAdmission, wsTurnRef) {
+func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error), release func()) (*application.WebAdmission, wsTurnRef) {
 	if release == nil {
 		release = func() {}
 	}
@@ -1519,11 +1546,20 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 		InitiatorID:  initiatorID,
 		Payload:      submission,
 		Admission:    admission,
+		QueueTurn:    queueTurn,
 	})
 	if err != nil {
 		// ErrSessionBusy and ErrInvocationConflict arrive here as themselves and
 		// leave as run_rejected with the stable code the client branches on.
 		failWSRequest(ctx, h.logger, writer, botID, ref, operation, err)
+		release()
+		return nil, ref
+	}
+	if admitted.Queued {
+		// A send that waits has no run to execute and no turn to publish: it is
+		// answered in the queue, and its run is announced to the session's
+		// subscribers when it starts.
+		sendWSRunQueued(writer, ref, wsRunQueued{ItemID: admitted.QueuedItemID, Duplicate: admitted.Duplicate})
 		release()
 		return nil, ref
 	}
@@ -1539,6 +1575,49 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 		return nil, ref
 	}
 	return admitted, ref
+}
+
+// webQueueTurn is the complete turn of a Web text send that waits in the
+// session's queue: what the server would start had the session been idle, and
+// the identities the turn's credentials are issued for when it starts. The queue
+// stores neither token.
+func (h *LocalChannelHandler) webQueueTurn(ctx context.Context, botID, sessionID, identityID, invocationID, text string, runtime application.RuntimeSessionExecutionInfo) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
+	if h.sessionService == nil {
+		return turn.StartTurnCommand{}, nil, apperror.New(apperror.CodeQueueAdmissionUnavailable, nil)
+	}
+	sess, err := h.sessionService.Get(ctx, sessionID)
+	if err != nil || sess.BotID != botID {
+		return turn.StartTurnCommand{}, nil, echo.NewHTTPError(http.StatusNotFound, "session not found")
+	}
+	cmd := turn.StartTurnCommand{
+		SchemaVersion:           turnwire.StartTurnVersion,
+		TeamID:                  sess.TeamID,
+		Mode:                    turn.ModeChat,
+		BotID:                   botID,
+		ChatID:                  botID,
+		ThreadID:                sessionID,
+		UserID:                  identityID,
+		SourceChannelIdentityID: identityID,
+		ExternalMessageID:       invocationID,
+		Query:                   text,
+		UserVisibleText:         text,
+		ConversationType:        channel.ConversationTypePrivate,
+		CurrentChannel:          h.channelType.String(),
+		ReplyTarget:             botID,
+		Channels:                []string{h.channelType.String()},
+	}
+	claims := &auth.RouteCredentials{
+		BotID:             botID,
+		ChatID:            botID,
+		ReplyTarget:       botID,
+		ChannelIdentityID: identityID,
+		UserID:            identityID,
+	}
+	if runtime.RequiresWorkspaceExec {
+		claims.ExternalRuntime = true
+		claims.RuntimeOwnerUserID = runtime.RuntimeOwnerAccountID
+	}
+	return cmd, claims, nil
 }
 
 // wsModelPreferenceSettled tells the client the run's model preference has
@@ -2159,7 +2238,18 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				messageAdmission.attachments = ingestedActivationAttachments
 				messageAdmission.attachmentsPrepared = true
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.message", submission, messageAdmission.build, releaseActiveWSTurn)
+			// A plain text send may wait behind the run in flight. A send that
+			// carries a skill activation, a model or reasoning choice, a workspace
+			// target or an agent command is more than text the queue can replay,
+			// so it meets a busy session as it always did.
+			var queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error)
+			if !hasSkillActivation && len(msg.Attachments) == 0 && strings.TrimSpace(msg.ModelID) == "" &&
+				strings.TrimSpace(msg.ReasoningEffort) == "" && workspaceTargetID == "" && decision.AgentCommand == "" {
+				queueTurn = func(ctx context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
+					return h.webQueueTurn(ctx, botID, sessionID, channelIdentityID, ref.InvocationID, text, runtimeInfo)
+				}
+			}
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.message", submission, messageAdmission.build, queueTurn, releaseActiveWSTurn)
 			if admitted == nil {
 				continue
 			}
@@ -2265,7 +2355,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					return h.agentService.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil, nil)
 			if admitted == nil {
 				continue
 			}
@@ -2355,7 +2445,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				},
 				attachments: chatAttachments,
 			}
-			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil)
+			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.edit_message", editSubmission, editAdmission.build, nil, nil)
 			if admitted == nil {
 				continue
 			}

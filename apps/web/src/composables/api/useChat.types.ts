@@ -417,6 +417,20 @@ export interface UIStreamRunAcceptedEvent {
   duplicate?: boolean
 }
 
+// A send that was not run but queued: the session had a run in flight or input
+// queued ahead of it, so the message waits and starts a run of its own in its
+// turn. It has no run and no turn yet, so it is named by the invocation the
+// client sent.
+export interface UIStreamRunQueuedEvent {
+  type: 'run_queued'
+  invocation_id: string
+  session_id: string
+  // The send's place in the session's queue. Absent when the queue already held
+  // or had taken the send (a redelivery).
+  queue_item_id?: string
+  duplicate?: boolean
+}
+
 export interface UIStreamRunRejectedEvent {
   type: 'run_rejected'
   invocation_id: string
@@ -621,6 +635,7 @@ export interface UIStreamModelPreferenceSettledEvent {
 export type UIStreamEvent =
   | UIStreamModelPreferenceSettledEvent
   | UIStreamRunAcceptedEvent
+  | UIStreamRunQueuedEvent
   | UIStreamRunRejectedEvent
   | UIStreamErrorEvent
   | UIStreamSessionCreatedEvent

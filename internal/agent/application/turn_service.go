@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -30,6 +32,16 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}
 	if s.allowedTeam != "" && cmd.TeamID != s.allowedTeam {
 		return nil, fmt.Errorf("%w: %s", turn.ErrTeamNotServed, cmd.TeamID)
+	}
+
+	if err := s.admitAfterQueue(ctx, cmd); err != nil {
+		return nil, err
+	}
+	// The earlier messages of a queued batch are rows of their own, written
+	// ahead of the run's turn. A failure here leaves no run behind, so the batch
+	// is started again as it was.
+	if err := s.persistPrecedingMessages(ctx, cmd); err != nil {
+		return nil, err
 	}
 
 	// A run names its own ending, so its context is derived from the caller's
@@ -89,6 +101,28 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	}()
 
 	return handle, nil
+}
+
+// admitAfterQueue is the session queue's gate on a new turn. A turn whose
+// message the queue already holds or has taken was delivered before, and is
+// answered like any redelivery. A turn that would pass input queued ahead of
+// it is busy: the input waits its turn in the queue, in order. The queue's own
+// admission is the one command that neither waits nor is counted.
+func (s *Service) admitAfterQueue(ctx context.Context, cmd turn.StartTurnCommand) error {
+	if cmd.NoDefer || s.queue == nil || strings.TrimSpace(cmd.ThreadID) == "" {
+		return nil
+	}
+	gate, err := s.queue.Gate(ctx, sessionruntime.Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}, cmd.IdempotencyKey)
+	if err != nil {
+		return fmt.Errorf("check session queue: %w", err)
+	}
+	switch {
+	case gate.Seen:
+		return fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, cmd.IdempotencyKey)
+	case gate.Waiting:
+		return fmt.Errorf("%w: thread %s has queued input", turn.ErrSessionBusy, cmd.ThreadID)
+	}
+	return nil
 }
 
 func runtimeHistoryError(err error) error {

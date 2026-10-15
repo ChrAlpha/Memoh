@@ -45,6 +45,7 @@ func newDeferredSteerTestService(t *testing.T, backends ...sessionruntime.Backen
 		sessionManager: manager,
 		messageService: &recordingStepPersister{recordingMessageService: &recordingMessageService{}},
 		queries:        nilQueries{},
+		queue:          &memoryQueuedInputs{},
 	}
 	return service, handle
 }
@@ -78,7 +79,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 		t.Fatalf("deferred step touched the steer queue: %#v", outcome)
 	}
 
-	if steers, _, err := service.sessionManager.PendingQueues(ctx, key, 0); err != nil || len(steers) != 1 || steers[0].Status != sessionruntime.QueueAccepted {
+	if steers, err := service.sessionManager.PendingSteers(ctx, key, 0); err != nil || len(steers) != 1 || steers[0].Status != sessionruntime.QueueAccepted {
 		t.Fatalf("steer should stay accepted across the park: %#v, %v", steers, err)
 	}
 
@@ -107,7 +108,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 		t.Fatalf("claimed payload = %q", got)
 	}
 
-	steers, _, err := service.sessionManager.PendingQueues(ctx, key, 0)
+	steers, err := service.sessionManager.PendingSteers(ctx, key, 0)
 	if err != nil || len(steers) != 0 {
 		t.Fatalf("pending steers while claimed = %#v, %v", steers, err)
 	}
@@ -155,5 +156,38 @@ func TestFinalStepClaimsSteerForLoopContinuation(t *testing.T) {
 	}
 	if _, err := service.EnqueueSteer(ctx, testQueueInput(handle.BotID, handle.SessionID, "invoke-2", "late")); err != nil {
 		t.Fatalf("run should stay open after a claimed final steer: %v", err)
+	}
+}
+
+// The step that applies a steer records, in the same commit, that the queued
+// input it was promoted from is taken. The terminal pass would find it too, but
+// only after the run is over.
+func TestStepThatAppliesASteerRecordsThePromotedInputAsTaken(t *testing.T) {
+	service, handle := newDeferredSteerTestService(t)
+	ctx := context.Background()
+	item, err := service.EnqueueSteer(ctx, testQueueInput(handle.BotID, handle.SessionID, "invoke-1", "steer me"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := newQueueStepCoordinator(service, ChatRequest{
+		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
+		RunHandle: handle, QueueSteerEnabled: true,
+	})
+	if coordinator == nil {
+		t.Fatal("queue step coordinator unavailable")
+	}
+	queue := service.queue.(*memoryQueuedInputs)
+
+	if _, err := coordinator.commit(ctx, queueStepFinal, messagepkg.AgentStep{RunID: handle.RunID}, nil); err != nil {
+		t.Fatalf("claiming commit: %v", err)
+	}
+	if got := queue.consumedIDs(); len(got) != 0 {
+		t.Fatalf("a claimed steer is not yet applied, but %v were recorded", got)
+	}
+	if _, err := coordinator.commit(ctx, queueStepFinal, messagepkg.AgentStep{RunID: handle.RunID}, nil); err != nil {
+		t.Fatalf("applying commit: %v", err)
+	}
+	if got := queue.consumedIDs(); len(got) != 1 || got[0] != string(item.ID) {
+		t.Fatalf("recorded as taken = %v, want [%s]", got, item.ID)
 	}
 }

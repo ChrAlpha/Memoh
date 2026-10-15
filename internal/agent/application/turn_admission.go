@@ -65,12 +65,7 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 	manager.SetTerminalObserver(func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 		s.logRunResult(ctx, terminal)
 		s.reconcileTerminalContextLifecycle(ctx, terminal)
-		// Steers die with their run; follow-ups outlive it. Close the steer
-		// queue before the follow-up starter so a continuation run never sees
-		// a stale steer that still names the finished run.
-		s.closeSteerQueueForRun(ctx, terminal)
-		s.startFollowUpAfterTerminal(ctx, terminal)
-		s.checkDiscussAfterTerminal(ctx, terminal)
+		s.afterSessionTerminal(ctx, terminal)
 	})
 	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)
 }
@@ -91,25 +86,6 @@ func (s *Service) cancelLostRunDecisions(ctx context.Context, botID, sessionID, 
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
-}
-
-func drainDeferredTurn(handle turn.RunHandle) {
-	if handle == nil {
-		return
-	}
-	events, errs := handle.Events(), handle.Errs()
-	for events != nil || errs != nil {
-		select {
-		case _, ok := <-events:
-			if !ok {
-				events = nil
-			}
-		case _, ok := <-errs:
-			if !ok {
-				errs = nil
-			}
-		}
-	}
 }
 
 // admitTurnRun puts a StartTurnCommand through durable admission and answers in

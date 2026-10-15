@@ -44,9 +44,6 @@ const (
 	silentReplyToken        = "NO_REPLY"
 	minDuplicateTextLength  = 10
 	processingStatusTimeout = 60 * time.Second
-	turnBusyRetryWindow     = 30 * time.Second
-	turnBusyRetryInitial    = 100 * time.Millisecond
-	turnBusyRetryMax        = time.Second
 )
 
 var whitespacePattern = regexp.MustCompile(`\s+`)
@@ -207,6 +204,9 @@ type ChannelInboundProcessor struct {
 	acpProfiles         turn.ACPProfileResolver
 	permissionChecker   BotPermissionChecker
 	skillResolver       RequestedSkillResolver
+	busyQueue           BusyQueue
+	replySurfaces       replySurfaces
+	busyDrains          drainCoalescer
 
 	// activeStreams maps "botID:routeID" to a context.CancelFunc for the
 	// currently running agent stream. Used by /stop to abort generation
@@ -1110,7 +1110,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	p.activeStreams.Store(streamKey, streamCancel)
 	defer p.activeStreams.Delete(streamKey)
 
-	handle, startErr := p.startTurnWithBusyRetry(streamCtx, cmd)
+	handle, startErr := p.startTurn(streamCtx, cmd)
 	if startErr != nil {
 		if errors.Is(startErr, turn.ErrDuplicateTurn) {
 			// Platform webhook redelivery of an already-claimed message:
@@ -1131,38 +1131,28 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			}
 			return nil
 		}
-		if errors.Is(startErr, turn.ErrSessionBusy) {
-			// Telegram dispatches updates asynchronously: returning an error cannot
-			// request redelivery. Tell the sender to retry instead of silently
-			// dropping a message the runtime never admitted. Webhook channels
-			// retain their existing adapter retry contract.
-			if p.logger != nil {
-				p.logger.InfoContext(ctx,
-					"inbound turn deferred: thread busy",
-					slog.String("channel", msg.Channel.String()),
-					slog.String("external_message_id", sourceMessageID),
-				)
-			}
+		if errors.Is(startErr, turn.ErrSessionBusy) && p.busyQueue != nil {
+			// The session is taken. The message waits in the session's queue
+			// and is answered when its turn comes, so nothing is dropped and
+			// the platform has nothing to redeliver.
 			if statusNotifier != nil {
 				if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
 					p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
 				}
 			}
-			if msg.Channel == channel.ChannelType("telegram") {
-				return sender.Send(ctx, channel.OutboundMessage{
-					Target:  target,
-					Message: replyTextMessage(p.localizer(ctx, identity.BotID).T("cmd.userInput.busy"), sourceMessageID),
-				})
-			}
-			return startErr
-		}
-		if errors.Is(startErr, turn.ErrTurnDeferred) {
-			if statusNotifier != nil {
-				if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-					p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-				}
-			}
-			return nil
+			return p.parkBusyTurn(ctx, busyTurn{
+				cmd:      cmd,
+				claims:   p.routeClaims(ctx, identity, activeChatID, resolved.RouteID, msg, runtimeSession, sessionRuntimeOwner),
+				msg:      msg,
+				identity: identity,
+				sender:   sender,
+				caps:     desc.Capabilities,
+				fail: func(err error) {
+					if event, ok := channel.ErrorEvent(streamCtx, p.localizer(ctx, identity.BotID), err); ok {
+						out.Fail(ctx, event)
+					}
+				},
+			})
 		}
 		// The stream's context is the turn's caller: /new and /stop end it,
 		// and a turn they ended gets no reply.
@@ -1180,25 +1170,14 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return startErr
 	}
 
-	// Ordinal bookkeeping plus forwarding of outbound asset refs into the
-	// running turn; the resolver attaches them at persist time.
-	assets := &assetTracker{run: handle}
-	loc := p.localizer(ctx, identity.BotID)
-	runErr := out.Run(ctx, delivery.RunInput{
-		ReportsTerminal: turn.ReportsRunTerminal(handle),
-		Localizer:       loc,
-		IngestAttachments: func(ctx context.Context, attachments []channel.Attachment) []channel.Attachment {
-			ingested := p.ingestOutboundAttachments(ctx, strings.TrimSpace(identity.BotID), msg.Channel, attachments)
-			assets.add(ingested)
-			return ingested
-		},
-		Outputs: func(messages []turn.ModelMessage) ([]channel.Message, bool) {
-			return p.runReplyMessages(msg, desc.Capabilities, target, sourceMessageID, messages)
-		},
-		StreamFailure: func(err error) (channel.StreamEvent, bool) {
-			return channel.ErrorEvent(streamCtx, loc, threadError(err))
-		},
-	}, handle.Events(), handle.Errs())
+	runErr := p.consumeRun(ctx, runReply{
+		out: out, handle: handle, botID: identity.BotID, channelType: msg.Channel, caps: desc.Capabilities,
+		target: target, sourceMessageID: sourceMessageID,
+		localizer: p.localizer(ctx, identity.BotID), streamCtx: streamCtx,
+	})
+	// The run is over, and this process was the one watching it end: what waited
+	// for the session can start.
+	p.kickBusyQueue(ctx, identity.BotID, sessionID)
 	if runErr != nil {
 		if statusNotifier != nil {
 			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, runErr); notifyErr != nil {
@@ -1218,15 +1197,52 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	return nil
 }
 
+// runReply is what the reply of one run needs besides the run itself.
+type runReply struct {
+	out             *delivery.Reply
+	handle          turn.RunHandle
+	botID           string
+	channelType     channel.ChannelType
+	caps            channel.ChannelCapabilities
+	target          string
+	sourceMessageID string
+	localizer       *i18n.Localizer
+	// streamCtx is the context of the run's caller: /new and /stop end it, and
+	// a run they ended gets no reply.
+	streamCtx context.Context
+}
+
+// consumeRun shows a run's events as its reply until the run ends. Ordinal
+// bookkeeping plus forwarding of outbound asset refs into the running turn; the
+// resolver attaches them at persist time.
+func (p *ChannelInboundProcessor) consumeRun(ctx context.Context, r runReply) error {
+	assets := &assetTracker{run: r.handle}
+	return r.out.Run(ctx, delivery.RunInput{
+		ReportsTerminal: turn.ReportsRunTerminal(r.handle),
+		Localizer:       r.localizer,
+		IngestAttachments: func(ctx context.Context, attachments []channel.Attachment) []channel.Attachment {
+			ingested := p.ingestOutboundAttachments(ctx, strings.TrimSpace(r.botID), r.channelType, attachments)
+			assets.add(ingested)
+			return ingested
+		},
+		Outputs: func(messages []turn.ModelMessage) ([]channel.Message, bool) {
+			return p.runReplyMessages(r.channelType, r.caps, r.target, r.sourceMessageID, messages)
+		},
+		StreamFailure: func(err error) (channel.StreamEvent, bool) {
+			return channel.ErrorEvent(r.streamCtx, r.localizer, threadError(err))
+		},
+	}, r.handle.Events(), r.handle.Errs())
+}
+
 // runReplyMessages selects the assistant outputs a run replies with. A run
 // whose replies a messaging tool already sent replies with none.
 func (p *ChannelInboundProcessor) runReplyMessages(
-	msg channel.InboundMessage,
+	channelType channel.ChannelType,
 	caps channel.ChannelCapabilities,
 	target, sourceMessageID string,
 	messages []turn.ModelMessage,
 ) ([]channel.Message, bool) {
-	sentTexts, suppressReplies := collectMessageToolContext(p.registry, messages, msg.Channel, target)
+	sentTexts, suppressReplies := collectMessageToolContext(p.registry, messages, channelType, target)
 	if suppressReplies {
 		return nil, true
 	}
@@ -1254,61 +1270,13 @@ func (p *ChannelInboundProcessor) runReplyMessages(
 	return out, false
 }
 
-// startTurnWithBusyRetry covers the race where a channel message arrives while
-// an ask_user/tool response is committing and the same session is still busy.
-//
-// Only local channel types (web, cli) park the complete command in the
-// follow-up queue. Their users observe the resulting run through the session
-// runtime subscription, so nobody needs this call's handle. A platform
-// channel delivers the reply by streaming this handle's events back to the
-// platform; a run started later from the queue would have no consumer and its
-// reply would never reach the user, so platform channels keep the bounded
-// retry and surface ErrSessionBusy when it expires.
-func (p *ChannelInboundProcessor) startTurnWithBusyRetry(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
+// startTurn starts a turn. A session that is busy answers with
+// turn.ErrSessionBusy, and the caller parks the turn in the session's queue.
+func (p *ChannelInboundProcessor) startTurn(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {
 	if p == nil || p.turnSvc == nil {
 		return nil, errors.New("channel inbound processor not configured")
 	}
-	deferrable := !cmd.NoDefer && isLocalChannelType(channel.ChannelType(cmd.CurrentChannel))
-	deadline := time.NewTimer(turnBusyRetryWindow)
-	defer deadline.Stop()
-	delay := turnBusyRetryInitial
-	for {
-		handle, err := p.turnSvc.StartTurn(ctx, cmd)
-		if !errors.Is(err, turn.ErrSessionBusy) {
-			return handle, err
-		}
-		if deferred, ok := p.turnSvc.(turn.DeferredTurnService); ok && deferrable {
-			if queueErr := deferred.EnqueueDeferredTurn(ctx, cmd); queueErr == nil {
-				return nil, turn.ErrTurnDeferred
-			}
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			stopTimer(timer)
-			return nil, ctx.Err()
-		case <-deadline.C:
-			stopTimer(timer)
-			return nil, err
-		case <-timer.C:
-		}
-		if delay < turnBusyRetryMax {
-			delay *= 2
-			if delay > turnBusyRetryMax {
-				delay = turnBusyRetryMax
-			}
-		}
-	}
-}
-
-func stopTimer(timer *time.Timer) {
-	if timer == nil || timer.Stop() {
-		return
-	}
-	select {
-	case <-timer.C:
-	default:
-	}
+	return p.turnSvc.StartTurn(ctx, cmd)
 }
 
 func turnIdempotencyKey(channelType channel.ChannelType, routeID, externalMessageID string) string {
@@ -1807,17 +1775,7 @@ func inboundForwardHeader(forward *channel.ForwardRef) (from, messageID string) 
 	if forward == nil {
 		return "", ""
 	}
-	switch {
-	case strings.TrimSpace(forward.Sender) != "":
-		from = strings.TrimSpace(forward.Sender)
-	case strings.TrimSpace(forward.FromUserID) != "":
-		from = "user:" + strings.TrimSpace(forward.FromUserID)
-	case strings.TrimSpace(forward.FromConversationID) != "":
-		from = "conversation:" + strings.TrimSpace(forward.FromConversationID)
-	default:
-		from = "unknown"
-	}
-	return from, strings.TrimSpace(forward.MessageID)
+	return turn.ForwardedFromHeader(forward.Sender, forward.FromUserID, forward.FromConversationID), strings.TrimSpace(forward.MessageID)
 }
 
 func messageForwardMetadata(forward *channel.ForwardRef) map[string]any {
@@ -3571,10 +3529,10 @@ func routeCredentials(identity InboundIdentity, chatID, routeID string, msg chan
 	}
 }
 
-// issueRouteCredentials signs the chat token and the session bearer of a turn
-// answering msg. A session an External Agent runtime drives acts for its
-// runtime owner; any other acts for the bot's owner.
-func (p *ChannelInboundProcessor) issueRouteCredentials(ctx context.Context, identity InboundIdentity, chatID, routeID string, msg channel.InboundMessage, sess SessionResult, runtimeOwnerAccountID string) (chatToken, sessionBearer string) {
+// routeClaims names who a turn answering msg on a route answers and acts for.
+// A session an External Agent runtime drives acts for its runtime owner; any
+// other acts for the bot's owner.
+func (p *ChannelInboundProcessor) routeClaims(ctx context.Context, identity InboundIdentity, chatID, routeID string, msg channel.InboundMessage, sess SessionResult, runtimeOwnerAccountID string) auth.RouteCredentials {
 	creds := routeCredentials(identity, chatID, routeID, msg)
 	if sessionUsesExternalRuntime(sess) {
 		creds.ExternalRuntime = true
@@ -3587,7 +3545,14 @@ func (p *ChannelInboundProcessor) issueRouteCredentials(ctx context.Context, ide
 				slog.String("bot_id", identity.BotID), slog.Any("error", err))
 		}
 	}
-	chatToken, sessionBearer, err := auth.IssueRouteCredentials(creds, p.jwtSecret, p.tokenTTL)
+	return creds
+}
+
+// issueRouteCredentials signs the chat token and the session bearer of a turn
+// answering msg. A turn parked in the session queue is signed again from the
+// same claims when it starts.
+func (p *ChannelInboundProcessor) issueRouteCredentials(ctx context.Context, identity InboundIdentity, chatID, routeID string, msg channel.InboundMessage, sess SessionResult, runtimeOwnerAccountID string) (chatToken, sessionBearer string) {
+	chatToken, sessionBearer, err := auth.IssueRouteCredentials(p.routeClaims(ctx, identity, chatID, routeID, msg, sess, runtimeOwnerAccountID), p.jwtSecret, p.tokenTTL)
 	if err != nil {
 		if p.logger != nil {
 			p.logger.WarnContext(ctx, "issue route credentials failed", slog.Any("error", err))

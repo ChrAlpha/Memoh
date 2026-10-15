@@ -13,9 +13,9 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-// queueStepCoordinator orders queue consumption after history persistence.
-// History remains a fenced PostgreSQL transaction; queue state lives in the
-// session runtime backend (memory or Redis). Queue state is transient and is
+// queueStepCoordinator orders steer consumption after history persistence.
+// History remains a fenced PostgreSQL transaction; steer state lives in the
+// session runtime backend (memory or Redis). Steer state is transient and is
 // never included in the history transaction.
 type queueStepCoordinator struct {
 	service              *Service
@@ -139,6 +139,7 @@ func (q *queueStepCoordinator) commit(
 			return outcome, err
 		}
 		outcome.appliedSteerItemID = string(q.pendingSteer.ItemID)
+		q.service.consumePromotedInput(ctx, outcome.appliedSteerItemID)
 		q.pendingSteer = nil
 		q.pendingSteerTurn = nil
 	}

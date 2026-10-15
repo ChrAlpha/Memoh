@@ -2,11 +2,17 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/errs"
 )
 
@@ -24,6 +30,12 @@ type WebAdmitInput struct {
 	// send's request user turn, or the boundary a retry or edit replaces. It
 	// runs after ownership is established, so its writes are fenced.
 	Admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)
+	// QueueTurn builds the complete turn of a send that may wait, and the
+	// identities its credentials are issued for when it starts. It is called only
+	// when the send does wait: the session has a run in flight, or input queued
+	// ahead of it. A submission that cannot wait as plain input, such as a retry,
+	// an edit or a skill activation, leaves it nil and meets ErrSessionBusy.
+	QueueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error)
 }
 
 // WebAdmission is the run a Web submission was admitted as. The run id, its
@@ -40,6 +52,12 @@ type WebAdmission struct {
 	// elsewhere, or already finished. Executing it again is the duplication
 	// admission exists to prevent, so there is nothing to run.
 	Duplicate bool
+	// Queued means the submission was not run: it waits in the session's queue
+	// behind the run in flight and the input queued before it, and starts a run of
+	// its own in its turn. QueuedItemID names it in the queue. A Duplicate queued
+	// admission is a submission the queue already held or had taken.
+	Queued       bool
+	QueuedItemID string
 
 	ctx       context.Context
 	stop      context.CancelCauseFunc
@@ -61,6 +79,9 @@ type WebAdmission struct {
 func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmission, error) {
 	if s.sessionRuntime == nil {
 		return nil, errs.New("session runtime is not configured")
+	}
+	if queued, err := s.queueWebRunBehindInput(ctx, in); queued != nil || err != nil {
+		return queued, err
 	}
 	endActive, err := s.activeTurns.begin()
 	if err != nil {
@@ -91,6 +112,13 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 			OwnershipCancel: stopRun,
 		},
 	})
+	if errors.Is(err, sessionruntime.ErrSessionBusy) && in.QueueTurn != nil && s.queue != nil {
+		// The run in flight took the session between the queue check and the
+		// admission: the send waits for it like every other.
+		stopRun(errRunStopped)
+		endActive()
+		return s.enqueueWebRun(ctx, in)
+	}
 	if err != nil {
 		stopRun(errRunStopped)
 		endActive()
@@ -119,6 +147,66 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 		injectCh:  make(chan turn.InjectMessage, 16),
 		endActive: endActive,
 	}, nil
+}
+
+// queueWebRunBehindInput answers a send that must wait for input already queued
+// for its session: a message the queue already holds or has taken is answered as
+// the repeat it is, and one that would pass queued input joins the queue behind
+// it. It returns nil for a send that admits as usual.
+func (s *Service) queueWebRunBehindInput(ctx context.Context, in WebAdmitInput) (*WebAdmission, error) {
+	if in.QueueTurn == nil || s.queue == nil {
+		return nil, nil
+	}
+	gate, err := s.queue.Gate(ctx, sessionruntime.Key{BotID: strings.TrimSpace(in.BotID), SessionID: strings.TrimSpace(in.SessionID)}, strings.TrimSpace(in.InvocationID))
+	if err != nil {
+		return nil, fmt.Errorf("check session queue: %w", err)
+	}
+	switch {
+	case gate.Seen:
+		return &WebAdmission{Queued: true, Duplicate: true}, nil
+	case gate.Waiting:
+		return s.enqueueWebRun(ctx, in)
+	default:
+		return nil, nil
+	}
+}
+
+// enqueueWebRun puts a send in the session's queue. The queue is the server's
+// to start from: it replays the stored command under credentials issued when it
+// starts, and the run's subscribers are the session's, as for any run of the
+// session.
+func (s *Service) enqueueWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmission, error) {
+	queue, err := s.queueStore()
+	if err != nil {
+		return nil, err
+	}
+	cmd, claims, err := in.QueueTurn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cmd.IdempotencyKey = strings.TrimSpace(in.InvocationID)
+	payload, err := turnwire.NewQueuedInput(cmd, claims, time.Now()).Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("encode queued send: %w", err)
+	}
+	item, err := queue.Enqueue(ctx, sessionruntime.QueueEnqueue{
+		Key:          sessionruntime.Key{BotID: strings.TrimSpace(in.BotID), SessionID: strings.TrimSpace(in.SessionID)},
+		Origin:       sessionruntime.QueueOriginFollowUp,
+		InvocationID: strings.TrimSpace(in.InvocationID),
+		MergeKey:     firstNonEmpty(cmd.SourceChannelIdentityID, cmd.UserID),
+		Payload:      payload,
+	})
+	switch {
+	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
+		return nil, apperror.New(apperror.CodeSessionQueueFull, nil)
+	case errors.Is(err, sessionruntime.ErrQueueInvocationConflict):
+		return nil, sessionruntime.ErrInvocationConflict
+	case err != nil:
+		return nil, err
+	}
+	// The run the send waits for may have ended before the row was written.
+	s.kickPending(ctx, strings.TrimSpace(in.BotID), strings.TrimSpace(in.SessionID))
+	return &WebAdmission{Queued: true, QueuedItemID: item.ID}, nil
 }
 
 // RunWebSend executes an admitted Web send. The draft is still the

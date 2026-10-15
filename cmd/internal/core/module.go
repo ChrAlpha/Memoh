@@ -55,6 +55,7 @@ func FoundationModule() fx.Option {
 			event.NewHub,
 			provideSessionService,
 			provideMessageService,
+			provideQueuedInputs,
 		),
 		fx.Invoke(setupTelemetry),
 	)

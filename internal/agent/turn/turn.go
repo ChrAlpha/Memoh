@@ -17,19 +17,15 @@ import (
 // delivery and drop the duplicate silently.
 var ErrDuplicateTurn = errors.New("turn: duplicate idempotency key")
 
-// ErrSessionBusy reports that the thread already has a run in flight. An
-// ingress whose user observes runs through the session runtime subscription
-// may park the full command with DeferredTurnService and report
-// ErrTurnDeferred instead; other callers retry the unchanged command.
+// ErrSessionBusy reports that the thread cannot take a new run now: it has a
+// run in flight, or input queued ahead of the turn. An ingress parks the
+// complete turn in the session's input queue and answers the sender that it is
+// waiting; other callers retry the unchanged command.
 //
 // It is declared here rather than reused from the runtime because this package
 // is the only agent surface Channel may import, and it must not depend on the
 // runtime that produces the condition.
 var ErrSessionBusy = errors.New("turn: thread already has a run in flight")
-
-// ErrTurnDeferred means the complete turn command was accepted by the
-// configured session runtime queue and will start after the current run ends.
-var ErrTurnDeferred = errors.New("turn: deferred until current run completes")
 
 // ErrTeamNotServed reports that the service instance does not serve the
 // command's team. The in-process runtime binds its database pool to the
@@ -53,9 +49,9 @@ type StartTurnCommand struct {
 	// command is sent or stored declares it; the reader refuses a version it
 	// does not know (turnwire.StartTurnVersion).
 	SchemaVersion int
-	// NoDefer is reserved for server-owned continuation attempts. A follow-up
-	// that is already being started must surface ErrSessionBusy instead of
-	// re-entering the follow-up queue when it races another admission.
+	// NoDefer marks the queue's own admission of a batch of queued input. It
+	// does not wait behind the queued input it is starting, and when it races
+	// another admission it surfaces ErrSessionBusy instead of queueing again.
 	NoDefer bool
 	TeamID  string // required; the service fails closed when empty
 	Mode    Mode
@@ -109,6 +105,48 @@ type StartTurnCommand struct {
 	SkipMemoryExtraction bool
 	SkipTitleGeneration  bool
 	UserMessagePersisted bool
+
+	// Preceding are the messages this command's run answers together with its
+	// own, which arrived before it: the earlier inputs of a queued batch. Each
+	// is written as a user row of its own ahead of the run's request, in this
+	// order, so the model reads them as it would had they been recorded as they
+	// came, and the run's request is the last of them.
+	Preceding []PrecedingMessage
+}
+
+// PrecedingMessage is one earlier message of a batch a run answers. It carries
+// what a user row and its header are made of; where the message was said
+// (channel, conversation, reply target) is the command's own.
+type PrecedingMessage struct {
+	// ID names the queue item the message waited as. Its row is written under
+	// that id, once: a batch that starts again after a crash, or is released and
+	// formed anew, finds the row it wrote.
+	ID                      string
+	ExternalMessageID       string
+	UserID                  string
+	SourceChannelIdentityID string
+	DisplayName             string
+	Query                   string
+	UserVisibleText         string
+	Attachments             []Attachment
+
+	SourceReplyToMessageID string
+	ReplySender            string
+	ReplyPreview           string
+	ReplyAttachments       []Attachment
+	MentionsBot            bool
+	RepliesToBot           bool
+
+	ForwardMessageID          string
+	ForwardFromUserID         string
+	ForwardFromConversationID string
+	ForwardSender             string
+	ForwardDate               int64
+
+	// ReceivedAtMs is when the platform delivered the message, in Unix
+	// milliseconds; zero when unknown. The row's header carries this time, the
+	// way a passive row's does.
+	ReceivedAtMs int64
 }
 
 // ToolApprovalResponse resumes a thread's turn deferred on tool approval
@@ -194,13 +232,4 @@ type StopCommand struct{ TeamID, BotID, ThreadID string }
 // while waiting for a decision. Kept separate for alternate turn providers.
 type Stopper interface {
 	StopTurn(context.Context, StopCommand) (bool, error)
-}
-
-// DeferredTurnService parks a complete user turn that arrived while its
-// session was busy. The run it later starts has no handle consumer, so only an
-// ingress that delivers output through the session runtime subscription (web,
-// cli) may use it; platform channels stream replies from the handle and must
-// not.
-type DeferredTurnService interface {
-	EnqueueDeferredTurn(context.Context, StartTurnCommand) error
 }

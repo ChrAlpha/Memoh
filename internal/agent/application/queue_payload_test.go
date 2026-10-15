@@ -16,3 +16,12 @@ func TestQueuePayloadTextNeverExposesCommandEnvelope(t *testing.T) {
 		}
 	}
 }
+
+// testQueueInput is what an ingress hands the application for one queued text:
+// the team and sender it authenticated, next to the session and the text.
+func testQueueInput(botID, sessionID, invocationID, text string) QueueInput {
+	return QueueInput{
+		TeamID: "team1", BotID: botID, SessionID: sessionID, InvocationID: invocationID,
+		UserID: "user-1", SourceChannelIdentityID: "user-1", Text: text,
+	}
+}

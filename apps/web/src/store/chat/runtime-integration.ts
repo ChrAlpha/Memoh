@@ -214,6 +214,25 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       }
       return
     }
+    if (event.type === 'run_queued') {
+      // The send waits for the run in flight and the input queued before it, and
+      // starts a run of its own in its turn. It has no run and no turn yet, so
+      // the empty assistant placeholder goes; the user's message stays on screen
+      // as sent, and the run that answers it arrives through the session's
+      // subscription like any other run of the session.
+      const invocationId = event.invocation_id.trim()
+      const queued = deps.assistantStreams.getAssistantStream(invocationId)
+      if (!queued) return
+      if (!deps.hasVisibleAssistantBlocks(queued.assistantTurn)) {
+        deps.removeTurnFromSession(
+          queued.botId,
+          queued.sessionId,
+          queued.assistantTurn,
+        )
+      }
+      deps.assistantStreams.resolveAssistantStream(invocationId)
+      return
+    }
     if (event.type === 'run_rejected') {
       const invocationId = event.invocation_id.trim()
       const rejected = deps.assistantStreams.getAssistantStream(invocationId)

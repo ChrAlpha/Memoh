@@ -96,7 +96,7 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 	if c.queueStep != nil && c.queueStep.steerEnabled {
 		cfg.SteerWake = c.service.sessionManager.SteerWake(c.req.RunHandle)
 		cfg.PendingSteer = func(ctx context.Context) (bool, error) {
-			items, _, err := c.service.sessionManager.PendingQueues(ctx, sessionruntime.Key{
+			items, err := c.service.sessionManager.PendingSteers(ctx, sessionruntime.Key{
 				BotID: c.req.BotID, SessionID: c.req.ThreadID,
 			}, sessionruntime.MaxPendingQueueItems)
 			for _, item := range items {

@@ -169,7 +169,7 @@ func TestQueueFollowUpsPreserveRepeatedReorderAndDrain(t *testing.T) {
 	mustReadRunTerminal(t, conn, admitted.RunID)
 	var priorPosition int64 = -1
 	for _, i := range []int{2, 1, 0} {
-		completed := mustWaitRunState(t, sessionID, "follow-up:"+ids[i], func(run sessionRunRecord) bool { return run.State == "completed" })
+		completed := mustWaitQueuedRun(t, sessionID, ids[i], func(run sessionRunRecord) bool { return run.State == "completed" })
 		if completed.TurnPosition <= priorPosition {
 			t.Fatalf("queue order regressed: position %d after %d", completed.TurnPosition, priorPosition)
 		}
@@ -376,7 +376,7 @@ func TestQueueWebSocketFollowUpReplayAndValidation(t *testing.T) {
 	}
 	globalFakeModel.Release(origin)
 	mustReadRunCompleted(t, conn, run.RunID)
-	mustWaitRunState(t, sessionID, "follow-up:"+queue.Items[0].ID, func(r sessionRunRecord) bool { return r.State == "completed" })
+	mustWaitQueuedRun(t, sessionID, queue.Items[0].ID, func(r sessionRunRecord) bool { return r.State == "completed" })
 	if globalFakeModel.RequestCount(marker) != 1 {
 		t.Fatal("follow-up did not execute exactly once")
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"time"
 
@@ -85,13 +84,16 @@ func (a DiscussAdmission) String() string {
 // A session an External Agent runtime drives is answered only when the pending
 // batch addresses the bot; otherwise no run is written and the batch stays
 // pending.
+//
+// The check is the discuss half of the session's pending admission: queued
+// follow-ups are started first, and a session that has one holds its slot for
+// that run, which is DiscussBusy here.
 func (s *Service) CheckAndAdmitDiscuss(ctx context.Context, botID, sessionID string) (DiscussAdmission, error) {
-	outcome, _, err := s.admitDiscuss(ctx, botID, sessionID)
-	return outcome, err
+	return s.admitPending(ctx, botID, sessionID)
 }
 
-// admitDiscuss is CheckAndAdmitDiscuss returning, for an admitted run, the
-// channel that closes when the run has ended.
+// admitDiscuss is the discuss check itself, returning, for an admitted run, the
+// channel that closes when the run has ended. It runs inside admitPending.
 func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (DiscussAdmission, <-chan struct{}, error) {
 	if s.queries == nil || s.sessionRuntime == nil {
 		return 0, nil, errors.New("discuss admission is not configured")
@@ -300,20 +302,4 @@ func (s *Service) discussCover(ctx context.Context, sessionID pgtype.UUID) (int6
 // invocation.
 func discussInvocationID(sessionID string, hw int64) string {
 	return "discuss:" + sessionID + ":" + strconv.FormatInt(hw, 10)
-}
-
-// checkDiscussAfterTerminal checks a session again once one of its runs has
-// ended. An input that arrived while the run held the session was refused as
-// busy; this is what answers it.
-func (s *Service) checkDiscussAfterTerminal(ctx context.Context, terminal sessionruntime.TerminalRun) {
-	if s == nil || s.queries == nil || !terminal.Applied || terminal.BotID == "" || terminal.SessionID == "" {
-		return
-	}
-	go func() {
-		_, err := s.CheckAndAdmitDiscuss(ctx, terminal.BotID, terminal.SessionID)
-		if err != nil && !errors.Is(err, sessionruntime.ErrManagerClosed) && s.logger != nil {
-			s.logger.WarnContext(ctx, "discuss check after run end failed",
-				slog.String("session_id", terminal.SessionID), slog.String("run_id", terminal.RunID), slog.Any("error", err))
-		}
-	}()
 }

@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-func TestFollowUpRepeatedReorderPreservesCurrentOrder(t *testing.T) {
+func TestSteerRepeatedReorderPreservesCurrentOrder(t *testing.T) {
 	b, key, _ := liveQueueFixture(t)
 	ctx := context.Background()
 	for _, id := range []string{"a", "b", "c", "d"} {
-		if _, err := b.EnqueueFollowUp(ctx, key, id, id, []byte(id)); err != nil {
+		if _, err := b.EnqueueSteer(ctx, key, id, id, []byte(id)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := b.ReorderFollowUp(ctx, key, FollowUpPendingRef{ItemID: "d"}, FollowUpPendingRef{ItemID: "a"}); err != nil {
+	if _, err := b.ReorderSteer(ctx, key, SteerPendingRef{ItemID: "d"}, SteerPendingRef{ItemID: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := b.ReorderFollowUp(ctx, key, FollowUpPendingRef{ItemID: "c"}, FollowUpPendingRef{ItemID: "b"})
+	got, err := b.ReorderSteer(ctx, key, SteerPendingRef{ItemID: "c"}, SteerPendingRef{ItemID: "b"})
 	if err != nil {
 		t.Fatal(err)
 	}

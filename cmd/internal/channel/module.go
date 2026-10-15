@@ -24,6 +24,7 @@ func FoundationModule() fx.Option {
 			provideRouteService,
 			timeline.NewEventStore,
 			provideDiscussWaker,
+			provideBusyQueue,
 			local.NewRouteHub,
 			provideChannelRegistry,
 			channel.NewStore,
@@ -80,6 +81,7 @@ func RuntimeModule() fx.Option {
 		),
 		fx.Invoke(
 			startChannelManager,
+			startBusyQueueSweep,
 			startWebhookTunnelListener,
 			startWebhookTunnel,
 		),
@@ -110,6 +112,7 @@ func EmbeddedModule() fx.Option {
 		),
 		fx.Invoke(
 			startChannelManager,
+			startBusyQueueSweep,
 			startWebhookTunnelListener,
 			startWebhookTunnel,
 		),

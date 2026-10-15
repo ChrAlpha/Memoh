@@ -287,51 +287,6 @@ func (f chatTurnFixture) stopRun(t *testing.T, handle turn.RunHandle) {
 	}
 }
 
-// awaitModelRequests waits for the fixture's model endpoint to receive at
-// least one request, which is how a test reads a run that starts in the
-// background.
-func (f chatTurnFixture) awaitModelRequests(t *testing.T) []string {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if requests := f.fixture.requests.recorded(); len(requests) > 0 {
-			return requests
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the run never reached the model provider")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-// withLiveQueue gives the fixture a live session queue holding one running run,
-// which is what a follow-up is queued behind and started after.
-func (f chatTurnFixture) withLiveQueue(t *testing.T) (*sessionruntime.MemoryBackend, sessionruntime.Key) {
-	t.Helper()
-	backend := sessionruntime.NewMemoryBackend()
-	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
-	f.setActiveRun(t, backend, key, sessionruntime.RunStatusRunning)
-	manager := sessionruntime.NewManager(backend, sessionruntime.Options{})
-	t.Cleanup(func() { _ = manager.Close() })
-	f.fixture.service.sessionManager = manager
-	return backend, key
-}
-
-// setActiveRun writes the session's current run, which is what makes the
-// session busy and what a follow-up's terminal boundary names.
-func (chatTurnFixture) setActiveRun(t *testing.T, backend *sessionruntime.MemoryBackend, key sessionruntime.Key, status string) {
-	t.Helper()
-	if _, _, err := backend.Update(context.Background(), key, func(snapshot sessionruntime.Snapshot, _ bool) (sessionruntime.Snapshot, bool, error) {
-		snapshot.BotID, snapshot.SessionID = key.BotID, key.SessionID
-		snapshot.CurrentRunView = &sessionruntime.CurrentRunView{
-			RunID: "original-run", TurnID: "turn-1", Generation: "gen-1", OwnerID: "owner-1", Status: status,
-		}
-		return snapshot, true, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStartTurnRequiresTeamID(t *testing.T) {
 	a := newTurnTestService()
 	_, err := a.StartTurn(context.Background(), turn.StartTurnCommand{Mode: turn.ModeChat})

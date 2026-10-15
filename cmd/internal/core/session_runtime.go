@@ -26,6 +26,16 @@ func provideSessionRunLedger(postgresStore *postgresstore.Store) (ledger.Store, 
 	return ledger.NewPostgres(postgresStore.SQLC(), postgresStore.Pool()), nil
 }
 
+// provideQueuedInputs supplies the durable queue of input that met a busy
+// session. Both processes use it: the server starts follow-ups from it, the
+// channel process the platform messages that waited.
+func provideQueuedInputs(postgresStore *postgresstore.Store) (*sessionruntime.QueuedInputs, error) {
+	if postgresStore == nil {
+		return nil, errors.New("session input queue requires postgres")
+	}
+	return sessionruntime.NewQueuedInputs(postgresStore.SQLC(), postgresStore.Pool()), nil
+}
+
 // provideRuntimeFenceActivator supplies the second half of a claim. The ledger
 // decides who owns a run; this decides whose writes PostgreSQL still accepts,
 // and both order off the same monotonic sequence.

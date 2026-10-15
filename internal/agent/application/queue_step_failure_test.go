@@ -65,7 +65,7 @@ func TestStepCommitSeparatesHistoryFailureFromQueueFailure(t *testing.T) {
 			if _, err := committer.commit(ctx, 0, record); !errors.Is(err, failure) {
 				t.Fatalf("commit error=%v", err)
 			}
-			pending, _, err := service.sessionManager.PendingQueues(ctx, sessionruntime.Key{BotID: handle.BotID, SessionID: handle.SessionID}, 0)
+			pending, err := service.sessionManager.PendingSteers(ctx, sessionruntime.Key{BotID: handle.BotID, SessionID: handle.SessionID}, 0)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -175,79 +174,31 @@ func (b *RedisBackend) EnqueueSteer(ctx context.Context, key Key, itemID, invoca
 	return item, err
 }
 
-func (b *RedisBackend) EnqueueFollowUp(ctx context.Context, key Key, itemID, invocationID string, payload []byte) (FollowUpItem, error) {
-	if err := b.ensureQueueOpen(); err != nil {
-		return FollowUpItem{}, err
+func (b *RedisBackend) PendingSteers(ctx context.Context, key Key, limit int) ([]SteerItem, error) {
+	steers, err := b.loadSteerQueue(ctx, key)
+	if err != nil {
+		return nil, err
 	}
-	if err := validateQueueKey(key); err != nil || strings.TrimSpace(itemID) == "" || strings.TrimSpace(invocationID) == "" || validatePayload(payload) != nil {
-		return FollowUpItem{}, ErrQueueInvalidReference
-	}
-	stateKey, queueKey := b.stateKey(key), b.followUpQueueKey(key)
-	var item FollowUpItem
-	// The state key is read but not watched; the application re-checks for an
-	// active run after a successful enqueue and starts the follow-up itself
-	// when the terminal observer has already passed.
-	err := redisWatch(ctx, b, []string{queueKey}, func(tx *redis.Tx) error {
-		queue, err := loadRedisJSON[followUpQueueState](ctx, tx, queueKey)
-		if err != nil {
-			return err
-		}
-		if replay, ok, replayErr := replayFollowUp(queue, invocationID, payload); ok {
-			item = replay
-			return replayErr
-		}
-		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
-		if err != nil {
-			return err
-		}
-		run, active := activeRun(snapshot, ok)
-		if !active {
-			return ErrQueueNoActiveRun
-		}
-		now, err := tx.Time(ctx).Result()
-		if err != nil {
-			return err
-		}
-		item, err = queue.enqueue(key, itemID, invocationID, run.RunID, payload, now.UTC())
-		if err != nil {
-			return err
-		}
-		return storeRedisJSON(ctx, tx, queueKey, queue, b.stateTTL)
-	})
-	return item, err
+	return pendingSteers(steers, limit), nil
 }
 
-func (b *RedisBackend) PendingQueues(ctx context.Context, key Key, limit int) ([]SteerItem, []FollowUpItem, error) {
+func (b *RedisBackend) LookupSteer(ctx context.Context, key Key, itemID SteerItemID) (SteerItem, bool, error) {
+	steers, err := b.loadSteerQueue(ctx, key)
+	if err != nil {
+		return SteerItem{}, false, err
+	}
+	item, ok := findSteer(steers, itemID)
+	return item, ok, nil
+}
+
+func (b *RedisBackend) loadSteerQueue(ctx context.Context, key Key) (steerQueueState, error) {
 	if err := b.ensureQueueOpen(); err != nil {
-		return nil, nil, err
+		return steerQueueState{}, err
 	}
 	if err := validateQueueKey(key); err != nil {
-		return nil, nil, err
+		return steerQueueState{}, err
 	}
-	pipe := b.client.Pipeline()
-	steerCmd := pipe.Get(ctx, b.steerQueueKey(key))
-	followCmd := pipe.Get(ctx, b.followUpQueueKey(key))
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, nil, err
-	}
-	var steers steerQueueState
-	if data, getErr := steerCmd.Bytes(); getErr == nil {
-		if err := json.Unmarshal(data, &steers); err != nil {
-			return nil, nil, err
-		}
-	} else if !errors.Is(getErr, redis.Nil) {
-		return nil, nil, getErr
-	}
-	var follows followUpQueueState
-	if data, getErr := followCmd.Bytes(); getErr == nil {
-		if err := json.Unmarshal(data, &follows); err != nil {
-			return nil, nil, err
-		}
-	} else if !errors.Is(getErr, redis.Nil) {
-		return nil, nil, getErr
-	}
-	return pendingSteers(steers, limit), pendingFollowUps(follows, limit), nil
+	return loadRedisJSON[steerQueueState](ctx, b.client, b.steerQueueKey(key))
 }
 
 func (b *RedisBackend) ReorderSteer(ctx context.Context, key Key, item, before SteerPendingRef) ([]SteerItem, error) {
@@ -256,17 +207,6 @@ func (b *RedisBackend) ReorderSteer(ctx context.Context, key Key, item, before S
 	}
 	return redisMutate(ctx, b, b.steerQueueKey(key), func(state *steerQueueState, now time.Time) ([]SteerItem, error) {
 		items, err := reorderSteerState(state, item, before)
-		state.UpdatedAt = now
-		return items, err
-	})
-}
-
-func (b *RedisBackend) ReorderFollowUp(ctx context.Context, key Key, item, before FollowUpPendingRef) ([]FollowUpItem, error) {
-	if err := validateQueueKey(key); err != nil {
-		return nil, err
-	}
-	return redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) ([]FollowUpItem, error) {
-		items, err := reorderFollowUpState(state, item, before)
 		state.UpdatedAt = now
 		return items, err
 	})
@@ -281,15 +221,6 @@ func (b *RedisBackend) UpdateSteer(ctx context.Context, key Key, itemID SteerIte
 	})
 }
 
-func (b *RedisBackend) UpdateFollowUp(ctx context.Context, key Key, itemID FollowUpItemID, payload []byte) (FollowUpItem, error) {
-	if err := validateQueueKey(key); err != nil || itemID == "" || validatePayload(payload) != nil {
-		return FollowUpItem{}, ErrQueueInvalidReference
-	}
-	return redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (FollowUpItem, error) {
-		return state.edit(itemID, payload, now)
-	})
-}
-
 func (b *RedisBackend) CancelSteer(ctx context.Context, key Key, itemID SteerItemID) error {
 	if err := validateQueueKey(key); err != nil || itemID == "" {
 		return ErrQueueInvalidReference
@@ -298,71 +229,6 @@ func (b *RedisBackend) CancelSteer(ctx context.Context, key Key, itemID SteerIte
 		return struct{}{}, state.cancel(itemID, now)
 	})
 	return err
-}
-
-func (b *RedisBackend) CancelFollowUp(ctx context.Context, key Key, itemID FollowUpItemID) error {
-	if err := validateQueueKey(key); err != nil || itemID == "" {
-		return ErrQueueInvalidReference
-	}
-	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		return struct{}{}, state.cancel(itemID, now)
-	})
-	return err
-}
-
-func (b *RedisBackend) PromoteFollowUpToSteer(ctx context.Context, key Key, ref FollowUpPendingRef) (PromoteFollowUpResult, error) {
-	if err := b.ensureQueueOpen(); err != nil {
-		return PromoteFollowUpResult{}, err
-	}
-	stateKey, steerKey, followKey := b.stateKey(key), b.steerQueueKey(key), b.followUpQueueKey(key)
-	if err := validateQueueKey(key); err != nil || ref.ItemID == "" {
-		return PromoteFollowUpResult{}, ErrQueueInvalidReference
-	}
-	var result PromoteFollowUpResult
-	err := redisWatch(ctx, b, []string{steerKey, followKey}, func(tx *redis.Tx) error {
-		snapshot, ok, err := loadRedisSnapshot(ctx, tx, stateKey)
-		if err != nil {
-			return err
-		}
-		run, active := activeRun(snapshot, ok)
-		steers, err := loadRedisJSON[steerQueueState](ctx, tx, steerKey)
-		if err != nil {
-			return err
-		}
-		if !active || steers.ClosedRunID == run.RunID {
-			return ErrQueueNoActiveRun
-		}
-		if !SteerRunAvailable(run) {
-			return ErrQueueSteerUnsupported
-		}
-		follows, err := loadRedisJSON[followUpQueueState](ctx, tx, followKey)
-		if err != nil {
-			return err
-		}
-		now, err := tx.Time(ctx).Result()
-		if err != nil {
-			return err
-		}
-		result, err = steers.promote(&follows, key, run.RunID, ref, now.UTC(), uuid.NewString())
-		if err != nil {
-			return err
-		}
-		steerData, err := json.Marshal(steers)
-		if err != nil {
-			return err
-		}
-		followData, err := json.Marshal(follows)
-		if err != nil {
-			return err
-		}
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, steerKey, steerData, b.stateTTL)
-			pipe.Set(ctx, followKey, followData, b.stateTTL)
-			return nil
-		})
-		return err
-	})
-	return result, err
 }
 
 func (b *RedisBackend) ClaimNextSteer(ctx context.Context, handle RunHandle, sealIfEmpty bool) (SteerItem, SteerClaimRef, bool, error) {
@@ -465,68 +331,8 @@ func (b *RedisBackend) ReleaseSteer(ctx context.Context, key Key, ref SteerClaim
 	return err
 }
 
-func (b *RedisBackend) ClaimNextFollowUp(ctx context.Context, key Key, triggerRunID string) (FollowUpItem, FollowUpClaimRef, bool, error) {
-	if err := b.ensureQueueOpen(); err != nil {
-		return FollowUpItem{}, FollowUpClaimRef{}, false, err
-	}
-	if err := validateQueueKey(key); err != nil {
-		return FollowUpItem{}, FollowUpClaimRef{}, false, err
-	}
-	triggerRunID = strings.TrimSpace(triggerRunID)
-	if triggerRunID == "" {
-		return FollowUpItem{}, FollowUpClaimRef{}, false, ErrQueueInvalidReference
-	}
-	type result struct {
-		item    FollowUpItem
-		claim   FollowUpClaimRef
-		claimed bool
-	}
-	claimed, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (result, error) {
-		item, claim, ok := state.claimNext(triggerRunID, now)
-		return result{item: item, claim: claim, claimed: ok}, nil
-	})
-	return claimed.item, claimed.claim, claimed.claimed, err
-}
-
-func (b *RedisBackend) ApplyFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
-	if err := validateFollowUpClaim(key, ref); err != nil {
-		return err
-	}
-	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		return struct{}{}, state.apply(ref, now)
-	})
-	return err
-}
-
-func (b *RedisBackend) ReleaseFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef) error {
-	if err := validateFollowUpClaim(key, ref); err != nil {
-		return err
-	}
-	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		return struct{}{}, state.release(ref, now)
-	})
-	return err
-}
-
-func (b *RedisBackend) RejectFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef, errorCode string) error {
-	if err := validateFollowUpClaim(key, ref); err != nil {
-		return err
-	}
-	if strings.TrimSpace(errorCode) == "" {
-		return ErrQueueInvalidReference
-	}
-	_, err := redisMutate(ctx, b, b.followUpQueueKey(key), func(state *followUpQueueState, now time.Time) (struct{}, error) {
-		return struct{}{}, state.reject(ref, errorCode, now)
-	})
-	return err
-}
-
 func (b *RedisBackend) steerQueueKey(key Key) string {
 	return b.keyPrefix + "steer_queue:" + key.String()
-}
-
-func (b *RedisBackend) followUpQueueKey(key Key) string {
-	return b.keyPrefix + "follow_up_queue:" + key.String()
 }
 
 var _ LiveQueueBackend = (*RedisBackend)(nil)

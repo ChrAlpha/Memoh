@@ -109,6 +109,7 @@ describe('ws frame goldens', () => {
       'error',
       'model_preference_settled',
       'run_accepted',
+      'run_queued',
       'run_rejected',
       'runtime_delta',
       'runtime_dropped',
@@ -132,6 +133,14 @@ describe('ws frame goldens', () => {
       })
       expect(frame('run_accepted').duplicate).toBeUndefined()
       expect(frame('run_accepted_duplicate').duplicate).toBe(true)
+    })
+
+    it('run_queued names the send by its invocation, with its place in the queue', () => {
+      expect(frame('run_queued')).toMatchObject({ invocation_id: 'inv-1', session_id: SESSION, queue_item_id: '88888888-8888-8888-8888-888888888888' })
+      expect(frame('run_queued').duplicate).toBeUndefined()
+      expect(frame('run_queued').run_id).toBeUndefined()
+      expect(frame('run_queued_duplicate')).toMatchObject({ invocation_id: 'inv-1', duplicate: true })
+      expect(frame('run_queued_duplicate').queue_item_id).toBeUndefined()
     })
 
     it('run_rejected and error carry a code and message', () => {

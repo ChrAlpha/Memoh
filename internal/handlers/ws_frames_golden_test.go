@@ -186,6 +186,10 @@ func goldenFrames(t *testing.T) map[string][]byte {
 	sent("run_accepted", func(w *wsWriter) { sendWSRunAccepted(w, ref, accepted) })
 	accepted.Duplicate = true
 	sent("run_accepted_duplicate", func(w *wsWriter) { sendWSRunAccepted(w, ref, accepted) })
+	sent("run_queued", func(w *wsWriter) {
+		sendWSRunQueued(w, preRun, wsRunQueued{ItemID: "88888888-8888-8888-8888-888888888888"})
+	})
+	sent("run_queued_duplicate", func(w *wsWriter) { sendWSRunQueued(w, preRun, wsRunQueued{Duplicate: true}) })
 	sent("run_rejected", func(w *wsWriter) { sendWSRunRejected(w, preRun, apperror.CodeSessionBusy) })
 	sent("session_created", func(w *wsWriter) { w.SendJSON(preRun.event("session_created")) })
 	sent("model_preference_settled", func(w *wsWriter) {

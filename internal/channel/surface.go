@@ -27,6 +27,25 @@ func (m *Manager) newSurface(cfg ChannelConfig, channelType ChannelType) *manage
 	}
 }
 
+// Surface returns the surface of the replies to a message of botID on
+// channelType, for a reply that is not made inside the handling of an inbound
+// message: the answer to a message that waited in a queue. It is the surface an
+// inbound message is handed, over the bot's effective configuration, so such a
+// reply has the channel's own previews, buttons and capabilities.
+func (m *Manager) Surface(ctx context.Context, botID string, channelType ChannelType) (StreamReplySender, error) {
+	if m.service == nil {
+		return nil, errors.New("channel manager not configured")
+	}
+	if _, ok := m.registry.GetSender(channelType); !ok {
+		return nil, errors.New("unsupported channel type: " + channelType.String())
+	}
+	config, err := m.service.ResolveEffectiveConfig(ctx, botID, channelType)
+	if err != nil {
+		return nil, err
+	}
+	return m.newSurface(config, channelType), nil
+}
+
 // Capabilities returns the channel's capabilities as refined for target.
 func (s *managerSurface) Capabilities(target string) ChannelCapabilities {
 	caps, _ := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, target)
