@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -127,6 +128,24 @@ func TestNormalizedContextPrefixLengthTracksSanitizedHistory(t *testing.T) {
 	}
 	if got := normalizedContextPrefixLength(messages, 2); got != 1 {
 		t.Fatalf("normalized prefix = %d, want 1", got)
+	}
+}
+
+func TestNormalizedContextPrefixLengthKeepsToolExchangesVerbatim(t *testing.T) {
+	t.Parallel()
+
+	var messages []ModelMessage
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("call-%d", i)
+		messages = append(messages,
+			ModelMessage{Role: "user", Content: newTextContent("question")},
+			ModelMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: id, Type: "function", Function: ToolCallFunction{Name: "read", Arguments: `{}`}}}},
+			ModelMessage{Role: "tool", ToolCallID: id, Content: newTextContent("payload")},
+			ModelMessage{Role: "assistant", Content: newTextContent("answer")},
+		)
+	}
+	if got := normalizedContextPrefixLength(messages, len(messages)); got != len(messages) {
+		t.Fatalf("normalizedContextPrefixLength = %d, want all %d rows", got, len(messages))
 	}
 }
 
