@@ -6,8 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sdk "github.com/felinics/twilight/sdk"
+
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
 type ContextSwitchSource struct {

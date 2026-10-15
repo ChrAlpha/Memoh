@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -229,7 +230,7 @@ func TestContextSwitchRejectsProtectedLossAndNoProgress(t *testing.T) {
 
 func TestContextSwitchCanceledCandidateIsNeverAdopted(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+		t.Run(strconv.FormatBool(stream), func(t *testing.T) {
 			a, cfg, f := newContextSwitchFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -310,7 +311,7 @@ func TestContextSwitchPreservesDuplicateDynamicInputIdentityAcrossRetry(t *testi
 
 func TestContextSwitchCarriesSummaryCoverageAcrossSuccessiveSteps(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+		t.Run(strconv.FormatBool(stream), func(t *testing.T) {
 			a, cfg, f := newContextSwitchFixture(t)
 			f.toolSteps = 6
 			f.retry = true
