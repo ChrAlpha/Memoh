@@ -748,7 +748,7 @@ func (e *streamEngine) checkpointSteeredStep(
 	}
 	e.takeDirective(dir)
 	e.resetRefused()
-	e.extend(steerCheckpointMessages(snapshot.Messages))
+	e.extendCheckpoint(steerCheckpointMessages(snapshot.Messages), dir, len(e.dynamic.stepAdditions(stepIndex)), stepIndex)
 	return false, nil
 }
 
@@ -1024,7 +1024,7 @@ partLoop:
 		if !e.continues() {
 			return true, nil
 		}
-		e.extend(sr.Messages)
+		e.extendCommitted(sr.Messages, dir, len(e.dynamic.stepAdditions(e.nextDurableStep-1)), e.nextDurableStep-1)
 		return false, nil
 	}
 	// A tool-loop abort raised by the batch stops the run after the step
@@ -1042,7 +1042,7 @@ partLoop:
 		e.aborted = true
 		return true, nil
 	}
-	e.extend(sr.Messages)
+	e.extendCommitted(sr.Messages, dir, len(e.dynamic.stepAdditions(e.nextDurableStep-1)), e.nextDurableStep-1)
 	return false, nil
 }
 

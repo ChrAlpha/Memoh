@@ -64,7 +64,11 @@ func (t *stepThread) advance(cfg RunConfig, dynamic *loopDynamicInputs, boundary
 	if !boundary.first {
 		dynamic.beginBoundary(boundary.committed)
 		if cfg.BackgroundManager != nil {
-			t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.initialMessageCount)
+			if cfg.contextSwitch != nil {
+				t.messages = cfg.contextSwitch.removeBackground(t.messages)
+			} else {
+				t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.initialMessageCount)
+			}
 		}
 		t.messages = drainReadMediaMessage(boundary.readMedia, dynamic, cfg.ContextMutations, boundary.committed, t.messages)
 		if boundary.drainInjected != nil {
@@ -89,6 +93,16 @@ func (t *stepThread) advance(cfg RunConfig, dynamic *loopDynamicInputs, boundary
 // extend appends a committed step's messages to the conversation.
 func (t *stepThread) extend(messages []sdk.Message) {
 	t.messages = append(t.messages, messages...)
+}
+
+func (t *stepThread) extendCommitted(messages []sdk.Message, dir StepDirective, additions, index int) {
+	t.dispatch.handoff.cfg.contextSwitch.extend(messages, dir, additions, index, true)
+	t.extend(messages)
+}
+
+func (t *stepThread) extendCheckpoint(messages []sdk.Message, dir StepDirective, additions, index int) {
+	t.dispatch.handoff.cfg.contextSwitch.extend(messages, dir, additions, index, false)
+	t.extend(messages)
 }
 
 // takeDirective keeps the inputs a step commit handed back for the next

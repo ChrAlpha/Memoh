@@ -84,7 +84,13 @@ func (h *providerAttemptHandoff) publish(params sdk.Request) error {
 
 	pending := *h.pending
 	if h.cfg.ForkContext != nil {
-		if err := h.cfg.ForkContext.Store(params.Messages); err != nil {
+		var err error
+		if h.cfg.contextSwitch != nil {
+			err = h.cfg.ForkContext.StoreWithSources(params.Messages, h.cfg.contextSwitch.sourceIDs())
+		} else {
+			err = h.cfg.ForkContext.Store(params.Messages)
+		}
+		if err != nil {
 			h.pending = nil
 			h.cfg.dynamicInputs.revoke()
 			return err
@@ -106,6 +112,7 @@ func (h *providerAttemptHandoff) publish(params sdk.Request) error {
 			fmt.Sprintf("truncated=%d", pending.protectedPruned),
 		)
 	}
+	h.cfg.contextSwitch.publish(params, pending.systemPrepended, pending.admitted, h.cfg.ContextMutations)
 	h.pending = nil
 	return nil
 }

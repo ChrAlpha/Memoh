@@ -70,6 +70,9 @@ func (a *Agent) LoopReselectMode() LoopReselectMode {
 // captureProviderAttemptPrefix freezes the applier-rendered boundary before
 // step-local hooks and other dynamic messages are appended.
 func captureProviderAttemptPrefix(cfg RunConfig) RunConfig {
+	if cfg.SwitchContext != nil && cfg.contextSwitch == nil {
+		cfg.contextSwitch = newContextSwitchState(cfg)
+	}
 	cfg.initialProviderMessageCount = len(cfg.Messages)
 	cfg.initialProviderPrefixSet = true
 	if cfg.providerAttemptState == nil {
@@ -322,6 +325,9 @@ func prepareProviderAttempt(
 		reselector = nil
 	}
 	inputAllowance := stepReselectionAllowance(cfg)
+	if cfg.SwitchContext != nil {
+		reselector = nil
+	}
 	reselectionDetail := ""
 	protectedPruned := 0
 	if reselector != nil && prefixCount < len(params.Messages) {
@@ -364,6 +370,13 @@ func prepareProviderAttempt(
 			}
 		default:
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
+		}
+	}
+	if cfg.contextSwitch != nil {
+		var err error
+		dynamicRefs, err = cfg.contextSwitch.prepare(ctx, cfg, params, systemPrepended, inputAllowance, dynamicRefs)
+		if err != nil {
+			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
 		}
 	}
 	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {

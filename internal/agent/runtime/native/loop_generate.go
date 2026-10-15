@@ -256,7 +256,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			// answered steps committed.
 			return nil, ErrToolLoopDetected
 		}
-		thread.extend(sr.Messages)
+		thread.extendCommitted(sr.Messages, dir, len(dynamic.stepAdditions(cfg.StepIndexOffset+sdkStep)), cfg.StepIndexOffset+sdkStep)
 	}
 
 	// Drain collected tool-emitted side effects into the result.
@@ -417,7 +417,11 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			if p == nil {
 				return nil
 			}
-			p.Messages = removeBackgroundSummaryMessages(p.Messages, initialProviderMessageCount)
+			if cfg.contextSwitch != nil {
+				p.Messages = cfg.contextSwitch.removeBackground(p.Messages)
+			} else {
+				p.Messages = removeBackgroundSummaryMessages(p.Messages, initialProviderMessageCount)
+			}
 			if basePrepare != nil {
 				if override := basePrepare(p); override != nil {
 					p = override
@@ -426,6 +430,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			if summary := strings.TrimSpace(cfg.BackgroundManager.RunningTasksSummary(cfg.Identity.BotID, cfg.Identity.SessionID)); summary != "" {
 				cfg.ContextMutations.Record(contextfrag.MutationBackgroundSummary, fmt.Sprintf("bytes=%d", len(summary)))
 				p.Messages = append(p.Messages, backgroundSummaryMessage(summary))
+				cfg.contextSwitch.noteBackground(p.Messages)
 			}
 			return p
 		}
