@@ -5298,12 +5298,20 @@ func (q *Queries) ListUncompactedMessagesBySession(ctx context.Context, sessionI
 }
 
 const listUncompactedMessagesBySessionWithinBytes = `-- name: ListUncompactedMessagesBySessionWithinBytes :many
-WITH candidate_rows AS MATERIALIZED (
+WITH history_positions AS MATERIALIZED (
+  SELECT history.id, ROW_NUMBER() OVER (
+    ORDER BY history.turn_position ASC, history.turn_message_seq ASC, history.created_at ASC, history.id ASC
+  )::BIGINT AS history_ordinal
+  FROM bot_visible_history_messages history
+  WHERE history.team_id = public.memoh_current_team_id()
+    AND history.session_id = $1
+), candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
     m.turn_position,
     m.turn_message_seq,
     m.created_at,
+    position.history_ordinal,
     (
       octet_length(m.content::text)
       + octet_length(m.metadata::text)
@@ -5311,6 +5319,7 @@ WITH candidate_rows AS MATERIALIZED (
       + octet_length(COALESCE(m.display_text, ''))
     )::BIGINT AS payload_bytes
   FROM bot_visible_history_messages m
+  JOIN history_positions position ON position.id = m.id
   JOIN bot_sessions candidate_session
     ON candidate_session.id = m.session_id
    AND candidate_session.team_id = public.memoh_current_team_id()
@@ -5329,19 +5338,23 @@ WITH candidate_rows AS MATERIALIZED (
         )
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+), eligible_candidates AS MATERIALIZED (
+  SELECT id, turn_position, turn_message_seq, created_at, history_ordinal, payload_bytes FROM candidate_rows
+  WHERE $2::UUID[] IS NULL
+     OR id = ANY($2::UUID[])
 ), ranked_candidates AS MATERIALIZED (
   SELECT
-    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes,
+    eligible_candidates.id, eligible_candidates.turn_position, eligible_candidates.turn_message_seq, eligible_candidates.created_at, eligible_candidates.history_ordinal, eligible_candidates.payload_bytes,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
     )::BIGINT AS cumulative_bytes
-  FROM candidate_rows
+  FROM eligible_candidates
 ), admitted_candidates AS MATERIALIZED (
-  SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
+  SELECT id, turn_position, turn_message_seq, created_at, history_ordinal, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $2::BIGINT
+  WHERE cumulative_bytes <= $3::BIGINT
 )
 SELECT
   m.id,
@@ -5372,7 +5385,8 @@ SELECT
   r.default_reply_target AS reply_target,
   admitted.candidate_count,
   admitted.candidate_bytes,
-  admitted.cumulative_bytes
+  admitted.cumulative_bytes,
+  admitted.history_ordinal
 FROM bot_visible_history_messages m
 JOIN admitted_candidates admitted ON admitted.id = m.id
 LEFT JOIN channel_identities ci
@@ -5389,8 +5403,9 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
 type ListUncompactedMessagesBySessionWithinBytesParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MaxBytes  int64       `json:"max_bytes"`
+	SessionID          pgtype.UUID   `json:"session_id"`
+	EligibleMessageIds []pgtype.UUID `json:"eligible_message_ids"`
+	MaxBytes           int64         `json:"max_bytes"`
 }
 
 type ListUncompactedMessagesBySessionWithinBytesRow struct {
@@ -5419,6 +5434,7 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 	CandidateCount          int64              `json:"candidate_count"`
 	CandidateBytes          int64              `json:"candidate_bytes"`
 	CumulativeBytes         int64              `json:"cumulative_bytes"`
+	HistoryOrdinal          int64              `json:"history_ordinal"`
 }
 
 // Compaction candidates are admitted oldest-first within a hard serialized
@@ -5427,7 +5443,7 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 // process-memory boundary. CandidateCount reports whether the prefix was
 // truncated and lets the service choose a progress-preserving selection.
 func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg ListUncompactedMessagesBySessionWithinBytesParams) ([]ListUncompactedMessagesBySessionWithinBytesRow, error) {
-	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes, arg.SessionID, arg.MaxBytes)
+	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes, arg.SessionID, arg.EligibleMessageIds, arg.MaxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -5461,6 +5477,7 @@ func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Contex
 			&i.CandidateCount,
 			&i.CandidateBytes,
 			&i.CumulativeBytes,
+			&i.HistoryOrdinal,
 		); err != nil {
 			return nil, err
 		}

@@ -221,6 +221,7 @@ VALUES
 	if len(oversized) != 0 {
 		t.Fatalf("tiny byte budget admitted %d payload rows", len(oversized))
 	}
+	assertScopedUncompactedRead(t, ctx, tx, queries, botID)
 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms) VALUES
@@ -250,5 +251,67 @@ INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, 
 		if row.CumulativeBytes > 1<<20 || (i > 0 && row.CumulativeBytes < replayRows[i-1].CumulativeBytes) {
 			t.Fatalf("invalid replay byte accounting: %#v", replayRows)
 		}
+	}
+}
+
+func assertScopedUncompactedRead(t *testing.T, ctx context.Context, tx pgx.Tx, queries *sqlc.Queries, botID string) {
+	t.Helper()
+	sessionID, compactID := uuid.NewString(), uuid.NewString()
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_sessions(id,bot_id) VALUES($1,$2)`, sessionID, botID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_message_compacts(id,bot_id,session_id,status,summary) VALUES($1,$2,$3,'ok','already represented')`, compactID, botID, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var eligible []pgtype.UUID
+	for i := range 6 {
+		id := uuid.NewString()
+		metadata := `{}`
+		if i == 0 {
+			metadata = `{"diagnostic":"` + strings.Repeat("d", 600<<10) + `"}`
+		}
+		var claim any
+		if i == 4 {
+			claim = compactID
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages(id,bot_id,session_id,role,content,metadata,compact_id,turn_visible,turn_id,turn_position,turn_message_seq) VALUES($1,$2,$3,'assistant','"completed output"',$4,$5,true,$6,$7,0)`, id, botID, sessionID, metadata, claim, uuid.NewString(), i); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 || i == 3 || i == 5 {
+			var value pgtype.UUID
+			if err := value.Scan(id); err != nil {
+				t.Fatal(err)
+			}
+			eligible = append(eligible, value)
+		}
+	}
+	var session pgtype.UUID
+	if err := session.Scan(sessionID); err != nil {
+		t.Fatal(err)
+	}
+	args := sqlc.ListUncompactedMessagesBySessionWithinBytesParams{SessionID: session, MaxBytes: 512 << 10}
+	ordinary, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, args)
+	if err != nil || len(ordinary) != 0 {
+		t.Fatalf("ordinary prefix semantics changed: rows=%d error=%v", len(ordinary), err)
+	}
+	args.EligibleMessageIds = eligible
+	scoped, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, args)
+	if err != nil || len(scoped) != 3 {
+		t.Fatalf("scoped tail blocked: rows=%d error=%v", len(scoped), err)
+	}
+	for i, row := range scoped {
+		if row.ID != eligible[i] || row.HistoryOrdinal != int64(2*i+2) || row.CandidateCount != 3 || row.CumulativeBytes > args.MaxBytes {
+			t.Fatalf("scoped row[%d] lost order/gap/budget: %+v", i, row)
+		}
+	}
+	args.MaxBytes = scoped[0].CumulativeBytes
+	limited, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, args)
+	if err != nil || len(limited) != 1 || limited[0].ID != eligible[0] {
+		t.Fatalf("shared scoped budget ignored: rows=%d error=%v", len(limited), err)
+	}
+	args.EligibleMessageIds = []pgtype.UUID{}
+	empty, err := queries.ListUncompactedMessagesBySessionWithinBytes(ctx, args)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty scope widened: rows=%d error=%v", len(empty), err)
 	}
 }

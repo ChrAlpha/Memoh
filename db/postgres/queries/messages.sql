@@ -2998,12 +2998,20 @@ WHERE message.team_id = public.memoh_current_team_id()
 -- so an oversized leading row returns no payload instead of crossing the
 -- process-memory boundary. CandidateCount reports whether the prefix was
 -- truncated and lets the service choose a progress-preserving selection.
-WITH candidate_rows AS MATERIALIZED (
+WITH history_positions AS MATERIALIZED (
+  SELECT history.id, ROW_NUMBER() OVER (
+    ORDER BY history.turn_position ASC, history.turn_message_seq ASC, history.created_at ASC, history.id ASC
+  )::BIGINT AS history_ordinal
+  FROM bot_visible_history_messages history
+  WHERE history.team_id = public.memoh_current_team_id()
+    AND history.session_id = sqlc.arg(session_id)
+), candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
     m.turn_position,
     m.turn_message_seq,
     m.created_at,
+    position.history_ordinal,
     (
       octet_length(m.content::text)
       + octet_length(m.metadata::text)
@@ -3011,6 +3019,7 @@ WITH candidate_rows AS MATERIALIZED (
       + octet_length(COALESCE(m.display_text, ''))
     )::BIGINT AS payload_bytes
   FROM bot_visible_history_messages m
+  JOIN history_positions position ON position.id = m.id
   JOIN bot_sessions candidate_session
     ON candidate_session.id = m.session_id
    AND candidate_session.team_id = public.memoh_current_team_id()
@@ -3029,15 +3038,19 @@ WITH candidate_rows AS MATERIALIZED (
         )
     ))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+), eligible_candidates AS MATERIALIZED (
+  SELECT * FROM candidate_rows
+  WHERE sqlc.narg(eligible_message_ids)::UUID[] IS NULL
+     OR id = ANY(sqlc.narg(eligible_message_ids)::UUID[])
 ), ranked_candidates AS MATERIALIZED (
   SELECT
-    candidate_rows.*,
+    eligible_candidates.*,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
     )::BIGINT AS cumulative_bytes
-  FROM candidate_rows
+  FROM eligible_candidates
 ), admitted_candidates AS MATERIALIZED (
   SELECT *
   FROM ranked_candidates
@@ -3072,7 +3085,8 @@ SELECT
   r.default_reply_target AS reply_target,
   admitted.candidate_count,
   admitted.candidate_bytes,
-  admitted.cumulative_bytes
+  admitted.cumulative_bytes,
+  admitted.history_ordinal
 FROM bot_visible_history_messages m
 JOIN admitted_candidates admitted ON admitted.id = m.id
 LEFT JOIN channel_identities ci

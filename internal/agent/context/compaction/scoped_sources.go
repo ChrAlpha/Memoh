@@ -10,10 +10,39 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 type compactionSourceScope map[string]contextfrag.ContextRef
+
+func (s compactionSourceScope) messageIDs() []pgtype.UUID {
+	if s == nil {
+		return nil
+	}
+	ids := make([]pgtype.UUID, 0, len(s))
+	for _, ref := range s {
+		if ref.Namespace != "bot_history_message" {
+			continue
+		}
+		id, err := db.ParseUUID(ref.ID)
+		if err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func scopedCandidateBarriers(messages []CompactionCandidate, rows []sqlc.ListUncompactedMessagesBySessionWithinBytesRow) []CompactionCandidate {
+	result := make([]CompactionCandidate, 0, len(messages))
+	for i, message := range messages {
+		if i > 0 && (rows[i-1].HistoryOrdinal <= 0 || rows[i].HistoryOrdinal != rows[i-1].HistoryOrdinal+1) {
+			result = append(result, CompactionCandidate{Policies: []CompactPolicy{CompactPolicyMustKeep}})
+		}
+		result = append(result, message)
+	}
+	return result
+}
 
 func newCompactionSourceScope(refs []contextfrag.ContextRef) compactionSourceScope {
 	if refs == nil {

@@ -25,9 +25,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Result{Status: StatusNoop}, nil
 	}
 	readMaxBytes := compactionReadMaxBytes(cfg)
+	scope := newCompactionSourceScope(cfg.EligibleSources)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
-		SessionID: sessionUUID,
-		MaxBytes:  readMaxBytes,
+		SessionID:          sessionUUID,
+		MaxBytes:           readMaxBytes,
+		EligibleMessageIds: scope.messageIDs(),
 	})
 	if err != nil {
 		return Result{}, err
@@ -62,10 +64,10 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 
 	messages, barrierCount := itemsFromRows(rows)
-	scope := newCompactionSourceScope(cfg.EligibleSources)
 	if scope == nil {
 		protectCurrentSources(messages, cfg.ProtectedSources)
 	} else {
+		messages = scopedCandidateBarriers(messages, boundedRows)
 		messages, err = s.loadScopedCandidateAssets(ctx, scope, messages, rows)
 		if err != nil {
 			return Result{}, err

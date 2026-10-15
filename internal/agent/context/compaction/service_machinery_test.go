@@ -159,12 +159,31 @@ func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ p
 	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: count, CandidateBytes: bytes}, nil
 }
 
-func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, _ sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
+func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, params sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
 	legacy, err := f.ListUncompactedMessagesBySession(ctx, pgtype.UUID{})
 	if err != nil {
 		return nil, err
 	}
-	return boundedRowsForTest(legacy), nil
+	rows := boundedRowsForTest(legacy)
+	if params.EligibleMessageIds == nil {
+		return rows, nil
+	}
+	eligible := idSet(params.EligibleMessageIds)
+	var result []sqlc.ListUncompactedMessagesBySessionWithinBytesRow
+	var bytes int64
+	for i, row := range rows {
+		if !eligible[row.ID] {
+			continue
+		}
+		bytes += int64(len(legacy[i].Content) + len(legacy[i].Metadata) + len(legacy[i].Usage) + len(legacy[i].DisplayText.String))
+		row.CumulativeBytes = bytes
+		result = append(result, row)
+	}
+	for i := range result {
+		result[i].CandidateCount = int64(len(result))
+		result[i].CandidateBytes = bytes
+	}
+	return result, nil
 }
 
 func boundedRowsForTest(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.ListUncompactedMessagesBySessionWithinBytesRow {
@@ -182,6 +201,7 @@ func boundedRowsForTest(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.
 			Platform: row.Platform, CompactionEpoch: row.CompactionEpoch,
 			ConversationType: row.ConversationType, ConversationName: row.ConversationName, ReplyTarget: row.ReplyTarget,
 			CandidateCount: int64(len(rows)), CandidateBytes: cumulative, CumulativeBytes: cumulative,
+			HistoryOrdinal: int64(i + 1),
 		}
 	}
 	return converted
