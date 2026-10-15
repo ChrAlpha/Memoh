@@ -23,7 +23,7 @@ func TestScopedCompactionDoesNotRechargeFixedContext(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			const summary = "summary: "
 			text := summary + strings.Repeat("s", 800)
-			var calls, outputLimit atomic.Int32
+			var calls, outputLimit atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					MaxTokens           int `json:"max_tokens"`
@@ -36,7 +36,7 @@ func TestScopedCompactionDoesNotRechargeFixedContext(t *testing.T) {
 				}
 				calls.Add(1)
 				limit := max(request.MaxTokens, request.MaxCompletionTokens)
-				outputLimit.Store(int32(limit))
+				outputLimit.Store(int64(limit))
 				finishReason := "stop"
 				if limit < 210 {
 					finishReason = "length"
@@ -50,11 +50,12 @@ func TestScopedCompactionDoesNotRechargeFixedContext(t *testing.T) {
 			defer server.Close()
 			eligible := mkRow(t, "assistant", jsonStr(strings.Repeat("completed step ", 500)), 2000)
 			rows := []sqlc.ListUncompactedMessagesBySessionRow{eligible}
-			if mode == "latest_tool" {
+			switch mode {
+			case "latest_tool":
 				call, result := toolCallRow(t, 100), toolResultRow(t, 400)
 				result.Content = []byte(`[{"type":"tool-result","toolName":"calc","toolCallId":"c1","result":` + jsonStr(strings.Repeat("f", 1200)) + `}]`)
 				rows = append(rows, call, result)
-			} else if mode == "unseen_history" {
+			case "unseen_history":
 				rows = append([]sqlc.ListUncompactedMessagesBySessionRow{mkRow(t, "assistant", jsonStr(strings.Repeat("unseen", 200)), 400)}, rows...)
 			}
 			cfg := machineryConfig(nil, 500)

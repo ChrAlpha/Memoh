@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -314,7 +315,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Result{}, err
 	}
 	if !scope.permitsClaimed(toCompact, compactedMessageIDs) {
-		err = fmt.Errorf("compaction: claimed source no longer matches eligible source")
+		err = errors.New("compaction: claimed source no longer matches eligible source")
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
