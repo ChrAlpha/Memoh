@@ -3,12 +3,16 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -49,4 +53,32 @@ func TestStepCommitterBindsBoundedContextSwitch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecisionContinuationPausesIdleDuringContextSwitch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := &Service{logger: slog.New(slog.DiscardHandler), messageService: &recordingMessageService{}, streamIdleTimeout: 10 * time.Second}
+		var recoveryErr error
+		called := false
+		cfg := native.RunConfig{
+			RunID: "continuation-run", ContextLifecycle: contextfrag.NewLifecycleHolder(),
+			SwitchContext: func(ctx context.Context, _ native.ContextSwitchInput) (native.ContextSwitchResult, error) {
+				called = true
+				time.Sleep(time.Minute)
+				recoveryErr = ctx.Err()
+				return native.ContextSwitchResult{}, recoveryErr
+			},
+		}
+		service.agent = native.New(native.Deps{ContextViewApplier: func(ctx context.Context, run native.RunConfig) (native.RunConfig, error) {
+			_, err := run.SwitchContext(ctx, native.ContextSwitchInput{})
+			if err != nil {
+				return run, err
+			}
+			return run, contextfrag.ErrBudgetUnsatisfied
+		}})
+		_ = service.runNativeDecisionContinuation(t.Context(), ChatRequest{}, cfg, "", nil, make(chan WSStreamEvent, 64))
+		if !called || recoveryErr != nil {
+			t.Fatalf("summary was interrupted by provider idle timer: called=%v err=%v", called, recoveryErr)
+		}
+	})
 }
