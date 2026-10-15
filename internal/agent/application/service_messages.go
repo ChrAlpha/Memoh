@@ -60,11 +60,17 @@ func modelMessagesToSDKMessages(msgs []ModelMessage) []sdk.Message {
 // Convert origins alongside each message so a rejected SDK message cannot
 // shift the source marker onto a different user input.
 func sdkMessagesWithOrigins(msgs []sdk.Message, indexes []int) []ModelMessage {
+	messages, _ := sdkMessagesWithOriginIndexes(msgs, indexes)
+	return messages
+}
+
+func sdkMessagesWithOriginIndexes(msgs []sdk.Message, indexes []int) ([]ModelMessage, []int) {
 	feedback := make(map[int]bool, len(indexes))
 	for _, index := range indexes {
 		feedback[index] = true
 	}
 	var result []ModelMessage
+	var origins []int
 	for index, msg := range msgs {
 		converted := sdkMessagesToModelMessages([]sdk.Message{msg})
 		if feedback[index] && msg.Role == sdk.MessageRoleUser {
@@ -73,6 +79,9 @@ func sdkMessagesWithOrigins(msgs []sdk.Message, indexes []int) []ModelMessage {
 			}
 		}
 		result = append(result, converted...)
+		for range converted {
+			origins = append(origins, index)
+		}
 	}
-	return result
+	return result, origins
 }

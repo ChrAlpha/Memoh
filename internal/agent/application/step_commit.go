@@ -177,7 +177,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return native.StepDirective{}, ownershipErr
 	}
 	ctx = persistCtx
-	messages := sdkMessagesWithOrigins(record.Messages, native.InternalFeedbackIndexes(ctx))
+	messages, origins := sdkMessagesWithOriginIndexes(record.Messages, native.InternalFeedbackIndexes(ctx))
 	timingState := "completed"
 	if interrupted {
 		timingState = "interrupted"
@@ -209,7 +209,11 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return native.StepDirective{}, nil
 	}
 	if (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
+		before := len(messages)
 		messages = prependTurnUserMessage(c.req, messages)
+		if len(messages) > before {
+			origins = append([]int{-1}, origins...)
+		}
 	}
 	storeReq := c.req
 	// Outbound assets are linked once after the stream closes; including the
@@ -310,6 +314,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	if queueErr != nil {
 		return fail(queueErr)
 	}
+	dir.CommittedSources = committedContextSources(len(record.Messages), origins, persisted)
 	return dir, nil
 }
 
