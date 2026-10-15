@@ -34,7 +34,8 @@ func TestStepCommitterBindsBoundedContextSwitch(t *testing.T) {
 				}
 				return compaction.Result{Status: compaction.StatusOK}, nil
 			}
-			input := native.ContextSwitchInput{RunID: cfg.RunID, StepIndex: 2,
+			input := native.ContextSwitchInput{
+				RunID: cfg.RunID, StepIndex: 2,
 				Request:   sdk.Request{Messages: []sdk.Message{sdk.UserMessage("current"), sdk.AssistantMessage(strings.Repeat("old", 2000)), sdk.AssistantMessage("latest")}},
 				Sources:   []native.ContextSwitchSource{{}, {Ref: switchProjectionSource(t, "old", "durable")}, {}},
 				Protected: []bool{true, false, true}, InputAllowanceTokens: 12000,
@@ -90,7 +91,8 @@ func TestContextSwitchDoesNotCompactAcrossTransientInput(t *testing.T) {
 	committer.bindContinuation(&cfg)
 	left := switchProjectionSource(t, "left", "first")
 	right := switchProjectionSource(t, "right", "second")
-	input := native.ContextSwitchInput{RunID: cfg.RunID,
+	input := native.ContextSwitchInput{
+		RunID:   cfg.RunID,
 		Request: sdk.Request{Messages: []sdk.Message{sdk.AssistantMessage(strings.Repeat("a", 4000)), sdk.UserMessage("transient hook, absent from database"), sdk.AssistantMessage(strings.Repeat("b", 1000)), sdk.AssistantMessage("latest")}},
 		Sources: []native.ContextSwitchSource{{Ref: left}, {}, {Ref: right}, {}}, Protected: []bool{false, true, false, true}, InputAllowanceTokens: 12000,
 	}
@@ -119,7 +121,8 @@ func TestContextSwitchCancellationDoesNotWaitForMaintenanceGate(t *testing.T) {
 		<-ctx.Done()
 		return compaction.Result{}, ctx.Err()
 	}
-	input := native.ContextSwitchInput{RunID: cfg.RunID,
+	input := native.ContextSwitchInput{
+		RunID:   cfg.RunID,
 		Request: sdk.Request{Messages: []sdk.Message{sdk.UserMessage("current"), sdk.AssistantMessage(strings.Repeat("old", 2000)), sdk.AssistantMessage("latest")}},
 		Sources: []native.ContextSwitchSource{{}, {Ref: switchProjectionSource(t, "old", "durable")}, {}}, Protected: []bool{true, false, true}, InputAllowanceTokens: 12000,
 	}
@@ -161,7 +164,8 @@ func TestContextSwitchRejectsRevokedOwnerWithDetachedCallback(t *testing.T) {
 			if !during {
 				revoke(sessionruntime.ErrRunOwnershipLost)
 			}
-			input := native.ContextSwitchInput{RunID: cfg.RunID,
+			input := native.ContextSwitchInput{
+				RunID:   cfg.RunID,
 				Request: sdk.Request{Messages: []sdk.Message{sdk.UserMessage("current"), sdk.AssistantMessage(strings.Repeat("old", 2000)), sdk.AssistantMessage("latest")}},
 				Sources: []native.ContextSwitchSource{{}, {Ref: switchProjectionSource(t, "old", "durable")}, {}}, Protected: []bool{true, false, true}, InputAllowanceTokens: 12000,
 			}

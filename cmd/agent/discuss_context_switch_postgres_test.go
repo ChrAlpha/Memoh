@@ -24,8 +24,10 @@ import (
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
-const switchOriginalInput = "ORIGINAL_INPUT_KEEP_EXACT: finish the numbered effects"
-const switchSteerInput = "STEER_INPUT_KEEP_EXACT: preserve every completed effect"
+const (
+	switchOriginalInput = "ORIGINAL_INPUT_KEEP_EXACT: finish the numbered effects"
+	switchSteerInput    = "STEER_INPUT_KEEP_EXACT: preserve every completed effect"
+)
 
 type switchToolInput struct {
 	Index int `json:"index"`
@@ -57,7 +59,7 @@ func (s *contextSwitchScript) Tools(context.Context, tools.SessionContext) ([]to
 			return sdk.ToolOutput{}, closeErr
 		}
 		if s.steer && input.Index == 2 {
-			_, err = s.f.service.EnqueueSteer(ctx, application.QueueInput{
+			_, err = s.f.service.EnqueueSteer(ctx.Context, application.QueueInput{
 				TeamID: s.f.cfg.TeamID, BotID: s.f.botID, SessionID: s.f.sessionID,
 				InvocationID: "switch-steer", Text: switchSteerInput,
 			})
@@ -80,7 +82,12 @@ func (s *contextSwitchScript) serve(w http.ResponseWriter, r *http.Request, body
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"SWITCH_SUMMARY_%03d: earlier numbered effects completed."},"finish_reason":"stop"}]}`, s.f.summaries.Load())
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "summary", "object": "chat.completion", "model": "compact-model",
+			"choices": []any{map[string]any{"index": 0, "message": map[string]any{
+				"role": "assistant", "content": fmt.Sprintf("SWITCH_SUMMARY_%03d: earlier numbered effects completed.", s.f.summaries.Load()),
+			}, "finish_reason": "stop"}},
+		})
 		return
 	}
 	s.mu.Lock()
@@ -174,7 +181,7 @@ func assertDiscussContextSwitch(t *testing.T, steps, size int) {
 			}
 		}
 	}
-	if got := f.summaries.Load(); got < 2 || got > int32(s.steps) {
+	if got := f.summaries.Load(); got < 2 || int(got) > s.steps {
 		t.Fatalf("loop must switch context at least twice within the step bound: summaries=%d", got)
 	}
 	if switches < 2 {
@@ -228,7 +235,7 @@ func (s *contextSwitchScript) chat(t *testing.T, text string) (string, []int) {
 			steps = append(steps, data.StepNumber)
 		}
 		if result, ok := turn.RunTerminalFrom(frame); ok {
-			terminal = string(result.State)
+			terminal = result.State
 		}
 		if data.Type == event.Error {
 			t.Errorf("chat emitted error: %s", data.Code)

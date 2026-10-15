@@ -20,14 +20,14 @@ func TestPostgresDiscussCommitsBeforeNextProviderCall(t *testing.T) {
 			f.provider = func(w http.ResponseWriter, r *http.Request, body []byte, stream bool) {
 				if stream && f.modelCalls.Load() == 2 {
 					var storedTools int
-					if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool'`, f.sessionID).Scan(&storedTools); err != nil {
+					if err := f.pool.QueryRow(r.Context(), `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool'`, f.sessionID).Scan(&storedTools); err != nil {
 						t.Error(err)
 					}
 					if storedTools != 1 {
 						t.Errorf("next provider call preceded its durable tool result: tools=%d", storedTools)
 					}
 					content, _ := json.Marshal("later input outside this run")
-					if _, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: "later-input", Role: "user", Content: content, SessionMode: "discuss"}); err != nil {
+					if _, err := f.messages.Persist(r.Context(), messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: "later-input", Role: "user", Content: content, SessionMode: "discuss"}); err != nil {
 						t.Error(err)
 					}
 					if mode == "provider-failure" {
@@ -72,9 +72,10 @@ func TestPostgresDiscussCommitsBeforeNextProviderCall(t *testing.T) {
 				}
 			}
 			wantState, wantTools := "completed", 2
-			if mode == "provider-failure" {
+			switch mode {
+			case "provider-failure":
 				wantState, wantTools = "failed", 1
-			} else if mode == "cancel" {
+			case "cancel":
 				wantState, wantTools = "aborted", 1
 			}
 			deadline := time.NewTimer(5 * time.Second)

@@ -35,7 +35,7 @@ func (c *agentStepCommitter) contextSwitchOwnership(ctx context.Context, runID s
 		return fmt.Errorf("%w: context switch run identity changed", contextfrag.ErrBudgetUnsatisfied)
 	}
 	if c.ownerContext != nil && c.ownerContext.Err() != nil {
-		return context.Cause(c.ownerContext)
+		return context.Cause(c.ownerContext) //nolint:contextcheck // The original owner fences callbacks even when their context is detached.
 	}
 	return ctx.Err()
 }

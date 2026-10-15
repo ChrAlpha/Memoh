@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,7 +32,7 @@ func TestPostgresChatContextSwitchCancellationKeepsCommittedEffects(t *testing.T
 		}
 	}()
 	terminal, _ := collectBoundaryChat(t, handle)
-	if terminal.State != "" && terminal.State != turn.RunStateAborted || f.summaries.Load() != 1 || f.modelCalls.Load() >= int32(s.steps) {
+	if terminal.State != "" && terminal.State != turn.RunStateAborted || f.summaries.Load() != 1 || int(f.modelCalls.Load()) >= s.steps {
 		t.Fatalf("cancellation did not stop the same run at its summary: terminal=%+v summaries=%d calls=%d", terminal, f.summaries.Load(), f.modelCalls.Load())
 	}
 	assertBoundaryFactsAndNextRound(t, s, handle.RunID(), "aborted")
@@ -57,7 +58,7 @@ func TestPostgresChatContextSwitchUnproductiveSummaryFailsBoundedly(t *testing.T
 			if terminal.State != turn.RunStateFailed || len(codes) != 1 || !strings.HasPrefix(codes[0], "context.") {
 				t.Fatalf("unproductive recovery did not fail explicitly: terminal=%+v error_codes=%v", terminal, codes)
 			}
-			if f.summaries.Load() > 3 || f.modelCalls.Load() >= int32(s.steps) {
+			if f.summaries.Load() > 3 || int(f.modelCalls.Load()) >= s.steps {
 				t.Fatalf("unproductive recovery exceeded its bound: summaries=%d calls=%d", f.summaries.Load(), f.modelCalls.Load())
 			}
 			if mode == "empty" && f.summaries.Load() == 0 || mode == "disabled" && f.summaries.Load() != 0 {
@@ -117,7 +118,7 @@ func assertBoundaryFactsAndNextRound(t *testing.T, s *contextSwitchScript, runID
 	}
 	effects := strings.Fields(string(before))
 	for i, effect := range effects {
-		if effect != fmt.Sprint(i+1) {
+		if effect != strconv.Itoa(i+1) {
 			t.Fatalf("effect was replayed or reordered: %q", before)
 		}
 	}
