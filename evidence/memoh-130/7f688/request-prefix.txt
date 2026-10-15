@@ -1,0 +1,10 @@
+head 7f688baae, 10 streamed provider requests (5 UI turns)
+req0->req1 [same turn] prev=3 next=5 common_prefix=3 prev fully preserved
+req1->req2 [next turn] prev=5 next=7 common_prefix=5 prev fully preserved
+req2->req3 [same turn] prev=7 next=9 common_prefix=7 prev fully preserved
+req3->req4 [next turn] prev=9 next=11 common_prefix=9 prev fully preserved
+req4->req5 [same turn] prev=11 next=13 common_prefix=11 prev fully preserved
+req5->req6 [next turn] prev=13 next=15 common_prefix=13 prev fully preserved
+req6->req7 [same turn] prev=15 next=17 common_prefix=15 prev fully preserved
+req7->req8 [next turn] prev=17 next=19 common_prefix=17 prev fully preserved
+req8->req9 [same turn] prev=19 next=21 common_prefix=19 prev fully preserved
