@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -157,7 +158,7 @@ func assertDiscussContextSwitch(t *testing.T, steps, size int) {
 	if len(requests) != s.steps+1 {
 		t.Fatalf("model calls=%d, want %d", len(requests), s.steps+1)
 	}
-	switches := 0
+	switches := assertSwitchRequestTransitions(t, requests, int(f.summaries.Load()))
 	for i, request := range requests {
 		if strings.Count(request, switchOriginalInput) != 1 {
 			t.Fatalf("request %d lost or duplicated the original input", i+1)
@@ -171,9 +172,6 @@ func assertDiscussContextSwitch(t *testing.T, steps, size int) {
 					t.Fatalf("request %d dropped effect %d without a summary; model_calls=%d summaries=%d", i+1, previous, len(requests), f.summaries.Load())
 				}
 			}
-		}
-		if i > 0 && strings.Contains(request, "SWITCH_SUMMARY_") && len(request) < len(requests[i-1]) {
-			switches++
 		}
 	}
 	if got := f.summaries.Load(); got < 2 || got > int32(s.steps) {
@@ -267,6 +265,9 @@ func TestPostgresChatSameRunCompactionPreservesSteerAndStepOrder(t *testing.T) {
 	s.mu.Lock()
 	requests := append([]string(nil), s.requests...)
 	s.mu.Unlock()
+	if switches := assertSwitchRequestTransitions(t, requests, int(f.summaries.Load())); switches < 2 {
+		t.Fatalf("steered loop did not adopt two smaller contexts: %d", switches)
+	}
 	for i, request := range requests {
 		if strings.Count(request, switchOriginalInput) != 1 {
 			t.Fatalf("request %d lost or duplicated original input", i+1)
@@ -297,4 +298,69 @@ func TestPostgresChatSameRunCompactionPreservesSteerAndStepOrder(t *testing.T) {
 	}
 	s.assertEffects(t)
 	t.Logf("run=%s steps=%d summaries=%d original=1 steer=1 effects_exact=1 next_round=answered", runID, len(steps), f.summaries.Load())
+}
+
+func assertSwitchRequestTransitions(t *testing.T, requests []string, summaryCount int) int {
+	t.Helper()
+	var previous []json.RawMessage
+	switches := 0
+	for index, request := range requests {
+		var body struct {
+			Messages []json.RawMessage `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(request), &body); err != nil {
+			t.Fatal(err)
+		}
+		if index > 0 {
+			switched := false
+			for summary := 1; summary <= summaryCount; summary++ {
+				marker := fmt.Sprintf("SWITCH_SUMMARY_%03d", summary)
+				if strings.Contains(request, marker) && !strings.Contains(requests[index-1], marker) {
+					switched = true
+				}
+			}
+			if switched {
+				switches++
+				unswitched := append([]json.RawMessage(nil), previous...)
+				latestID, exchangeParts := fmt.Sprintf("effect_%03d", index), 0
+				for _, raw := range body.Messages {
+					var message struct {
+						Role       string                `json:"role"`
+						ToolCallID string                `json:"tool_call_id"`
+						ToolCalls  []struct{ ID string } `json:"tool_calls"`
+					}
+					if err := json.Unmarshal(raw, &message); err != nil {
+						t.Fatal(err)
+					}
+					latest := message.Role == "tool" && message.ToolCallID == latestID
+					for _, call := range message.ToolCalls {
+						latest = latest || call.ID == latestID
+					}
+					if latest {
+						exchangeParts++
+					}
+					steer := message.Role == "user" && strings.Contains(string(raw), switchSteerInput) && !strings.Contains(requests[index-1], switchSteerInput)
+					if latest || steer {
+						unswitched = append(unswitched, raw)
+					}
+				}
+				if exchangeParts != 2 {
+					t.Fatalf("request %d lacks the latest complete exchange %s", index+1, latestID)
+				}
+				var envelope map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(requests[index-1]), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				envelope["messages"], _ = json.Marshal(unswitched)
+				before, _ := json.Marshal(envelope)
+				if len(request) >= len(before) {
+					t.Fatalf("request %d adopted a summary without reducing its encoded candidate: before=%d after=%d", index+1, len(before), len(request))
+				}
+			} else if len(body.Messages) < len(previous) || !reflect.DeepEqual(previous, body.Messages[:len(previous)]) {
+				t.Fatalf("request %d mutated the previous message prefix without a summary switch", index+1)
+			}
+		}
+		previous = body.Messages
+	}
+	return switches
 }
