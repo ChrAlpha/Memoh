@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
 func TestStepCommitterBindsBoundedContextSwitch(t *testing.T) {
@@ -142,5 +143,35 @@ func TestContextSwitchCancellationDoesNotWaitForMaintenanceGate(t *testing.T) {
 		release()
 		<-returned
 		t.Fatal("cancelled recovery did not return while maintenance gate remained held")
+	}
+}
+
+func TestContextSwitchRejectsRevokedOwnerWithDetachedCallback(t *testing.T) {
+	for _, during := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before", true: "during"}[during], func(t *testing.T) {
+			service, _, runner, cfg := chatRecoveryFixture(t)
+			owner, revoke := context.WithCancelCause(t.Context())
+			defer revoke(context.Canceled)
+			committer := &agentStepCommitter{service: service, ownerContext: owner, req: ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: cfg.RunID}}
+			committer.bindContinuation(&cfg)
+			runner.run = func() (compaction.Result, error) {
+				revoke(sessionruntime.ErrRunOwnershipLost)
+				return compaction.Result{Status: compaction.StatusOK}, nil
+			}
+			if !during {
+				revoke(sessionruntime.ErrRunOwnershipLost)
+			}
+			input := native.ContextSwitchInput{RunID: cfg.RunID,
+				Request: sdk.Request{Messages: []sdk.Message{sdk.UserMessage("current"), sdk.AssistantMessage(strings.Repeat("old", 2000)), sdk.AssistantMessage("latest")}},
+				Sources: []native.ContextSwitchSource{{}, {Ref: switchProjectionSource(t, "old", "durable")}, {}}, Protected: []bool{true, false, true}, InputAllowanceTokens: 12000,
+			}
+			candidate, err := cfg.SwitchContext(context.WithoutCancel(owner), input)
+			if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || candidate.Messages != nil {
+				t.Fatalf("revoked owner returned a candidate: candidate=%v err=%v", candidate.Messages != nil, err)
+			}
+			if !during && len(runner.configs) != 0 {
+				t.Fatal("revoked owner started compaction")
+			}
+		})
 	}
 }
