@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -18,6 +20,7 @@ import (
 )
 
 type contextSwitchFixture struct {
+	toolSteps                    int
 	forks                        [][]sdk.Message
 	committed, executed, adopted int
 	retry                        bool
@@ -27,7 +30,7 @@ type contextSwitchFixture struct {
 
 func newContextSwitchFixture(t *testing.T) (*Agent, RunConfig, *contextSwitchFixture) {
 	t.Helper()
-	f := &contextSwitchFixture{}
+	f := &contextSwitchFixture{toolSteps: 2}
 	fork := agenttools.NewMessageSnapshot(nil)
 	provider := &atomicMockProvider{handler: func(call int, req sdk.Request) (sdk.ModelResult, error) {
 		f.requests = append(f.requests, cloneGenerateParams(req))
@@ -36,10 +39,10 @@ func newContextSwitchFixture(t *testing.T) (*Agent, RunConfig, *contextSwitchFix
 			t.Error(err)
 		}
 		f.forks = append(f.forks, snapshot)
-		if call <= 2 {
+		if call <= f.toolSteps {
 			return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: fmt.Sprint("call-", call), ToolName: "lookup"}}}, nil
 		}
-		if f.retry && call == 3 {
+		if f.retry && call == f.toolSteps+1 {
 			return sdk.ModelResult{}, serverErr()
 		}
 		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
@@ -86,7 +89,11 @@ func newContextSwitchFixture(t *testing.T) (*Agent, RunConfig, *contextSwitchFix
 						result.SourceIndexes = append(result.SourceIndexes, -1)
 						result.Sources = append(result.Sources, ContextSwitchSource{Ref: contextfrag.ContextRef{Namespace: "compaction_summary", ID: "summary"}})
 					}
-					result.Sources[summaryIndex].Coverage = append(result.Sources[summaryIndex].Coverage, input.Sources[i].Ref)
+					if len(input.Sources[i].Coverage) > 0 {
+						result.Sources[summaryIndex].Coverage = append(result.Sources[summaryIndex].Coverage, input.Sources[i].Coverage...)
+					} else {
+						result.Sources[summaryIndex].Coverage = append(result.Sources[summaryIndex].Coverage, input.Sources[i].Ref)
+					}
 					continue
 				}
 				result.Messages = append(result.Messages, msg)
@@ -231,5 +238,145 @@ func TestContextSwitchCanceledCandidateIsNeverAdopted(t *testing.T) {
 				t.Fatal("canceled candidate changed dispatched hash")
 			}
 		})
+	}
+}
+
+func TestContextSwitchPreservesDuplicateDynamicInputIdentityAcrossRetry(t *testing.T) {
+	a, cfg, f := newContextSwitchFixture(t)
+	f.retry = true
+	injected := make(chan InjectMessage, 1)
+	injected <- InjectMessage{Text: "current request"}
+	cfg.InjectCh = injected
+	commit := cfg.OnStepCommitted
+	cfg.OnStepCommitted = func(ctx context.Context, index int, record *step.Record) (StepDirective, error) {
+		dir, err := commit(ctx, index, record)
+		if index == 0 {
+			dir.NextInputs = []DirectiveInput{{ID: "steer-item", Text: "current request"}}
+		}
+		return dir, err
+	}
+	var recorded []string
+	cfg.InjectedRecorder = func(text string, _ int) { recorded = append(recorded, text) }
+	if err := runContextSwitchFixture(context.Background(), a, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	if f.adopted != 1 || len(f.requests) != 4 {
+		t.Fatalf("adopted/requests=%d/%d", f.adopted, len(f.requests))
+	}
+	last := f.requests[len(f.requests)-1]
+	if countRound8MessageText(last.Messages, "current request") != 3 {
+		t.Fatal("switch merged equal-text user, injection, and steer inputs")
+	}
+	if !reflect.DeepEqual(recorded, []string{"current request", "current request"}) {
+		t.Fatalf("recorded inputs=%v", recorded)
+	}
+	input := f.inputs[0]
+	var sources []string
+	for i, message := range input.Request.Messages {
+		if countRound8MessageText([]sdk.Message{message}, "current request") == 1 {
+			if !input.Protected[i] {
+				t.Fatal("current input was not protected")
+			}
+			sources = append(sources, input.Sources[i].Ref.ID)
+		}
+	}
+	if !reflect.DeepEqual(sources, []string{"", "step-1-message-0", "step-1-message-1"}) {
+		t.Fatalf("duplicate-text sources=%v", sources)
+	}
+}
+
+func TestContextSwitchCarriesSummaryCoverageAcrossSuccessiveSteps(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			a, cfg, f := newContextSwitchFixture(t)
+			f.toolSteps = 6
+			f.retry = true
+			if err := runContextSwitchFixture(context.Background(), a, cfg, stream); err != nil {
+				t.Fatal(err)
+			}
+			if f.committed != 7 || f.executed != 6 || len(f.requests) != 8 || f.adopted < 2 {
+				t.Fatalf("committed/executed/requests/adopted=%d/%d/%d/%d", f.committed, f.executed, len(f.requests), f.adopted)
+			}
+			var summary ContextSwitchSource
+			for _, source := range f.inputs[len(f.inputs)-1].Sources {
+				if source.Ref.Namespace == "compaction_summary" {
+					summary = source
+				}
+			}
+			if len(summary.Coverage) != 8 {
+				t.Fatalf("last summary's raw coverage=%d want first four steps' 8 messages", len(summary.Coverage))
+			}
+			for i, ref := range summary.Coverage {
+				want := fmt.Sprintf("step-%d-message-%d", i/2, i%2)
+				if ref.ID != want {
+					t.Fatalf("coverage[%d]=%s want %s", i, ref.ID, want)
+				}
+			}
+		})
+	}
+}
+
+func TestContextSwitchSteerCheckpointKeepsLastCompleteInteraction(t *testing.T) {
+	a, cfg, f := newContextSwitchFixture(t)
+	cfg.ContextManifest.BudgetPlan.Window = 1900
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wake := make(chan struct{}, 1)
+	var pending atomic.Bool
+	cfg.SteerWake = wake
+	cfg.PendingSteer = func(context.Context) (bool, error) { return pending.Load(), nil }
+	cfg.OnSteer = func(ctx context.Context, index int, record *step.Record) (StepDirective, error) {
+		dir, err := cfg.OnStepCommitted(ctx, index, record)
+		pending.Store(false)
+		dir.NextInputs = []DirectiveInput{{ID: "steer", Text: "change direction"}}
+		return dir, err
+	}
+	original := cfg.Model.Provider
+	var calls int
+	partial := strings.Repeat("partial ", 200)
+	cfg.Model.Provider = agentStreamTestProvider(func(ctx context.Context, request sdk.Request) (<-chan sdk.StreamPart, error) {
+		calls++
+		if calls <= 2 {
+			return original.DoStream(ctx, request)
+		}
+		f.requests = append(f.requests, cloneGenerateParams(request))
+		if calls == 3 {
+			parts := make(chan sdk.StreamPart, 1)
+			parts <- &sdk.TextDeltaPart{Text: partial}
+			go func() { <-ctx.Done(); close(parts) }()
+			return parts, nil
+		}
+		return closedAgentTestStream(&sdk.TextDeltaPart{Text: "done"}, &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}), nil
+	})
+	for event := range a.Stream(ctx, cfg) {
+		if event.Type == EventTextDelta && event.Delta == partial {
+			pending.Store(true)
+			wake <- struct{}{}
+		}
+		if event.Type == EventError || event.Type == EventAgentAbort {
+			t.Fatalf("steer failed: %v", event.Cause)
+		}
+	}
+	if calls != 4 || f.committed != 4 || f.executed != 2 || f.adopted != 1 {
+		t.Fatalf("calls/committed/executed/adopted=%d/%d/%d/%d", calls, f.committed, f.executed, f.adopted)
+	}
+	if len(f.inputs) < 2 {
+		t.Fatal("steer checkpoint did not reach switch pressure")
+	}
+	input := f.inputs[len(f.inputs)-1]
+	if input.StepIndex != 3 {
+		t.Fatalf("next durable step=%d want3", input.StepIndex)
+	}
+	var lastComplete int
+	for i, source := range input.Sources {
+		if strings.HasPrefix(source.Ref.ID, "step-1-") {
+			lastComplete++
+			if !input.Protected[i] {
+				t.Fatal("interrupted checkpoint released previous complete interaction")
+			}
+		}
+	}
+	if lastComplete != 2 || !providerAttemptContainsText(f.requests[3].Messages, partial) || !providerAttemptContainsText(f.requests[3].Messages, "change direction") {
+		t.Fatal("steer lost completed or current input")
 	}
 }
