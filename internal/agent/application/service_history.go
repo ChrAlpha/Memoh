@@ -302,11 +302,20 @@ func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req
 
 func estimateMessageTokens(msg ModelMessage) int {
 	text := msg.TextContent()
-	if len(text) == 0 {
+	if len(text) == 0 || hasNonTextParts(msg) {
 		data, _ := json.Marshal(msg.Content)
 		return contextfrag.TokensFromBytes(len(data))
 	}
 	return contextfrag.TokensFromBytes(len(text))
+}
+
+func hasNonTextParts(msg ModelMessage) bool {
+	for _, part := range msg.ContentParts() {
+		if part.Type != "text" {
+			return true
+		}
+	}
+	return false
 }
 
 func trimMessagesByTokens(log *slog.Logger, messages []historyfrag.HistoryRecord, maxTokens int) ([]ModelMessage, int) {
