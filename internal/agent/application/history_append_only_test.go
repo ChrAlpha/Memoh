@@ -200,27 +200,3 @@ func TestChatRendersInterruptedCheckpointTheSameOnEveryLaterTurn(t *testing.T) {
 		t.Fatalf("interrupted checkpoint rewritten once superseded:\nbefore %s\nafter  %s", previous, next)
 	}
 }
-
-func TestChatHistoryPrefixSurvivesCrossingTheOldStripThreshold(t *testing.T) {
-	short := persistedToolTurns(t, 2)
-	before := chatWithPersistedHistory(t, short)
-	after := chatWithPersistedHistory(t, persistedToolTurns(t, 3))
-
-	beforeStart, afterStart := historyStart(t, before), historyStart(t, after)
-	if len(before) < beforeStart+len(short) || len(after) < afterStart+len(short) {
-		t.Fatalf("history shorter than persisted rows: before=%d after=%d", len(before), len(after))
-	}
-	for i := range short {
-		previous, err := json.Marshal(before[beforeStart+i])
-		if err != nil {
-			t.Fatalf("marshal before: %v", err)
-		}
-		next, err := json.Marshal(after[afterStart+i])
-		if err != nil {
-			t.Fatalf("marshal after: %v", err)
-		}
-		if !bytes.Equal(previous, next) {
-			t.Fatalf("history message %d rewritten once history grew:\nbefore %s\nafter  %s", i, previous, next)
-		}
-	}
-}

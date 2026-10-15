@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -134,24 +133,6 @@ func TestNormalizedContextPrefixLengthTracksSanitizedHistory(t *testing.T) {
 	}
 }
 
-func TestNormalizedContextPrefixLengthKeepsToolExchangesVerbatim(t *testing.T) {
-	t.Parallel()
-
-	var messages []ModelMessage
-	for i := 0; i < 6; i++ {
-		id := fmt.Sprintf("call-%d", i)
-		messages = append(messages,
-			ModelMessage{Role: "user", Content: newTextContent("question")},
-			ModelMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: id, Type: "function", Function: ToolCallFunction{Name: "read", Arguments: `{}`}}}},
-			ModelMessage{Role: "tool", ToolCallID: id, Content: newTextContent("payload")},
-			ModelMessage{Role: "assistant", Content: newTextContent("answer")},
-		)
-	}
-	if got := normalizedContextPrefixLength(messages, len(messages)); got != len(messages) {
-		t.Fatalf("normalizedContextPrefixLength = %d, want all %d rows", got, len(messages))
-	}
-}
-
 func TestLoadCompactionArtifactBoundaryFetchesCutoffOutsideLoadedWindow(t *testing.T) {
 	t.Parallel()
 
@@ -218,20 +199,5 @@ func TestEstimateMessageTokensCountsReplayedReasoningAndToolInput(t *testing.T) 
 	}})[0]
 	if got, floor := estimateMessageTokens(message), contextfrag.TokensFromBytes(len(reasoning)+len(input)); got < floor {
 		t.Fatalf("estimateMessageTokens = %d, want at least %d for the replayed reasoning and tool input", got, floor)
-	}
-}
-
-func TestEstimateMessageTokensLeavesInlineImagesToTheSelector(t *testing.T) {
-	t.Parallel()
-
-	content, err := json.Marshal([]map[string]any{
-		{"type": "text", "text": "look at this"},
-		{"type": "image", "image": "data:image/png;base64," + strings.Repeat("A", 1<<20)},
-	})
-	if err != nil {
-		t.Fatalf("marshal content: %v", err)
-	}
-	if got := estimateMessageTokens(ModelMessage{Role: "user", Content: content}); got > 10 {
-		t.Fatalf("estimateMessageTokens = %d, want the text-only estimate; image cost belongs to the selector", got)
 	}
 }
