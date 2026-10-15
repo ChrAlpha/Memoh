@@ -2193,6 +2193,7 @@ definitions:
     - background_summary
     - mid_task_prune
     - loop_step_reselection
+    - context_switch
     - injected_message
     - context_view_fallback
     - context_budget_failure
@@ -2210,6 +2211,7 @@ definitions:
     - MutationBackgroundSummary
     - MutationMidTaskPrune
     - MutationLoopStepReselection
+    - MutationContextSwitch
     - MutationInjectedMessage
     - MutationContextViewFallback
     - MutationContextBudgetFailure

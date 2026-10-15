@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sdk "github.com/felinics/twilight/sdk"
@@ -46,7 +47,7 @@ type contextSwitchState struct {
 	admitted      []dynamicSourceRef
 	pending       []contextSwitchOrigin
 	onAdopted     func()
-	pendingChange bool
+	pendingDetail string
 }
 
 func newContextSwitchState(cfg RunConfig) *contextSwitchState {
@@ -108,7 +109,7 @@ func (s *contextSwitchState) prepare(ctx context.Context, cfg RunConfig, params 
 	origins := s.align(params.Messages, promoted)
 	s.pending = origins
 	s.onAdopted = nil
-	s.pendingChange = false
+	s.pendingDetail = ""
 	beforeTokens := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
 	if s.latestStep < 0 || allowance <= 0 || beforeTokens < allowance-allowance/5 {
 		return refs, nil
@@ -136,12 +137,16 @@ func (s *contextSwitchState) prepare(ctx context.Context, cfg RunConfig, params 
 	retained := make([]bool, len(origins))
 	next := make([]contextSwitchOrigin, len(result.Messages))
 	previous := -1
+	var summaryRefs []string
+	coverageCount := 0
 	for i, source := range result.SourceIndexes {
 		if source == -1 {
 			if result.Sources[i].Ref.ID == "" {
 				return nil, fmt.Errorf("%w: context switch summary has no source", contextfrag.ErrBudgetUnsatisfied)
 			}
 			next[i] = contextSwitchOrigin{source: cloneContextSwitchSource(result.Sources[i]), step: -1}
+			summaryRefs = append(summaryRefs, result.Sources[i].Ref.StableKey())
+			coverageCount += len(result.Sources[i].Coverage)
 			continue
 		}
 		if source <= previous || source < 0 || source >= len(origins) || !providerMessagesEqual(params.Messages[source:source+1], result.Messages[i:i+1]) {
@@ -165,7 +170,7 @@ func (s *contextSwitchState) prepare(ctx context.Context, cfg RunConfig, params 
 	params.Messages = cloneProviderMessages(result.Messages)
 	s.pending = next
 	s.onAdopted = result.OnAdopted
-	s.pendingChange = true
+	s.pendingDetail = fmt.Sprintf("summary_refs=%s coverage_count=%d", strings.Join(summaryRefs, ","), coverageCount)
 	return refs, nil
 }
 
@@ -178,9 +183,9 @@ func (s *contextSwitchState) publish(params sdk.Request, promoted bool, admitted
 	s.pending = nil
 	s.promoted = promoted
 	s.admitted = cloneDynamicSourceRefs(admitted)
-	if s.pendingChange {
-		ledger.Record(contextfrag.MutationKind("context_switch"), fmt.Sprintf("step=%d input_tokens=%d", s.nextStep, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)))
-		s.pendingChange = false
+	if s.pendingDetail != "" {
+		ledger.Record(contextfrag.MutationContextSwitch, fmt.Sprintf("step=%d input_tokens=%d %s", s.nextStep, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools), s.pendingDetail))
+		s.pendingDetail = ""
 	}
 	if s.onAdopted != nil {
 		s.onAdopted()

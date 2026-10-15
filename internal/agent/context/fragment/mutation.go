@@ -17,6 +17,7 @@ const (
 	MutationBackgroundSummary     MutationKind = "background_summary"
 	MutationMidTaskPrune          MutationKind = "mid_task_prune"
 	MutationLoopStepReselection   MutationKind = "loop_step_reselection"
+	MutationContextSwitch         MutationKind = "context_switch"
 	MutationInjectedMessage       MutationKind = "injected_message"
 	MutationContextViewFallback   MutationKind = "context_view_fallback"
 	MutationContextBudgetFailure  MutationKind = "context_budget_failure"
@@ -48,6 +49,7 @@ func AllMutationKinds() []MutationKind {
 		MutationBackgroundSummary,
 		MutationMidTaskPrune,
 		MutationLoopStepReselection,
+		MutationContextSwitch,
 		MutationInjectedMessage,
 		MutationContextViewFallback,
 		MutationContextBudgetFailure,

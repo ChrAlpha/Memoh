@@ -87,7 +87,7 @@ func newContextSwitchFixture(t *testing.T) (*Agent, RunConfig, *contextSwitchFix
 						summaryIndex = len(result.Messages)
 						result.Messages = append(result.Messages, sdk.UserMessage("earlier work summary"))
 						result.SourceIndexes = append(result.SourceIndexes, -1)
-						result.Sources = append(result.Sources, ContextSwitchSource{Ref: contextfrag.ContextRef{Namespace: "compaction_summary", ID: "summary"}})
+						result.Sources = append(result.Sources, ContextSwitchSource{Ref: contextfrag.ContextRef{Namespace: "compaction_summary", ID: "summary", Version: 7}})
 					}
 					if len(input.Sources[i].Coverage) > 0 {
 						result.Sources[summaryIndex].Coverage = append(result.Sources[summaryIndex].Coverage, input.Sources[i].Coverage...)
@@ -132,6 +132,13 @@ func TestContextSwitchContinuesSameRunWithCommittedSources(t *testing.T) {
 				}
 				if f.committed != 3 || f.executed != 2 || f.adopted != 1 {
 					t.Fatalf("committed/executed/adopted=%d/%d/%d", f.committed, f.executed, f.adopted)
+				}
+				mutations := contextSwitchMutations(cfg)
+				if len(mutations) != 1 || !strings.Contains(mutations[0].Detail, "summary_refs=compaction_summary:summary@v7") || !strings.Contains(mutations[0].Detail, "coverage_count=2") {
+					t.Fatalf("adoption evidence lacks the summary and raw coverage: %+v", mutations)
+				}
+				if strings.Contains(mutations[0].Detail, "earlier work summary") || strings.Contains(mutations[0].Detail, "current request") {
+					t.Fatalf("adoption evidence includes message content: %+v", mutations)
 				}
 				req := f.requests[len(f.requests)-1]
 				if !providerAttemptContainsText(req.Messages, "earlier work summary") || !providerAttemptContainsText(req.Messages, "current request") {
@@ -204,6 +211,9 @@ func TestContextSwitchRejectsProtectedLossAndNoProgress(t *testing.T) {
 				if f.adopted != 0 || len(f.requests) != 2 || f.executed != 2 || f.committed != 2 {
 					t.Fatalf("adopted/requests/executed/committed=%d/%d/%d/%d", f.adopted, len(f.requests), f.executed, f.committed)
 				}
+				if mutations := contextSwitchMutations(cfg); len(mutations) != 0 {
+					t.Fatalf("rejected candidate recorded adoption: %+v", mutations)
+				}
 				last := f.requests[len(f.requests)-1]
 				if cfg.ContextMutations.FinalInputHash() != contextfrag.ProviderPayloadHash(last.System, last.Messages, last.Tools) {
 					t.Fatal("failed candidate changed dispatched hash")
@@ -233,12 +243,25 @@ func TestContextSwitchCanceledCandidateIsNeverAdopted(t *testing.T) {
 			if len(f.requests) != 2 || f.adopted != 0 || f.committed != 2 {
 				t.Fatalf("requests/adopted/committed=%d/%d/%d", len(f.requests), f.adopted, f.committed)
 			}
+			if mutations := contextSwitchMutations(cfg); len(mutations) != 0 {
+				t.Fatalf("cancelled candidate recorded adoption: %+v", mutations)
+			}
 			last := f.requests[1]
 			if cfg.ContextMutations.FinalInputHash() != contextfrag.ProviderPayloadHash(last.System, last.Messages, last.Tools) {
 				t.Fatal("canceled candidate changed dispatched hash")
 			}
 		})
 	}
+}
+
+func contextSwitchMutations(cfg RunConfig) []contextfrag.MutationRecord {
+	var result []contextfrag.MutationRecord
+	for _, record := range cfg.ContextMutations.Records() {
+		if record.Kind == contextfrag.MutationContextSwitch {
+			result = append(result, record)
+		}
+	}
+	return result
 }
 
 func TestContextSwitchPreservesDuplicateDynamicInputIdentityAcrossRetry(t *testing.T) {
