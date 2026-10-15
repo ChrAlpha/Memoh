@@ -142,6 +142,65 @@ func TestChatReplaysEarlierTurnToolExchangesAndReasoningVerbatim(t *testing.T) {
 	}
 }
 
+func interruptedReasoningTurn(t *testing.T, at time.Time) []messagepkg.Message {
+	t.Helper()
+	turnMessages := messageconv.SDKMessagesToModelMessages([]sdk.Message{
+		sdk.UserMessage("question 1"),
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.ReasoningPart{Text: "half a thought", Format: sdk.ReasoningFormatOpenAIChat},
+		}},
+	})
+	out := make([]messagepkg.Message, 0, len(turnMessages))
+	for i, message := range turnMessages {
+		content, err := json.Marshal(message)
+		if err != nil {
+			t.Fatalf("marshal history message: %v", err)
+		}
+		row := messagepkg.Message{
+			ID:        fmt.Sprintf("interrupted-%d", i),
+			BotID:     lifecycleTestBotID,
+			SessionID: lifecycleTestSessionID,
+			Role:      message.Role,
+			Content:   content,
+			CreatedAt: at.Add(time.Duration(i) * time.Second),
+		}
+		if message.Role == "assistant" {
+			row.Metadata = map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func TestChatRendersInterruptedCheckpointTheSameOnEveryLaterTurn(t *testing.T) {
+	at := time.Now().Add(-2 * time.Hour)
+	live := interruptedReasoningTurn(t, at)
+	superseded := append(append([]messagepkg.Message(nil), live...), persistedToolTurn(t, 2, time.Now().Add(-time.Hour))...)
+
+	before := chatWithPersistedHistory(t, live)
+	after := chatWithPersistedHistory(t, superseded)
+
+	beforeStart, afterStart := historyStart(t, before), historyStart(t, after)
+	if len(before) < beforeStart+2 || len(after) < afterStart+2 {
+		t.Fatalf("interrupted turn missing: before=%d after=%d", len(before), len(after))
+	}
+	checkpoint := before[beforeStart+1]
+	if checkpoint.Role != "assistant" || !strings.Contains(string(checkpoint.Content), "half a thought") || checkpoint.ReasoningContent != nil {
+		t.Fatalf("interrupted checkpoint must replay as visible text, got %+v content=%s", checkpoint, checkpoint.Content)
+	}
+	previous, err := json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatalf("marshal before: %v", err)
+	}
+	next, err := json.Marshal(after[afterStart+1])
+	if err != nil {
+		t.Fatalf("marshal after: %v", err)
+	}
+	if !bytes.Equal(previous, next) {
+		t.Fatalf("interrupted checkpoint rewritten once superseded:\nbefore %s\nafter  %s", previous, next)
+	}
+}
+
 func TestChatHistoryPrefixSurvivesCrossingTheOldStripThreshold(t *testing.T) {
 	short := persistedToolTurns(t, 2)
 	before := chatWithPersistedHistory(t, short)
