@@ -41,9 +41,8 @@ import (
 )
 
 const (
-	silentReplyToken        = "NO_REPLY"
-	minDuplicateTextLength  = 10
-	processingStatusTimeout = 60 * time.Second
+	silentReplyToken       = "NO_REPLY"
+	minDuplicateTextLength = 10
 )
 
 var whitespacePattern = regexp.MustCompile(`\s+`)
@@ -980,24 +979,21 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		ReplyTarget:       strings.TrimSpace(msg.ReplyTarget),
 		SourceMessageID:   strings.TrimSpace(msg.Message.ID),
 	}
-	statusNotifier := p.resolveProcessingStatusNotifier(msg.Channel)
-	statusHandle := channel.ProcessingStatusHandle{}
-	if statusNotifier != nil {
-		handle, notifyErr := p.notifyProcessingStarted(ctx, statusNotifier, cfg, msg, statusInfo)
-		if notifyErr != nil {
-			p.logProcessingStatusError("processing_started", msg, identity, notifyErr)
-		} else {
-			statusHandle = handle
+	status := channel.StartProcessingStatus(ctx, p.resolveProcessingStatusNotifier(msg.Channel), cfg, msg, statusInfo, p.processingStatusErrorLogger(msg, identity))
+	// Exit paths that do not reach the explicit Complete/Fail calls below are
+	// covered by this defer so the refresh loop never outlives the turn. It
+	// runs after the reply stream is closed.
+	defer func() {
+		if retErr != nil {
+			status.Fail(ctx, retErr)
+			return
 		}
-	}
+		status.Complete(ctx)
+	}()
 	target := strings.TrimSpace(msg.ReplyTarget)
 	if target == "" {
 		err := errors.New("reply target missing")
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
+		status.Fail(ctx, err)
 		return err
 	}
 	sourceMessageID := strings.TrimSpace(msg.Message.ID)
@@ -1034,11 +1030,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		},
 	})
 	if err != nil {
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
+		status.Fail(ctx, err)
 		return err
 	}
 	defer func() {
@@ -1068,11 +1060,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	}
 
 	if err := out.Start(ctx); err != nil {
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, err); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
+		status.Fail(ctx, err)
 		return err
 	}
 
@@ -1151,22 +1139,14 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 					slog.String("external_message_id", sourceMessageID),
 				)
 			}
-			if statusNotifier != nil {
-				if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-					p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-				}
-			}
+			status.Complete(ctx)
 			return nil
 		}
 		if errors.Is(startErr, turn.ErrSessionBusy) && p.busyQueue != nil {
 			// The session is taken. The message waits in the session's queue
 			// and is answered when its turn comes, so nothing is dropped and
 			// the platform has nothing to redeliver.
-			if statusNotifier != nil {
-				if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-					p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-				}
-			}
+			status.Complete(ctx)
 			return p.parkBusyTurn(ctx, busyTurn{
 				cmd:      cmd,
 				claims:   p.routeClaims(ctx, identity, activeChatID, resolved.RouteID, msg, runtimeSession, sessionRuntimeOwner),
@@ -1186,41 +1166,33 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		if event, ok := channel.ErrorEvent(streamCtx, p.localizer(ctx, identity.BotID), threadError(startErr)); ok {
 			out.Fail(ctx, event)
 		}
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, startErr); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
+		status.Fail(ctx, startErr)
 		if stoppedByCommand(ctx, streamCtx) {
 			return nil
 		}
 		return startErr
 	}
 
+	// The run is over: stop re-sending the typing indicator before any final
+	// output goes out, so it cannot reappear after the reply.
+	status.StopRefresh()
 	runErr := p.consumeRun(ctx, runReply{
 		out: out, handle: handle, botID: identity.BotID, channelType: msg.Channel, caps: desc.Capabilities,
 		target: target, sourceMessageID: sourceMessageID,
 		localizer: p.localizer(ctx, identity.BotID), streamCtx: streamCtx,
+		status: status,
 	})
 	// The run is over, and this process was the one watching it end: what waited
 	// for the session can start.
 	p.kickBusyQueue(ctx, identity.BotID, sessionID)
 	if runErr != nil {
-		if statusNotifier != nil {
-			if notifyErr := p.notifyProcessingFailed(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle, runErr); notifyErr != nil {
-				p.logProcessingStatusError("processing_failed", msg, identity, notifyErr)
-			}
-		}
+		status.Fail(ctx, runErr)
 		if stoppedByCommand(ctx, streamCtx) {
 			return nil
 		}
 		return runErr
 	}
-	if statusNotifier != nil {
-		if notifyErr := p.notifyProcessingCompleted(ctx, statusNotifier, cfg, msg, statusInfo, statusHandle); notifyErr != nil {
-			p.logProcessingStatusError("processing_completed", msg, identity, notifyErr)
-		}
-	}
+	status.Complete(ctx)
 	return nil
 }
 
@@ -1237,13 +1209,18 @@ type runReply struct {
 	// streamCtx is the context of the run's caller: /new and /stop end it, and
 	// a run they ended gets no reply.
 	streamCtx context.Context
+	// status drives the platform processing indicator for this turn. Nil is safe.
+	status *channel.ProcessingStatus
 }
 
 // consumeRun shows a run's events as its reply until the run ends. Ordinal
 // bookkeeping plus forwarding of outbound asset refs into the running turn; the
-// resolver attaches them at persist time.
+// resolver attaches them at persist time. When r.status is set, pending tool
+// approval and ask_user events pause the typing indicator; any following event
+// resumes it.
 func (p *ChannelInboundProcessor) consumeRun(ctx context.Context, r runReply) error {
 	assets := &assetTracker{run: r.handle}
+	events := interceptStatusEvents(ctx, r.handle.Events(), r.status)
 	return r.out.Run(ctx, delivery.RunInput{
 		ReportsTerminal: turn.ReportsRunTerminal(r.handle),
 		Localizer:       r.localizer,
@@ -1258,7 +1235,42 @@ func (p *ChannelInboundProcessor) consumeRun(ctx context.Context, r runReply) er
 		StreamFailure: func(err error) (channel.StreamEvent, bool) {
 			return channel.ErrorEvent(r.streamCtx, r.localizer, threadError(err))
 		},
-	}, r.handle.Events(), r.handle.Errs())
+	}, events, r.handle.Errs())
+}
+
+// interceptStatusEvents wraps the events channel so that tool approval and
+// ask_user events pause the processing indicator while the turn waits for the
+// user, and every other event resumes it. When status is nil the original
+// channel is returned unchanged.
+func interceptStatusEvents(ctx context.Context, events <-chan turn.Event, status *channel.ProcessingStatus) <-chan turn.Event {
+	if status == nil {
+		return events
+	}
+	out := make(chan turn.Event)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if awaitsUserDecision(ev.Payload) {
+					status.PauseRefresh()
+				} else {
+					status.ResumeRefresh()
+				}
+				select {
+				case out <- ev:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out
 }
 
 // runReplyMessages selects the assistant outputs a run replies with. A run
@@ -2303,71 +2315,40 @@ func (p *ChannelInboundProcessor) resolveProcessingStatusNotifier(channelType ch
 	return notifier
 }
 
-func (*ChannelInboundProcessor) notifyProcessingStarted(
-	ctx context.Context,
-	notifier channel.ProcessingStatusNotifier,
-	cfg channel.ChannelConfig,
-	msg channel.InboundMessage,
-	info channel.ProcessingStatusInfo,
-) (channel.ProcessingStatusHandle, error) {
-	if notifier == nil {
-		return channel.ProcessingStatusHandle{}, nil
+// processingStatusErrorLogger returns the error func passed to StartProcessingStatus.
+func (p *ChannelInboundProcessor) processingStatusErrorLogger(msg channel.InboundMessage, identity InboundIdentity) channel.ProcessingStatusErrorFunc {
+	return func(ctx context.Context, stage string, err error) {
+		if p == nil || p.logger == nil || err == nil {
+			return
+		}
+		p.logger.WarnContext(ctx,
+			"processing status notify failed",
+			slog.String("stage", stage),
+			slog.String("channel", msg.Channel.String()),
+			slog.String("channel_identity_id", identity.ChannelIdentityID),
+			slog.String("user_id", identity.UserID),
+			slog.Any("error", err),
+		)
 	}
-	statusCtx, cancel := context.WithTimeout(ctx, processingStatusTimeout)
-	defer cancel()
-	return notifier.ProcessingStarted(statusCtx, cfg, msg, info)
 }
 
-func (*ChannelInboundProcessor) notifyProcessingCompleted(
-	ctx context.Context,
-	notifier channel.ProcessingStatusNotifier,
-	cfg channel.ChannelConfig,
-	msg channel.InboundMessage,
-	info channel.ProcessingStatusInfo,
-	handle channel.ProcessingStatusHandle,
-) error {
-	if notifier == nil {
-		return nil
+// awaitsUserDecision reports whether a stream chunk announces a tool approval
+// or ask_user request that blocks the turn until the user responds.
+func awaitsUserDecision(chunk json.RawMessage) bool {
+	var envelope struct {
+		Type   string `json:"type"`
+		Status string `json:"status"`
 	}
-	statusCtx, cancel := context.WithTimeout(ctx, processingStatusTimeout)
-	defer cancel()
-	return notifier.ProcessingCompleted(statusCtx, cfg, msg, info, handle)
-}
-
-func (*ChannelInboundProcessor) notifyProcessingFailed(
-	ctx context.Context,
-	notifier channel.ProcessingStatusNotifier,
-	cfg channel.ChannelConfig,
-	msg channel.InboundMessage,
-	info channel.ProcessingStatusInfo,
-	handle channel.ProcessingStatusHandle,
-	cause error,
-) error {
-	if notifier == nil {
-		return nil
+	if json.Unmarshal(chunk, &envelope) != nil {
+		return false
 	}
-	statusCtx, cancel := context.WithTimeout(ctx, processingStatusTimeout)
-	defer cancel()
-	return notifier.ProcessingFailed(statusCtx, cfg, msg, info, handle, cause)
-}
-
-func (p *ChannelInboundProcessor) logProcessingStatusError(
-	stage string,
-	msg channel.InboundMessage,
-	identity InboundIdentity,
-	err error,
-) {
-	if p == nil || p.logger == nil || err == nil {
-		return
+	switch strings.ToLower(strings.TrimSpace(envelope.Type)) {
+	case "tool_approval_request", "user_input_request":
+		status := strings.ToLower(strings.TrimSpace(envelope.Status))
+		return status == "" || status == "pending"
+	default:
+		return false
 	}
-	p.logger.Warn(
-		"processing status notify failed",
-		slog.String("stage", stage),
-		slog.String("channel", msg.Channel.String()),
-		slog.String("channel_identity_id", identity.ChannelIdentityID),
-		slog.String("user_id", identity.UserID),
-		slog.Any("error", err),
-	)
 }
 
 func (p *ChannelInboundProcessor) ingestInboundAttachments(
