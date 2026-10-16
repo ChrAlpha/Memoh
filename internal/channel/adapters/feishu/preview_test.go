@@ -238,8 +238,8 @@ func TestFeishuPreviewCapabilities(t *testing.T) {
 
 	var _ channel.PreviewOpener = (*FeishuAdapter)(nil)
 	caps := NewFeishuAdapter(nil).Descriptor().Capabilities
-	if caps.Preview != channel.PreviewEditInPlace {
-		t.Fatalf("preview mode = %v, want edit in place", caps.Preview)
+	if caps.Preview != channel.PreviewNativeStream {
+		t.Fatalf("preview mode = %v, want native stream", caps.Preview)
 	}
 	if caps.NativeApproval {
 		t.Fatal("Feishu renders no approval request itself; the delivery layer sends the text prompt")
@@ -543,5 +543,160 @@ func TestFeishuPreviewAbortShowsNothingMore(t *testing.T) {
 
 	if got := api.summary(); !equalStrings(got, "POST /messages") {
 		t.Fatalf("calls = %v, want the placeholder only", got)
+	}
+}
+
+// cardKitAPI stands in for the Feishu open API with CardKit support. It serves
+// /cardkit/v1/cards POST with a card_id response and records all other calls.
+type cardKitAPI struct {
+	feishuAPI
+	cardKitFail bool // when true the /cardkit create returns an error code
+	cards       int
+}
+
+func (a *cardKitAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if strings.Contains(r.URL.Path, "tenant_access_token") {
+		_, _ = io.WriteString(w, `{"code":0,"tenant_access_token":"tenant-token","expire":7200}`)
+		return
+	}
+	raw, _ := io.ReadAll(r.Body)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls = append(a.calls, feishuCall{Method: r.Method, Path: r.URL.Path, Body: string(raw)})
+
+	switch {
+	case strings.Contains(r.URL.Path, "/cardkit/") && r.Method == http.MethodPost && strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/cards"):
+		if a.cardKitFail {
+			_, _ = io.WriteString(w, `{"code":10003,"msg":"no permission"}`)
+			return
+		}
+		a.cards++
+		_, _ = fmt.Fprintf(w, `{"code":0,"data":{"card_id":"ck_%d"}}`, a.cards)
+	case r.Method == http.MethodPost:
+		a.sent++
+		_, _ = fmt.Fprintf(w, `{"code":0,"data":{"message_id":"om_%d"}}`, a.sent)
+	default:
+		_, _ = io.WriteString(w, `{"code":0}`)
+	}
+}
+
+func newCardKitPreview(t *testing.T, reply *channel.ReplyRef, failCardKit bool) (*feishuPreview, *cardKitAPI) {
+	t.Helper()
+	api := &cardKitAPI{cardKitFail: failCardKit}
+	server := httptest.NewServer(api)
+	t.Cleanup(server.Close)
+	adapter := &FeishuAdapter{}
+	p := &feishuPreview{
+		adapter:       adapter,
+		cfg:           channel.ChannelConfig{ID: "cfg-ck"},
+		target:        "chat_id:oc_1",
+		reply:         reply,
+		client:        lark.NewClient("app-"+t.Name(), "app-secret", lark.WithOpenBaseUrl(server.URL)),
+		receiveID:     "oc_1",
+		receiveType:   "chat_id",
+		patchInterval: 0,
+		useCardKit:    true,
+		sendMessage: func(context.Context, channel.ChannelConfig, channel.PreparedOutboundMessage) error {
+			return nil
+		},
+	}
+	return p, api
+}
+
+// isCardKitElementPath is true for CardKit element-content paths.
+func isCardKitElementPath(path string) bool {
+	return strings.Contains(path, "/cardkit/") && strings.Contains(path, "content")
+}
+
+// isCardKitSettingsPath is true for CardKit streaming-settings paths.
+func isCardKitSettingsPath(path string) bool {
+	return strings.Contains(path, "/cardkit/") && strings.Contains(path, "settings")
+}
+
+// When CardKit is available the preview creates a card entity first, sends the
+// message with the card_id, then streams text via element-content updates, and
+// closes streaming mode on finish.
+func TestFeishuPreviewCardKitStreamsTextViaEntityUpdates(t *testing.T) {
+	t.Parallel()
+
+	p, api := newCardKitPreview(t, nil, false)
+	mustUpdate(t, p, started())
+	mustUpdate(t, p, textDelta("hello "))
+	mustUpdate(t, p, textDelta("world"))
+	mustFinish(t, p, finalOf(channel.Message{Text: "hello world"}))
+
+	calls := api.snapshot()
+	// Expect: card entity create, IM message create (card_id), at least one
+	// element-content update, one final element-content update, and a
+	// streaming-settings close.
+	var hasEntityCreate, hasIMCreate, hasElementUpdate, hasSettingsClose bool
+	for _, c := range calls {
+		switch {
+		case strings.Contains(c.Path, "/cardkit/") && strings.HasSuffix(strings.TrimRight(c.Path, "/"), "/cards") && c.Method == http.MethodPost:
+			hasEntityCreate = true
+		case strings.Contains(c.Path, "/im/v1/messages") && c.Method == http.MethodPost && strings.Contains(c.Body, "card_id"):
+			hasIMCreate = true
+		case isCardKitElementPath(c.Path):
+			hasElementUpdate = true
+		case isCardKitSettingsPath(c.Path) && strings.Contains(c.Body, "false"):
+			hasSettingsClose = true
+		}
+	}
+	if !hasEntityCreate {
+		t.Errorf("missing CardKit entity create; calls = %v", api.summary())
+	}
+	if !hasIMCreate {
+		t.Errorf("missing IM create with card_id; calls = %v", api.summary())
+	}
+	if !hasElementUpdate {
+		t.Errorf("missing element-content update; calls = %v", api.summary())
+	}
+	if !hasSettingsClose {
+		t.Errorf("missing streaming-settings close; calls = %v", api.summary())
+	}
+}
+
+// When CardKit entity creation fails the preview falls back to the ordinary
+// message-PATCH path without returning an error to the caller.
+func TestFeishuPreviewCardKitFallsBackToMessagePatchOnCreateFailure(t *testing.T) {
+	t.Parallel()
+
+	p, api := newCardKitPreview(t, nil, true /* fail CardKit */)
+	mustUpdate(t, p, started())
+	mustUpdate(t, p, textDelta("draft"))
+	mustFinish(t, p, finalOf(channel.Message{Text: "final"}))
+
+	calls := api.snapshot()
+	// Must have a /im/v1/messages POST (not a card_id send) and a PATCH.
+	var hasIMCreate, hasPatch, hasCardKitEntity bool
+	for _, c := range calls {
+		switch {
+		case strings.Contains(c.Path, "/cardkit/") && strings.HasSuffix(strings.TrimRight(c.Path, "/"), "/cards") && c.Method == http.MethodPost:
+			hasCardKitEntity = true
+		case strings.Contains(c.Path, "/im/v1/messages") && c.Method == http.MethodPost:
+			hasIMCreate = true
+		case c.Method == http.MethodPatch:
+			hasPatch = true
+		}
+	}
+	if !hasCardKitEntity {
+		t.Errorf("expected CardKit create attempt; calls = %v", api.summary())
+	}
+	if !hasIMCreate {
+		t.Errorf("expected IM create fallback; calls = %v", api.summary())
+	}
+	if !hasPatch {
+		t.Errorf("expected message PATCH on fallback; calls = %v", api.summary())
+	}
+	// No element-content or settings calls after the fallback.
+	for _, c := range calls {
+		if isCardKitElementPath(c.Path) || isCardKitSettingsPath(c.Path) {
+			t.Errorf("unexpected CardKit call after fallback: %s %s", c.Method, c.Path)
+		}
+	}
+	// Availability mark propagated to the adapter.
+	if p.adapter.cardKit.available("cfg-ck") {
+		t.Errorf("expected cardKit to be marked unavailable after failure")
 	}
 }
