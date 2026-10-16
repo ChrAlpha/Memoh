@@ -66,6 +66,27 @@ func toolExchangeGroups(items []CompactionCandidate) [][]int {
 	return groups
 }
 
+// protectPendingUserInput keeps an ask_user exchange in raw history only while
+// its call has no answer: the continuation still needs the open call. An
+// answered exchange is ordinary history the summary can cover.
+func protectPendingUserInput(items []CompactionCandidate) {
+	for _, group := range toolExchangeGroups(items) {
+		if !isAskUserRecord(items[group[0]].Record) || isToolResultItem(items[group[0]]) {
+			continue
+		}
+		answered := false
+		for _, idx := range group[1:] {
+			answered = answered || isAskUserRecord(items[idx].Record)
+		}
+		if answered {
+			continue
+		}
+		for _, idx := range group {
+			items[idx].Policies = appendPolicy(items[idx].Policies, CompactPolicyMustKeep)
+		}
+	}
+}
+
 // propagateMustKeepAcrossToolExchanges spreads CompactPolicyMustKeep across an
 // entire tool exchange: if the call row or any of its answering tool-result
 // rows is must-keep, every row in that exchange becomes must-keep, so
@@ -141,7 +162,6 @@ func candidatePolicies(record historyfrag.HistoryRecord) []CompactPolicy {
 		policies = appendPolicy(policies, CompactPolicyPreserveToolClosure)
 	}
 	if isAskUserRecord(record) {
-		policies = appendPolicy(policies, CompactPolicyMustKeep)
 		policies = appendPolicy(policies, CompactPolicyPreserveToolClosure)
 	}
 	return policies
@@ -354,36 +374,16 @@ func isToolResultItem(item CompactionCandidate) bool {
 }
 
 // buildEntriesAndIDs renders the summarizer entries and the ids to mark
-// compacted from one contiguous sequence of complete tool-exchange groups (see
-// toolExchangeGroups). A group is complete only when every row in it renders
-// non-empty; an incomplete group — a reasoning-only message, or a tool call
-// whose result renders empty — is never marked. Must-keep groups (ask_user,
-// unparseable barriers) stay in raw history and split the span into runs.
-//
-// Within the span, the first run holding at least one markable sequence wins:
-// leading must-keep islands and runs made only of unmarkable groups are
-// skipped instead of ending the whole pass, so a permanently-empty island can
-// never starve the compactable history behind it. Within the winning run,
-// marking stops at the first skipped group so the marked ids stay a contiguous
-// history range under one compact_id — were a later complete group marked
-// across a skipped raw row, the read path (replaceCompactedHistoryRecords)
-// would emit the summary at the first marked row and fold the later rows in
-// front of the still-raw skipped row, reordering history. Everything left raw
-// by this pass sits before the marked range or after it, and compacts on a
-// later pass. Emitting entries and ids together keeps them aligned, so the
-// summarizer never sees content that would remain in raw history.
+// compacted from one contiguous run of tool-exchange groups (see
+// toolExchangeGroups). Must-keep groups (a pending ask_user call, unparseable
+// barriers) stay in raw history and split the span into runs; the first run
+// that renders any entry wins and is covered whole. A row that renders
+// nothing (a reasoning-only message, an empty tool result) is covered with its
+// neighbours and contributes no entry: leaving it raw would split the run into
+// fragments too short to summarize. One run under one compact_id keeps the
+// marked ids a contiguous history range, which the read path
+// (replaceCompactedHistoryRecords) replaces in place.
 func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.UUID) {
-	rendered := make([]string, len(items))
-	renderedOK := make([]bool, len(items))
-	for i, it := range items {
-		content := renderCandidateEntry(it.Record)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		rendered[i] = content
-		renderedOK[i] = true
-	}
-
 	groups := toolExchangeGroups(items)
 	mustKeep := func(group []int) bool {
 		for _, idx := range group {
@@ -393,15 +393,6 @@ func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.U
 		}
 		return false
 	}
-	complete := func(group []int) bool {
-		for _, idx := range group {
-			if !renderedOK[idx] {
-				return false
-			}
-		}
-		return true
-	}
-
 	for g := 0; g < len(groups); {
 		if mustKeep(groups[g]) {
 			g++
@@ -411,26 +402,17 @@ func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.U
 		for runEnd < len(groups) && !mustKeep(groups[runEnd]) {
 			runEnd++
 		}
-		start := g
-		for start < runEnd && !complete(groups[start]) {
-			start++
-		}
-		end := start
-		for end < runEnd && complete(groups[end]) {
-			end++
-		}
-		if end > start {
-			entries := make([]messageEntry, 0, len(items))
-			ids := make([]pgtype.UUID, 0, len(items))
-			for _, group := range groups[start:end] {
-				for _, idx := range group {
-					entries = append(entries, messageEntry{
-						Role:    items[idx].Record.ModelMessage.Role,
-						Content: rendered[idx],
-					})
-					ids = append(ids, items[idx].ID)
+		var entries []messageEntry
+		var ids []pgtype.UUID
+		for _, group := range groups[g:runEnd] {
+			for _, idx := range group {
+				ids = append(ids, items[idx].ID)
+				if content := renderCandidateEntry(items[idx].Record); strings.TrimSpace(content) != "" {
+					entries = append(entries, messageEntry{Role: items[idx].Record.ModelMessage.Role, Content: content})
 				}
 			}
+		}
+		if len(entries) > 0 {
 			return entries, ids
 		}
 		g = runEnd
@@ -445,12 +427,9 @@ func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.U
 // read in narrative order.
 //
 // The budget models exactly what buildEntriesAndIDs will feed the summarizer:
-// only markable groups — complete (every row renders non-empty) and not
-// must-keep — cost anything. Charging an unmarkable group would let it consume
-// the budget while never producing entries or marks, starving the markable
-// history behind it into a permanent noop. The first markable group is always
-// kept so an oversized one cannot stall progress, and group-aligned cuts can
-// never split a tool exchange.
+// must-keep groups and rows that render nothing cost nothing. The first
+// group with a cost is always kept so an oversized one cannot stall progress,
+// and group-aligned cuts can never split a tool exchange.
 func trimCompactMessages(items []CompactionCandidate, maxTokens int) []CompactionCandidate {
 	if len(items) == 0 || maxTokens <= 0 {
 		return items
@@ -481,14 +460,13 @@ func trimCompactMessages(items []CompactionCandidate, maxTokens int) []Compactio
 }
 
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
-// zero for unmarkable groups (must-keep, or any row rendering empty), and for
-// markable groups the rendered entry text — what buildUserPrompt actually
-// emits, headers included — plus the per-entry role prefix, with a floor of
-// one token per row so tiny-but-real entries can never ride along for free. A
-// markable group therefore always has a positive cost, keeping eligibility
-// and cost in one predicate. Costing the rendered bytes rather than the raw
-// usage estimate matters: a row whose generation cost five tokens can still
-// render a two-kilobyte tool outcome into the prompt.
+// zero for a must-keep group, otherwise each rendered entry's text — what
+// buildUserPrompt actually emits, headers included — plus its role prefix,
+// with a floor of one token per entry so tiny-but-real entries can never ride
+// along for free. Rows that render nothing cost nothing. Costing the rendered
+// bytes rather than the raw usage estimate matters: a row whose generation
+// cost five tokens can still render a two-kilobyte tool outcome into the
+// prompt.
 func markableGroupCost(items []CompactionCandidate, group []int) int {
 	cost := 0
 	for _, idx := range group {
@@ -497,7 +475,7 @@ func markableGroupCost(items []CompactionCandidate, group []int) int {
 		}
 		rendered := strings.TrimSpace(renderCandidateEntry(items[idx].Record))
 		if rendered == "" {
-			return 0
+			continue
 		}
 		cost += estimateBytesAsTokens(rendered) + estimateBytesAsTokens(items[idx].Record.ModelMessage.Role) + 1
 	}

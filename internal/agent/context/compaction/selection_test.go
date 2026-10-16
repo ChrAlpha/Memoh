@@ -146,34 +146,26 @@ func TestItemsFromRowsAnnotatesCompactionCandidatePolicy(t *testing.T) {
 	assertPolicy(t, items[4], CompactPolicyPreserveRecent)
 }
 
-func TestItemsFromRowsKeepsAskUserToolExchange(t *testing.T) {
+func TestItemsFromRowsKeepsOnlyPendingAskUserCall(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		mkRow(t, "user", `"current instruction"`, 100),
-		mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100),
-		mkRow(t, "tool", `[{"type":"tool-result","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","result":{"status":"submitted"}}]`, 100),
-		mkRow(t, "assistant", `"latest tail"`, 100),
+	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
+	askResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","result":{"status":"submitted"}}]`, 100)
+	answered, _ := itemsFromRows([]sqlc.ListUncompactedMessagesBySessionRow{askCall, askResult, mkRow(t, "user", `"current"`, 100)})
+	for _, idx := range []int{0, 1} {
+		assertNoPolicy(t, answered[idx], CompactPolicyMustKeep)
+		assertPolicy(t, answered[idx], CompactPolicyPreserveToolClosure)
 	}
-	items, barrierCount := itemsFromRows(rows)
-	if barrierCount != 0 || len(items) != 4 {
-		t.Fatalf("items=%d barriers=%d, want four classified candidates", len(items), barrierCount)
-	}
-
-	for _, idx := range []int{1, 2} {
-		assertPolicy(t, items[idx], CompactPolicy("must_keep"))
-		assertPolicy(t, items[idx], CompactPolicyPreserveToolClosure)
-	}
+	pending, _ := itemsFromRows([]sqlc.ListUncompactedMessagesBySessionRow{askCall, mkRow(t, "user", `"current"`, 100)})
+	assertPolicy(t, pending[0], CompactPolicyMustKeep)
 }
 
 func TestGuardedSelectionCompactsAroundMustKeepAskExchange(t *testing.T) {
 	t.Parallel()
 
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
-	askResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","result":{"status":"submitted"}}]`, 100)
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		askCall,
-		askResult,
 		mkRow(t, "user", `"question 2"`, 100),
 		mkRow(t, "assistant", `"answer 2"`, 100),
 		mkRow(t, "user", `"question 3"`, 100),
@@ -188,10 +180,10 @@ func TestGuardedSelectionCompactsAroundMustKeepAskExchange(t *testing.T) {
 		t.Fatal("a must-keep ask exchange at the window head must not starve compaction of newer history")
 	}
 	for _, id := range ids {
-		if id == askCall.ID || id == askResult.ID {
+		if id == askCall.ID {
 			t.Fatalf("must-keep ask_user row was marked for compaction")
 		}
-		for _, protected := range []pgtype.UUID{rows[6].ID, rows[7].ID} {
+		for _, protected := range []pgtype.UUID{rows[5].ID, rows[6].ID} {
 			if id == protected {
 				t.Fatalf("current turn row was marked for compaction")
 			}
@@ -243,16 +235,14 @@ func TestGuardedSelectionKeepsCompactRunContiguousAcrossMustKeepIsland(t *testin
 	t.Parallel()
 
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
-	askResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","result":{"status":"submitted"}}]`, 100)
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		mkRow(t, "user", `"old q"`, 100),          // 0 run before island
 		mkRow(t, "assistant", `"old a"`, 100),     // 1
-		askCall,                                   // 2 must-keep island
-		askResult,                                 // 3
-		mkRow(t, "user", `"mid q"`, 100),          // 4 run after island
-		mkRow(t, "assistant", `"mid a"`, 100),     // 5
-		mkRow(t, "user", `"current q"`, 100),      // 6 protected recent
-		mkRow(t, "assistant", `"current a"`, 100), // 7
+		askCall,                                   // 2 must-keep island: unanswered
+		mkRow(t, "user", `"mid q"`, 100),          // 3 run after island
+		mkRow(t, "assistant", `"mid a"`, 100),     // 4
+		mkRow(t, "user", `"current q"`, 100),      // 5 protected recent
+		mkRow(t, "assistant", `"current a"`, 100), // 6
 	}
 	items, _ := itemsFromRows(rows)
 
@@ -278,7 +268,7 @@ func TestGuardedSelectionKeepsCompactRunContiguousAcrossMustKeepIsland(t *testin
 		t.Fatal("run after the must-keep island must be compactable on a later pass")
 	}
 	for _, id := range nextIDs {
-		if id == askCall.ID || id == askResult.ID {
+		if id == askCall.ID {
 			t.Fatalf("must-keep ask_user row was marked for compaction")
 		}
 	}

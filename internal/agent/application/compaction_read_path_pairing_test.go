@@ -105,7 +105,7 @@ func pairingRow(t *testing.T, role, content string) sqlc.ListUncompactedMessages
 }
 
 // TestSelectorToReadPathPreservesOrderEndToEnd drives the real compaction
-// selector over a history with a must-keep ask_user island and feeds its
+// selector over a history with a pending ask_user island and feeds its
 // actual marked rows into replaceCompactedHistoryRecords. It pins the pair of
 // invariants that live in two packages: the selector marks one contiguous
 // pre-island run under one compact_id, and the read path substitutes it in
@@ -118,7 +118,6 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		pairingRow(t, "user", `"old q with plenty of extra descriptive words so the raw exchange clearly outweighs its summary"`),
 		pairingRow(t, "assistant", `"old a walking through the answer in enough detail that compaction genuinely shrinks it"`),
 		pairingRow(t, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[]}}]`),
-		pairingRow(t, "tool", `[{"type":"tool-result","toolCallId":"ask-1","toolName":"ask_user","output":"answered"}]`),
 		pairingRow(t, "user", `"mid q"`),
 		pairingRow(t, "user", `"current q"`),
 	}
@@ -154,8 +153,8 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	}
 
 	compactID := uuid.UUID(q.logID.Bytes).String()
-	texts := []string{`old q`, `old a`, `ask you something`, `answered`, `mid q`, `current q`}
-	roles := []string{"user", "assistant", "assistant", "tool", "user", "user"}
+	texts := []string{`old q`, `old a`, `ask you something`, `mid q`, `current q`}
+	roles := []string{"user", "assistant", "assistant", "user", "user"}
 	records := make([]historyfrag.HistoryRecord, 0, len(rows))
 	for i, row := range rows {
 		id := uuid.UUID(row.ID.Bytes).String()
@@ -173,7 +172,6 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	want := []ModelMessage{
 		{Role: "user", Content: newTextContent("<summary>\n" + res.Summary + "\n</summary>")},
 		{Role: "assistant", Content: newTextContent("ask you something")},
-		{Role: "tool", Content: newTextContent("answered")},
 		{Role: "user", Content: newTextContent("mid q")},
 		{Role: "user", Content: newTextContent("current q")},
 	}
