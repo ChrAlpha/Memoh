@@ -26,6 +26,7 @@ type stubModel struct {
 	calls        int
 	prompt       string // decoded text of the captured request messages
 	maxTokens    int    // captured max_tokens of the last request
+	reasoning    int    // output tokens spent on reasoning before the summary text
 }
 
 func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -43,6 +44,9 @@ func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	finishReason := s.finishReason
 	if finishReason == "" {
 		finishReason = "stop"
+	}
+	if s.reasoning > 0 && (s.maxTokens-s.reasoning)*4 < len(s.summary) {
+		finishReason = "length"
 	}
 	resp := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
 		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":` + jsonStr(finishReason) + `}],` +
