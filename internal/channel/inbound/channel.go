@@ -3355,6 +3355,7 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	if sourceMessageID != "" {
 		replyRef.MessageID = sourceMessageID
 	}
+	hideToolCalls := !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID)
 	stream, err := delivery.OpenStream(ctx, delivery.Config{
 		Surface:         sender,
 		Target:          target,
@@ -3364,7 +3365,7 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 			"conversation_type": msg.Conversation.Type,
 		},
 		ReceivedAt:    msg.ReceivedAt,
-		HideToolCalls: !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID),
+		HideToolCalls: hideToolCalls,
 	})
 	if err != nil {
 		return err
@@ -3430,8 +3431,12 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 				// Approval continuations should not flash transient "running"
 				// tool messages in IM. If tool visibility is enabled, the
 				// completed tool state may still be shown on tool_call_end.
-				if event.Type == channel.StreamEventToolCallStart &&
-					(event.ToolCall == nil || (strings.TrimSpace(event.ToolCall.ApprovalID) == "" && !hasUserInputAction(event.ToolCall.Actions))) {
+				// A hidden start is still handed over: the mapping layer does
+				// not show it either, and it is the boundary that ends the text
+				// streamed before the call.
+				ordinaryStart := event.Type == channel.StreamEventToolCallStart &&
+					(event.ToolCall == nil || (strings.TrimSpace(event.ToolCall.ApprovalID) == "" && !hasUserInputAction(event.ToolCall.Actions)))
+				if ordinaryStart && !hideToolCalls {
 					continue
 				}
 				if event.Type == channel.StreamEventReaction && len(event.Reactions) > 0 {
