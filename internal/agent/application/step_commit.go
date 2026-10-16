@@ -204,7 +204,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	// provider result: final handoff and queue reconciliation are keyed to the
 	// step, not to whether the provider emitted a message. Legacy/non-durable
 	// paths retain the old cheap no-op behavior.
-	if !hasAssistantOutput && mode != stepSteered && (c.queueStep == nil || interrupted) {
+	if !hasAssistantOutput && failureCode == "" && mode != stepSteered && (c.queueStep == nil || interrupted) {
 		c.nextStep++
 		return native.StepDirective{}, nil
 	}
@@ -401,14 +401,13 @@ func (c *agentStepCommitter) err() error {
 }
 
 // recordFailure writes the history of a run that failed with code, a failure
-// the history shows (see wsFailureCode), before the run is finished. Text
-// the stream showed for the model call that failed is written as an
-// interrupted step carrying the code. Without such text, a run that wrote
-// nothing gets the user message and failure row persistTurnFailure writes for
-// a turn without step commits, and a run with committed steps keeps them as
-// they are. A model call the runtime already checkpointed is not written
-// again. It returns the rows persistTurnFailure wrote; a checkpoint joins the
-// committed steps.
+// the history shows (see wsFailureCode), before the run is finished. A run
+// with committed steps that replaces no turn, or text the stream showed for
+// the model call that failed, gets an interrupted step carrying the code and
+// that text. Otherwise the run gets the user message and failure row
+// persistTurnFailure writes for a turn without step commits. A model call the
+// runtime already checkpointed is not written again. It returns the rows
+// persistTurnFailure wrote; a checkpoint joins the committed steps.
 func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText string, code apperror.Code) ([]messagepkg.Message, error) {
 	if c == nil || code == "" {
 		return nil, nil
@@ -421,7 +420,7 @@ func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText stri
 	if skip {
 		return nil, nil
 	}
-	if strings.TrimSpace(partialText) != "" {
+	if strings.TrimSpace(partialText) != "" || (persistedSteps > 0 && c.req.TurnReplacement == nil) {
 		record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
 		_, err := c.persist(ctx, stepIndex, record, stepInterrupted, code)
 		return nil, err
