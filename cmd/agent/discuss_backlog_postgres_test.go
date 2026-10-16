@@ -294,28 +294,25 @@ func TestPostgresDiscussBacklogOverBudgetIsAnsweredAndNextRoundContinues(t *test
 	t.Logf("summary_calls=%d provider_calls=%d backlog_raw=%d backlog_compacted=%d", f.summaries.Load(), f.modelCalls.Load(), raw, compacted)
 }
 
-// Without compaction the older input cannot be summarized; the session still
-// answers the newest input and records which input it proceeded without.
-func TestPostgresDiscussBacklogWithoutCompactionIsAnsweredAndRecordsOmission(t *testing.T) {
+// A backlog the summarizer cannot reduce fails explicitly without a provider
+// call or consuming the batch; once the summarizer is back, the next message
+// is answered.
+func TestPostgresDiscussBacklogSummarizerFailureFailsExplicitly(t *testing.T) {
 	f := newBacklogFixture(t)
-	if _, err := f.pool.Exec(f.ctx, `UPDATE bots SET compaction_enabled=false WHERE id=$1`, f.botID); err != nil {
-		t.Fatal(err)
-	}
+	f.failSummary.Store(true)
 	f.appendBacklog(12, 2800)
-	request := f.answer("backlog", "backlog-11 ")
-	if f.summaries.Load() != 0 || strings.Contains(request, "backlog-0 ") {
-		t.Fatalf("summaries=%d; the oldest input cannot fit without compaction", f.summaries.Load())
+	if code := f.trigger(); code != "context.budget_unsatisfied" || f.modelCalls.Load() != 0 {
+		t.Fatalf("code=%q provider_calls=%d, want budget_unsatisfied before any provider call", code, f.modelCalls.Load())
 	}
-	omitted := f.omittedInput()
-	for i := range 12 {
-		id := fmt.Sprintf("backlog-%d", i)
-		if !omitted[id] && !strings.Contains(request, id+" ") {
-			t.Fatalf("%s vanished from the provider context without a record; omitted=%v", id, omitted)
-		}
+	if raw, compacted := f.backlogRows(); raw != 12 || compacted != 0 {
+		t.Fatalf("failed summaries changed history: raw=%d compacted=%d", raw, compacted)
 	}
-	t.Logf("omitted_records=%v", omitted)
+	f.failSummary.Store(false)
 	f.appendMessage("next-round", "next-round small message")
-	f.answer("next round", "next-round small message")
+	request := f.answer("next round", "next-round small message")
+	if !strings.Contains(request, "Earlier backlog summarized.") {
+		t.Fatal("the recovered round did not summarize the backlog")
+	}
 }
 
 // A newest input that cannot fit even alone fails once, without consuming the
@@ -525,21 +522,15 @@ func TestPostgresDiscussOversizedImageInputFailsOnceThenNextMessageIsAnswered(t 
 	t.Logf("summary_calls=%d provider_calls=%d", f.summaries.Load(), f.modelCalls.Load())
 }
 
-// Answered history goes before the images of unconsumed input: with or
-// without compaction, an older unconsumed message keeps its image when
-// trimming or summarizing what was already answered makes room.
+// Answered history goes before the images of unconsumed input: an older
+// unconsumed message keeps its image when summarizing what was already
+// answered makes room.
 func TestPostgresDiscussImageBacklogYieldsAnsweredHistoryFirst(t *testing.T) {
-	for _, tc := range []struct {
-		compaction bool
-		rounds     int
-	}{{false, 10}, {true, 10}, {true, 4}, {false, 4}} {
-		t.Run(fmt.Sprintf("compaction=%v/rounds=%d", tc.compaction, tc.rounds), func(t *testing.T) {
+	for _, rounds := range []int{10, 4} {
+		t.Run(fmt.Sprintf("rounds=%d", rounds), func(t *testing.T) {
 			f := newBacklogFixture(t)
 			f.enableVision()
-			if _, err := f.pool.Exec(f.ctx, `UPDATE bots SET compaction_enabled=$2 WHERE id=$1`, f.botID, tc.compaction); err != nil {
-				t.Fatal(err)
-			}
-			for i := range tc.rounds {
+			for i := range rounds {
 				id := fmt.Sprintf("old-%d", i)
 				f.appendMessage(id, id+" "+strings.Repeat("h", 2400))
 				f.answer(id, id+" ")

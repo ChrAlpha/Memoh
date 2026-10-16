@@ -233,7 +233,6 @@ func (h *CompactionHandler) buildTriggerConfig(ctx context.Context, botID, sessi
 	cfg.SessionID = sessionID
 	cfg.Ratio = 100
 	cfg.TotalInputTokens = 1
-	cfg.Manual = true
 	return cfg, nil
 }
 

@@ -143,9 +143,6 @@ func TestDiscussProviderBudgetRecoveryRecomposesBeforeProviderDispatch(t *testin
 		published = append(published, event.Type)
 		return nil
 	}
-	if pressure := discussContextPressure(cmd); pressure >= hardCompactionThreshold(16000) {
-		t.Fatalf("fixture pressure %d must stay below the old window-share backstop", pressure)
-	}
 	handle, err := service.StartTurn(context.Background(), cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -160,8 +157,8 @@ func TestDiscussProviderBudgetRecoveryRecomposesBeforeProviderDispatch(t *testin
 	if len(compactor.configs) != 1 {
 		t.Fatalf("compaction calls = %d, want 1 after actual provider-budget rejection; events=%v", len(compactor.configs), kinds)
 	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 3740 || cfg.TargetTokens != 399 || !cfg.HardPressure || cfg.SessionID != cmd.ThreadID {
-		t.Fatalf("compaction config = %#v, want total pressure=3740, target=399 from history allowance=998 and hard pressure in the same session", cfg)
+	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 3740 || cfg.Ratio != 100 || cfg.HistoryBudgetTokens != 998 || cfg.SessionID != cmd.ThreadID {
+		t.Fatalf("compaction config = %#v, want total pressure=3740 compacted whole into history allowance=998 in the same session", cfg)
 	}
 	if len(kinds) != 2 || kinds[0] != turn.DiscussEventRunResolved || kinds[1] != turn.DiscussEventRecompose {
 		t.Fatalf("transport events = %v, want resolved then recompose", kinds)
@@ -209,7 +206,7 @@ func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *t
 }
 
 func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testing.T) {
-	for _, scenario := range []string{"protected hook", "off", "compaction failure", "compaction noop"} {
+	for _, scenario := range []string{"protected hook", "compaction failure", "compaction noop"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 			wantCompactions := 0
@@ -220,8 +217,6 @@ func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testi
 					Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotAfterHistoryBeforeCurrent,
 					Budget: contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 				})}
-			case "off":
-				service.SetSyncCompactionMode(scenario)
 			case "compaction failure":
 				compactor.err = errors.New("private summarizer failure")
 				wantCompactions = 1
@@ -276,8 +271,8 @@ func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *t
 	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 || resolver.storeCalls != 0 {
 		t.Fatalf("recompose=%t compaction/provider/history=%d/%d/%d, want recovery before trimmed provider dispatch", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
 	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.TargetTokens != 399 || !cfg.HardPressure {
-		t.Fatalf("ordinary history recovery config = %#v, want raw=2500 target=399 hard pressure", cfg)
+	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.Ratio != 100 || cfg.HistoryBudgetTokens != 998 {
+		t.Fatalf("ordinary history recovery config = %#v, want raw=2500 compacted whole into 998", cfg)
 	}
 }
 

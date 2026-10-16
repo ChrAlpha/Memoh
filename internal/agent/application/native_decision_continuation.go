@@ -102,7 +102,7 @@ func (s *Service) runNativeDecisionContinuation(ctx context.Context, req ChatReq
 				}
 				var storeErr error
 				if stepCommitter != nil {
-					storeErr = stepCommitter.finish(ctx, extractInputTokensFromUsage(snap.usage))
+					storeErr = stepCommitter.finish(ctx)
 				} else {
 					storeErr = s.persistTerminalSnapshot(
 						context.WithoutCancel(ctx),
@@ -129,7 +129,7 @@ func (s *Service) runNativeDecisionContinuation(ctx context.Context, req ChatReq
 		}
 	}
 	if !stored && stepCommitter != nil {
-		if storeErr := stepCommitter.finish(ctx, 0); storeErr != nil {
+		if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 			lifecycleCause = storeErr
 			return storeErr
 		}

@@ -286,7 +286,7 @@ func (s *Service) consumeTriggeredStreamWithIdle(ctx context.Context, events <-c
 			hasSnapshot = true
 			if !stored && !runOwnershipLost(ctx) {
 				if stepCommitter != nil {
-					if storeErr := stepCommitter.finish(ctx, extractInputTokensFromUsage(snap.usage)); storeErr != nil {
+					if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 						terminalPersistErr = runtimeHistoryError(storeErr)
 						if streamErr == nil {
 							streamErr = terminalPersistErr
@@ -315,7 +315,7 @@ func (s *Service) consumeTriggeredStreamWithIdle(ctx context.Context, events <-c
 				// row to persist; the admitted user message is already durable.
 				stored = true
 			case stepCommitter != nil:
-				if storeErr := stepCommitter.finish(ctx, rc.estimatedTokens); storeErr != nil {
+				if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 					terminalPersistErr = runtimeHistoryError(storeErr)
 				} else {
 					stored = true
@@ -348,7 +348,7 @@ func (s *Service) consumeTriggeredStreamWithIdle(ctx context.Context, events <-c
 	// behavior change from the Generate era, which persisted nothing on
 	// failure — the partial record is the more honest one.
 	if !stored && stepCommitter != nil && !runOwnershipLost(ctx) {
-		if storeErr := stepCommitter.finish(ctx, rc.estimatedTokens); storeErr != nil {
+		if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 			if streamErr == nil {
 				streamErr = storeErr
 			}

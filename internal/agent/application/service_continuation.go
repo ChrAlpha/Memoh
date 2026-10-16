@@ -48,7 +48,7 @@ func (s *Service) prepareContinuationRunConfig(
 		return native.RunConfig{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
-	messages, retained, _ := trimMessagesAndRecordsByTokens(s.logger, loaded, 0)
+	messages, retained := historyMessagesFromRecords(loaded)
 	messages = sanitizeMessages(messages)
 	historyEstimates := make([]int, len(messages))
 	pressure := 0

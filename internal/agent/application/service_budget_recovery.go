@@ -38,7 +38,7 @@ func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) nativ
 
 func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) func(context.Context, native.RunConfig) (native.RunConfig, bool, error) {
 	return func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		if s.effectiveSyncCompactionMode() == syncCompactionModeOff || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return cfg, false, nil
 		}
 		budget, pressure := layout.availableHistoryBudget(cfg)
@@ -53,7 +53,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		var messages []ModelMessage
 		var records []historyfrag.HistoryRecord
 		if layout.usePipeline {
-			messages, _, _, _ = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens)
+			messages, _, _ = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens)
 		} else {
 			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
 			if err != nil {
@@ -241,7 +241,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		}
 	}
 	cfg, shed := shedOlderBatchImages(cfg, batch, plan.HistoryBudget)
-	if *compacted || s.effectiveSyncCompactionMode() == syncCompactionModeOff {
+	if *compacted {
 		return cfg, shed, nil
 	}
 	type batchInput struct {

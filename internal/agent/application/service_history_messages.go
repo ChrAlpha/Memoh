@@ -9,7 +9,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
@@ -17,16 +16,16 @@ import (
 // RenderedContext (RC) merged with assistant/tool turns (TR) from
 // bot_history_messages. This gives chat mode the same event-driven context
 // that discuss mode uses, replacing the legacy loadMessages path. The second
-// return value is the raw (compactable) token pressure measured before
-// trimming; the third also includes active summaries.
-func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, int, time.Time) {
+// return value is the token pressure of raw history and active summaries;
+// the third is the creation time of the oldest loaded row.
+func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, time.Time) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
-		return nil, 0, 0, time.Time{}
+		return nil, 0, time.Time{}
 	}
 	rc := s.pipeline.GetRC(sessionID)
 	if len(rc) == 0 {
-		return nil, 0, 0, time.Time{}
+		return nil, 0, time.Time{}
 	}
 
 	trs := s.loadTurnResponses(ctx, sessionID, contextTokenBudget)
@@ -34,12 +33,11 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 
 	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
-		return nil, 0, 0, time.Time{}
+		return nil, 0, time.Time{}
 	}
 
 	messages := make([]ModelMessage, 0, len(composed.Messages))
-	pinned := make([]bool, 0, len(composed.Messages))
-	compactable, pressure := 0, 0
+	pressure := 0
 	for _, m := range composed.Messages {
 		if m.Source != nil && req.ExternalMessageID != "" {
 			m.Source.Current = m.Source.Kind == "external" && m.Source.ID == req.ExternalMessageID
@@ -57,21 +55,10 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 			ContextSource: m.Source,
 			Content:       contentJSON,
 		})
-		isPinned := m.CompactionArtifactID != ""
-		pinned = append(pinned, isPinned)
-		cost := estimateMessageTokens(messages[len(messages)-1])
-		pressure += cost
-		if !isPinned {
-			compactable += cost
-		}
+		pressure += estimateMessageTokens(messages[len(messages)-1])
 	}
 
-	// Apply context token budget trimming to pipeline path as well.
-	if contextTokenBudget > 0 && len(messages) > 0 {
-		messages = trimPipelineMessagesByTokens(s.logger, messages, pinned, contextTokenBudget)
-	}
-
-	return messages, compactable, pressure, time.UnixMilli(timeline.ViewFromMs(rc, trs)).UTC()
+	return messages, pressure, time.UnixMilli(timeline.ViewFromMs(rc, trs)).UTC()
 }
 
 // loadTimelineArtifacts projects the session's active compaction frontier for
@@ -92,38 +79,6 @@ func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID st
 		return nil
 	}
 	return artifacts
-}
-
-// trimPipelineMessagesByTokens trims pipeline-assembled messages to fit within
-// the context token budget using character-based estimation. Pinned messages
-// (compaction summaries) survive the dropped prefix.
-func trimPipelineMessagesByTokens(log *slog.Logger, messages []ModelMessage, pinned []bool, maxTokens int) []ModelMessage {
-	entries := make([]turn.AdmissionEntry, len(messages))
-	for i, message := range messages {
-		entries[i] = turn.AdmissionEntry{Source: message.ContextSource, Cost: estimateMessageTokens(message), Pinned: i < len(pinned) && pinned[i], ToolResponse: strings.EqualFold(strings.TrimSpace(message.Role), "tool")}
-	}
-	decision := turn.AdmitContextEntries(entries, maxTokens)
-	if decision.ProtectedOverflow || decision.DroppedEntries == 0 {
-		// Keep irreducible input intact for the final provider admission.
-		return messages
-	}
-	kept := make([]ModelMessage, 0, len(messages)-decision.DroppedEntries)
-	for i, message := range messages {
-		if decision.Selected[i] {
-			kept = append(kept, message)
-		}
-	}
-
-	if log != nil {
-		log.Info("trimPipelineMessagesByTokens: context trimmed",
-			slog.Int("total_messages", len(messages)),
-			slog.Int("estimated_tokens", decision.EstimatedTokens),
-			slog.Int("max_tokens", maxTokens),
-			slog.Int("kept_messages", len(kept)),
-		)
-	}
-
-	return kept
 }
 
 // loadTurnResponses loads recent assistant/tool messages from bot_history_messages

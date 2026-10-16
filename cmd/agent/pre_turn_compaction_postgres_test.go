@@ -14,8 +14,9 @@ import (
 
 // History that does not fit the model window is summarized before the turn,
 // only from what the turn loaded, into one active summary that the next
-// compaction folds again. When the summarizer fails, the turn still answers
-// on the history that fits.
+// compaction folds again. When the summarizer fails, the turn fails before
+// any provider call and leaves history whole; once the summarizer is back,
+// the next turn runs on a summary.
 func TestPostgresPreTurnCompaction(t *testing.T) {
 	for _, entry := range []string{"chat", "discuss"} {
 		t.Run(entry, func(t *testing.T) {
@@ -47,12 +48,20 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 			f.failSummary.Store(true)
 			f.appendRound(entry, "failed-")
 			summaries, calls := f.summaries.Load(), f.modelCalls.Load()
-			if code := send("failed-current", "failed-current message"); code != "" || f.modelCalls.Load() != calls+1 || f.summaries.Load() == summaries {
-				t.Fatalf("summarizer down: code=%q provider_calls=%d summary_attempts=%d, want the turn answered on the history that fits", code, f.modelCalls.Load()-calls, f.summaries.Load()-summaries)
+			if code := send("failed-current", "failed-current message"); code != "context.budget_unsatisfied" || f.modelCalls.Load() != calls || f.summaries.Load() == summaries {
+				t.Fatalf("summarizer down: code=%q provider_calls=%d summary_attempts=%d, want budget_unsatisfied before any provider call", code, f.modelCalls.Load()-calls, f.summaries.Load()-summaries)
+			}
+			if raw, compacted := f.backlogRowsPrefixed("failed-"); raw < 11 || compacted != 0 || f.activeSummaries() != 1 {
+				t.Fatalf("a failed summary changed history: raw=%d compacted=%d active=%d", raw, compacted, f.activeSummaries())
+			}
+			f.failSummary.Store(false)
+			calls = f.modelCalls.Load()
+			if code := send("next-current", "next-current message"); code != "" || f.modelCalls.Load() != calls+1 {
+				t.Fatalf("summarizer back: code=%q provider_calls=%d", code, f.modelCalls.Load()-calls)
 			}
 			request, _ := f.lastRequest.Load().(string)
-			if strings.Count(request, "failed-current message") != 1 || strings.Contains(request, "failed-0 ") || f.activeSummaries() != 1 {
-				t.Fatalf("summarizer down: current=%d oldest_kept=%v active=%d", strings.Count(request, "failed-current message"), strings.Contains(request, "failed-0 "), f.activeSummaries())
+			if _, compacted := f.backlogRowsPrefixed("failed-"); compacted == 0 || strings.Count(request, "next-current message") != 1 || f.activeSummaries() != 1 {
+				t.Fatalf("summarizer back: compacted=%d current=%d active=%d", compacted, strings.Count(request, "next-current message"), f.activeSummaries())
 			}
 		})
 	}

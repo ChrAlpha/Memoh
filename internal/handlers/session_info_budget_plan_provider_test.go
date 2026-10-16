@@ -27,6 +27,14 @@ type providerCollisionQueries struct {
 	models map[pgtype.UUID]sqlc.Model
 }
 
+func (*providerCollisionQueries) GetLatestSessionModelID(context.Context, pgtype.UUID) (pgtype.UUID, error) {
+	return pgtype.UUID{}, pgx.ErrNoRows
+}
+
+func (*providerCollisionQueries) GetProviderByID(context.Context, pgtype.UUID) (sqlc.Provider, error) {
+	return sqlc.Provider{}, pgx.ErrNoRows
+}
+
 func (q *providerCollisionQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
 	if model, ok := q.models[id]; ok {
 		return model, nil

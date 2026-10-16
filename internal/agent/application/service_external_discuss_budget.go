@@ -20,7 +20,7 @@ func (s *Service) prepareExternalDiscussContext(ctx context.Context, req ChatReq
 	admitted, admission := admitDiscussAgentContext(req.discussMessages, s.contextAbsoluteMaxTokens(), len(markdown)+len(req.discussPromptPrefix)+len(req.discussPromptSuffix), imageCount)
 	recoveryAttempted := false
 	if admission.ProtectedOverflow || admission.DroppedMessages > 0 || len(req.discussOmittedSources) > 0 || max(0, req.discussContextTokens-admission.ProtectedTokens) > admission.RecoveryBudgetTokens {
-		if !req.discussRecoveryExhausted && admission.RecoveryBudgetTokens > 0 && s.effectiveSyncCompactionMode() != syncCompactionModeOff && s.compactionService != nil && s.settingsService != nil {
+		if !req.discussRecoveryExhausted && admission.RecoveryBudgetTokens > 0 && s.compactionService != nil && s.settingsService != nil {
 			recoveryAttempted = true
 			recovery := req
 			recovery.discussCurrentSources = admission.ProtectedSources
