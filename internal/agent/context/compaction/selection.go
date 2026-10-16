@@ -66,25 +66,44 @@ func toolExchangeGroups(items []CompactionCandidate) [][]int {
 	return groups
 }
 
-// protectPendingUserInput keeps an ask_user exchange in raw history only while
-// its call has no answer: the continuation still needs the open call. An
+// protectPendingUserInput keeps an ask_user exchange in raw history while any
+// of its calls has no answer: the continuation still needs the open call. An
 // answered exchange is ordinary history the summary can cover.
 func protectPendingUserInput(items []CompactionCandidate) {
 	for _, group := range toolExchangeGroups(items) {
-		if !isAskUserRecord(items[group[0]].Record) || isToolResultItem(items[group[0]]) {
+		if isToolResultItem(items[group[0]]) {
 			continue
 		}
-		answered := false
+		pending := askUserCallIDs(items[group[0]].Record)
 		for _, idx := range group[1:] {
-			answered = answered || isAskUserRecord(items[idx].Record)
+			mm := items[idx].Record.ModelMessage
+			delete(pending, strings.TrimSpace(mm.ToolCallID))
+			for _, p := range parseEntryParts(mm.Content) {
+				delete(pending, strings.TrimSpace(p.ToolCallID))
+			}
 		}
-		if answered {
+		if len(pending) == 0 {
 			continue
 		}
 		for _, idx := range group {
 			items[idx].Policies = appendPolicy(items[idx].Policies, CompactPolicyMustKeep)
 		}
 	}
+}
+
+func askUserCallIDs(record historyfrag.HistoryRecord) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, call := range record.ModelMessage.ToolCalls {
+		if isAskUserToolName(call.Function.Name) {
+			ids[strings.TrimSpace(call.ID)] = struct{}{}
+		}
+	}
+	for _, p := range parseEntryParts(record.ModelMessage.Content) {
+		if isToolCallPartType(p.Type) && isAskUserToolName(p.ToolName) {
+			ids[strings.TrimSpace(p.ToolCallID)] = struct{}{}
+		}
+	}
+	return ids
 }
 
 // propagateMustKeepAcrossToolExchanges spreads CompactPolicyMustKeep across an

@@ -198,6 +198,20 @@ func TestBuildAbsorbedContextUsesRawOrSummaryPerParentBudget(t *testing.T) {
 			wantMaxCost: 100,
 		},
 		{
+			name:     "raw transcript skips rows that render nothing",
+			artifact: Artifact{ID: "reasoning", Summary: "fallback summary"},
+			budget:   100,
+			load: func(context.Context, Artifact) ([]sqlc.ListUncompactedMessagesBySessionRow, error) {
+				return []sqlc.ListUncompactedMessagesBySessionRow{
+					mkRow(t, "assistant", `[{"type":"reasoning","text":"internal chain of thought"}]`, 100),
+					rawRow(t, "canonical raw transcript"),
+				}, nil
+			},
+			wantSource:  absorbedSourceRawTranscript,
+			wantText:    "canonical raw transcript",
+			wantMaxCost: 100,
+		},
+		{
 			name:     "raw transcript overflows",
 			artifact: Artifact{ID: "overflow", Summary: "short fallback summary"},
 			budget:   20,

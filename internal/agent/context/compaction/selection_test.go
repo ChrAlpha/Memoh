@@ -158,6 +158,11 @@ func TestItemsFromRowsKeepsOnlyPendingAskUserCall(t *testing.T) {
 	}
 	pending, _ := itemsFromRows([]sqlc.ListUncompactedMessagesBySessionRow{askCall, mkRow(t, "user", `"current"`, 100)})
 	assertPolicy(t, pending[0], CompactPolicyMustKeep)
+	twoCalls := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{}},{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-2","input":{}}]`, 100)
+	half, _ := itemsFromRows([]sqlc.ListUncompactedMessagesBySessionRow{twoCalls, askResult, mkRow(t, "user", `"current"`, 100)})
+	for _, idx := range []int{0, 1} {
+		assertPolicy(t, half[idx], CompactPolicyMustKeep)
+	}
 }
 
 func TestGuardedSelectionCompactsAroundMustKeepAskExchange(t *testing.T) {

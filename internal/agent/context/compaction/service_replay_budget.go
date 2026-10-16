@@ -25,12 +25,7 @@ func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUI
 		if selected[message.ID] || isProtectedSource(message, sources) {
 			continue
 		}
-		sdkMessage := messageconv.ModelMessageToSDKMessage(message.Record.ModelMessage)
-		if len(sdkMessage.Content) == 0 {
-			tokens += contextfrag.ProviderBudgetTokensFromBytes(len(message.RawContent))
-			continue
-		}
-		tokens += contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdkMessage}))
+		tokens += messageReplayTokens(message)
 	}
 	if !fusing {
 		for _, artifact := range frontier {
@@ -38,6 +33,28 @@ func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUI
 		}
 	}
 	return tokens
+}
+
+func compactedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID) int {
+	selected := make(map[pgtype.UUID]bool, len(compacted))
+	for _, id := range compacted {
+		selected[id] = true
+	}
+	tokens := 0
+	for _, message := range messages {
+		if selected[message.ID] {
+			tokens += messageReplayTokens(message)
+		}
+	}
+	return tokens
+}
+
+func messageReplayTokens(message CompactionCandidate) int {
+	sdkMessage := messageconv.ModelMessageToSDKMessage(message.Record.ModelMessage)
+	if len(sdkMessage.Content) == 0 {
+		return contextfrag.ProviderBudgetTokensFromBytes(len(message.RawContent))
+	}
+	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdkMessage}))
 }
 
 func summaryOutputLimit(replayBudget, modelLimit int) int {

@@ -196,3 +196,21 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 		}
 	}
 }
+
+func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
+	t.Parallel()
+
+	reasoning := `[{"type":"reasoning","text":"` + strings.Repeat("weigh the options ", 1500) + `"}]`
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"ok"`, 2),
+		mkRow(t, "assistant", reasoning, 6000),
+		mkRow(t, "assistant", `"done"`, 2),
+		mkRow(t, "user", `"current question"`, 4),
+	}
+	q := &fakeQueries{uncompacted: rows}
+	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 20)}
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 1))
+	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 3 {
+		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
+	}
+}

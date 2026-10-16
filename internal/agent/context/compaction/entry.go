@@ -32,11 +32,12 @@ var (
 // summarizer-friendly entry without leaking raw JSON, media payloads, or
 // oversized tool blobs.
 type entryPart struct {
-	Type     string          `json:"type"`
-	ToolName string          `json:"toolName"`
-	Input    json.RawMessage `json:"input"`
-	Output   json.RawMessage `json:"output"`
-	Result   json.RawMessage `json:"result"`
+	Type       string          `json:"type"`
+	ToolName   string          `json:"toolName"`
+	ToolCallID string          `json:"toolCallId"`
+	Input      json.RawMessage `json:"input"`
+	Output     json.RawMessage `json:"output"`
+	Result     json.RawMessage `json:"result"`
 }
 
 func isToolCallPartType(value string) bool {
