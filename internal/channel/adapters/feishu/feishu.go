@@ -29,8 +29,9 @@ type assetOpener interface {
 
 // FeishuAdapter implements the channel.Adapter, channel.Sender, and channel.Receiver interfaces for Feishu.
 type FeishuAdapter struct {
-	logger *slog.Logger
-	assets assetOpener
+	logger  *slog.Logger
+	assets  assetOpener
+	cardKit feishuCardKitAvailability
 }
 
 const (
@@ -140,7 +141,7 @@ func (*FeishuAdapter) Descriptor() channel.Descriptor {
 			Reply:          true,
 			Streaming:      true,
 			BlockStreaming: true,
-			Preview:        channel.PreviewEditInPlace,
+			Preview:        channel.PreviewNativeStream,
 			ProactiveSend:  true,
 			// Removing a reaction takes the id the add call returned.
 			ReactionRemoveKey: channel.ReactionRemoveByReactionID,
@@ -709,6 +710,7 @@ func (a *FeishuAdapter) OpenPreview(ctx context.Context, cfg channel.ChannelConf
 		receiveType:   receiveType,
 		patchInterval: feishuStreamPatchInterval,
 		sendMessage:   a.Send,
+		useCardKit:    a.cardKit.available(cfg.ID),
 	}, nil
 }
 
