@@ -13,13 +13,12 @@ func TestDiscussComposedInputSurvivesEchoThroughProviderAdmission(t *testing.T) 
 	for _, size := range []int{1600, 10000, 80000} {
 		t.Run(strings.Repeat("x", size/10000+1), func(t *testing.T) {
 			service, resolver, _, _, cmd := discussBudgetRecoveryFixture(t)
-			service.SetSyncCompactionMode("off")
 			configureDiscussLifecycle(service)
 			provider := &triggerLifecycleProvider{}
 			resolver.resolveResult.RunConfig.Model.Provider = provider
 			input := strings.Repeat("u", size)
 			rc := timeline.RenderedContext{
-				{MessageID: "old", ReceivedAtMs: 1, Content: []timeline.RenderedContentPiece{{Type: "text", Text: strings.Repeat("h", 20000)}}},
+				{MessageID: "old", ReceivedAtMs: 1, Content: []timeline.RenderedContentPiece{{Type: "text", Text: strings.Repeat("h", 1200)}}},
 				{MessageID: "current", ReceivedAtMs: 2, Content: []timeline.RenderedContentPiece{{Type: "text", Text: input}}},
 				{MessageID: "echo", ReceivedAtMs: 3, IsSelfSent: true, Content: []timeline.RenderedContentPiece{{Type: "text", Text: "self echo"}}},
 			}

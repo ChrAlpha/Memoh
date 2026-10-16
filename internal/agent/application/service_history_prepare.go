@@ -11,12 +11,10 @@ import (
 )
 
 type preparedHistoryContext struct {
-	messages          []ModelMessage
-	records           []historyfrag.HistoryRecord
-	estimatedTokens   int
-	compactableTokens int
-	pressureTokens    int
-	viewFrom          time.Time
+	messages       []ModelMessage
+	records        []historyfrag.HistoryRecord
+	pressureTokens int
+	viewFrom       time.Time
 }
 
 func (s *Service) prepareHistoryContext(
@@ -51,15 +49,12 @@ func (s *Service) prepareHistoryContext(
 		return preparedHistoryContext{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
-	compactableTokens := totalCompactableHistoryTokens(loaded)
-	messages, records, estimatedTokens := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
+	messages, records := historyMessagesFromRecords(loaded)
 	return preparedHistoryContext{
-		messages:          messages,
-		records:           records,
-		estimatedTokens:   estimatedTokens,
-		compactableTokens: compactableTokens,
-		pressureTokens:    estimateMessagesTokens(loaded),
-		viewFrom:          viewFrom,
+		messages:       messages,
+		records:        records,
+		pressureTokens: estimateMessagesTokens(loaded),
+		viewFrom:       viewFrom,
 	}, nil
 }
 

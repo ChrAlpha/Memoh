@@ -108,12 +108,11 @@ func TestExternalDiscussOversizedBatchCompactsOlderInputOrRecordsOmission(t *tes
 	for _, id := range []string{"a", "b", "c", "d"} {
 		messages = append(messages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("x", 1200), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
 	}
-	for _, mode := range []string{"shadow", "off"} {
+	for _, exhausted := range []bool{false, true} {
 		service, compactor := newControllerPolicyService(t, nil)
 		service.SetContextAbsoluteMaxTokens(1000)
-		service.SetSyncCompactionMode(mode)
-		got, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussMessages: messages}, "", 0)
-		if mode == "shadow" {
+		got, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussMessages: messages, discussRecoveryExhausted: exhausted}, "", 0)
+		if !exhausted {
 			if !errors.Is(err, native.ErrContextRecompose) || len(compactor.configs) != 1 {
 				t.Fatalf("older input must be compacted: err=%v compactions=%d", err, len(compactor.configs))
 			}
@@ -288,61 +287,53 @@ func TestExternalDiscussFinalAdmissionRejectsIrreducibleContext(t *testing.T) {
 }
 
 func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *testing.T) {
-	for _, mode := range []string{"shadow", "off"} {
-		t.Run(mode, func(t *testing.T) {
-			pool := &recordingACPPrompter{}
-			messages := &recordingMessageService{}
-			external := newACPLifecycleService(t, pool, messages, nil)
-			service := newDiscussTestService(&fakeRunner{}, &fakeAgentStreamer{}, &fakeDiscussService{
-				resolveResult: ResolveRunConfigResult{RuntimeType: sessionpkg.RuntimeACPAgent},
-			})
-			service.messageService = messages
-			service.botPermissions = external.botPermissions
-			service.sessionService = external.sessionService
-			service.SetACPSessionPool(pool)
-			service.turnHooks.streamChat = nil
-			service.SetContextAbsoluteMaxTokens(1000)
-			service.SetSyncCompactionMode(mode)
-			policy, compactor := newControllerPolicyService(t, nil)
-			service.settingsService, service.modelsService = policy.settingsService, policy.modelsService
-			service.queries = &externalDiscussQueries{recoveryHistoryQueries: &recoveryHistoryQueries{controllerQueries: policy.queries.(*controllerQueries)}}
-			service.compactionService = compactor
-			configureDiscussLifecycle(service)
-			published := 0
-			service.publishTurnEvent = func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error { published++; return nil }
-			cmd := lifecycleDiscussCommand()
-			cmd.DiscussMessages = []turn.DiscussMessage{
-				{Role: "user", Content: strings.Repeat("s", 2000), CompactionArtifactID: "summary"},
-				{Role: "user", Content: strings.Repeat("c", 1400)},
-			}
-			handle, err := service.StartTurn(t.Context(), cmd)
-			if err != nil {
-				t.Fatal(err)
-			}
-			recomposed := false
-			for event := range handle.Events() {
-				recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
-				if event.Kind == string(native.EventContextRecompose) {
-					t.Fatal("private runtime control leaked")
-				}
-			}
-			failures := 0
-			for err := range handle.Errs() {
-				failures++
-				if apperror.CodeOf(err) != apperror.CodeContextProtectedOverflow || errors.Is(err, native.ErrContextRecompose) {
-					t.Fatalf("unexpected failure: %v", err)
-				}
-			}
-			if mode == "shadow" && (!recomposed || failures != 0 || len(compactor.configs) != 1) {
-				t.Fatalf("recovery outcome: recompose=%v failures=%d compactions=%d", recomposed, failures, len(compactor.configs))
-			}
-			if mode == "off" && (recomposed || failures != 1 || len(compactor.configs) != 0) {
-				t.Fatal("explicit off did not fail closed")
-			}
-			if pool.calls != 0 || published != 0 || len(messages.persisted) != 0 || len(messages.roundOptions) != 0 || len(messages.deleted) != 0 {
-				t.Fatalf("rejected context had side effects: driver=%d public=%d history=%d rounds=%d deletes=%d", pool.calls, published, len(messages.persisted), len(messages.roundOptions), len(messages.deleted))
-			}
-		})
+	pool := &recordingACPPrompter{}
+	messages := &recordingMessageService{}
+	external := newACPLifecycleService(t, pool, messages, nil)
+	service := newDiscussTestService(&fakeRunner{}, &fakeAgentStreamer{}, &fakeDiscussService{
+		resolveResult: ResolveRunConfigResult{RuntimeType: sessionpkg.RuntimeACPAgent},
+	})
+	service.messageService = messages
+	service.botPermissions = external.botPermissions
+	service.sessionService = external.sessionService
+	service.SetACPSessionPool(pool)
+	service.turnHooks.streamChat = nil
+	service.SetContextAbsoluteMaxTokens(1000)
+	policy, compactor := newControllerPolicyService(t, nil)
+	service.settingsService, service.modelsService = policy.settingsService, policy.modelsService
+	service.queries = &externalDiscussQueries{recoveryHistoryQueries: &recoveryHistoryQueries{controllerQueries: policy.queries.(*controllerQueries)}}
+	service.compactionService = compactor
+	configureDiscussLifecycle(service)
+	published := 0
+	service.publishTurnEvent = func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error { published++; return nil }
+	cmd := lifecycleDiscussCommand()
+	cmd.DiscussMessages = []turn.DiscussMessage{
+		{Role: "user", Content: strings.Repeat("s", 2000), CompactionArtifactID: "summary"},
+		{Role: "user", Content: strings.Repeat("c", 1400)},
+	}
+	handle, err := service.StartTurn(t.Context(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recomposed := false
+	for event := range handle.Events() {
+		recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
+		if event.Kind == string(native.EventContextRecompose) {
+			t.Fatal("private runtime control leaked")
+		}
+	}
+	failures := 0
+	for err := range handle.Errs() {
+		failures++
+		if apperror.CodeOf(err) != apperror.CodeContextProtectedOverflow || errors.Is(err, native.ErrContextRecompose) {
+			t.Fatalf("unexpected failure: %v", err)
+		}
+	}
+	if !recomposed || failures != 0 || len(compactor.configs) != 1 {
+		t.Fatalf("recovery outcome: recompose=%v failures=%d compactions=%d", recomposed, failures, len(compactor.configs))
+	}
+	if pool.calls != 0 || published != 0 || len(messages.persisted) != 0 || len(messages.roundOptions) != 0 || len(messages.deleted) != 0 {
+		t.Fatalf("rejected context had side effects: driver=%d public=%d history=%d rounds=%d deletes=%d", pool.calls, published, len(messages.persisted), len(messages.roundOptions), len(messages.deleted))
 	}
 }
 
@@ -375,7 +366,6 @@ func TestExternalDiscussFailedRecoveryReportsBudgetUnsatisfied(t *testing.T) {
 	}}
 	service.compactionService = runner
 	service.SetContextAbsoluteMaxTokens(1000)
-	service.SetSyncCompactionMode("shadow")
 	_, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{
 		BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
 		discussMessages: []turn.DiscussMessage{
