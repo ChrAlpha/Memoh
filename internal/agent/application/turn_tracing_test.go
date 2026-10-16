@@ -362,7 +362,7 @@ func spanTestEntries() []spanTestEntry {
 				_ = service.driveUnroutedContinuation(ctx, decisionContinuation{
 					Req: ChatRequest{BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, Query: directLifecyclePrompt},
 					Setup: func(ctx context.Context, req ChatRequest) (runPlan, error) {
-						return service.externalRunPlan(ctx, req, runSpec{Input: inputAccepted}, service.externalDrivers[session.RuntimeACPAgent], "")
+						return service.externalRunPlan(ctx, req, runSpec{Input: inputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
 					},
 				}, nil)
 			}()

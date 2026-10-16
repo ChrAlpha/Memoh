@@ -26,12 +26,6 @@ const (
 // feishuPreview shows one reply as an interactive card that is patched while
 // the reply is produced. The card opens as a placeholder and takes the streamed
 // text, then the final text.
-//
-// When useCardKit is true a CardKit card entity is created first; its text is
-// pushed by element-content updates (giving the typewriter effect) and
-// streaming mode is closed once text is final. If the entity cannot be created
-// (e.g. missing cardkit:card:write scope) useCardKit is set to false and the
-// stream falls back to ordinary message-PATCH for the rest of this reply.
 type feishuPreview struct {
 	adapter       *FeishuAdapter
 	cfg           channel.ChannelConfig
@@ -42,10 +36,6 @@ type feishuPreview struct {
 	receiveType   string
 	cardMessageID string
 	placeholder   bool
-	// useCardKit enables the CardKit streaming path for this preview.
-	useCardKit    bool
-	cardID        string
-	cardSequence  int
 	textBuffer    strings.Builder
 	lastPatchedAt time.Time
 	lastPatched   string
@@ -109,9 +99,7 @@ func (s *feishuPreview) Update(ctx context.Context, event channel.PreparedStream
 		if err := s.ensureCard(ctx, feishuStreamThinkingText); err != nil {
 			return err
 		}
-		err := s.patchCard(ctx, channel.ErrorReplyText(event.ErrorCode, errText))
-		s.finishCard(ctx)
-		return err
+		return s.patchCard(ctx, channel.ErrorReplyText(event.ErrorCode, errText))
 	default:
 		return nil
 	}
@@ -145,7 +133,6 @@ func (s *feishuPreview) Finish(ctx context.Context, final *channel.PreparedStrea
 		if err := s.patchCard(ctx, finalText); err != nil {
 			return err
 		}
-		s.finishCard(ctx)
 	} else if err := s.clearPlaceholder(ctx); err != nil {
 		return err
 	}
@@ -174,8 +161,6 @@ func (s *feishuPreview) Abort(context.Context) error {
 // resetCard forgets the open card, so the next text opens a new one.
 func (s *feishuPreview) resetCard() {
 	s.cardMessageID = ""
-	s.cardID = ""
-	s.cardSequence = 0
 	s.placeholder = false
 	s.lastPatched = ""
 	s.lastPatchedAt = time.Time{}
@@ -215,15 +200,9 @@ func (s *feishuPreview) ensureCard(ctx context.Context, text string) error {
 	if s.client == nil {
 		return errors.New("feishu client not configured")
 	}
-	// Try CardKit first: create a card entity with streaming_mode so the client
-	// shows a typewriter effect. Fall back to an ordinary patched card when
-	// the entity cannot be created (missing scope, etc.).
-	cardID, content := s.openCardKitEntity(ctx, text)
-	if content == "" {
-		var err error
-		if content, err = buildFeishuStreamCardContent(text); err != nil {
-			return err
-		}
+	content, err := buildFeishuStreamCardContent(text)
+	if err != nil {
+		return err
 	}
 	if s.reply != nil && strings.TrimSpace(s.reply.MessageID) != "" {
 		replyReq := larkim.NewReplyMessageReqBuilder().
@@ -249,7 +228,6 @@ func (s *feishuPreview) ensureCard(ctx context.Context, text string) error {
 			return errors.New("feishu stream reply failed: empty message id")
 		}
 		s.cardMessageID = strings.TrimSpace(*replyResp.Data.MessageId)
-		s.cardID, s.cardSequence = cardID, 0
 		s.placeholder = true
 		s.lastPatched = normalizeFeishuStreamText(text)
 		s.lastPatchedAt = time.Now()
@@ -279,7 +257,6 @@ func (s *feishuPreview) ensureCard(ctx context.Context, text string) error {
 		return errors.New("feishu stream create failed: empty message id")
 	}
 	s.cardMessageID = strings.TrimSpace(*createResp.Data.MessageId)
-	s.cardID, s.cardSequence = cardID, 0
 	s.placeholder = true
 	s.lastPatched = normalizeFeishuStreamText(text)
 	s.lastPatchedAt = time.Now()
@@ -292,16 +269,6 @@ func (s *feishuPreview) patchCard(ctx context.Context, text string) error {
 	}
 	contentText := normalizeFeishuStreamText(text)
 	if contentText == s.lastPatched {
-		return nil
-	}
-	// When a CardKit entity is open, push text via element-content update.
-	if s.cardID != "" {
-		if err := s.streamCardEntityText(ctx, feishuStreamCardText(contentText)); err != nil {
-			return err
-		}
-		s.placeholder = false
-		s.lastPatched = contentText
-		s.lastPatchedAt = time.Now()
 		return nil
 	}
 	content, err := buildFeishuStreamCardContent(contentText)
@@ -542,76 +509,6 @@ func (s *feishuPreview) sendToolCallCard(ctx context.Context, text string) (stri
 		return "", nil
 	}
 	return strings.TrimSpace(*createResp.Data.MessageId), nil
-}
-
-// openCardKitEntity creates a CardKit card entity and returns its ID and the
-// message content that sends it. Both are empty when CardKit is unavailable for
-// this preview or the create call fails; the caller then sends a patched card.
-func (s *feishuPreview) openCardKitEntity(ctx context.Context, text string) (string, string) {
-	if !s.useCardKit {
-		return "", ""
-	}
-	cardID, err := createFeishuCardEntity(ctx, s.client, text)
-	if err != nil {
-		s.useCardKit = false
-		if s.adapter != nil {
-			s.adapter.cardKit.markFailed(s.cfg.ID)
-			if s.adapter.logger != nil {
-				s.adapter.logger.WarnContext(ctx, "feishu: card entity unavailable, patching message cards instead",
-					slog.String("config_id", s.cfg.ID),
-					slog.Any("error", err),
-				)
-			}
-		}
-		return "", ""
-	}
-	content, err := buildFeishuCardEntityMessageContent(cardID)
-	if err != nil {
-		s.useCardKit = false
-		if s.adapter != nil {
-			s.adapter.cardKit.markFailed(s.cfg.ID)
-		}
-		return "", ""
-	}
-	return cardID, content
-}
-
-func (s *feishuPreview) nextCardSequence() int {
-	s.cardSequence++
-	return s.cardSequence
-}
-
-// streamCardEntityText pushes full text to the current card entity. A single
-// retry after reopening streaming mode covers the case where Feishu has closed
-// it after ten minutes.
-func (s *feishuPreview) streamCardEntityText(ctx context.Context, text string) error {
-	err := streamFeishuCardEntityText(ctx, s.client, s.cardID, s.nextCardSequence(), text)
-	if err == nil {
-		return nil
-	}
-	if reopenErr := setFeishuCardEntityStreaming(ctx, s.client, s.cardID, s.nextCardSequence(), true); reopenErr != nil {
-		return errors.Join(err, reopenErr)
-	}
-	return streamFeishuCardEntityText(ctx, s.client, s.cardID, s.nextCardSequence(), text)
-}
-
-// finishCard closes streaming mode on the current card entity. Failure only
-// leaves the "[生成中...]" preview until Feishu closes streaming on its own;
-// the error is logged and not returned.
-func (s *feishuPreview) finishCard(ctx context.Context) {
-	if s.cardID == "" {
-		return
-	}
-	cardID := s.cardID
-	s.cardID = ""
-	if err := setFeishuCardEntityStreaming(ctx, s.client, cardID, s.nextCardSequence(), false); err != nil {
-		if s.adapter != nil && s.adapter.logger != nil {
-			s.adapter.logger.WarnContext(ctx, "feishu: close card entity streaming failed",
-				slog.String("config_id", s.cfg.ID),
-				slog.Any("error", err),
-			)
-		}
-	}
 }
 
 func normalizeFeishuStreamText(text string) string {

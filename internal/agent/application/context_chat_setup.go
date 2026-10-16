@@ -44,7 +44,10 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 		if spec.Replacement != nil {
 			return runPlan{}, apperror.New(apperror.CodeExternalAgentTurnReplacementUnsupported, nil)
 		}
-		return s.externalRunPlan(ctx, req, spec, dispatch.driver, "")
+		// A runtime that owns its conversation context is prompted with what
+		// the entry resolved rather than with a query: discuss hands it the
+		// whole batch, which is history and not a message of its own.
+		return s.externalRunPlan(ctx, req, spec, dispatch.driver)
 	}
 
 	ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
@@ -129,12 +132,15 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 }
 
 // externalRunPlan resolves a run an External Agent runtime executes, for every
-// entry that has one: the chat entries and the schedule fire. prompt is what
-// the driver is prompted with, empty for the request's own query. The plan
-// carries the context lifecycle the run's context sections build, so the
-// lifecycle row of a runtime's turn records what the runtime was given, whoever
-// started it.
-func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec runSpec, driver external.Driver, prompt string) (runPlan, error) {
+// entry that has one: the chat entries and the schedule fire. What the driver
+// is prompted with is the request's model text, which an entry whose prompt is
+// not the user's own message sets on the request itself (ModelQuery): a
+// schedule fire prompts with its generated prompt, and discuss with the context
+// it assembles. It is never a parameter, so an entry that prompts with
+// something else cannot forget to pass it. The plan carries the context
+// lifecycle the run's context sections build, so the lifecycle row of a
+// runtime's turn records what the runtime was given, whoever started it.
+func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec runSpec, driver external.Driver) (runPlan, error) {
 	plan, req, err := s.prepareExternal(ctx, req, driver)
 	if err != nil {
 		return runPlan{}, err
@@ -156,7 +162,7 @@ func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec run
 			service:    s,
 			plan:       plan,
 			req:        req,
-			prompt:     prompt,
+			prompt:     modelQueryText(req),
 			unattended: spec.Unattended,
 			input:      spec.Input,
 			lifecycle:  lifecycle,

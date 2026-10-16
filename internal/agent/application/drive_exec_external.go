@@ -389,10 +389,6 @@ func (e *externalExecutor) cleanupProjectionsIn(ctx context.Context) { e.cleanup
 
 // promptInput is the driver call for this run.
 func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.StreamEvent)) external.PromptInput {
-	prompt := e.prompt
-	if prompt == "" {
-		prompt = e.req.Query
-	}
 	return external.PromptInput{
 		Steering:                 e.service.runtimeSteering(e.req),
 		BotID:                    e.req.BotID,
@@ -401,7 +397,7 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		ThreadID:                 e.req.ThreadID,
 		RunID:                    e.req.RunID,
 		RouteID:                  e.req.RouteID,
-		Prompt:                   prompt,
+		Prompt:                   e.prompt,
 		ContextMarkdown:          e.plan.contextMarkdown,
 		ContextURI:               e.plan.contextURI,
 		ContextBudgetMaxTokens:   e.service.runtimeContextBudgetDefault(ctx, e.req.BotID),

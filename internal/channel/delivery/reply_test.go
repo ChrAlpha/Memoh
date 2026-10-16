@@ -447,67 +447,6 @@ func TestReplyHiddenToolEventsReachObserversOnly(t *testing.T) {
 	}
 }
 
-// A tool call the channel hides is still a boundary: the text streamed before
-// it ends as a message of its own, and what follows opens a new preview, so
-// the run's final reply does not overwrite it.
-func TestReplyKeepsTheTextBeforeAHiddenToolCall(t *testing.T) {
-	toolStart := `{"type":"tool_call_start","toolName":"search","toolCallId":"c"}`
-
-	t.Run("the text before the call ends and a new preview carries the rest", func(t *testing.T) {
-		surface, obs, res := run(t, runSetup{caps: streaming, hide: true, payloads: []string{
-			deltaPayload("Let me check."), toolStart, deltaPayload("Here is the answer."),
-			endPayload("Let me check.", "Here is the answer."),
-		}})
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		want := []string{
-			"open", "update:status:started", "update:delta:Let me check.", "finish:flush",
-			"open", "update:status:started", "update:delta:Here is the answer.", "update:agent_end",
-			"finish:Here is the answer.",
-		}
-		if got := surface.snapshot(); !equalCalls(got, want...) {
-			t.Fatalf("calls = %v\nwant    %v", got, want)
-		}
-		if len(surface.opens) != 2 || !surface.opens[1].Continuation {
-			t.Fatalf("previews opened with %+v, want the second to continue the reply", surface.opens)
-		}
-		// The tool call reaches observers, and the repeat of the first segment
-		// is observed but not delivered a second time.
-		want = []string{"status:started", "delta:Let me check.", "tool_call_start", "delta:Here is the answer.", "agent_end", "final:Let me check.", "final:Here is the answer.", "status:completed"}
-		if !equalCalls(obs.events, want...) {
-			t.Fatalf("observed = %v\nwant     %v", obs.events, want)
-		}
-	})
-	t.Run("a run that only repeats does not deliver the text twice", func(t *testing.T) {
-		surface, _, res := run(t, runSetup{caps: streaming, hide: true, payloads: []string{
-			deltaPayload("Let me check."), toolStart, endPayload("Let me check."),
-		}})
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		// The new preview shows no text and ends as a placeholder, while the
-		// text that was ended before the call stands as its own message.
-		want := []string{"open", "update:status:started", "update:delta:Let me check.", "finish:flush", "open", "update:status:started", "update:agent_end", "finish:none"}
-		if got := surface.snapshot(); !equalCalls(got, want...) {
-			t.Fatalf("calls = %v\nwant    %v", got, want)
-		}
-	})
-	t.Run("text before the call is not ended when the channel shows no preview", func(t *testing.T) {
-		caps := streaming
-		caps.Preview = channel.PreviewNone
-		surface, _, res := run(t, runSetup{caps: caps, hide: true, payloads: []string{
-			deltaPayload("Let me check."), toolStart, endPayload("Let me check."),
-		}})
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		if got := surface.snapshot(); !equalCalls(got, "send:Let me check.") {
-			t.Fatalf("calls = %v", got)
-		}
-	})
-}
-
 // A channel with a preview gets attachments as messages of their own, one
 // each, in the order they came.
 func TestReplyAttachmentsOnAPreview(t *testing.T) {

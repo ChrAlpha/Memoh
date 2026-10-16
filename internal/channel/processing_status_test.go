@@ -186,6 +186,7 @@ func TestProcessingStatusStopsRefreshWhenContextEnds(t *testing.T) {
 	status := channel.StartProcessingStatus(ctx, fakeRefreshingNotifier{fakeStatusNotifier: base, interval: time.Millisecond}, channel.ChannelConfig{}, channel.InboundMessage{}, channel.ProcessingStatusInfo{}, nil)
 	waitForRefreshes(t, base, 1)
 	cancel()
+	// Returns once the loop observed the cancellation.
 	status.StopRefresh()
 	stopped := base.refreshes.Load()
 	time.Sleep(20 * time.Millisecond)
@@ -196,30 +197,48 @@ func TestProcessingStatusStopsRefreshWhenContextEnds(t *testing.T) {
 
 func TestProcessingStatusNilNotifierIsInert(t *testing.T) {
 	status := startTestStatus(t, nil, func(context.Context, string, error) {
-		t.Error("error func should not be called for nil notifier")
+		t.Fatal("inert status reported an error")
 	})
-	status.PauseRefresh()
-	status.ResumeRefresh()
 	status.StopRefresh()
 	status.Complete(context.Background())
-	status.Fail(context.Background(), errors.New("x"))
+	status.Fail(context.Background(), errors.New("ignored"))
+
+	var nilStatus *channel.ProcessingStatus
+	nilStatus.StopRefresh()
+	nilStatus.Complete(context.Background())
+	nilStatus.Fail(context.Background(), errors.New("ignored"))
 }
 
-func TestProcessingStatusPauseResume(t *testing.T) {
+func TestProcessingStatusPauseHoldsRefreshUntilResume(t *testing.T) {
 	base := &fakeStatusNotifier{}
 	status := startTestStatus(t, fakeRefreshingNotifier{fakeStatusNotifier: base, interval: 5 * time.Millisecond}, nil)
+	defer status.Complete(context.Background())
 
-	// Pause then wait: no refreshes during pause.
+	waitForRefreshes(t, base, 1)
 	status.PauseRefresh()
+	// A tick already past the pause check may still land; after that, none.
+	time.Sleep(15 * time.Millisecond)
+	paused := base.refreshes.Load()
 	time.Sleep(30 * time.Millisecond)
-	before := base.refreshes.Load()
-	time.Sleep(20 * time.Millisecond)
-	if got := base.refreshes.Load(); got != before {
-		t.Fatalf("refresh fired while paused: %d -> %d", before, got)
+	if got := base.refreshes.Load(); got != paused {
+		t.Fatalf("refreshes continued while paused: %d -> %d", paused, got)
 	}
 
-	// Resume: refreshes restart.
 	status.ResumeRefresh()
-	waitForRefreshes(t, base, before+1)
-	status.Complete(context.Background())
+	waitForRefreshes(t, base, paused+2)
+}
+
+func TestProcessingStatusResumeRefreshesImmediately(t *testing.T) {
+	base := &fakeStatusNotifier{}
+	status := startTestStatus(t, fakeRefreshingNotifier{fakeStatusNotifier: base, interval: time.Hour}, nil)
+	defer status.Complete(context.Background())
+
+	status.ResumeRefresh() // not paused: no-op
+	status.PauseRefresh()
+	status.ResumeRefresh()
+	waitForRefreshes(t, base, 1)
+	time.Sleep(20 * time.Millisecond)
+	if got := base.refreshes.Load(); got != 1 {
+		t.Fatalf("refreshes = %d, want exactly the one sent on resume", got)
+	}
 }

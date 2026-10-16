@@ -233,7 +233,8 @@ func (s *Service) externalSchedulePlan(ctx context.Context, req ChatRequest, spe
 		MaxCalls:    payload.MaxCalls,
 		Command:     payload.Command,
 	})
-	return s.externalRunPlan(ctx, req, spec, driver, prompt)
+	req.ModelQuery = prompt
+	return s.externalRunPlan(ctx, req, spec, driver)
 }
 
 // scheduleSubmission is the canonical fingerprint input for a triggered turn.

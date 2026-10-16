@@ -208,7 +208,24 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		// against it rather than handing anything back.
 		Input: inputAccepted,
 	}
+	// The run builds its context from history like any other turn, and the text
+	// the model is prompted with is that context. A runtime that owns its own
+	// conversation context does not read history itself, so the entry renders
+	// the context into the text the run is prompted with. The two facts travel
+	// together: a prompt that carries the whole context is also a reason to
+	// start the runtime fresh, because a resumed one would be shown the same
+	// batch twice. The assembly runs inside the run, after admission, so a wake
+	// that answers nothing pays for nothing, and the rendered text is what the
+	// run stores for a crash resume.
 	spec.Setup = func(setupCtx context.Context, req ChatRequest) (runPlan, error) {
+		if externalRuntime {
+			prompt, err := s.discussExternalPrompt(setupCtx, req)
+			if err != nil {
+				return runPlan{}, err
+			}
+			req.ModelQuery = prompt
+			req.ForceFreshRuntime = true
+		}
 		return s.chatSetup(setupCtx, req, spec)
 	}
 
