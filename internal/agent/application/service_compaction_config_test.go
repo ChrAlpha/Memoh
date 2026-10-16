@@ -80,7 +80,7 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 		ThreadID: "00000000-0000-0000-0000-000000000404",
 	}, settings.Settings{
 		CompactionModelID:       modelUUID,
-		CompactionTargetPercent: intPtr(40),
+		CompactionTargetPercent: intPointer(40),
 	}, 150000, "")
 	if err != nil {
 		t.Fatalf("buildCompactionConfig: %v", err)
@@ -100,56 +100,6 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 	}
 	if cfg.MaxCompactTokens != 170000 {
 		t.Fatalf("MaxCompactTokens = %d, want 170000 (85%% of the summarizer window)", cfg.MaxCompactTokens)
-	}
-}
-
-func TestAsyncCompactionInputTokensPrefersKnownCompactableHistory(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name          string
-		resolved      resolvedContext
-		providerInput int
-		want          int
-	}{
-		{
-			name:          "includes summary pressure without provider overhead",
-			resolved:      resolvedContext{compactableTokens: 4000, compactableTokensKnown: true, historyPressureTokens: 8000},
-			providerInput: 12000,
-			want:          8000,
-		},
-		{
-			name:          "summary-only history can recover",
-			resolved:      resolvedContext{compactableTokensKnown: true, historyPressureTokens: 8000},
-			providerInput: 12000,
-			want:          8000,
-		},
-		{
-			name:          "legacy raw projection excludes provider overhead",
-			resolved:      resolvedContext{compactableTokens: 4000, compactableTokensKnown: true},
-			providerInput: 9000,
-			want:          4000,
-		},
-		{
-			name:          "known empty history stays zero",
-			resolved:      resolvedContext{compactableTokensKnown: true},
-			providerInput: 9000,
-			want:          0,
-		},
-		{
-			name:          "pipeline without a raw projection falls back to provider usage",
-			resolved:      resolvedContext{},
-			providerInput: 9000,
-			want:          9000,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := asyncCompactionInputTokens(tc.resolved, tc.providerInput); got != tc.want {
-				t.Fatalf("asyncCompactionInputTokens() = %d, want %d", got, tc.want)
-			}
-		})
 	}
 }
 
@@ -184,7 +134,7 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 		ThreadID: "00000000-0000-0000-0000-000000000414",
 	}, settings.Settings{
 		CompactionModelID:       modelUUID,
-		CompactionTargetPercent: intPtr(20),
+		CompactionTargetPercent: intPointer(20),
 	}, 150000, "")
 	if err != nil {
 		t.Fatalf("buildCompactionConfig() error = %v, want nil", err)

@@ -379,8 +379,6 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	if len(terminalPayload) > 0 && !h.emit(string(terminalEvent.Type), terminalPayload) {
 		return
 	}
-
-	s.scheduleDiscussCompaction(ctx, cmd, resolved.ModelID)
 }
 
 func (s *Service) persistDiscussTerminalSnapshot(
@@ -667,9 +665,6 @@ func (s *Service) pumpDiscussAgent(ctx context.Context, cmd turn.StartTurnComman
 			h.failed.Store(true)
 			return
 		}
-	}
-	if !h.failed.Load() {
-		s.scheduleDiscussCompaction(ctx, cmd, "")
 	}
 }
 

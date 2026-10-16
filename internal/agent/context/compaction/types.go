@@ -73,16 +73,4 @@ type TriggerConfig struct {
 	// kept raw must fit it, and only ProtectedSources name the current turn.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
-
-	// Manual marks a user-initiated compaction (slash command, HTTP endpoint).
-	// Such a request bypasses the per-session failure cooldown so a user who
-	// just fixed their credentials/model isn't told "done" while nothing runs.
-	// Automatic per-request paths leave this false to keep the cooldown backstop.
-	Manual bool
-
-	// HardPressure marks an automatic trigger fired at or above the blocking
-	// share of the context window. Such retries re-attempt on an exponential
-	// backoff instead of waiting out the full failure cooldown, because every
-	// turn until a summary lands degrades or fails.
-	HardPressure bool
 }

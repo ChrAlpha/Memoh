@@ -455,7 +455,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 					hasSnapshot = true
 					outcome.observeSnapshot(snap)
 					if !stored && !runOwnershipLost(streamCtx) && stepCommitter != nil {
-						if storeErr := stepCommitter.finish(streamCtx, extractInputTokensFromUsage(snap.usage)); storeErr != nil {
+						if storeErr := stepCommitter.finish(streamCtx); storeErr != nil {
 							terminalPersistErr = runtimeHistoryError(storeErr)
 							outcome.recordCause(terminalPersistErr)
 							s.logger.ErrorContext(ctx, "stream step finalization failed", slog.Any("error", storeErr))
@@ -481,7 +481,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 				case !hasVisibleOutput:
 					stored = true
 				case stepCommitter != nil:
-					if storeErr := stepCommitter.finish(streamCtx, rc.estimatedTokens); storeErr != nil {
+					if storeErr := stepCommitter.finish(streamCtx); storeErr != nil {
 						terminalPersistErr = runtimeHistoryError(storeErr)
 					} else {
 						stored = true
@@ -520,7 +520,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		// snapshot are treated as unsent so the Web UI can restore the draft
 		// without polluting history.
 		if !stored && stepCommitter != nil && !runOwnershipLost(streamCtx) {
-			if storeErr := stepCommitter.finish(streamCtx, rc.estimatedTokens); storeErr != nil {
+			if storeErr := stepCommitter.finish(streamCtx); storeErr != nil {
 				outcome.recordCause(storeErr)
 				s.logger.ErrorContext(ctx, "stream step finalization failed", slog.Any("error", storeErr))
 			}
@@ -801,7 +801,7 @@ func (s *Service) streamChatWSResultWithHooks(
 				hasSnapshot = true
 				outcome.observeSnapshot(snap)
 				if !stored && !runOwnershipLost(ctx) && stepCommitter != nil {
-					if storeErr := stepCommitter.finish(ctx, extractInputTokensFromUsage(snap.usage)); storeErr != nil {
+					if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 						outcome.recordCause(storeErr)
 						s.logger.ErrorContext(ctx, "ws step finalization failed", slog.Any("error", storeErr))
 					} else {
@@ -845,7 +845,7 @@ func (s *Service) streamChatWSResultWithHooks(
 		if !failureRecorded {
 			failureRows = s.recordStepRunFailure(ctx, stepCommitter, uncommittedText.String(), wsFailureCode(req, outcome))
 		}
-		if storeErr := stepCommitter.finish(ctx, rc.estimatedTokens); storeErr != nil {
+		if storeErr := stepCommitter.finish(ctx); storeErr != nil {
 			outcome.recordCause(storeErr)
 			s.logger.ErrorContext(ctx, "ws step finalization failed", slog.Any("error", storeErr))
 		} else {
@@ -988,10 +988,6 @@ func (s *Service) persistTerminalSnapshotResult(ctx context.Context, req ChatReq
 		}
 	}
 
-	if inputTokens := extractInputTokensFromUsage(snap.usage); inputTokens > 0 {
-		s.maybeCompact(context.WithoutCancel(ctx), req, rc, inputTokens)
-	}
-
 	return persisted, nil
 }
 
@@ -1050,12 +1046,6 @@ func (s *Service) persistPartialResult(
 				slog.Int("partial_messages", len(partialMessages)),
 				slog.Bool("idle_timeout", wasIdleTimeout),
 			)
-			// Trigger compaction on the failure path so that oversized
-			// contexts don't deadlock (where the LLM can never succeed and
-			// therefore compaction never fires).
-			if rc.estimatedTokens > 0 {
-				s.maybeCompact(persistCtx, req, rc, rc.estimatedTokens)
-			}
 			return persisted
 		}
 		s.logger.ErrorContext(ctx, "failed to persist partial agent messages",
@@ -1081,10 +1071,6 @@ func (s *Service) persistPartialResult(
 		slog.Bool("idle_timeout", wasIdleTimeout),
 		slog.Bool("visible_output", hasVisibleOutput),
 	)
-
-	if rc.estimatedTokens > 0 {
-		s.maybeCompact(persistCtx, req, rc, rc.estimatedTokens)
-	}
 	return nil
 }
 
@@ -1162,17 +1148,4 @@ func interleaveInjectedMessages(round []ModelMessage, injections []InjectedMessa
 		})
 	}
 	return result
-}
-
-func extractInputTokensFromUsage(raw json.RawMessage) int {
-	if len(raw) == 0 {
-		return 0
-	}
-	var u struct {
-		InputTokens int `json:"inputTokens"`
-	}
-	if json.Unmarshal(raw, &u) != nil {
-		return 0
-	}
-	return u.InputTokens
 }

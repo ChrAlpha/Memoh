@@ -122,7 +122,7 @@ func TestBuildCompactConfigUsesSummarizerWindow(t *testing.T) {
 	if cfg.SummaryWindowTokens != 32000 {
 		t.Fatalf("SummaryWindowTokens = %d, want summarizer window 32000", cfg.SummaryWindowTokens)
 	}
-	if cfg.Ratio != 100 || cfg.TotalInputTokens != 1 || !cfg.Manual {
+	if cfg.Ratio != 100 || cfg.TotalInputTokens != 1 {
 		t.Fatalf("manual config semantics changed: %#v", cfg)
 	}
 }

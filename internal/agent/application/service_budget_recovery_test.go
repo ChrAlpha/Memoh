@@ -114,7 +114,7 @@ func TestChatBudgetRecoveryReloadsOnlyHistory(t *testing.T) {
 	if len(runner.configs) != 1 || history.loads != 1 || history.maxBytes != s.historyLoadMaxBytes(16000) {
 		t.Fatalf("compactions=%d history loads=%d maxBytes=%d", len(runner.configs), history.loads, history.maxBytes)
 	}
-	if compactionCfg := runner.configs[0]; !compactionCfg.HardPressure || compactionCfg.TargetTokens >= 400 || compactionCfg.TotalInputTokens != 3900 {
+	if compactionCfg := runner.configs[0]; compactionCfg.TargetTokens != 0 || compactionCfg.Ratio != 100 || compactionCfg.HistoryBudgetTokens != 984 || compactionCfg.TotalInputTokens != 3900 {
 		t.Fatalf("recovery did not subtract fixed history content: %#v", compactionCfg)
 	}
 	if got.RunID != cfg.RunID || got.Model != cfg.Model || got.InjectCh != cfg.InjectCh || !reflect.DeepEqual(got.ContextToolDefs, cfg.ContextToolDefs) {
@@ -149,10 +149,10 @@ func TestChatBudgetRecoveryCannotBypassFailure(t *testing.T) {
 				}
 				return compaction.Result{Status: compaction.StatusOK}, nil
 			}
-			got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
+			_, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
 			if outcome == "droppable reload" {
-				if err != nil || len(runner.configs) != 2 || countRecoveryText(got.Messages, strings.Repeat("h", 8000)) != 0 {
-					t.Fatalf("final admission did not drop oversized reload: error=%v calls=%d", err, len(runner.configs))
+				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 2 {
+					t.Fatalf("history that still does not fit was trimmed instead of failing: error=%v calls=%d", err, len(runner.configs))
 				}
 				return
 			}
@@ -210,21 +210,12 @@ func TestChatBudgetRecoveryPreservesMaterializedCurrentMedia(t *testing.T) {
 }
 
 func TestChatBudgetRecoveryDeclinesIrreducibleContext(t *testing.T) {
-	for _, scenario := range []string{"fixed hook", "off"} {
-		t.Run(scenario, func(t *testing.T) {
-			s, history, runner, cfg := chatRecoveryFixture(t)
-			switch scenario {
-			case "off":
-				s.SetSyncCompactionMode(scenario)
-			case "fixed hook":
-				cfg.ContextSourceFrags = append(cfg.ContextSourceFrags, contextfrag.TextFrag(contextfrag.TextFragInput{ID: "fixed-hook", Text: strings.Repeat("x", 4000), Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotHistory}))
-			}
-			cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 998}
-			_, recovered, err := cfg.RecoverContextBudget(t.Context(), cfg)
-			if err != nil || recovered || len(runner.configs) != 0 || history.loads != 0 {
-				t.Fatalf("irreducible context ran recovery: recovered=%v error=%v calls=%d loads=%d", recovered, err, len(runner.configs), history.loads)
-			}
-		})
+	_, history, runner, cfg := chatRecoveryFixture(t)
+	cfg.ContextSourceFrags = append(cfg.ContextSourceFrags, contextfrag.TextFrag(contextfrag.TextFragInput{ID: "fixed-hook", Text: strings.Repeat("x", 4000), Kind: contextfrag.KindHookContext, Slot: contextfrag.SlotHistory}))
+	cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 998}
+	_, recovered, err := cfg.RecoverContextBudget(t.Context(), cfg)
+	if err != nil || recovered || len(runner.configs) != 0 || history.loads != 0 {
+		t.Fatalf("irreducible context ran recovery: recovered=%v error=%v calls=%d loads=%d", recovered, err, len(runner.configs), history.loads)
 	}
 }
 
@@ -370,22 +361,35 @@ func TestWSBudgetRecoveryPausesIdleUntilProviderDispatch(t *testing.T) {
 	}
 }
 
-func TestChatBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *testing.T) {
-	s, history, runner, cfg := chatRecoveryFixture(t)
-	cfg.Messages = []sdk.Message{sdk.AssistantMessage(strings.Repeat("h", 8000)), sdk.UserMessage("continue")}
-	cfg.ContextFrags = nil
-	cfg.ContextTrimmableMessages = 1
-	cfg.ContextCurrentUserMessageIndex = intPointer(1)
-	cfg.ContextMemoryMessageIndex = nil
-	cfg.ContextHookText = ""
-	cfg.ContextSourceFrags = buildProviderSourceFrags(t.Context(), cfg, []native.SystemSection{{ID: "system", Kind: contextfrag.KindSystemPrompt, Text: strings.Repeat("s", 3200)}}, nil)
-	cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}, chatHistoryLayout{historyCount: 1, pressureTokens: 2500})
-	got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
-	if err != nil || len(runner.configs) != 1 || history.loads != 1 || countRecoveryText(got.Messages, "compacted history") != 1 {
-		t.Fatalf("ordinary history was trimmed instead of compacted: error=%v calls=%d loads=%d messages=%v", err, len(runner.configs), history.loads, got.Messages)
-	}
-	if runner.configs[0].TargetTokens != 399 || runner.configs[0].TotalInputTokens != 3125 {
-		t.Fatalf("ordinary recovery did not use history allowance 998: %#v", runner.configs[0])
+func TestChatBudgetRecoveryCompactsOrdinaryHistoryOrFails(t *testing.T) {
+	for _, summarizerFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("summarizer_fails=%v", summarizerFails), func(t *testing.T) {
+			s, history, runner, cfg := chatRecoveryFixture(t)
+			if summarizerFails {
+				runner.run = func() (compaction.Result, error) { return compaction.Result{}, errors.New("summarizer down") }
+			}
+			cfg.Messages = []sdk.Message{sdk.AssistantMessage(strings.Repeat("h", 8000)), sdk.UserMessage("continue")}
+			cfg.ContextFrags = nil
+			cfg.ContextTrimmableMessages = 1
+			cfg.ContextCurrentUserMessageIndex = intPointer(1)
+			cfg.ContextMemoryMessageIndex = nil
+			cfg.ContextHookText = ""
+			cfg.ContextSourceFrags = buildProviderSourceFrags(t.Context(), cfg, []native.SystemSection{{ID: "system", Kind: contextfrag.KindSystemPrompt, Text: strings.Repeat("s", 3200)}}, nil)
+			cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}, chatHistoryLayout{historyCount: 1, pressureTokens: 2500})
+			got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
+			if len(runner.configs) != 1 || runner.configs[0].Ratio != 100 || runner.configs[0].HistoryBudgetTokens != 998 || runner.configs[0].TotalInputTokens != 3125 {
+				t.Fatalf("recovery did not compact once against history allowance 998: %#v", runner.configs)
+			}
+			if summarizerFails {
+				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || history.loads != 0 {
+					t.Fatalf("failed compaction must fail the run without trimming history: error=%v loads=%d", err, history.loads)
+				}
+				return
+			}
+			if err != nil || history.loads != 1 || countRecoveryText(got.Messages, "compacted history") != 1 {
+				t.Fatalf("ordinary history was not compacted: error=%v loads=%d messages=%v", err, history.loads, got.Messages)
+			}
+		})
 	}
 }
 
@@ -476,9 +480,8 @@ func TestChatBudgetRecoveryAccountsForRenderedPipelineSummary(t *testing.T) {
 	}
 }
 
-func TestChatBudgetRecoveryFusesSummaryOnlyHistoryInShadow(t *testing.T) {
+func TestChatBudgetRecoveryFusesSummaryOnlyHistory(t *testing.T) {
 	s, history, runner, cfg := chatRecoveryFixture(t)
-	s.SetSyncCompactionMode("shadow")
 	var frags []contextfrag.ContextFrag
 	for _, frag := range cfg.ContextSourceFrags {
 		if frag.ID != "message.021" {
@@ -497,7 +500,6 @@ func TestBudgetRecoveryRetainsPressureAfterAllHistoryWasTrimmed(t *testing.T) {
 	for _, mode := range []string{"chat", "discuss"} {
 		t.Run(mode, func(t *testing.T) {
 			s, history, runner, cfg := chatRecoveryFixture(t)
-			s.SetSyncCompactionMode("shadow")
 			cfg.Messages = []sdk.Message{sdk.UserMessage("current request")}
 			cfg.ContextFrags = nil
 			cfg.ContextTrimmableMessages = 0

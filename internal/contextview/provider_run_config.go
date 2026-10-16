@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -407,6 +408,11 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 	if budgetErr != nil {
 		recordContextBudgetFailure(ledger, budgetErr)
 		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
+	}
+	if err == nil && cfg.RecoverContextBudget != nil && slices.ContainsFunc(view.Selected, func(frag contextfrag.ContextFrag) bool {
+		return frag.ID == historyTrimNoticeID
+	}) {
+		err = contextfrag.ErrBudgetUnsatisfied
 	}
 	if err != nil {
 		if isContextBudgetError(err) {
