@@ -7,8 +7,8 @@ import (
 
 	"github.com/felinics/memoh/internal/acl"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/route"
 	"github.com/felinics/memoh/internal/i18n"
 	"github.com/felinics/memoh/internal/slash"
 )
@@ -26,33 +26,29 @@ func (p *ChannelInboundProcessor) runtimeSlash(ctx context.Context, cfg channel.
 		return decision, false, nil
 	}
 	service, ok := p.turnSvc.(turn.RuntimeControlService)
-	if !ok || p.sessionEnsurer == nil {
-		return decision, false, nil
-	}
-	finder, ok := p.routeResolver.(interface {
-		Find(context.Context, string, string, string, string) (route.Route, error)
-	})
 	if !ok {
 		return decision, false, nil
 	}
-	existing, err := finder.Find(ctx, identity.BotID, msg.Channel.String(), msg.Conversation.ID, extractThreadID(msg))
-	if err != nil {
-		return decision, false, nil
-	}
-	sess, err := p.sessionEnsurer.GetActiveSession(ctx, existing.ID)
-	if err != nil || !sessionUsesExternalRuntime(sess) {
+	_, sess, found := p.existingActiveSession(ctx, identity, msg)
+	if !found || !sessionUsesExternalRuntime(sess) {
 		return decision, false, nil
 	}
 	if p.acl != nil {
 		allowed, err := p.acl.Evaluate(ctx, acl.EvaluateRequest{BotID: identity.BotID, ChannelIdentityID: identity.ChannelIdentityID, ChannelType: msg.Channel.String(), SourceScope: acl.SourceScope{ConversationType: channel.NormalizeConversationType(msg.Conversation.Type), ConversationID: strings.TrimSpace(msg.Conversation.ID), ThreadID: extractThreadID(msg)}})
 		if err != nil || !allowed {
-			return decision, true, p.sendSlashError(ctx, sender, msg, slash.CodePermissionDenied)
+			return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodePermissionDenied, nil))
 		}
 	}
 	request := turn.RuntimeControlRequest{TeamID: cfg.TeamID, BotID: identity.BotID, ThreadID: sess.ID, ActorID: identity.UserID, Command: selector}
+	if resource := runtimeModelResource(selector); resource != "" {
+		if hasSlashControlAttachments(msg) {
+			return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeSlashAttachmentsUnsupported, nil))
+		}
+		return decision, true, p.runtimeModelSlash(ctx, msg, sender, identity, service, request, resource, invocation.Parsed)
+	}
 	if selector == "permission" {
 		if hasSlashControlAttachments(msg) {
-			return decision, true, p.sendSlashError(ctx, sender, msg, slash.CodeSlashAttachmentsUnsupported)
+			return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeSlashAttachmentsUnsupported, nil))
 		}
 		controls, err := service.RuntimeControls(ctx, request)
 		if err != nil {
@@ -60,7 +56,7 @@ func (p *ChannelInboundProcessor) runtimeSlash(ctx context.Context, cfg channel.
 		}
 		modes := controls.Modes
 		if !modes.Supported {
-			return decision, true, p.sendSlashError(ctx, sender, msg, slash.CodePermissionModeUnsupported)
+			return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(apperror.CodeRuntimeControlUnsupported, nil))
 		}
 		if strings.TrimSpace(invocation.Rest) != "" {
 			request.ModeID = strings.TrimSpace(invocation.Rest)
@@ -97,7 +93,7 @@ func (p *ChannelInboundProcessor) runtimeSlash(ctx context.Context, cfg channel.
 		if decision.Kind == slash.DecisionNormalChat && strings.Contains(selector, "/") {
 			return decision, false, nil
 		}
-		return decision, true, p.sendSlashError(ctx, sender, msg, slash.CodeUnknownSlash)
+		return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeUnknownSlash, nil))
 	}
 	if command.Kind == turn.RuntimeCommandTurn {
 		decision.Kind = slash.DecisionNormalChat
@@ -106,7 +102,7 @@ func (p *ChannelInboundProcessor) runtimeSlash(ctx context.Context, cfg channel.
 		return decision, false, nil
 	}
 	if hasSlashControlAttachments(msg) {
-		return decision, true, p.sendSlashError(ctx, sender, msg, slash.CodeSlashAttachmentsUnsupported)
+		return decision, true, p.sendSlashError(ctx, sender, msg, apperror.New(slash.CodeSlashAttachmentsUnsupported, nil))
 	}
 	loc := p.localizer(ctx, identity.BotID)
 	running := runtimeControlCopy(loc, command.I18nKey, "running_text", command.RunningText, "")

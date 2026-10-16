@@ -140,25 +140,27 @@ type RunConfig struct {
 	ContextToolDefs                []contextfrag.ToolDefAccounting
 	ContextToolDefsResolved        bool
 	ContextBudgetMaxTokens         int
-	ContextHistoryTokenEstimates   []int
-	ContextTrimmableMessages       int
-	ContextCachePlan               contextfrag.CachePlan
-	ContextMutations               *contextfrag.MutationLedger
-	ContextDynamicMutators         []contextfrag.DynamicMutator
-	ContextLifecycle               *contextfrag.LifecycleHolder
-	StepContextCompactor           StepContextCompactor
-	initialProviderMessageCount    int
-	initialProviderPrefixSet       bool
-	providerAttemptState           *providerAttemptState
-	retryDynamicRefs               []dynamicSourceRef
-	dynamicInputs                  *loopDynamicInputs
-	SessionType                    string
-	LiveToolStream                 bool
-	CanRequestUserInput            bool
-	SupportsImageInput             bool
-	SupportsFileInput              bool
-	SupportsToolCall               bool
-	InlineImages                   []sdk.ImagePart
+	// ModelMaxOutputTokens is the model's configured output cap; zero means unknown.
+	ModelMaxOutputTokens         int
+	ContextHistoryTokenEstimates []int
+	ContextTrimmableMessages     int
+	ContextCachePlan             contextfrag.CachePlan
+	ContextMutations             *contextfrag.MutationLedger
+	ContextDynamicMutators       []contextfrag.DynamicMutator
+	ContextLifecycle             *contextfrag.LifecycleHolder
+	StepContextCompactor         StepContextCompactor
+	initialProviderMessageCount  int
+	initialProviderPrefixSet     bool
+	providerAttemptState         *providerAttemptState
+	retryDynamicRefs             []dynamicSourceRef
+	dynamicInputs                *loopDynamicInputs
+	SessionType                  string
+	LiveToolStream               bool
+	CanRequestUserInput          bool
+	SupportsImageInput           bool
+	SupportsFileInput            bool
+	SupportsToolCall             bool
+	InlineImages                 []sdk.ImagePart
 	// ReplyDelivery and DecisionMode are the session facts this run executes
 	// under; see sessionfacts.
 	ReplyDelivery sessionfacts.ReplyDelivery

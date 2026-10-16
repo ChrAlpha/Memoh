@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -90,7 +89,7 @@ func (s *feishuPreview) Update(ctx context.Context, event channel.PreparedStream
 		return s.renderToolCallCard(ctx, event.ToolCall, channel.BuildToolCallEnd(event.ToolCall))
 	case channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd:
 		return nil
-	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted, channel.StreamEventProcessingFailed:
+	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted:
 		return nil
 	case channel.StreamEventError:
 		errText := strings.TrimSpace(event.Error)
@@ -361,70 +360,6 @@ func extractReadableFromJSON(text string) string {
 		}
 	}
 	return text
-}
-
-func buildFeishuCardContent(text string) (string, error) {
-	return buildFeishuCardContentWithTag(text, "lark_md")
-}
-
-func buildFeishuPlainCardContent(text string) (string, error) {
-	return buildFeishuCardContentWithTag(text, "plain_text")
-}
-
-func buildFeishuCardContentWithTag(text string, tag string) (string, error) {
-	if tag == "" {
-		tag = "lark_md"
-	}
-	body := processFeishuCardMarkdown(strings.TrimSpace(text))
-	if tag == "plain_text" {
-		body = strings.TrimSpace(text)
-	}
-	card := map[string]any{
-		"config": map[string]any{
-			"wide_screen_mode": true,
-			"enable_forward":   true,
-			"update_multi":     true,
-		},
-		"elements": []map[string]any{
-			{
-				"tag": "div",
-				"fields": []map[string]any{
-					{
-						"is_short": false,
-						"text": map[string]any{
-							"tag":     tag,
-							"content": body,
-						},
-					},
-				},
-			},
-		},
-	}
-	data, err := json.Marshal(card)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func buildFeishuStreamCardContent(text string) (string, error) {
-	content := normalizeFeishuStreamText(extractReadableFromJSON(text))
-	return buildFeishuCardContent(content)
-}
-
-var feishuCardHeadingPrefix = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
-
-// processFeishuCardMarkdown normalizes markdown for Feishu card lark_md (e.g. ATX headings to bold).
-func processFeishuCardMarkdown(s string) string {
-	s = strings.ReplaceAll(s, "\\n", "\n")
-	s = feishuCardHeadingPrefix.ReplaceAllStringFunc(s, func(m string) string {
-		parts := feishuCardHeadingPrefix.FindStringSubmatch(m)
-		if len(parts) == 2 {
-			return "**" + parts[1] + "**"
-		}
-		return m
-	})
-	return s
 }
 
 // renderToolCallCard posts a card for tool_call_start and patches the same

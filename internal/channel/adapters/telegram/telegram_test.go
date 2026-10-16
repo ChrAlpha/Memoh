@@ -2123,3 +2123,40 @@ func TestResolveAttachmentDownloadErrorOmitsBotToken(t *testing.T) {
 		}
 	})
 }
+
+func TestTelegramAdapter_ProcessingRefreshSendsTypingToReplyTarget(t *testing.T) {
+	adapter := NewTelegramAdapter(nil)
+	var actions []map[string]any
+	bot := newTestTelegramBot(telegramRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(req.URL.Path, "/sendChatAction") {
+			t.Fatalf("unexpected Telegram request path %s", req.URL.Path)
+		}
+		body, _ := io.ReadAll(req.Body)
+		actions = append(actions, decodeTelegramBody(t, body))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)),
+		}, nil
+	}))
+	origGetBot := getOrCreateBotForTest
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
+		return bot, nil
+	}
+	defer func() { getOrCreateBotForTest = origGetBot }()
+
+	if got := adapter.ProcessingRefreshInterval(); got <= 0 || got >= 5*time.Second {
+		t.Fatalf("refresh interval = %s, want below Telegram's ~5s typing expiry", got)
+	}
+	cfg := channel.ChannelConfig{ID: "cfg", Credentials: map[string]any{"bot_token": "fake"}}
+	info := channel.ProcessingStatusInfo{ReplyTarget: "-100123"}
+	if err := adapter.ProcessingRefresh(context.Background(), cfg, channel.InboundMessage{}, info, channel.ProcessingStatusHandle{}); err != nil {
+		t.Fatalf("ProcessingRefresh: %v", err)
+	}
+	if len(actions) != 1 || fmt.Sprint(actions[0]["chat_id"]) != "-100123" || actions[0]["action"] != "typing" {
+		t.Fatalf("chat actions = %v, want one typing action to -100123", actions)
+	}
+	if err := adapter.ProcessingRefresh(context.Background(), cfg, channel.InboundMessage{}, channel.ProcessingStatusInfo{}, channel.ProcessingStatusHandle{}); err != nil || len(actions) != 1 {
+		t.Fatalf("refresh without a reply target sent %d actions, err %v; want none", len(actions)-1, err)
+	}
+}

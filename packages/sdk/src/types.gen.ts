@@ -227,6 +227,8 @@ export type AdaptersCompactResult = {
     results?: Array<AdaptersMemoryItem>;
 };
 
+export type AdaptersCompactUnavailableReason = 'unsupported' | 'not_configured';
+
 export type AdaptersDeleteResponse = {
     message?: string;
 };
@@ -251,7 +253,10 @@ export type AdaptersIngestResult = {
 
 export type AdaptersMemoryCompactCapability = {
     archive?: boolean;
-    reason?: string;
+    /**
+     * Reason says why Semantic is false.
+     */
+    reason?: AdaptersCompactUnavailableReason;
     rebuild_index?: boolean;
     semantic?: boolean;
 };
@@ -820,8 +825,29 @@ export type ChannelChannelCapabilities = {
     native_commands?: boolean;
     native_user_input?: boolean;
     polls?: boolean;
+    /**
+     * Preview selects how a streamed reply is shown. The zero value is
+     * PreviewNone: an adapter that does not declare a mode gets its reply in one
+     * message when the reply is complete.
+     */
+    preview?: ChannelPreviewMode;
+    /**
+     * ProactiveSend reports whether the adapter can still send to the
+     * conversation after ReplyWindow has passed.
+     */
+    proactive_send?: boolean;
+    /**
+     * ReactionRemoveKey says how a reaction is removed: by the message it sat
+     * on, or by the reaction's own id. The zero value is ReactionRemoveByMessageID.
+     */
+    reaction_remove_key?: ChannelReactionRemoveKey;
     reactions?: boolean;
     reply?: boolean;
+    /**
+     * ReplyWindow is how long after an inbound message the platform accepts a
+     * passive reply to it. Zero means the platform imposes no such window.
+     */
+    reply_window?: TimeDuration;
     rich_text?: boolean;
     streaming?: boolean;
     text?: boolean;
@@ -925,6 +951,10 @@ export type ChannelMessagePart = {
 export type ChannelMessagePartType = 'text' | 'link' | 'code_block' | 'mention' | 'emoji' | 'heading' | 'blockquote' | 'list_item';
 
 export type ChannelMessageTextStyle = 'bold' | 'italic' | 'strikethrough' | 'code' | 'underline' | 'spoiler';
+
+export type ChannelPreviewMode = 0 | 1 | 2 | 3;
+
+export type ChannelReactionRemoveKey = 0 | 1;
 
 export type ChannelReplyRef = {
     attachments?: Array<ChannelAttachment>;
@@ -1730,7 +1760,12 @@ export type HandlersAppItem = {
     installation_id?: string;
     installed_at?: string;
     last_checked_at?: string;
+    /**
+     * LastError is text recorded by earlier servers. A failure recorded now
+     * carries LastErrorCode, which clients render as errors.<code>.
+     */
     last_error?: string;
+    last_error_code?: string;
     license?: string;
     name?: string;
     reason?: 'user' | 'required';
@@ -1751,8 +1786,10 @@ export type HandlersAppItem = {
 };
 
 export type HandlersAppListResponse = {
+    dependency_catalog_refreshing?: boolean;
     dependency_catalog_stale?: boolean;
     items?: Array<HandlersAppItem>;
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
@@ -1910,6 +1947,7 @@ export type HandlersConnectorEnabledRequest = {
 };
 
 export type HandlersContainerCpuMetricsResponse = {
+    cores?: number;
     kernel_nanoseconds?: number;
     usage_nanocores?: number;
     usage_nanoseconds?: number;
@@ -1964,7 +2002,11 @@ export type HandlersContainerResourceLimitValuesResponse = {
 };
 
 export type HandlersContainerStorageMetricsResponse = {
+    limit_bytes?: number;
     path?: string;
+    /**
+     * UsedBytes is omitted when only the allotment is known.
+     */
     used_bytes?: number;
 };
 
@@ -2169,6 +2211,7 @@ export type HandlersGetContainerResponse = {
     image?: string;
     legacy?: boolean;
     namespace?: string;
+    removal?: HandlersWorkspaceRemovalResponse;
     runtime_backend?: string;
     status?: string;
     task_running?: boolean;
@@ -2412,6 +2455,28 @@ export type HandlersSnapshotInfo = {
     source?: string;
     updated_at?: string;
     version?: number;
+};
+
+export type HandlersStarterPrompt = {
+    prompt: string;
+    title: string;
+};
+
+export type HandlersStarterPromptsRefreshRequest = {
+    /**
+     * Avoid lists the prompts currently shown, which the new set must not repeat.
+     */
+    avoid?: Array<string>;
+    /**
+     * Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.
+     */
+    locale?: string;
+};
+
+export type HandlersStarterPromptsResponse = {
+    hash: string;
+    items: Array<HandlersStarterPrompt>;
+    unchanged: boolean;
 };
 
 export type HandlersSupermarketAppCategory = {
@@ -2748,7 +2813,15 @@ export type HandlersWorkspaceDependencyItem = {
      */
     installed_version?: string;
     last_checked_at?: string;
+    /**
+     * LastError is text recorded by earlier servers, including the script
+     * output they used to keep. A failure recorded now carries LastErrorCode.
+     */
     last_error?: string;
+    /**
+     * LastErrorCode is the catalog code of a recorded failure, which clients
+     * render as errors.<code>.
+     */
     last_error_code?: string;
     /**
      * LatestVersion is the last upstream check result, omitted until a check
@@ -2803,6 +2876,11 @@ export type HandlersWorkspaceDependencyItem = {
 
 export type HandlersWorkspaceDependencyListResponse = {
     catalog_fetched_at?: string;
+    /**
+     * CatalogRefreshing is set while the catalog is refreshed in the
+     * background; listing again shortly may show a newer catalog.
+     */
+    catalog_refreshing?: boolean;
     catalog_stale?: boolean;
     /**
      * DiscoveryError is set when the workspace is running but could not be
@@ -2813,6 +2891,11 @@ export type HandlersWorkspaceDependencyListResponse = {
     discovery_error?: string;
     items?: Array<HandlersWorkspaceDependencyItem>;
     platform?: HandlersWorkspaceDependencyPlatform;
+    /**
+     * UpdateChecksIncomplete is set by check-updates when some checks did not
+     * finish in time; those keep their last result.
+     */
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
@@ -2892,6 +2975,12 @@ export type HandlersWorkspaceDependencyStreamEvent = {
 export type HandlersWorkspaceDependencyTranslation = {
     description?: string;
     name?: string;
+};
+
+export type HandlersWorkspaceRemovalResponse = {
+    preserve_data?: boolean;
+    state?: 'removing' | 'failed';
+    updated_at?: string;
 };
 
 export type HandlersAcpRuntimeCreateRequest = {
@@ -3408,6 +3497,12 @@ export type ModelsModelConfig = {
     description?: string;
     dimensions?: number;
     /**
+     * MaxOutputTokens is the most output tokens the model can produce in one
+     * response; nil means unknown. When set, every turn requests an explicit
+     * limit within it.
+     */
+    max_output_tokens?: number;
+    /**
      * ReasoningDefaultOn reports whether omitting the thinking field leaves the
      * model thinking. Separate from off-ability: Claude 4.6 can be turned off *and*
      * defaults to off, while Opus 5 can be turned off but defaults to on, so
@@ -3763,6 +3858,11 @@ export type ScheduleListResponse = {
 export type ScheduleLog = {
     bot_id?: string;
     completed_at?: string;
+    error_code?: string;
+    /**
+     * ErrorMessage is the text an earlier server stored; new failures set
+     * ErrorCode and leave it empty.
+     */
     error_message?: string;
     id?: string;
     result_text?: string;
@@ -4084,6 +4184,8 @@ export type SkillsSafeCatalogItem = {
     source_kind?: string;
     state?: string;
 };
+
+export type TimeDuration = -9223372036854776000 | 9223372036854776000 | 1 | 1000 | 1000000 | 1000000000 | 60000000000 | 3600000000000;
 
 export type TurnRuntimeCommand = {
     completed_text?: string;
@@ -7259,9 +7361,9 @@ export type DeleteBotsByBotIdContainerError = DeleteBotsByBotIdContainerErrors[k
 
 export type DeleteBotsByBotIdContainerResponses = {
     /**
-     * No Content
+     * Accepted
      */
-    204: unknown;
+    202: unknown;
 };
 
 export type GetBotsByBotIdContainerData = {
@@ -8252,6 +8354,34 @@ export type PutBotsByBotIdContainerMetricsResponses = {
 };
 
 export type PutBotsByBotIdContainerMetricsResponse = PutBotsByBotIdContainerMetricsResponses[keyof PutBotsByBotIdContainerMetricsResponses];
+
+export type PostBotsByBotIdContainerRemovalCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/removal/cancel';
+};
+
+export type PostBotsByBotIdContainerRemovalCancelErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdContainerRemovalCancelError = PostBotsByBotIdContainerRemovalCancelErrors[keyof PostBotsByBotIdContainerRemovalCancelErrors];
+
+export type PostBotsByBotIdContainerRemovalCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
 
 export type DeleteBotsByBotIdContainerSkillsData = {
     /**
@@ -12596,6 +12726,94 @@ export type GetBotsByBotIdSkillsCatalogResponses = {
 };
 
 export type GetBotsByBotIdSkillsCatalogResponse = GetBotsByBotIdSkillsCatalogResponses[keyof GetBotsByBotIdSkillsCatalogResponses];
+
+export type GetBotsByBotIdStarterPromptsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * BCP 47 language tag the suggestions are written in. Defaults to en.
+         */
+        locale?: string;
+        /**
+         * Hash of the set the client already holds.
+         */
+        known_hash?: string;
+    };
+    url: '/bots/{bot_id}/starter-prompts';
+};
+
+export type GetBotsByBotIdStarterPromptsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdStarterPromptsError = GetBotsByBotIdStarterPromptsErrors[keyof GetBotsByBotIdStarterPromptsErrors];
+
+export type GetBotsByBotIdStarterPromptsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersStarterPromptsResponse;
+};
+
+export type GetBotsByBotIdStarterPromptsResponse = GetBotsByBotIdStarterPromptsResponses[keyof GetBotsByBotIdStarterPromptsResponses];
+
+export type PostBotsByBotIdStarterPromptsRefreshData = {
+    /**
+     * Locale and the prompts on screen
+     */
+    body: HandlersStarterPromptsRefreshRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/starter-prompts/refresh';
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshError = PostBotsByBotIdStarterPromptsRefreshErrors[keyof PostBotsByBotIdStarterPromptsRefreshErrors];
+
+export type PostBotsByBotIdStarterPromptsRefreshResponses = {
+    /**
+     * OK
+     */
+    200: HandlersStarterPromptsResponse;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshResponse = PostBotsByBotIdStarterPromptsRefreshResponses[keyof PostBotsByBotIdStarterPromptsRefreshResponses];
 
 export type GetBotsByBotIdTokenUsageData = {
     body?: never;

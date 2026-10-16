@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 // Type is the channel type identifier for WeChat.
@@ -269,7 +270,7 @@ func (a *WeixinAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg
 	cacheKey := cfg.ID + ":" + target
 	contextToken, ok := a.contextCache.Get(cacheKey)
 	if !ok {
-		return fmt.Errorf("weixin: no context_token cached for target %s (reply-only channel — message can only be sent after receiving an inbound message)", target)
+		return errs.New("weixin: no context_token cached for target (reply-only channel, a message can only be sent after receiving an inbound message)", slog.String("target", target))
 	}
 
 	// Send attachments first if present (media + text in one flow).
@@ -331,7 +332,7 @@ func (a *WeixinAdapter) sendWithAttachments(ctx context.Context, cfg adapterConf
 
 func openAttachment(ctx context.Context, att channel.PreparedAttachment) (io.ReadCloser, error) {
 	if att.Kind != channel.PreparedAttachmentUpload {
-		return nil, fmt.Errorf("weixin attachment requires upload source, got %s", att.Kind)
+		return nil, errs.New("weixin attachment requires upload source", slog.String("kind", string(att.Kind)))
 	}
 	if att.Open == nil {
 		return nil, errors.New("weixin attachment upload is not openable")

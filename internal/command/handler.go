@@ -103,6 +103,8 @@ type ExecuteInput struct {
 	ThreadID         string
 	RouteID          string
 	SessionID        string
+	// SessionRuntime is SessionID's runtime type, when the caller has read it.
+	SessionRuntime string
 	// CommandTarget optionally identifies the bot username for transport-specific
 	// command guidance. Channel callers set it only for Telegram group messages.
 	CommandTarget string
@@ -441,6 +443,7 @@ func (h *Handler) ExecuteResult(ctx context.Context, input ExecuteInput) (res *R
 		ThreadID:          strings.TrimSpace(input.ThreadID),
 		RouteID:           strings.TrimSpace(input.RouteID),
 		SessionID:         strings.TrimSpace(input.SessionID),
+		SessionRuntime:    strings.TrimSpace(input.SessionRuntime),
 		Page:              parsed.Page,
 		Prov:              parsed.Prov,
 		SelectID:          parsed.SelectID,

@@ -57,6 +57,7 @@ it('leaves an accepted run\'s failure to its run view', () => {
         rejectAssistantStream: vi.fn(),
       },
       chatViews: { getSession: vi.fn() },
+      firstSend: { isResent: () => false },
       hasVisibleAssistantBlocks: () => false,
       removeTurnFromSession: vi.fn(),
       sendFailedMessage: () => 'failed',
@@ -80,4 +81,50 @@ it('leaves an accepted run\'s failure to its run view', () => {
 
   const refused = setup(undefined)
   expect(refused.deps.removeTurnFromSession).toHaveBeenCalledOnce()
+})
+
+it('shows the local send-failed copy for an error frame that has no code', () => {
+  const rejectAssistantStream = vi.fn()
+  const assistantTurn = {
+    id: 'assistant', role: 'assistant' as const, messages: [], timestamp: '', streaming: true,
+  }
+  const deps = {
+    assistantStreams: {
+      invocationIdForEvent: () => 'inv-1',
+      getAssistantStream: () => ({ botId: 'bot', sessionId: 'session', assistantTurn }),
+      rejectAssistantStream,
+    },
+    firstSend: { isResent: () => false },
+    hasVisibleAssistantBlocks: () => true,
+    removeTurnFromSession: vi.fn(),
+    sendFailedMessage: () => 'local send failed',
+  } as unknown as RuntimeIntegrationDeps
+  createRuntimeIntegration(deps).handleWebSocketEvent(
+    { type: 'error', message: 'upstream said: secret detail' } as never,
+    'bot',
+  )
+  const failure = rejectAssistantStream.mock.calls[0]![1] as Error
+  expect(failure.message).toBe('local send failed')
+})
+
+it('shows the local send-failed copy for a rejected run that has no code', () => {
+  const rejectAssistantStream = vi.fn()
+  const assistantTurn = {
+    id: 'assistant', role: 'assistant' as const, messages: [], timestamp: '', streaming: true,
+  }
+  const deps = {
+    assistantStreams: {
+      getAssistantStream: () => ({ botId: 'bot', sessionId: 'session', assistantTurn }),
+      rejectAssistantStream,
+    },
+    firstSend: { isResent: () => false },
+    hasVisibleAssistantBlocks: () => true,
+    removeTurnFromSession: vi.fn(),
+    sendFailedMessage: () => 'local send failed',
+  } as unknown as RuntimeIntegrationDeps
+  createRuntimeIntegration(deps).handleWebSocketEvent(
+    { type: 'run_rejected', invocation_id: 'inv-1', message: 'upstream said: secret detail' } as never,
+    'bot',
+  )
+  expect((rejectAssistantStream.mock.calls[0]![1] as Error).message).toBe('local send failed')
 })

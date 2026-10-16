@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
@@ -337,7 +338,7 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 	located, err := h.messageService.LocateByExternalIDBySession(c.Request().Context(), sessionID, externalMessageID, before, after)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, "message not found")
+			return apperror.Wrap(apperror.CodeMessageNotFound, err, nil)
 		}
 		return errs.Wrap(err, "get message")
 	}
@@ -747,11 +748,11 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 		}
 		sess, getErr := h.sessionService.Get(ctx, sessionID)
 		if getErr != nil || sess.BotID != botID {
-			return echo.NewHTTPError(http.StatusNotFound, "session not found")
+			return apperror.New(apperror.CodeSessionNotFound, nil)
 		}
 		ctx, release, resetErr := h.runtimeResets.BeginSessionHistoryReset(ctx, botID, sessionID)
 		if resetErr != nil {
-			return apperror.Wrap(apperror.CodeSessionResetConflict, resetErr, nil)
+			return historyResetError(resetErr)
 		}
 		defer release()
 		if err := h.messageService.DeleteBySession(ctx, sessionID); err != nil {
@@ -760,7 +761,7 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 	} else {
 		ctx, release, resetErr := h.runtimeResets.BeginBotHistoryReset(ctx, botID)
 		if resetErr != nil {
-			return apperror.Wrap(apperror.CodeSessionResetConflict, resetErr, nil)
+			return historyResetError(resetErr)
 		}
 		defer release()
 		if err := h.messageService.DeleteByBot(ctx, botID); err != nil {
@@ -772,6 +773,19 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 }
 
 // --- helpers ---
+
+// historyResetError translates a failure to begin a history reset. The
+// conversation is busy only while something else holds it; any other failure
+// is answered by its fault (docs/errors.md).
+func historyResetError(err error) error {
+	switch {
+	case sessionruntime.IsHistoryResetBusy(err):
+		return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
+	case errors.Is(err, sessionruntime.ErrHistoryResetUnavailable):
+		return apperror.Wrap(apperror.CodeSessionResetUnavailable, err, nil)
+	}
+	return err
+}
 
 func (*MessageHandler) requireChannelIdentityID(c echo.Context) (string, error) {
 	return RequireChannelIdentityID(c)
@@ -797,14 +811,14 @@ func (h *MessageHandler) authorizeBotMessageAccess(c echo.Context, channelIdenti
 	bot, err := h.botService.GetForAccess(ctx, botID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return bots.Bot{}, nil, echo.NewHTTPError(http.StatusNotFound, "bot not found")
+			return bots.Bot{}, nil, apperror.Wrap(apperror.CodeBotNotFound, err, nil)
 		}
 		return bots.Bot{}, nil, errs.Wrap(err, "get bot")
 	}
 	perms, err := h.botService.ResolveUserPermissionsForBot(ctx, bot, channelIdentityID, isAdmin)
 	if err != nil {
 		if errors.Is(err, bots.ErrBotNotFound) {
-			return bots.Bot{}, nil, echo.NewHTTPError(http.StatusNotFound, "bot not found")
+			return bots.Bot{}, nil, apperror.Wrap(apperror.CodeBotNotFound, err, nil)
 		}
 		return bots.Bot{}, nil, errs.Wrap(err, "get bot")
 	}
@@ -824,10 +838,10 @@ func (h *MessageHandler) authorizeMessageSession(c echo.Context, channelIdentity
 	}
 	sess, err := h.sessionService.Get(c.Request().Context(), sessionID)
 	if err != nil || sess.BotID != bot.ID {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	if !canAccessSession(sess, channelIdentityID, perms) {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	return bot, perms, sess, nil
 }
@@ -857,7 +871,7 @@ func (h *MessageHandler) ServeMedia(c echo.Context) error {
 	reader, asset, err := h.mediaService.Open(c.Request().Context(), botID, contentHash)
 	if err != nil {
 		if errors.Is(err, media.ErrAssetNotFound) {
-			return echo.NewHTTPError(http.StatusNotFound, "asset not found")
+			return apperror.Wrap(apperror.CodeMediaAssetNotFound, err, nil)
 		}
 		return errs.Wrap(err, "read media asset")
 	}

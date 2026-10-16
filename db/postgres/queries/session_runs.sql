@@ -111,12 +111,49 @@ WHERE team_id = public.memoh_current_team_id()
 ORDER BY session_id, run_id;
 
 -- name: GetLatestSessionRun :one
+-- The latest run, reported only while it belongs to the session's current
+-- runtime generation. Clearing history and deleting the session move
+-- bot_sessions.runtime_fencing_token past the token of every run claimed
+-- before them, and a run a history reset ended, or retired before it was
+-- ever claimed, carries history_reset. Such a run has nothing left to
+-- report, and no older run stands in for it; nor has any run of a deleted
+-- session.
+--
+-- Ending a run in a way that leaves the session without a live owner is the
+-- one move past a run's token that does not supersede it: the run is still
+-- what the session last did, and its failure is what a subscriber or a
+-- reload has to see. That move is exactly one step, so the exemption names
+-- it; a reset, or any later activation, moves further and keeps the run
+-- hidden.
 SELECT *
-FROM session_runs
-WHERE team_id = public.memoh_current_team_id()
-  AND session_id = sqlc.arg(session_id)
-ORDER BY created_at DESC, run_id DESC
-LIMIT 1;
+FROM session_runs run
+WHERE run.team_id = public.memoh_current_team_id()
+  AND run.session_id = sqlc.arg(session_id)
+  AND run.run_id = (
+    SELECT latest.run_id
+    FROM session_runs latest
+    WHERE latest.team_id = public.memoh_current_team_id()
+      AND latest.session_id = sqlc.arg(session_id)
+    ORDER BY latest.created_at DESC, latest.run_id DESC
+    LIMIT 1
+  )
+  AND run.error_code IS DISTINCT FROM 'history_reset'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bot_sessions session
+    WHERE session.team_id = run.team_id
+      AND session.id = run.session_id
+      AND (
+        session.deleted_at IS NOT NULL
+        OR run.fencing_token > 0
+          AND session.runtime_fencing_token > run.fencing_token
+          AND NOT (
+            run.state = 'lost'
+            AND run.error_code IS DISTINCT FROM 'history_reset'
+            AND session.runtime_fencing_token = run.fencing_token + 1
+          )
+      )
+  );
 
 -- name: LockBotForSessionRunClaim :one
 -- Claim uses a real transaction and a fresh statement after this parent lock.

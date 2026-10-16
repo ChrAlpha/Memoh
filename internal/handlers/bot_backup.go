@@ -14,6 +14,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/botbackup"
@@ -56,7 +57,7 @@ func (h *BotBackupHandler) Summary(c echo.Context) error {
 	botID := strings.TrimSpace(c.Param("bot_id"))
 	userID, err := auth.UserIDFromContext(c)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return echo.NewHTTPError(http.StatusUnauthorized).WithInternal(err)
 	}
 	if _, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, userID, botID); err != nil {
 		return err
@@ -87,7 +88,7 @@ func (h *BotBackupHandler) Export(c echo.Context) error {
 	botID := strings.TrimSpace(c.Param("bot_id"))
 	userID, err := auth.UserIDFromContext(c)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return echo.NewHTTPError(http.StatusUnauthorized).WithInternal(err)
 	}
 	bot, err := AuthorizeBotAccess(c.Request().Context(), h.botService, h.accountService, userID, botID)
 	if err != nil {
@@ -105,7 +106,7 @@ func (h *BotBackupHandler) Export(c echo.Context) error {
 	// rather than a truncated body after a misleading "200 OK".
 	tmp, err := os.CreateTemp("", "memoh-backup-*.zip")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to allocate temp file")
+		return echo.NewHTTPError(http.StatusInternalServerError).WithInternal(err)
 	}
 	tmpPath := tmp.Name()
 	defer func() {
@@ -157,7 +158,7 @@ func (h *BotBackupHandler) PreviewImport(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "bot backup service not configured")
 	}
 	if _, err := auth.UserIDFromContext(c); err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return echo.NewHTTPError(http.StatusUnauthorized).WithInternal(err)
 	}
 	raw, err := readUploadedBackup(c)
 	if err != nil {
@@ -191,7 +192,7 @@ func (h *BotBackupHandler) Import(c echo.Context) error {
 	}
 	userID, err := auth.UserIDFromContext(c)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, err.Error())
+		return echo.NewHTTPError(http.StatusUnauthorized).WithInternal(err)
 	}
 	opts := importOptionsFromForm(c)
 	if opts.Mode == botbackup.ImportModeOverwrite {
@@ -205,16 +206,24 @@ func (h *BotBackupHandler) Import(c echo.Context) error {
 	}
 	result, err := h.service.Import(c.Request().Context(), userID, raw, opts, c.FormValue("passphrase"))
 	if err != nil {
-		if errors.Is(err, runtimefence.ErrResetLeaseLost) {
-			return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
-		}
-		if errors.Is(err, runtimefence.ErrTransactionsUnsupported) ||
-			errors.Is(err, botbackup.ErrHistoryResetUnavailable) {
-			return apperror.Wrap(apperror.CodeSessionResetUnavailable, err, nil)
-		}
-		return botBackupError(err, "import bot backup")
+		return importError(err)
 	}
 	return c.JSON(http.StatusOK, result)
+}
+
+// importError translates a failed import. The history reset an overwrite
+// import takes fails the way any history reset does.
+func importError(err error) error {
+	reset := errors.Is(err, botbackup.ErrHistoryResetUnavailable)
+	switch {
+	case errors.Is(err, runtimefence.ErrResetLeaseLost), reset && sessionruntime.IsHistoryResetBusy(err):
+		return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
+	case reset && errs.FaultOf(err) == apperror.FaultDependency:
+		return apperror.Wrap(apperror.CodeInternal, err, nil)
+	case reset, errors.Is(err, runtimefence.ErrTransactionsUnsupported):
+		return apperror.Wrap(apperror.CodeSessionResetUnavailable, err, nil)
+	}
+	return botBackupError(err, "import bot backup")
 }
 
 // botBackupError answers the failures the uploaded file or form causes and

@@ -92,7 +92,7 @@ func (p *discordPreview) Update(ctx context.Context, event channel.PreparedStrea
 	case channel.StreamEventToolCallEnd:
 		return p.sendToolCallMessage(event.ToolCall, channel.BuildToolCallEnd(event.ToolCall))
 
-	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted, channel.StreamEventProcessingFailed:
+	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd, channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd, channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted:
 		// Status events - no action needed for Discord
 		return nil
 

@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/reasoning"
 )
 
 type ProvidersHandler struct {
@@ -148,7 +149,7 @@ func (h *ProvidersHandler) Get(c echo.Context) error {
 
 	resp, err := h.service.Get(c.Request().Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "get provider")
 	}
 
 	return c.JSON(http.StatusOK, resp)
@@ -187,11 +188,11 @@ func (h *ProvidersHandler) ListModelsByProvider(c echo.Context) error {
 		if errors.Is(err, models.ErrInvalidModelType) {
 			return apperror.FieldInvalid("type", err)
 		}
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "list provider models")
 	}
 	provider, err := h.service.Get(c.Request().Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "get provider")
 	}
 	return c.JSON(http.StatusOK, withReasoningForClientType(resp, provider.ClientType))
 }
@@ -216,7 +217,10 @@ func (h *ProvidersHandler) GetByName(c echo.Context) error {
 
 	resp, err := h.service.GetByName(c.Request().Context(), name)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, db.ErrNotFound) {
+			return apperror.Wrap(apperror.CodeProviderNotFound, err, nil)
+		}
+		return errs.Wrap(err, "get provider by name")
 	}
 
 	return c.JSON(http.StatusOK, resp)
@@ -325,13 +329,7 @@ func (h *ProvidersHandler) Test(c echo.Context) error {
 
 	resp, err := h.service.Test(ctx, id)
 	if err != nil {
-		if errors.Is(err, db.ErrInvalidUUID) {
-			return apperror.FieldInvalid("id", err)
-		}
-		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, db.ErrNotFound) {
-			return echo.NewHTTPError(http.StatusNotFound, "provider not found").WithInternal(err)
-		}
-		return errs.Wrap(err, "test provider")
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "test provider")
 	}
 	if resp.Cause != nil {
 		// The response carries only the code; this event is where the cause
@@ -380,13 +378,7 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 
 	provider, err := h.service.Get(ctx, id)
 	if err != nil {
-		if errors.Is(err, db.ErrInvalidUUID) {
-			return apperror.FieldInvalid("id", err)
-		}
-		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, db.ErrNotFound) {
-			return echo.NewHTTPError(http.StatusNotFound, "provider not found").WithInternal(err)
-		}
-		return errs.Wrap(err, "get provider")
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "get provider")
 	}
 	if !models.IsLLMClientType(models.ClientType(provider.ClientType)) {
 		return echo.NewHTTPError(http.StatusBadRequest).WithInternal(errors.New("import models is not supported for speech providers"))
@@ -394,16 +386,10 @@ func (h *ProvidersHandler) ImportModels(c echo.Context) error {
 
 	remoteModels, err := h.service.FetchRemoteModels(ctx, id)
 	if err != nil {
-		if errors.Is(err, db.ErrInvalidUUID) {
-			return apperror.FieldInvalid("id", err)
-		}
-		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, db.ErrNotFound) {
-			return echo.NewHTTPError(http.StatusNotFound, "provider not found").WithInternal(err)
-		}
 		if translated := probeError(err, false); apperror.CodeOf(translated) != "" {
 			return translated
 		}
-		return errs.Wrap(err, "fetch provider models")
+		return resourceLookupError(err, "id", apperror.CodeProviderNotFound, "fetch provider models")
 	}
 
 	resp := providers.ImportModelsResponse{
@@ -586,26 +572,9 @@ func modelConfigFromRemote(m providers.RemoteModel, compatibilities []string) mo
 		ThinkingBudgetMin:   m.ThinkingBudgetMin,
 		ThinkingBudgetMax:   m.ThinkingBudgetMax,
 		ContextWindow:       m.ContextWindow,
+		MaxOutputTokens:     m.MaxOutputTokens,
 		Dimensions:          m.Dimensions,
 	}
-}
-
-// preserveDeclaredCapabilities lets generic discovery refresh the tier list while
-// keeping capability tokens it structurally cannot know about.
-//
-// The disable token declares that a model can be turned off. For providers whose
-// off travels outside the effort field — DeepSeek through chat_completions_compat,
-// Gemini 2.5 Flash through a zero budget — the hand-maintained template is the only
-// source. Managed Codex/Copilot catalogs skip this helper and replace the list
-// exactly, so an upstream removal can revoke Off.
-func preserveDeclaredCapabilities(stored, discovered []string) []string {
-	out := append([]string(nil), discovered...)
-	for _, token := range []string{models.ReasoningEffortDisable} {
-		if slices.Contains(stored, token) && !slices.Contains(out, token) {
-			out = append([]string{token}, out...)
-		}
-	}
-	return out
 }
 
 func mergeManagedDiscoveredConfig(existing, discovered models.ModelConfig) (models.ModelConfig, bool) {
@@ -662,11 +631,9 @@ func mergeDiscoveredConfig(existing, discovered models.ModelConfig) (models.Mode
 		out.ThinkingMode = discovered.ThinkingMode
 		changed = true
 	}
-	if len(discovered.ReasoningEfforts) > 0 {
-		if wanted := preserveDeclaredCapabilities(out.ReasoningEfforts, discovered.ReasoningEfforts); !slices.Equal(wanted, out.ReasoningEfforts) {
-			out.ReasoningEfforts = wanted
-			changed = true
-		}
+	if merged := reasoning.MergeTiers(out.ReasoningEfforts, discovered.ReasoningEfforts); !slices.Equal(merged, out.ReasoningEfforts) {
+		out.ReasoningEfforts = merged
+		changed = true
 	}
 	if discovered.ReasoningDialect != "" && discovered.ReasoningDialect != out.ReasoningDialect {
 		out.ReasoningDialect = discovered.ReasoningDialect
@@ -690,6 +657,10 @@ func mergeDiscoveredConfig(existing, discovered models.ModelConfig) (models.Mode
 	}
 	if discovered.ContextWindow != nil && (out.ContextWindow == nil || *discovered.ContextWindow != *out.ContextWindow) {
 		out.ContextWindow = discovered.ContextWindow
+		changed = true
+	}
+	if discovered.MaxOutputTokens != nil && (out.MaxOutputTokens == nil || *discovered.MaxOutputTokens != *out.MaxOutputTokens) {
+		out.MaxOutputTokens = discovered.MaxOutputTokens
 		changed = true
 	}
 	if discovered.CatalogAvailable != nil && (out.CatalogAvailable == nil || *discovered.CatalogAvailable != *out.CatalogAvailable) {

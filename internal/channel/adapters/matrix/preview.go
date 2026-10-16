@@ -44,8 +44,7 @@ func (s *matrixPreview) Update(ctx context.Context, event channel.PreparedStream
 		channel.StreamEventAgentStart,
 		channel.StreamEventAgentEnd,
 		channel.StreamEventProcessingStarted,
-		channel.StreamEventProcessingCompleted,
-		channel.StreamEventProcessingFailed:
+		channel.StreamEventProcessingCompleted:
 		return nil
 	case channel.StreamEventPhaseEnd:
 		if event.Phase != channel.StreamPhaseText {

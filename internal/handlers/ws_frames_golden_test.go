@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -17,6 +18,7 @@ import (
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/server"
+	"github.com/felinics/memoh/internal/slash"
 )
 
 // The files under testdata/ws-frames are the browser-facing WebSocket frame
@@ -213,7 +215,9 @@ func goldenFrames(t *testing.T) map[string][]byte {
 			Items: []CommandActionListItem{{I18nKey: "i", ID: "s1", Title: "S1", Description: "d", Kind: "skill"}},
 		})
 	})
-	sent("command_error", func(w *wsWriter) { sendWSCommandError(w, msg, "slash.unknown_command") })
+	sent("command_error", func(w *wsWriter) {
+		w.SendJSON(commandErrorEvent(context.Background(), msg, "", apperror.New(slash.CodeUnknownSlash, nil)))
+	})
 
 	put("runtime_snapshot_empty", snapshotFrame(t, nil))
 	rich := goldenRichRunView()

@@ -19,7 +19,6 @@ import (
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/httpx"
 	"github.com/felinics/memoh/internal/server"
-	"github.com/felinics/memoh/internal/workspace/bridge"
 	"github.com/felinics/memoh/internal/workspacedeps"
 	"github.com/felinics/memoh/internal/workspacedeps/catalog"
 )
@@ -69,6 +68,8 @@ type WorkspaceDependencyPlatform struct {
 // WorkspaceDependencyItem is one catalog dependency reconciled with its
 // installation record and the workspace.
 type WorkspaceDependencyItem struct {
+	// LastErrorCode is the catalog code of a recorded failure, which clients
+	// render as errors.<code>.
 	LastErrorCode      string                                    `json:"last_error_code,omitempty"`
 	RegistryID         string                                    `json:"registry_id,omitempty"`
 	DefinitionRevision string                                    `json:"definition_revision,omitempty"`
@@ -112,7 +113,9 @@ type WorkspaceDependencyItem struct {
 	// check reported a version other than the one in effect.
 	UpdateAvailable bool       `json:"update_available,omitempty"`
 	LastCheckedAt   *time.Time `json:"last_checked_at,omitempty"`
-	LastError       string     `json:"last_error,omitempty"`
+	// LastError is text recorded by earlier servers, including the script
+	// output they used to keep. A failure recorded now carries LastErrorCode.
+	LastError string `json:"last_error,omitempty"`
 	// PreviousVersion is the version rollback would switch back to.
 	PreviousVersion string `json:"previous_version,omitempty"`
 	// InstallPath is the dependency home when a managed copy is in effect or
@@ -192,6 +195,12 @@ type WorkspaceDependencyListResponse struct {
 	// reflect the installation records alone, without workspace facts or
 	// actions; a refresh retries discovery.
 	DiscoveryError string `json:"discovery_error,omitempty"`
+	// CatalogRefreshing is set while the catalog is refreshed in the
+	// background; listing again shortly may show a newer catalog.
+	CatalogRefreshing bool `json:"catalog_refreshing,omitempty"`
+	// UpdateChecksIncomplete is set by check-updates when some checks did not
+	// finish in time; those keep their last result.
+	UpdateChecksIncomplete bool `json:"update_checks_incomplete,omitempty"`
 }
 
 // WorkspaceDependencyPreflightRequest names the dependencies an agent needs.
@@ -344,7 +353,7 @@ func (h *ContainerdHandler) ListWorkspaceDependencies(c echo.Context) error {
 
 // CheckWorkspaceDependencyUpdates godoc
 // @Summary Check workspace dependencies for updates
-// @Description Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.
+// @Description Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
 // @Tags containerd
 // @Produce json
 // @Param bot_id path string true "Bot ID"
@@ -845,26 +854,6 @@ func workspaceDependencyError(err error) error {
 		return nil
 	case apperror.CodeOf(err) != "":
 		return err
-	case errors.Is(err, workspacedeps.ErrOperationUncertain):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyOperationUnknown, err, nil)
-	case errors.Is(err, workspacedeps.ErrInvalidVersion):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyRequestInvalid, err, nil)
-	case errors.Is(err, workspacedeps.ErrCatalogUnavailable):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyCatalogUnavailable, err, nil)
-	case errors.Is(err, workspacedeps.ErrDefinitionInvalid):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyDefinitionInvalid, err, nil)
-	case errors.Is(err, workspacedeps.ErrDefinitionUnavailable):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyDefinitionUnavailable, err, nil)
-	case errors.Is(err, workspacedeps.ErrDependencyNotFound):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyNotFound, err, nil)
-	case errors.Is(err, workspacedeps.ErrActionUnsupported):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyActionUnsupported, err, nil)
-	case errors.Is(err, workspacedeps.ErrPlatformUnsupported):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyPlatformUnsupported, err, nil)
-	case errors.Is(err, workspacedeps.ErrBusy):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyBusy, err, nil)
-	case errors.Is(err, workspacedeps.ErrPrerequisitesChanged):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyPrerequisitesChanged, err, nil)
 	case errors.Is(err, workspacedeps.ErrRequired):
 		var required *workspacedeps.RequiredError
 		args := map[string]string{}
@@ -872,27 +861,24 @@ func workspaceDependencyError(err error) error {
 			args["dependents"] = strings.Join(required.Dependents, ",")
 		}
 		return apperror.Wrap(apperror.CodeWorkspaceDependencyRequired, err, args)
-	case errors.Is(err, workspacedeps.ErrWorkspaceNotRunning):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyWorkspaceNotRunning, err, nil)
-	case errors.Is(err, workspacedeps.ErrWorkspaceMissing):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyWorkspaceMissing, err, nil)
-	case errors.Is(err, workspacedeps.ErrRollbackUnavailable):
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyRollbackUnavailable, err, nil)
-	case errors.Is(err, bridge.ErrUnavailable):
-		return apperror.Wrap(apperror.CodeWorkspaceUnreachable, err, nil)
-	default:
-		return apperror.Wrap(apperror.CodeWorkspaceDependencyOperationFailed, err, nil)
 	}
+	if code := workspacedeps.CodeOf(err); code != "" {
+		return apperror.Wrap(code, err, nil)
+	}
+	return apperror.Wrap(apperror.CodeWorkspaceDependencyOperationFailed, err, nil)
 }
 
 func workspaceDependencyListResponse(result workspacedeps.ListResult) WorkspaceDependencyListResponse {
 	resp := WorkspaceDependencyListResponse{
-		WorkspaceState: string(result.Workspace),
-		Items:          make([]WorkspaceDependencyItem, 0, len(result.Entries)),
-		DiscoveryError: "",
-		CatalogStale:   result.CatalogStale,
+		WorkspaceState:    string(result.Workspace),
+		Items:             make([]WorkspaceDependencyItem, 0, len(result.Entries)),
+		DiscoveryError:    "",
+		CatalogStale:      result.CatalogStale,
+		CatalogRefreshing: result.CatalogRefreshing,
+
+		UpdateChecksIncomplete: result.ChecksIncomplete,
 	}
-	if result.DiscoveryError != "" {
+	if result.DiscoveryFailed {
 		resp.DiscoveryError = string(apperror.CodeWorkspaceDependencyDiscoveryFailed)
 	}
 	if !result.CatalogFetchedAt.IsZero() {
@@ -981,8 +967,11 @@ func workspaceDependencyItem(entry workspacedeps.Entry, dataRoot string) Workspa
 	}
 	if rec := entry.Installation; rec != nil {
 		item.LastCheckedAt = rec.LastCheckedAt
-		if rec.LastError != "" {
-			item.LastErrorCode = string(apperror.CodeWorkspaceDependencyOperationFailed)
+		// A failure recorded now carries its catalog code; rows written by an
+		// earlier server carry the text they wrote and no code.
+		if rec.LastErrorCode != "" {
+			item.LastErrorCode = rec.LastErrorCode
+		} else if rec.LastError != "" {
 			item.LastError = workspacedeps.SafeErrorDetail(rec.LastError)
 		}
 	}

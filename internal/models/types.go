@@ -121,11 +121,10 @@ func NearestEffortToMedium(levels []string) string {
 // Thinking mode tokens. Semantics live in internal/reasoning; these are
 // forwarding aliases so existing call sites keep compiling while they migrate.
 const (
-	ThinkingModeAdaptive     = reasoning.ModeAdaptive
-	ThinkingModeToggle       = reasoning.ModeToggle
-	ThinkingModeAlways       = reasoning.ModeAlways
-	ThinkingModeOnlyAdaptive = reasoning.ModeOnlyAdaptive
-	ThinkingModeNone         = reasoning.ModeNone
+	ThinkingModeAdaptive = reasoning.ModeAdaptive
+	ThinkingModeToggle   = reasoning.ModeToggle
+	ThinkingModeAlways   = reasoning.ModeAlways
+	ThinkingModeNone     = reasoning.ModeNone
 )
 
 // validCompatibilities enumerates accepted compatibility tokens.
@@ -187,6 +186,10 @@ type ModelConfig struct {
 	// off, while Flash starts at 0 and can.
 	ThinkingBudgetMin *int `json:"thinking_budget_min,omitempty"`
 	ThinkingBudgetMax *int `json:"thinking_budget_max,omitempty"`
+	// MaxOutputTokens is the most output tokens the model can produce in one
+	// response; nil means unknown. When set, every turn requests an explicit
+	// limit within it.
+	MaxOutputTokens *int `json:"max_output_tokens,omitempty"`
 }
 
 func normalizeModelConfig(config ModelConfig) ModelConfig {
@@ -212,6 +215,15 @@ func NormalizeAdvertisedEfforts(efforts []string) []string {
 func (c ModelConfig) ContextBudgetMaxTokens() int {
 	if c.ContextWindow != nil && *c.ContextWindow > 0 {
 		return *c.ContextWindow
+	}
+	return 0
+}
+
+// MaxOutputTokensLimit returns the configured maximum output tokens, or zero
+// when the model's cap is unknown.
+func (c ModelConfig) MaxOutputTokensLimit() int {
+	if c.MaxOutputTokens != nil && *c.MaxOutputTokens > 0 {
+		return *c.MaxOutputTokens
 	}
 	return 0
 }
@@ -249,6 +261,9 @@ func (m *Model) Validate() error {
 	}
 	if !IsValidModelType(m.Type) {
 		return fieldInvalid("type", ErrInvalidModelType)
+	}
+	if m.Config.MaxOutputTokens != nil && *m.Config.MaxOutputTokens <= 0 {
+		return errors.New("max output tokens must be greater than 0")
 	}
 	if m.Type == ModelTypeEmbedding {
 		if m.Config.Dimensions == nil || *m.Config.Dimensions <= 0 {

@@ -98,7 +98,6 @@ func (s *slackPreview) Update(ctx context.Context, event channel.PreparedStreamE
 	case channel.StreamEventAgentStart, channel.StreamEventAgentEnd,
 		channel.StreamEventPhaseStart, channel.StreamEventPhaseEnd,
 		channel.StreamEventProcessingStarted, channel.StreamEventProcessingCompleted,
-		channel.StreamEventProcessingFailed,
 		channel.StreamEventReaction:
 		return nil
 

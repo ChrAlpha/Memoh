@@ -31,12 +31,15 @@ import { useI18n } from 'vue-i18n'
 import { getBotsByBotIdAgents, getBotsById } from '@memohai/sdk'
 import { fetchBot } from '@/composables/api/useBot'
 import { PanePlaceholder } from '@felinic/ui'
+import { CHAT_ROUTE_NAMES } from '@/constants/chat-routes'
 import { useChatStore } from '@/store/chat-list'
 import { routeConversationLabel } from '@/store/chat-list.utils'
+import { useComposerPrefillStore } from '@/store/composer-prefill'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { ACP_NO_PROJECT_MODE, createACPNoProjectPath } from '@/utils/acp'
 import { botAgentProvider } from '@/utils/bot-agent'
 import ChatWorkspace from './components/chat-workspace.vue'
+import { useComposerPrefillResolver } from './composables/useComposerPrefillResolver'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,6 +47,17 @@ const { t } = useI18n()
 const chatStore = useChatStore()
 const workspaceTabs = useWorkspaceTabsStore()
 const { currentBotId, bots, activeSession } = storeToRefs(chatStore)
+const composerPrefill = useComposerPrefillStore()
+
+useComposerPrefillResolver({
+  pending: () => composerPrefill.pending,
+  currentBotId: () => currentBotId.value,
+  // Wait out a bot switch: until the new bot's chats load, the dock may still
+  // show the previous bot's panels.
+  dockReady: () => !!workspaceTabs.api && !chatStore.loadingChats,
+  activeChatWritable: () => !!workspaceTabs.activeId && workspaceTabs.activePanelIsChat && !chatStore.activeChatReadOnly,
+  openDraftChat: () => workspaceTabs.openDraftChat({ title: t('chat.newSession'), explicitSelection: false }),
+})
 
 // Resolve a bot UUID from a URL name slug. Prefers the already-loaded bot list,
 // falling back to the API (which accepts both name and UUID identifiers).
@@ -86,13 +100,14 @@ const missingBotName = ref('')
 // yanking the user out of settings. URL sync must only run while a chat route
 // (home/bot) is current. route.name is the reliable signal (no mount/unmount
 // timing to race).
-const CHAT_ROUTE_NAMES = new Set(['home', 'bot'])
 const isChatRoute = () => CHAT_ROUTE_NAMES.has(route.name as string)
 
 // Home remains mounted behind settings, so the route gates the browser title.
+// A first send's session is titled like the draft it came from until the
+// server confirms the send (see isSessionTentative).
 useTitle(() => {
   const session = activeSession.value
-  if (!isChatRoute() || !currentBotId.value || !session) return 'Memoh'
+  if (!isChatRoute() || !currentBotId.value || !session || chatStore.isSessionTentative(session.id)) return 'Memoh'
   const title = (session.title ?? '').trim() || routeConversationLabel(session) || t('chat.untitledSession')
   return `Memoh · ${title}`
 }, { restoreOnUnmount: () => 'Memoh' })

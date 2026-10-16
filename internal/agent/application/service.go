@@ -22,6 +22,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/background"
@@ -135,6 +136,7 @@ type Service struct {
 	hookService             *hooks.Service
 	memoryContextMu         sync.Mutex
 	memoryContextCache      *memprovider.MemoryContextCache
+	starterPromptFlights    singleflight.Group
 	externalAgentPromptHubs sync.Map
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
@@ -698,6 +700,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		ThinkingBudgetMin:     chatModel.Config.ThinkingBudgetMin,
 		ThinkingBudgetMax:     chatModel.Config.ThinkingBudgetMax,
 		ContextWindow:         contextBudgetFromChatModel(chatModel),
+		MaxOutputTokens:       chatModel.Config.MaxOutputTokensLimit(),
 	})
 
 	var agentSkills []native.SkillEntry
@@ -734,6 +737,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		SupportsImageInput:       supportsImageInputForModel(chatModel),
 		SupportsFileInput:        supportsFileInputForModel(chatModel),
 		SupportsToolCall:         chatModel.HasCompatibility(models.CompatToolCall),
+		ModelMaxOutputTokens:     chatModel.Config.MaxOutputTokensLimit(),
 		Identity: native.SessionContext{
 			BotID:             p.BotID,
 			ChatID:            chatID,
@@ -837,7 +841,6 @@ func resolveReasoningConfig(chatModel models.GetResponse, botSettings settings.S
 		chatModel.ReasoningOptions(clientType),
 		stored,
 		requestedEffort,
-		clientType,
 	)
 }
 

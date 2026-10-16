@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/publicmedia"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 const (
@@ -42,7 +43,7 @@ func (a *Adapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg chann
 	imageMessages := make([]messaging_api.MessageInterface, 0)
 	skippedAttachments := 0
 	for _, att := range msg.Message.Attachments {
-		image, ok := a.lineImageMessage(cfg, att)
+		image, ok := a.lineImageMessage(ctx, cfg, att)
 		if !ok {
 			skippedAttachments++
 			continue
@@ -77,7 +78,7 @@ func (a *Adapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg chann
 	return nil
 }
 
-func (a *Adapter) pushMessages(client messagingClient, target string, messages []messaging_api.MessageInterface) error {
+func (*Adapter) pushMessages(client messagingClient, target string, messages []messaging_api.MessageInterface) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -86,11 +87,10 @@ func (a *Adapter) pushMessages(client messagingClient, target string, messages [
 		Messages: messages,
 	}, "")
 	if err != nil {
-		a.logWarn("line push message failed",
+		return errs.Wrap(sanitizeLineError("line push failed", err), "push line message",
 			slog.String("target_hash", hashValue(target)),
 			slog.String("reason", "push_api_failed"),
 		)
-		return sanitizeLineError("line push failed", err)
 	}
 	return nil
 }
@@ -124,11 +124,11 @@ func batchLineMessages(messages []messaging_api.MessageInterface, size int) [][]
 	return batches
 }
 
-func (a *Adapter) lineImageMessage(cfg channel.ChannelConfig, att channel.PreparedAttachment) (messaging_api.MessageInterface, bool) {
+func (a *Adapter) lineImageMessage(ctx context.Context, cfg channel.ChannelConfig, att channel.PreparedAttachment) (messaging_api.MessageInterface, bool) {
 	originalURL, previewURL, ok, reason := a.lineImageURLs(cfg, att)
 	if !ok {
 		total := a.incrementCounter("line_outbound_image_skipped_no_public_url")
-		a.logWarn("line outbound attachment skipped",
+		a.logWarn(ctx, "line outbound attachment skipped", nil,
 			slog.String("config_id", cfg.ID),
 			slog.String("bot_id", cfg.BotID),
 			slog.String("attachment_type", string(att.Logical.Type)),

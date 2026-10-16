@@ -202,17 +202,6 @@ func Decode(chunk json.RawMessage, t *i18n.Localizer) ([]channel.StreamEvent, []
 		return []channel.StreamEvent{
 			{Type: channel.StreamEventProcessingCompleted},
 		}, finalMessages, nil
-	case "processing_failed":
-		streamError := strings.TrimSpace(envelope.Error)
-		if streamError == "" {
-			streamError = strings.TrimSpace(envelope.Message)
-		}
-		return []channel.StreamEvent{
-			{
-				Type:  channel.StreamEventProcessingFailed,
-				Error: streamError,
-			},
-		}, finalMessages, nil
 	case "error":
 		// Without a catalogued code the event is a failed run; its own text is
 		// never shown.

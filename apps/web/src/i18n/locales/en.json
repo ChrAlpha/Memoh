@@ -106,12 +106,12 @@
   },
   "computerConnect": {
     "title": "Connect computer",
-    "replaceAction": "Replace saved binding",
-    "replaceDescription": "When enabled, running the command below overwrites this computer's saved binding and switches the background service to the current connection.",
+    "replaceAction": "Replace saved connection",
+    "replaceDescription": "If the terminal reports another connection, turn on and copy again.",
     "restore": "Reconnect",
     "existingDescription": "Run the command on “{name}” to restore its background connection with its original credentials. Its computer record and Bot permissions are preserved.",
     "commandLabel": "Connection command",
-    "commandDescription": "Install Node.js 20+, then run this command in Terminal (macOS/Linux) or Command Prompt (Windows). It installs and connects the runtime in the background, so you can close the terminal afterward.",
+    "commandDescription": "Install Node.js 20+ on that computer and run this in a terminal.",
     "waiting": "Waiting for the computer to connect…",
     "finish": "Done"
   },
@@ -186,13 +186,19 @@
     "agent_dependency_missing": "{dep_id} is not installed in this workspace. Install it from the bot's dependencies, or wait for the running installation to finish, then send the message again.",
     "app": {
       "busy": "Another operation on this App is in progress.",
+      "dependencies_unavailable": "Workspace dependencies are unavailable on this server, so the App cannot manage them.",
       "not_found": "This App installation was not found.",
       "operation_failed": "The App operation failed.",
+      "prerequisite_failed": "A dependency this one needs failed to install. Fix that dependency first, then retry.",
       "request_invalid": "The App request is invalid."
     },
     "bot": {
       "name_invalid": "Use 2-63 lowercase letters, digits or hyphens, starting with a letter or digit. Some names are reserved.",
-      "name_taken": "This name is already taken."
+      "name_taken": "This name is already taken.",
+      "not_found": "This bot no longer exists. Go back to the bot list and pick another one."
+    },
+    "bot_access": {
+      "grant_not_found": "This access grant no longer exists. Refresh the member list and try again."
     },
     "bot_agent": {
       "default_in_use": "Choose another default Agent before disabling or deleting this one.",
@@ -200,12 +206,16 @@
       "invalid_runtime": "This Agent runtime is not supported.",
       "name_taken": "An Agent with this name already exists for this Bot.",
       "not_found": "This Agent no longer exists.",
+      "provider_direct_runtime": "This provider runs as a direct runtime. Create the Agent with the {runtime} runtime instead.",
       "unavailable": "This Agent is unavailable for new conversations."
     },
     "bot_backup": {
       "bundle_invalid": "The backup file is damaged or from an unsupported version."
     },
     "bot_ready_update_failed": "The bot could not be loaded after its workspace was set up. Refresh the page.",
+    "browser": {
+      "session_not_found": "This browser session has expired or was closed. Open a new one."
+    },
     "canceled": "The request was canceled.",
     "capability": {
       "access_denied": "You need Manage permission on this bot to manage its capabilities.",
@@ -216,11 +226,16 @@
     },
     "channel": {
       "binding_required": "The recipient has not linked this channel yet.",
+      "config_not_found": "This channel is not configured for the bot. Set it up first, then try again.",
       "enable_failed": "The channel could not be enabled. Check its credentials, then try again.",
+      "identity_config_not_found": "You have not set up this channel yet. Set it up first, then try again.",
       "reply_window_expired": "The platform no longer accepts a reply to this message.",
       "runtime_unavailable": "The channel service could not be reached. Please try again shortly.",
       "verification_failed": "The channel configuration could not be verified. Check the credentials, then try again.",
       "webhook_endpoint_invalid": "Use a public HTTPS URL without a port, credentials, query or fragment. Its path must be the webhook path shown for this channel."
+    },
+    "channel_route": {
+      "not_found": "This conversation route no longer exists. Start a new conversation from the channel."
     },
     "chat": {
       "message_empty": "Enter a message or attach a file."
@@ -234,6 +249,7 @@
       "conflict": "This connector conflicts with an existing connection.",
       "not_configured": "Connectors are not configured on this server.",
       "not_found": "This connector is no longer available.",
+      "oauth_client_not_configured": "Connect-It has no OAuth App (Client ID and Client Secret) configured for this connector. Ask this deployment's administrator or the operator of its Connect-It to configure it, then connect again.",
       "operation_failed": "The connector operation failed. Please try again.",
       "request_invalid": "The connector request is invalid.",
       "request_rejected": "Connect-It rejected the connector request.",
@@ -249,6 +265,9 @@
       "load_failed": "Context lifecycle diagnostics could not be loaded. Please try again.",
       "not_found": "The conversation was not found.",
       "request_invalid": "The context lifecycle request is invalid."
+    },
+    "display": {
+      "session_not_found": "This display session has ended. Open a new one."
     },
     "elicitation_declined": "A tool requested an interaction that could not be shown. The request was declined.",
     "external_agent": {
@@ -268,9 +287,10 @@
       "usage_limited": "The external Agent's account has no usage left. Try again after the limit resets, or check the account's plan and billing."
     },
     "fetch_provider": {
-      "native_managed": "The built-in fetch provider is managed by Memoh and cannot be changed this way."
+      "native_managed": "The built-in fetch provider is managed by Memoh and cannot be changed this way.",
+      "not_found": "This fetch provider no longer exists. Refresh the list and choose another one."
     },
-    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex.",
+    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>.",
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
     },
@@ -297,11 +317,24 @@
     "internal": "Something went wrong on the server. Please try again.",
     "invalid_chat_runtime": "The selected chat runtime is invalid.",
     "mcp": {
+      "connection_not_found": "This MCP connection no longer exists or has closed. Refresh the list and reconnect.",
       "endpoint_invalid": "Enter either a command (local server) or a URL (remote server), not both.",
       "name_taken": "An MCP connection with this name already exists.",
       "oauth_client_id_required": "Automatic client registration is unavailable for this server. Enter a client ID from an OAuth app you registered with it.",
       "oauth_discovery_failed": "Could not discover OAuth settings from this MCP server. Check that the URL is correct and that the server supports OAuth.",
       "oauth_not_discovered": "Run OAuth discovery for this connection first."
+    },
+    "media": {
+      "asset_not_found": "This file no longer exists. Upload it again if you still need it."
+    },
+    "memory": {
+      "compact_unsupported": "The selected memory provider does not support memory compaction. Choose a provider that supports it in the bot's memory settings."
+    },
+    "message": {
+      "not_found": "This message no longer exists. Refresh the conversation and try again."
+    },
+    "model": {
+      "not_found": "This model no longer exists. Refresh the list and choose another one."
     },
     "native_history_lost": "The agent could not restore its previous context and started over. Earlier messages remain as history only. Provide any context needed to continue.",
     "network": {
@@ -311,13 +344,15 @@
     "oauth": {
       "state_invalid": "This authorization has expired or is no longer valid. Start the authorization again."
     },
+    "output_truncated": "The reply reached the model's output limit and was cut off. Ask it to continue, or split the request into smaller parts.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
       "update_failed": "The profile could not be updated."
     },
     "provider": {
-      "name_taken": "A provider with this name already exists."
+      "name_taken": "A provider with this name already exists.",
+      "not_found": "This provider no longer exists. Refresh the list and choose another one."
     },
     "provider_template": {
       "domain_invalid": "This provider template type is invalid.",
@@ -332,12 +367,14 @@
     "queue_admission_overloaded": "The queue is busy. Please retry shortly.",
     "queue_admission_unavailable": "Queue admission is temporarily unavailable. Please retry shortly.",
     "queue_capacity_exceeded": "This session queue is full. Cancel or wait for pending items before adding more.",
+    "queue_follow_up_command_invalid": "This queued message could not be started. Send it again as a new message.",
     "queue_follow_up_unsupported_channel": "Queued follow-ups are not available on this channel; its replies are delivered from the message you send. Use /steer to add to the current reply, or queue from the web app.",
     "queue_invocation_conflict": "This message was already submitted with different content.",
     "queue_item_not_editable": "Only the sender can edit this queued message.",
     "queue_item_not_pending": "This message is no longer pending in the queue.",
     "queue_no_active_run": "The current response has ended. Send this as a new message.",
     "queue_request_invalid": "Enter text after /steer or /queue in an existing conversation.",
+    "queue_target_run_not_active": "The response ended before this instruction reached it. Send it as a new message.",
     "queue_unsupported_session": "Queue controls are not available in discussion sessions.",
     "registry": {
       "app_install_failed": "The app could not be installed. Please try again.",
@@ -371,10 +408,17 @@
     "runtime_reservation_failed": "The response could not be started. Please try again shortly.",
     "runtime_run_failed": "The response could not be completed. Please try again.",
     "schedule": {
-      "execution_timeout": "This scheduled run reached its execution limit. Review its progress or increase the limit."
+      "execution_timeout": "This scheduled run reached its execution limit. Review its progress or increase the limit.",
+      "model_conflict": "The model setting does not fit this schedule's runtime. Choose the model field that matches the runtime.",
+      "model_required": "This bot has no default model, so the schedule needs an explicit model. Choose a model or set a default one.",
+      "model_unusable": "This model cannot run a schedule. Choose an enabled chat model.",
+      "not_found": "This scheduled task no longer exists. Refresh the list and choose another one.",
+      "run_target_conflict": "The run target, runtime, Agent and session settings of this schedule cannot be combined. Adjust them and try again.",
+      "session_mode_unsupported": "Scheduled runs can only continue chat or schedule sessions. Choose another target session."
     },
     "search_provider": {
       "invalid_provider": "This web search provider is not supported.",
+      "not_found": "This search provider no longer exists. Refresh the list and choose another one.",
       "type_conflict": "This web search provider has already been configured."
     },
     "session": {
@@ -392,6 +436,7 @@
       "reset_unavailable": "Conversation history cannot be reset right now. Contact the developers.",
       "session_busy": "This conversation is still working on your previous message. Please try again in a moment.",
       "turn_incomplete": "This message cannot be retried right now. Refresh the conversation.",
+      "turn_not_found": "This message was not found in the conversation. Refresh the conversation and try again.",
       "turn_not_latest": "The conversation has newer messages. Refresh and try again."
     },
     "settings": {
@@ -402,8 +447,28 @@
       "builtin_read_only": "Built-in Skills are managed by Memoh and cannot be edited or deleted.",
       "name_invalid": "The Skill needs a valid name in its YAML frontmatter.",
       "name_taken": "A Skill with this name already exists. Choose a different name.",
+      "not_found": "This Skill was not found. Refresh the list and try again.",
       "registry_read_only": "This Skill belongs to a Registry App. Update or uninstall the App instead.",
       "save_failed": "The Skill could not be saved. Please try again."
+    },
+    "slash": {
+      "attachments_unsupported": "Slash commands cannot include attachments. Remove the attachments and send the command again.",
+      "permission_denied": "You do not have permission to use this command.",
+      "requires_websocket": "Skill activation requires a live chat connection. Reconnect and try again.",
+      "reserved_metadata": "This message carries reserved skill metadata, which clients cannot supply.",
+      "skill_activation_unsupported": "Skills can only be activated in a chat session that uses the bot's own model. Switch to such a session and try again.",
+      "skill_ambiguous": "More than one skill has this name. Rename or disable one of them in the bot's skills, then try again.",
+      "skill_context_too_large": "The selected skills are too large for one message. Select fewer skills and try again.",
+      "skill_disabled": "This skill is disabled. Enable it in the bot's skills, then try again.",
+      "skill_not_found": "No skill has this name. Check the name and try again.",
+      "skill_not_usable": "This skill is not available for chat.",
+      "skill_syntax_invalid": "Use /<skill-name> [prompt] to activate a skill.",
+      "too_many_skills": "Too many skills in one message. Activate fewer skills and try again.",
+      "unknown_command": "Unknown slash command. Send /help to see the available commands.",
+      "unsupported_in_web": "This slash command is not available in Web chat."
+    },
+    "supermarket": {
+      "not_found": "This item is no longer in the Supermarket. Refresh the list and try again."
     },
     "tool_approval": {
       "ambiguous": "More than one approval request matches this response.",
@@ -414,31 +479,54 @@
       "request_invalid": "The approval response is invalid."
     },
     "tools_unavailable": "Memoh tools are unavailable for this conversation. Start a new session to restore them.",
+    "transcription_model": {
+      "not_found": "This transcription model no longer exists. Refresh the list and choose another one."
+    },
     "tts": {
       "model_not_configured": "This bot has no text-to-speech model. Choose one in the bot settings.",
       "text_too_long": "Text is too long. The limit is {max} characters."
     },
+    "tts_model": {
+      "not_found": "This speech model no longer exists. Refresh the list and choose another one."
+    },
+    "tts_provider": {
+      "not_found": "This speech provider no longer exists. Refresh the list and choose another one."
+    },
     "user": {
-      "cannot_remove_self": "You cannot remove yourself. Ask another admin to remove you."
+      "cannot_remove_self": "You cannot remove yourself. Ask another admin to remove you.",
+      "not_found": "This user no longer exists. Refresh the member list and try again."
     },
     "user_input": {
       "expired": "This question has expired or was already answered.",
       "forbidden": "You do not have permission to answer this question.",
       "operation_failed": "The answer could not be processed."
     },
+    "user_runtime": {
+      "not_found": "This runtime is no longer registered to your account. Refresh the list and try again."
+    },
     "video": {
       "job_outcome_unknown": "The video job status could not be confirmed. Check the saved job before creating another video."
+    },
+    "video_model": {
+      "not_found": "This video model no longer exists. Refresh the list and choose another one."
+    },
+    "video_provider": {
+      "not_found": "This video provider no longer exists. Refresh the list and choose another one."
     },
     "workdir": {
       "git_branch_unavailable": "This local branch is unavailable. Refresh and select an existing branch.",
       "git_busy": "An agent is using this working directory. Wait for it to finish before switching branches.",
       "git_switch_failed": "Git could not switch branches. Check uncommitted changes and whether the branch is used by another worktree.",
       "git_unavailable": "The Git working directory could not be read. Check the workspace and try again.",
+      "not_found": "This working directory no longer exists. Refresh the list and choose another one.",
       "remote_unsupported_for_agent": "External agent sessions cannot use a remote computer. Choose a workdir on the native workspace instead."
     },
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
       "display_prepare_failed": "Display preparation failed.",
+      "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
+      "image_registry_unavailable": "The image registry could not be reached. Please try again later.",
+      "teardown_failed": "Workspace removal failed. Retry deleting the bot.",
       "template_bootstrap_failed": "The workspace files could not be initialized. Please try rebuilding the workspace.",
       "unreachable": "The workspace could not be reached."
     },
@@ -454,6 +542,7 @@
       "discovery_failed": "Workspace dependencies could not be inspected. Please try again.",
       "not_found": "This dependency doesn't exist.",
       "operation_failed": "The dependency operation failed. Check the log and try again.",
+      "operation_interrupted": "The operation was interrupted before it finished. Try it again.",
       "platform_unsupported": "Not available on this workspace platform.",
       "prerequisites_changed": "The dependencies this one needs changed after you confirmed. Review the operation again.",
       "request_invalid": "The dependency request is invalid. Check it and try again.",
@@ -464,6 +553,9 @@
     },
     "workspace_dependency_operation_unknown": "The operation result is not yet confirmed. Refresh dependencies to check its status.",
     "workspace_display_disabled": "Workspace desktop is not enabled.",
+    "workspace_file": {
+      "not_found": "This file or folder no longer exists in the workspace. Refresh and try again."
+    },
     "workspace_load_failed": "Failed to load workspace info. Please try again.",
     "workspace_manager_unavailable": "Workspace manager is not configured.",
     "workspace_metrics_load_failed": "Failed to load workspace metrics. Please try again.",
@@ -486,7 +578,10 @@
     "workspace_snapshots_unsupported": "Snapshots are not supported by this workspace runtime.",
     "workspace_snapshotter_mismatch": "The snapshotter does not match the workspace runtime.",
     "workspace_start_failed": "Failed to start the workspace. Please try again.",
-    "workspace_stop_failed": "Failed to stop the workspace. Please try again."
+    "workspace_stop_failed": "Failed to stop the workspace. Please try again.",
+    "workspace_target": {
+      "not_found": "This workspace target is no longer available. Refresh and choose another one."
+    }
   },
   "auth": {
     "welcome": "Welcome Back",
@@ -1088,6 +1183,8 @@
     "pdfUnsupportedByModel": "The current model can't read PDFs natively. The file will be saved to the workspace as a path, but the model won't be able to view its content.",
     "send": "Send",
     "sendFailed": "Message failed to send",
+    "sendOutcomeUnknown": "The server hasn't confirmed this message, so it may already have been received. Check the conversation list before sending it again.",
+    "sendWorkdirUnsupported": "The server couldn't start this chat in the selected folder. Update the server, or send without a folder.",
     "forkFailed": "Failed to fork session",
     "forkedFrom": "Forked from {session}",
     "forkSourceUnavailable": "The original session no longer exists or was deleted.",
@@ -1386,7 +1483,6 @@
     "reasoningEffort": "Reasoning",
     "reasoningOn": "On",
     "reasoningOff": "Off",
-    "reasoningAdaptive": "Adaptive",
     "reasoningMinimal": "Minimal",
     "reasoningLow": "Low",
     "reasoningMedium": "Medium",
@@ -1449,7 +1545,7 @@
       "accountUnbound": "Your IM account isn't linked to a Memoh account yet, so you can't use this bot's workspace. If you're its owner, open Profile → Connected Accounts in Memoh on the web, get a link code, and send {link} <code> here.",
       "runtimeOwnerMissing": "This external-agent session has no runtime owner. Start a new session to continue.",
       "discussUnsupported": "This external agent cannot run in discuss mode.",
-      "groupChatUnsupported": "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex.",
+      "groupChatUnsupported": "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>.",
       "projectModeInvalid": "The external agent project mode is invalid.",
       "projectPathInvalid": "The external agent project path must be absolute.",
       "displayArgsInvalid": "The external agent display arguments are invalid.",
@@ -1542,25 +1638,6 @@
       "commandError": "Slash command",
       "dismiss": "Dismiss",
       "errorMessages": {
-        "unknown_slash": "Unknown slash command.",
-        "unsupported_web_command": "That slash command is not available in Web chat.",
-        "invalid_skill_slash_syntax": "Invalid skill slash syntax. Use /<skill-name> [prompt].",
-        "requested_skill_not_found": "Requested skill was not found.",
-        "requested_skill_ambiguous": "Requested skill is ambiguous.",
-        "requested_skill_disabled": "Requested skill is disabled.",
-        "requested_skill_not_runtime_usable": "Requested skill is not available for chat.",
-        "too_many_requested_skills": "Too many skills requested.",
-        "requested_skill_context_too_large": "Requested skill context is too large.",
-        "slash_attachments_unsupported": "Slash commands do not support attachments.",
-        "unsupported_skill_slash_context": "Requested skills are not supported in this context.",
-        "unsupported_legacy_endpoint": "Skill activation requires WebSocket. Reconnect and try again.",
-        "invalid_quick_action_scope": "This quick action cannot be scoped to a session.",
-        "permission_denied": "You do not have permission to use that slash command.",
-        "permission_session_required": "Open an external-Agent session before using /permission.",
-        "permission_mode_unsupported": "This Agent does not declare selectable session modes.",
-        "permission_mode_unavailable": "That mode is not available for this Agent session.",
-        "permission_mode_failed": "The Agent session mode could not be loaded or changed.",
-        "reserved_skill_metadata": "Reserved skill metadata cannot be supplied.",
         "generic": "Slash command failed."
       }
     },
@@ -1753,6 +1830,37 @@
       }
     }
   },
+  "chatExamples": {
+    "noBot": "Create a bot first to try this.",
+    "createBot": "Create bot",
+    "tryThese": "Try one of these",
+    "needs": "Needs {capability}",
+    "capability": {
+      "web_search": "web search",
+      "memory": "memory",
+      "email": "email",
+      "workspace": "a workspace",
+      "browser": "the browser",
+      "schedule": "schedules",
+      "channel": "a channel"
+    },
+    "sidebarEntry": "See what Memoh can do",
+    "galleryTitle": "See what Memoh can do",
+    "galleryDescription": "Pick an example to put it in the chat box. You can edit it before sending.",
+    "refresh": "Refresh",
+    "refreshFailed": "Couldn't get new suggestions. Try again later.",
+    "fillIn": "Use",
+    "dismiss": "Hide suggestions",
+    "replaceDraft": {
+      "title": "Replace your unsent message?",
+      "description": "The chat box already has text you haven't sent. Replacing it with this prompt discards that text.",
+      "confirm": "Replace"
+    },
+    "share": {
+      "prompt": "What have you built with Memoh? Share your use case on X with #Memoh.",
+      "action": "Share on X"
+    }
+  },
   "models": {
     "title": "Models",
     "searchPlaceholder": "Search providers…",
@@ -1791,6 +1899,9 @@
     "reasoningEfforts": "Supported efforts",
     "reasoningEffortsPlaceholder": "Select efforts",
     "contextWindowMin": "Context window must be greater than 0",
+    "maxOutputTokens": "Max Output Tokens",
+    "maxOutputTokensPlaceholder": "e.g. 8192",
+    "maxOutputTokensMin": "Max output tokens must be greater than 0",
     "testModel": "Test Model",
     "enable": "Enable model",
     "toggleFailed": "Failed to update model",
@@ -2308,6 +2419,8 @@
       "enabledDescription": "Hooks are enabled for matching events.",
       "disabledDescription": "The hooks file exists but is disabled.",
       "invalidDescription": "The JSON file is not valid yet.",
+      "invalidJson": "The hooks file has a syntax error. Check commas, quotes and brackets.",
+      "testPayloadInvalid": "The payload is not valid JSON.",
       "rules": "Rules",
       "rulesDescription": "Enabled rules over total rules.",
       "actions": "Actions",
@@ -2412,7 +2525,7 @@
     "aclPreset": "IM App Policy",
     "aclPresetDescription": "Start with a standard ACL preset. You can tweak it later in Channel Access.",
     "aclPresetHint": "Tip: use 'Private Only' for personal bots, 'Group Only' or 'Group and Thread' for community bots, and 'Allow All' to stay completely open.",
-    "aclPresetHelp": "This sets up your default ACL effect and initial rules. You can adjust them anytime from the Channel Access page.",
+    "aclPresetHelp": "This sets up your default ACL effect and initial rules. You can change them after creation under Access Control › Channel Members.",
     "aclPresets": {
       "allowAll": {
         "title": "Allow All",
@@ -2432,7 +2545,7 @@
       },
       "denyAll": {
         "title": "Deny All",
-        "description": "Defaults to deny and adds no rules, so you can configure access manually later."
+        "description": "Defaults to deny and adds no rules. After creation, add allowed members or groups in Access Control before the bot replies on IM."
       }
     },
     "editAvatar": "Edit Avatar",
@@ -2575,6 +2688,7 @@
       "usageNone": "No usage yet",
       "runtimeTitle": "Runtime",
       "runtimeSampledAt": "Updated {time}",
+      "runtimeCpuCores": "{count} vCPU",
       "runtimeStopped": "Workspace isn't running — start it to see live resource usage",
       "runtimeNoMetrics": "Resource usage isn't available right now",
       "remindersTitle": "Action needed",
@@ -2792,9 +2906,7 @@
         "removed": "{name} removed",
         "failed": "{name}: operation failed"
       },
-      "busy": "Another dependency operation is still running in this workspace.",
-      "catalogStaleTitle": "Showing cached dependencies",
-      "catalogStaleDescription": "Supermarket is unavailable. You can retry to get the latest catalog."
+      "busy": "Another dependency operation is still running in this workspace."
     },
     "folders": {
       "create": "New folder",
@@ -2982,6 +3094,7 @@
       "statusRunning": "Running",
       "statusStopped": "Stopped",
       "statusExited": "Exited",
+      "statusPaused": "Paused",
       "statusUnknown": "Unknown",
       "loadFailed": "Failed to load workspace info",
       "actionFailed": "Workspace action failed",
@@ -2998,6 +3111,17 @@
       "stopSuccess": "Workspace stopped",
       "deleteSuccess": "Workspace deleted",
       "deletePreserveSuccess": "Workspace deleted and data preserved",
+      "removal": {
+        "removingTitle": "Deleting workspace",
+        "removingHint": "You can leave this page. The result will be here when you come back.",
+        "removingKeepHint": "Your data is backed up first, then the workspace is deleted. You can leave this page; the result will be here when you come back.",
+        "failedTitle": "Workspace deletion failed",
+        "failedHint": "The workspace was not deleted (failed {time}). Try again, or cancel the deletion to keep using it.",
+        "retry": "Try again",
+        "cancel": "Cancel deletion",
+        "cancelSuccess": "Deletion cancelled",
+        "recreateStopped": "The old workspace could not be deleted, so it was not rebuilt."
+      },
       "snapshotSuccess": "Snapshot created",
       "restoreSuccess": "Data restored",
       "rollbackSuccess": "Snapshot rolled back",
@@ -3019,7 +3143,6 @@
       "metricsUnavailable": "No metrics available.",
       "metricsStopped": "Workspace isn't running; only storage usage is available.",
       "metricsPath": "Path",
-      "metricsUnlimited": "No limit",
       "currentSample": "Current",
       "sampledAt": "Sampled at",
       "metricsLabels": {
@@ -3038,7 +3161,6 @@
         "storageHint": "Reserved as a VM hard limit; container runtime backends currently track it as a soft limit.",
         "unlimited": "Unlimited",
         "unlimitedPlaceholder": "unlimited",
-        "cpuCoresValue": "{value} cores",
         "cpuSummary": "CPU {value}",
         "memorySummary": "Memory {value}",
         "storageSummary": "Storage {value}",
@@ -3331,10 +3453,12 @@
         "updated": "Updated",
         "updateFailed": "Failed to update",
         "removed": "Member removed",
-        "removeFailed": "Failed to remove member"
+        "removeFailed": "Failed to remove member",
+        "emptyWithRules": "The list is empty, but {count} advanced rule is in effect — see In Effect above. | The list is empty, but {count} advanced rules are in effect — see In Effect above."
       },
       "advanced": {
-        "entryTitle": "Advanced rules"
+        "entryTitle": "Advanced rules",
+        "activeCount": "{count} rule in effect | {count} rules in effect"
       },
       "defaultEffectTitle": "Default Effect",
       "defaultEffectDescription": "Applied when no rule matches an inbound message.",
@@ -3447,7 +3571,20 @@
       "threadId": "Thread ID",
       "threadIdPlaceholder": "Enter thread ID",
       "clearSpecificConversation": "Clear Selection",
-      "lastObserved": "Last seen"
+      "lastObserved": "Last seen",
+      "effective": {
+        "title": "In Effect",
+        "item": "{scope}: {access}",
+        "separator": " · ",
+        "listJoiner": ", ",
+        "everyone": "everyone",
+        "listed": "listed only",
+        "exceptListed": "everyone not listed",
+        "nobody": "no one",
+        "scopeNote": "Applies to IM channels only; web chat is not affected.",
+        "scopeNoteWithExempt": "Applies to IM channels only; web chat and {channels} are not affected.",
+        "modeWithScope": "{mode} {scope}"
+      }
     },
     "channels": {
       "title": "Platforms",
@@ -3502,6 +3639,7 @@
       "deleteTitle": "Delete platform",
       "deleteWarning": "Deleting this connection cannot be undone. Proceed with caution.",
       "weixinQr": {
+        "startFailed": "Couldn't get the QR code. Try again.",
         "title": "QR Code Login",
         "description": "Scan the QR code with WeChat to connect your account.",
         "startScan": "Get QR Code",
@@ -3908,6 +4046,10 @@
     "oauthPopupBlocked": "The authorization window was blocked — allow popups for this page and try again.",
     "connectedSuccess": "{name} connected",
     "connectFailed": "Failed to connect service",
+    "oauthAppNotConfigured": {
+      "admin": "Connect-It has no OAuth App (Client ID and Client Secret) configured for {connector}. If you can access this deployment's Connect-It admin console, enter them on the {connector} connector's config page and connect again; otherwise, ask the operator of its Connect-It.",
+      "member": "Connect-It has no OAuth App (Client ID and Client Secret) configured for {connector}. Ask this deployment's administrator or the operator of its Connect-It to configure it, then connect again."
+    },
     "status": {
       "active": "Connected",
       "pending": "Waiting for authorization",
@@ -4009,23 +4151,10 @@
       "title": "You're All Set",
       "subtitle": "Open Memoh and start your first conversation",
       "action": "Open Memoh",
-      "cards": {
-        "im": {
-          "title": "IM channels",
-          "desc": "Deploy your bot to Telegram and beyond"
-        },
-        "voice": {
-          "title": "Voice chat",
-          "desc": "TTS and STT give your bot a voice"
-        },
-        "search": {
-          "title": "Web search",
-          "desc": "Plug in search engines for real-time info"
-        }
-      },
       "saveFailed": "Failed to save, please try again",
       "navigationFailed": "Couldn't open your bot. Please try again.",
-      "noModelWarning": "No model is selected for this bot, so it cannot reply yet. You can configure one later in Bot Settings."
+      "noModelWarning": "No model is selected for this bot, so it cannot reply yet. You can configure one later in Bot Settings.",
+      "examplesHint": "Or start with one of these"
     }
   },
   "deviceCode": {
@@ -4048,6 +4177,8 @@
     "checkUpdates": "Check for updates",
     "checkUpdatesDone": "Update check finished",
     "checkUpdatesFailed": "Couldn't check for updates",
+    "checkUpdatesIncomplete": "Some checks didn't finish in time and keep their last result. Try again later.",
+    "checkUpdatesTimedOut": "The check took too long and the results may be incomplete. Try again later.",
     "browse": "Browse Supermarket",
     "emptyTitle": "No Apps installed yet",
     "emptyDescription": "Install Skills, dependencies and connectors as Apps from the Supermarket.",
@@ -4064,7 +4195,8 @@
       "update": "Update",
       "remove": "Uninstall",
       "viewProgress": "View progress",
-      "open": "View in Supermarket"
+      "open": "View in Supermarket",
+      "tryIt": "Try it"
     },
     "section": {
       "skills": "{count} Skill | {count} Skills",
@@ -4160,6 +4292,9 @@
       "release": "App release",
       "confirm": "Update {count} item | Update {count} items",
       "none": "Nothing to update."
+    },
+    "tryIt": {
+      "prompt": "Help me test the {name} App: show me how to use its features, then briefly explain what it can do."
     }
   },
   "runtime": {

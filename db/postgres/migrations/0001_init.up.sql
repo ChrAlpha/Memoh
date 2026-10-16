@@ -557,7 +557,7 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   -- keep session_mode='schedule' for prompt/tool gating but can be 'user'
   -- visible so they surface in the sidebar and can be continued.
   visibility TEXT NOT NULL DEFAULT 'internal' CHECK (visibility IN ('user', 'internal')),
-  -- The facts session_mode used to stand in for (see migration 0163). They
+  -- The facts session_mode used to stand in for (see migration 0167). They
   -- are written from the session_mode preset when the session is created;
   -- audience comes from the route's conversation type.
   reply_delivery TEXT NOT NULL DEFAULT 'stream' CHECK (reply_delivery IN ('stream', 'explicit')),
@@ -1034,6 +1034,7 @@ CREATE TABLE IF NOT EXISTS schedule_logs (
   status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'error')),
   result_text TEXT NOT NULL DEFAULT '',
   error_message TEXT NOT NULL DEFAULT '',
+  error_code TEXT NOT NULL DEFAULT '',
   usage JSONB,
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -2419,6 +2420,7 @@ CREATE TABLE IF NOT EXISTS public.bot_app_installations (
     available_version   TEXT        NOT NULL DEFAULT '',
     last_checked_at     TIMESTAMPTZ,
     last_error          TEXT        NOT NULL DEFAULT '',
+    last_error_code     TEXT        NOT NULL DEFAULT '',
     -- The release document the installation materialized, so the App
     -- view does not depend on the Supermarket being reachable.
     release             BYTEA       NOT NULL DEFAULT ''::bytea,
@@ -2873,6 +2875,7 @@ CREATE TABLE IF NOT EXISTS public.bot_dependency_installations (
     latest_version      TEXT        NOT NULL DEFAULT '',
     last_checked_at     TIMESTAMPTZ,
     last_error          TEXT        NOT NULL DEFAULT '',
+    last_error_code     TEXT        NOT NULL DEFAULT '',
     manifest_digest     TEXT        NOT NULL DEFAULT '',
     source_url          TEXT        NOT NULL DEFAULT '',
     registry_id         TEXT        NOT NULL DEFAULT '',
@@ -3034,6 +3037,7 @@ CREATE TABLE IF NOT EXISTS public.bot_workspaces (
     observed_generation BIGINT      NOT NULL DEFAULT 0,
     ever_ready          BOOLEAN     NOT NULL DEFAULT false,
     last_error          TEXT        NOT NULL DEFAULT '',
+    last_error_code     TEXT        NOT NULL DEFAULT '',
     last_error_phase    TEXT        NOT NULL DEFAULT '',
     attempts            INTEGER     NOT NULL DEFAULT 0,
     next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT now(),

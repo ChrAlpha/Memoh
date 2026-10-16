@@ -2497,7 +2497,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/apps/check-updates": {
             "post": {
-                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.",
+                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -3731,6 +3731,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "description": "Records the removal and answers at once. The workspace is gone when GET answers 404; until then GET reports the removal's state.",
                 "tags": [
                     "containerd"
                 ],
@@ -3751,8 +3752,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "202": {
+                        "description": "Accepted"
                     },
                     "404": {
                         "description": "Not Found",
@@ -4905,6 +4906,35 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/container/removal/cancel": {
+            "post": {
+                "description": "Keeps the workspace after its removal failed. Does nothing when no removal has failed; one still in progress cannot be withdrawn.",
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Withdraw a failed workspace removal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/container/skills": {
             "get": {
                 "tags": [
@@ -5507,7 +5537,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/dependencies/check-updates": {
             "post": {
-                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.",
+                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -10367,6 +10397,115 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/starter-prompts": {
+            "get": {
+                "description": "Suggestions for the current user's new chat with a bot, generated from the bot's memory, the user's recent session titles, the bot's installed Apps and its name. The server keeps nothing: pass the hash of the set you hold as known_hash, and the response says unchanged while that set is still current; otherwise a new set is generated, which can take a while.",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Get new-chat starter prompts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "BCP 47 language tag the suggestions are written in. Defaults to en.",
+                        "name": "locale",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Hash of the set the client already holds.",
+                        "name": "known_hash",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.StarterPromptsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/starter-prompts/refresh": {
+            "post": {
+                "description": "Generates a new set for the current user's new chat with a bot, steering away from the prompts already on screen. The returned hash is the same one Get reports for the current material, so later Get calls answer unchanged for the refreshed set.",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Generate a different set of new-chat starter prompts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Locale and the prompts on screen",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.StarterPromptsRefreshRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.StarterPromptsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/server.Problem"
                         }
@@ -17547,6 +17686,17 @@ const docTemplate = `{
                 }
             }
         },
+        "adapters.CompactUnavailableReason": {
+            "type": "string",
+            "enum": [
+                "unsupported",
+                "not_configured"
+            ],
+            "x-enum-varnames": [
+                "CompactUnsupported",
+                "CompactNotConfigured"
+            ]
+        },
         "adapters.DeleteResponse": {
             "type": "object",
             "properties": {
@@ -17586,7 +17736,12 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "reason": {
-                    "type": "string"
+                    "description": "Reason says why Semantic is false.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/adapters.CompactUnavailableReason"
+                        }
+                    ]
                 },
                 "rebuild_index": {
                     "type": "boolean"
@@ -18989,11 +19144,39 @@ const docTemplate = `{
                 "polls": {
                     "type": "boolean"
                 },
+                "preview": {
+                    "description": "Preview selects how a streamed reply is shown. The zero value is\nPreviewNone: an adapter that does not declare a mode gets its reply in one\nmessage when the reply is complete.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/channel.PreviewMode"
+                        }
+                    ]
+                },
+                "proactive_send": {
+                    "description": "ProactiveSend reports whether the adapter can still send to the\nconversation after ReplyWindow has passed.",
+                    "type": "boolean"
+                },
+                "reaction_remove_key": {
+                    "description": "ReactionRemoveKey says how a reaction is removed: by the message it sat\non, or by the reaction's own id. The zero value is ReactionRemoveByMessageID.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/channel.ReactionRemoveKey"
+                        }
+                    ]
+                },
                 "reactions": {
                     "type": "boolean"
                 },
                 "reply": {
                     "type": "boolean"
+                },
+                "reply_window": {
+                    "description": "ReplyWindow is how long after an inbound message the platform accepts a\npassive reply to it. Zero means the platform imposes no such window.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/time.Duration"
+                        }
+                    ]
                 },
                 "rich_text": {
                     "type": "boolean"
@@ -19326,6 +19509,32 @@ const docTemplate = `{
                 "MessageStyleCode",
                 "MessageStyleUnderline",
                 "MessageStyleSpoiler"
+            ]
+        },
+        "channel.PreviewMode": {
+            "type": "integer",
+            "enum": [
+                0,
+                1,
+                2,
+                3
+            ],
+            "x-enum-varnames": [
+                "PreviewNone",
+                "PreviewEditInPlace",
+                "PreviewNativeStream",
+                "PreviewDraft"
+            ]
+        },
+        "channel.ReactionRemoveKey": {
+            "type": "integer",
+            "enum": [
+                0,
+                1
+            ],
+            "x-enum-varnames": [
+                "ReactionRemoveByMessageID",
+                "ReactionRemoveByReactionID"
             ]
         },
         "channel.ReplyRef": {
@@ -21408,6 +21617,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_error": {
+                    "description": "LastError is text recorded by earlier servers. A failure recorded now\ncarries LastErrorCode, which clients render as errors.\u003ccode\u003e.",
+                    "type": "string"
+                },
+                "last_error_code": {
                     "type": "string"
                 },
                 "license": {
@@ -21474,6 +21687,9 @@ const docTemplate = `{
         "handlers.AppListResponse": {
             "type": "object",
             "properties": {
+                "dependency_catalog_refreshing": {
+                    "type": "boolean"
+                },
                 "dependency_catalog_stale": {
                     "type": "boolean"
                 },
@@ -21482,6 +21698,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.AppItem"
                     }
+                },
+                "update_checks_incomplete": {
+                    "type": "boolean"
                 },
                 "workspace_state": {
                     "type": "string",
@@ -21904,6 +22123,9 @@ const docTemplate = `{
         "handlers.ContainerCPUMetricsResponse": {
             "type": "object",
             "properties": {
+                "cores": {
+                    "type": "integer"
+                },
                 "kernel_nanoseconds": {
                     "type": "integer"
                 },
@@ -22033,10 +22255,14 @@ const docTemplate = `{
         "handlers.ContainerStorageMetricsResponse": {
             "type": "object",
             "properties": {
+                "limit_bytes": {
+                    "type": "integer"
+                },
                 "path": {
                     "type": "string"
                 },
                 "used_bytes": {
+                    "description": "UsedBytes is omitted when only the allotment is known.",
                     "type": "integer"
                 }
             }
@@ -22493,6 +22719,9 @@ const docTemplate = `{
                 },
                 "namespace": {
                     "type": "string"
+                },
+                "removal": {
+                    "$ref": "#/definitions/handlers.WorkspaceRemovalResponse"
                 },
                 "runtime_backend": {
                     "type": "string"
@@ -23073,6 +23302,59 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.StarterPrompt": {
+            "type": "object",
+            "required": [
+                "prompt",
+                "title"
+            ],
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.StarterPromptsRefreshRequest": {
+            "type": "object",
+            "properties": {
+                "avoid": {
+                    "description": "Avoid lists the prompts currently shown, which the new set must not repeat.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "locale": {
+                    "description": "Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.StarterPromptsResponse": {
+            "type": "object",
+            "required": [
+                "hash",
+                "items",
+                "unchanged"
+            ],
+            "properties": {
+                "hash": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.StarterPrompt"
+                    }
+                },
+                "unchanged": {
+                    "type": "boolean"
                 }
             }
         },
@@ -24029,9 +24311,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_error": {
+                    "description": "LastError is text recorded by earlier servers, including the script\noutput they used to keep. A failure recorded now carries LastErrorCode.",
                     "type": "string"
                 },
                 "last_error_code": {
+                    "description": "LastErrorCode is the catalog code of a recorded failure, which clients\nrender as errors.\u003ccode\u003e.",
                     "type": "string"
                 },
                 "latest_version": {
@@ -24117,6 +24401,10 @@ const docTemplate = `{
                 "catalog_fetched_at": {
                     "type": "string"
                 },
+                "catalog_refreshing": {
+                    "description": "CatalogRefreshing is set while the catalog is refreshed in the\nbackground; listing again shortly may show a newer catalog.",
+                    "type": "boolean"
+                },
                 "catalog_stale": {
                     "type": "boolean"
                 },
@@ -24132,6 +24420,10 @@ const docTemplate = `{
                 },
                 "platform": {
                     "$ref": "#/definitions/handlers.WorkspaceDependencyPlatform"
+                },
+                "update_checks_incomplete": {
+                    "description": "UpdateChecksIncomplete is set by check-updates when some checks did not\nfinish in time; those keep their last result.",
+                    "type": "boolean"
                 },
                 "workspace_state": {
                     "type": "string",
@@ -24357,6 +24649,24 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WorkspaceRemovalResponse": {
+            "type": "object",
+            "properties": {
+                "preserve_data": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "removing",
+                        "failed"
+                    ]
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -25534,6 +25844,10 @@ const docTemplate = `{
                 "dimensions": {
                     "type": "integer"
                 },
+                "max_output_tokens": {
+                    "description": "MaxOutputTokens is the most output tokens the model can produce in one\nresponse; nil means unknown. When set, every turn requests an explicit\nlimit within it.",
+                    "type": "integer"
+                },
                 "reasoning_default_on": {
                     "description": "ReasoningDefaultOn reports whether omitting the thinking field leaves the\nmodel thinking. Separate from off-ability: Claude 4.6 can be turned off *and*\ndefaults to off, while Opus 5 can be turned off but defaults to on, so\nomitting the field there keeps thinking running — billed, and invisible to a\nuser who believes they turned it off. nil means unknown.",
                     "type": "boolean"
@@ -26168,7 +26482,11 @@ const docTemplate = `{
                 "completed_at": {
                     "type": "string"
                 },
+                "error_code": {
+                    "type": "string"
+                },
                 "error_message": {
+                    "description": "ErrorMessage is the text an earlier server stored; new failures set\nErrorCode and leave it empty.",
                     "type": "string"
                 },
                 "id": {
@@ -26889,6 +27207,30 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "time.Duration": {
+            "type": "integer",
+            "format": "int64",
+            "enum": [
+                -9223372036854775808,
+                9223372036854775807,
+                1,
+                1000,
+                1000000,
+                1000000000,
+                60000000000,
+                3600000000000
+            ],
+            "x-enum-varnames": [
+                "minDuration",
+                "maxDuration",
+                "Nanosecond",
+                "Microsecond",
+                "Millisecond",
+                "Second",
+                "Minute",
+                "Hour"
+            ]
         },
         "turn.RuntimeCommand": {
             "type": "object",

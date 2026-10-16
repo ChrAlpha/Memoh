@@ -635,6 +635,7 @@ func toWorkspaceOutcome(w botworkspace.Workspace) bots.WorkspaceOutcome {
 		Desired:        w.Desired,
 		Observed:       w.Observed,
 		LastError:      w.LastError,
+		LastErrorCode:  w.LastErrorCode,
 		LastErrorPhase: w.LastErrorPhase,
 		EverReady:      w.EverReady,
 	}

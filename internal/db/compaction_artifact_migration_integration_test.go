@@ -67,6 +67,17 @@ CREATE TABLE bot_session_events (
   session_id UUID NOT NULL
 );
 
+-- The history clears retire an interrupted run's resume intent.
+CREATE TABLE session_runs (
+  run_id UUID PRIMARY KEY,
+  team_id UUID NOT NULL DEFAULT public.memoh_current_team_id(),
+  session_id UUID NOT NULL,
+  state TEXT NOT NULL,
+  error_code TEXT,
+  fencing_token BIGINT NOT NULL DEFAULT 0,
+  input_json JSONB NOT NULL
+);
+
 CREATE TABLE bot_history_message_compacts (
   id UUID PRIMARY KEY,
   bot_id UUID NOT NULL,
@@ -122,6 +133,14 @@ CREATE TABLE bot_history_messages (
 	VALUES ($1, $2), ($3, $4), ($5, $6), ($7, $8)
 		`, sessionID, botID, foreignSessionID, foreignBotID, repairSessionID, repairBotID, clearedSessionID, clearedBotID); err != nil {
 		t.Fatalf("insert sessions: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+	INSERT INTO session_runs (run_id, session_id, state, error_code, input_json)
+	VALUES
+	  ('00000000-0000-0000-0000-00000000f001', $1, 'lost', 'session_runtime.interrupted', '{"resume": {}}'),
+	  ('00000000-0000-0000-0000-00000000f101', $2, 'lost', 'session_runtime.interrupted', '{"resume": {}}')
+		`, sessionID, foreignSessionID); err != nil {
+		t.Fatalf("insert interrupted runs: %v", err)
 	}
 	for _, table := range []string{"agent_session_publications"} {
 		if _, err := tx.Exec(ctx,
@@ -185,12 +204,12 @@ INSERT INTO bot_history_messages (
 	assertCompactionEpoch(t, ctx, tx, "bot_history_message_compacts", clearedArtifactID, 0)
 	// The migration names public.bot_history_message_compacts; this legacy copy
 	// lives in the test schema, so the statement is pointed there.
-	up0167 := strings.ReplaceAll(
-		readEmbeddedMigration(t, "postgres/migrations/0167_compact_invalidated_at.up.sql"),
+	up0168 := strings.ReplaceAll(
+		readEmbeddedMigration(t, "postgres/migrations/0168_compact_invalidated_at.up.sql"),
 		"public.bot_history_message_compacts", quotedSchema+".bot_history_message_compacts",
 	)
-	if _, err := tx.Exec(ctx, up0167); err != nil {
-		t.Fatalf("apply 0167 up: %v", err)
+	if _, err := tx.Exec(ctx, up0168); err != nil {
+		t.Fatalf("apply 0168 up: %v", err)
 	}
 	parsedClearedSessionID, err := ParseUUID(clearedSessionID)
 	if err != nil {
@@ -288,6 +307,7 @@ VALUES ($1, $2, 'ok', 'log-only artifact')
 	// The session clear must also drop that session's runtime publication while the
 	// foreign session's rows survive.
 	assertRowCount(t, ctx, tx, "agent_session_publications", 1)
+	assertResumeIntents(t, ctx, tx, 1)
 
 	parsedForeignBotID, err := ParseUUID(foreignBotID)
 	if err != nil {
@@ -300,6 +320,7 @@ VALUES ($1, $2, 'ok', 'log-only artifact')
 	assertRowCount(t, ctx, tx, "bot_history_message_compacts", 3)
 	assertCompactionEpoch(t, ctx, tx, "bot_sessions", foreignSessionID, 1)
 	assertRowCount(t, ctx, tx, "agent_session_publications", 0)
+	assertResumeIntents(t, ctx, tx, 0)
 
 	parsedRepairSessionID, err := ParseUUID(repairSessionID)
 	if err != nil {
@@ -470,6 +491,17 @@ SELECT EXISTS (
 	}
 	if got != want {
 		t.Fatalf("%s.%s existence = %v, want %v", table, column, got, want)
+	}
+}
+
+func assertResumeIntents(t *testing.T, ctx context.Context, tx pgx.Tx, want int) {
+	t.Helper()
+	var got int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM session_runs WHERE input_json ? 'resume'").Scan(&got); err != nil {
+		t.Fatalf("count resume intents: %v", err)
+	}
+	if got != want {
+		t.Fatalf("resume intents = %d, want %d", got, want)
 	}
 }
 

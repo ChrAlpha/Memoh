@@ -233,10 +233,10 @@ func TestWebSendRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 	}
 	resolver.SetACPSessionPool(pool)
 
-	// The refusal is the run's setup failure. Its slash code is not a catalog
-	// code, so the run is recorded under the code for a failure nothing named.
-	if _, err := streamWebSend(context.Background(), t, resolver, requestedSkillGuardRequest("session-1")); apperror.CodeOf(err) != apperror.CodeRuntimeRunFailed {
-		t.Fatalf("Web send failure = %v, want %s", err, apperror.CodeRuntimeRunFailed)
+	// The refusal is the run's setup failure, recorded under the catalog code
+	// the composer already renders for it.
+	if _, err := streamWebSend(context.Background(), t, resolver, requestedSkillGuardRequest("session-1")); apperror.CodeOf(err) != apperror.CodeSlashSkillActivationUnsupported {
+		t.Fatalf("Web send failure = %v, want %s", err, apperror.CodeSlashSkillActivationUnsupported)
 	}
 	if pool.calls != 0 {
 		t.Fatalf("ACP pool calls = %d, want 0", pool.calls)

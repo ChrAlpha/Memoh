@@ -1,15 +1,18 @@
 package misskey
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 var (
@@ -207,5 +210,35 @@ func TestUnreactNeedsOnlyTheNoteID(t *testing.T) {
 	}
 	if body["noteId"] != "note-9" || len(body) != 2 {
 		t.Fatalf("body = %#v, want the credential and noteId only", body)
+	}
+}
+
+func TestSendFailureIsReturnedWithConfigIDAndNotLogged(t *testing.T) {
+	t.Parallel()
+
+	cfg, _ := withMisskeyHTTPStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	var buf bytes.Buffer
+	adapter := NewMisskeyAdapter(slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	err := adapter.Send(context.Background(), cfg, channel.PreparedOutboundMessage{
+		Target:  "note-source",
+		Message: channel.PreparedMessage{Message: channel.Message{Text: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("Send returned nil, want the platform failure")
+	}
+	var found bool
+	for _, attr := range errs.Analyze(context.Background(), err).Attrs {
+		if attr.Key == "config_id" && attr.Value.String() == "cfg-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("error attrs lack config_id: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("adapter logged the failure it returns: %s", buf.String())
 	}
 }

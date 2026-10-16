@@ -148,12 +148,6 @@ func TestDecode(t *testing.T) {
 			wantType: channel.StreamEventProcessingCompleted,
 		},
 		{
-			name:      "processing_failed",
-			chunk:     `{"type":"processing_failed","error":"failed"}`,
-			wantType:  channel.StreamEventProcessingFailed,
-			wantError: "failed",
-		},
-		{
 			name:          "empty chunk",
 			chunk:         ``,
 			wantNilEvents: true,

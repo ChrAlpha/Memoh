@@ -101,21 +101,19 @@ func (c feishuCall) cardText(t *testing.T) string {
 		t.Fatalf("decode %s %s body: %v (body=%q)", c.Method, c.Path, err, c.Body)
 	}
 	var card struct {
-		Elements []struct {
-			Fields []struct {
-				Text struct {
-					Content string `json:"content"`
-				} `json:"text"`
-			} `json:"fields"`
-		} `json:"elements"`
+		Body struct {
+			Elements []struct {
+				Content string `json:"content"`
+			} `json:"elements"`
+		} `json:"body"`
 	}
 	if err := json.Unmarshal([]byte(body.Content), &card); err != nil {
 		t.Fatalf("decode card %q: %v", body.Content, err)
 	}
-	if len(card.Elements) != 1 || len(card.Elements[0].Fields) != 1 {
+	if len(card.Body.Elements) != 1 {
 		t.Fatalf("unexpected card %q", body.Content)
 	}
-	return card.Elements[0].Fields[0].Text.Content
+	return card.Body.Elements[0].Content
 }
 
 // feishuAPI stands in for the Feishu open API. It records the message calls

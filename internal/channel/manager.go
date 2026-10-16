@@ -278,9 +278,6 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	}
 	surface := m.newSurface(config, channelType)
 	if err := surface.deliver(ctx, OutboundMessage{Target: target, Message: req.Message}); err != nil {
-		if m.logger != nil {
-			m.logger.ErrorContext(ctx, "send outbound failed", slog.String("channel", channelType.String()), slog.String("bot_id", botID), slog.Any("error", err))
-		}
 		return err
 	}
 	return nil

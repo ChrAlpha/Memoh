@@ -569,3 +569,45 @@ func writeDockerJSON(t *testing.T, w http.ResponseWriter, value any) {
 		t.Errorf("encode Docker API response: %v", err)
 	}
 }
+
+func TestDecodePullProgressReturnsDaemonErrorFromStream(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"id":"layer1","status":"Downloading","progressDetail":{"current":1,"total":10}}` + "\n" +
+		`{"error":"manifest unknown","errorDetail":{"message":"manifest unknown"}}` + "\n"
+	var reports int
+	err := decodePullProgress(strings.NewReader(stream), func(containerapi.PullProgress) { reports++ })
+	if err == nil || !strings.Contains(err.Error(), "image pull failed") {
+		t.Fatalf("decodePullProgress error = %v, want the stream's error", err)
+	}
+	if reports != 1 {
+		t.Fatalf("progress reports = %d, want 1 before the error", reports)
+	}
+	if got := errs.Analyze(context.Background(), err).Fault; got != apperror.FaultDependency {
+		t.Fatalf("fault = %q, want dependency", got)
+	}
+}
+
+func TestPullImageMapsMissingImageAndInvalidName(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   error
+	}{
+		{"daemon answers 404", http.StatusNotFound, containerapi.ErrNotFound},
+		{"daemon answers 400", http.StatusBadRequest, containerapi.ErrInvalidArgument},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestService(t, "", func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "pull failed"})
+			})
+			_, err := svc.PullImage(context.Background(), "registry.example/nope:1", nil)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("PullImage() error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}

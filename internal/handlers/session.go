@@ -293,7 +293,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 			req.RuntimeMetadata = mergeSessionMetadata(req.RuntimeMetadata, map[string]any{"acp_agent_id": botAgentDescriptor.Provider})
 		}
 	}
-	boundWorkdir, err := h.resolveCreateSessionWorkdir(c.Request().Context(), bot.ID, req.WorkdirID, targetRuntimeType)
+	boundWorkdir, err := resolveSessionWorkdirBinding(c.Request().Context(), h.workdirs, bot.ID, req.WorkdirID, targetRuntimeType)
 	if err != nil {
 		return err
 	}
@@ -973,7 +973,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			}
 			resetCtx, releaseRuntimeReset, err := h.runtimeResets.BeginSessionHistoryReset(c.Request().Context(), botID, sessionID)
 			if err != nil {
-				return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
+				return historyResetError(err)
 			}
 			defer releaseRuntimeReset()
 			c.SetRequest(c.Request().WithContext(resetCtx))
@@ -1100,7 +1100,7 @@ func (h *SessionHandler) DeleteSession(c echo.Context) error {
 		var resetCtx context.Context
 		resetCtx, releaseRuntimeReset, err = h.runtimeResets.BeginSessionHistoryReset(c.Request().Context(), botID, sessionID)
 		if err != nil {
-			return apperror.Wrap(apperror.CodeSessionResetConflict, err, nil)
+			return historyResetError(err)
 		}
 		defer releaseRuntimeReset()
 		c.SetRequest(c.Request().WithContext(resetCtx))
@@ -1150,10 +1150,10 @@ func (h *SessionHandler) authorizeSession(c echo.Context, channelIdentityID, bot
 	}
 	sess, err := h.sessionService.Get(c.Request().Context(), sessionID)
 	if err != nil || sess.BotID != bot.ID {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	if !canAccessSession(sess, channelIdentityID, perms) {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	return bot, perms, sess, nil
 }
@@ -1259,18 +1259,25 @@ func filterSessionsForPermissions(items []session.Thread, userID string, perms [
 	return out
 }
 
-// resolveCreateSessionWorkdir validates a requested workdir binding. External
-// Agent sessions can only bind native-workspace workdirs until their runtime
-// lifecycles are scoped by workspace target.
-func (h *SessionHandler) resolveCreateSessionWorkdir(ctx context.Context, botID, workdirID, runtimeType string) (*workdir.Workdir, error) {
+// resolveSessionWorkdirBinding validates a workdir binding requested at
+// session creation. Both creation entry points use it — the REST create and
+// the WebSocket first send that creates its session in-band — so a session is
+// only ever born bound to an active workdir of its own bot. An empty id means
+// no binding and returns nil. External Agent sessions can only bind
+// native-workspace workdirs until their runtime lifecycles are scoped by
+// workspace target.
+//
+// Errors are echo.HTTPError values; the WebSocket caller renders them with
+// wsErrorMessage.
+func resolveSessionWorkdirBinding(ctx context.Context, workdirs sessionWorkdirService, botID, workdirID, runtimeType string) (*workdir.Workdir, error) {
 	workdirID = strings.TrimSpace(workdirID)
 	if workdirID == "" {
 		return nil, nil
 	}
-	if h.workdirs == nil {
+	if workdirs == nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "workdir service not configured")
 	}
-	bound, err := h.workdirs.RequireActive(ctx, botID, workdirID)
+	bound, err := workdirs.RequireActive(ctx, botID, workdirID)
 	if err != nil {
 		return nil, workdirHTTPError(err)
 	}
@@ -1349,7 +1356,7 @@ func sessionServiceError(err error) error {
 func sessionForkError(err error) error {
 	switch {
 	case errors.Is(err, session.ErrForkSourceNotFound):
-		return echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return apperror.Wrap(apperror.CodeSessionNotFound, err, nil)
 	case errors.Is(err, session.ErrForkSourceNotReply):
 		return echo.NewHTTPError(http.StatusConflict, "fork source is not a visible assistant reply")
 	case errors.Is(err, session.ErrForkSourceNotChat):

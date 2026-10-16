@@ -17,6 +17,7 @@ import type {
   ChatViewTarget,
 } from './types'
 import type { createChatViewRegistry } from './view-registry'
+import type { FirstSendTracker } from './first-send'
 
 type AssistantStreams = ReturnType<typeof createAssistantStreamRegistry>
 type Decisions = ReturnType<typeof createChatDecisions>
@@ -27,7 +28,11 @@ type ChatViews = ReturnType<typeof createChatViewRegistry>
 export interface RuntimeIntegrationDeps {
   currentBotId: Ref<string | null>
   sessionId: Ref<string | null>
+  explicitSessionSelection: Ref<boolean>
+  draftIntent: Ref<boolean>
   focusedViewId: Ref<string>
+  firstSend: FirstSendTracker
+  workdirMismatchMessage: () => string
   assistantStreams: AssistantStreams
   decisions: Decisions
   realtime: Realtime
@@ -83,8 +88,14 @@ export interface RuntimeIntegrationDeps {
     turn: ChatMessage,
   ) => void
   sendFailedMessage: () => string
+  sendOutcomeUnknownMessage: () => string
   touchSessionInList: (sessionId: string, updatedAt?: string) => void
 }
+
+// How long a held first send waits for the server to confirm it. Creating the
+// session and admitting the run normally take well under a second; without a
+// limit a server that never answers leaves the pane locked on welcome.
+const FIRST_SEND_CONFIRM_TIMEOUT_MS = 30_000
 
 export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
   const deferredAbortByInvocation = new Map<string, {
@@ -92,29 +103,113 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
     botId: string
   }>()
 
+  // A held first send that ended without the server's answer: its run may
+  // have been taken, so the send keeps its session (see StreamFailureError).
+  function sendOutcomeUnknownError() {
+    return new StreamFailureError(deps.sendOutcomeUnknownMessage(), 'startup', undefined, { outcomeUnknown: true })
+  }
+
+  // A refusal of a resent first send refuses the resend, not the send. The
+  // server checks access, the workspace target and, for a skill activation,
+  // whether the session is free (its own run still holding it reads as busy)
+  // before admission looks the invocation up, so a refusal says nothing about
+  // whether the first attempt's run was taken. Only a confirmation or the
+  // timeout settles that; until then the send keeps its session.
+  function refusalOf(invocationId: string, refusal: StreamFailureError): StreamFailureError {
+    return deps.firstSend.isResent(invocationId) ? sendOutcomeUnknownError() : refusal
+  }
+
   function handleSessionCreated(
-    event: { invocation_id: string; session_id: string },
+    event: { invocation_id: string; session_id: string; workdir_id?: string },
     sourceBotId = '',
   ) {
     const eventSessionId = event.session_id.trim()
+    if (!eventSessionId) return
     const pending = deps.assistantStreams.getAssistantStream(event.invocation_id)
+    // A send that already ended locally (it failed, timed out or was stopped)
+    // has given the draft back to the user. Its session must not take the
+    // draft over now; only a stop still waiting for the session is sent.
+    if (!pending) {
+      replayDeferredAbort(event.invocation_id, eventSessionId)
+      return
+    }
     const botId = (
-      pending?.botId
+      pending.botId
       || sourceBotId
       || deps.currentBotId.value
       || ''
     ).trim()
-    if (!botId || !eventSessionId) return
-    const originalSessionId = (pending?.sessionId ?? '').trim()
+    if (!botId) return
+    const originalSessionId = pending.sessionId.trim()
     const sessionId = deps.assistantStreams.recordCreatedSession(
       event.invocation_id,
       eventSessionId,
     ) || eventSessionId
-    const deferredAbort = deferredAbortByInvocation.get(event.invocation_id)
-    if (deferredAbort) {
-      deferredAbortByInvocation.delete(event.invocation_id)
-      sendAbortControl(deferredAbort.runId, deferredAbort.botId, sessionId)
+    // The workdir binding is fixed when the session is created, so a session
+    // born without the requested workdir cannot be repaired afterwards. A
+    // server that predates in-band workdir binding omits the field and
+    // creates an unbound session; treat any mismatch as a startup failure.
+    // The stop is replayed once run_accepted names the run, and send.ts
+    // deletes the session; the draft never showed the send. The queued
+    // resend is dropped so a reconnect cannot create the session again.
+    const requestedWorkdirId = deps.firstSend.requestedWorkdirFor(event.invocation_id)
+    if (requestedWorkdirId && (event.workdir_id ?? '').trim() !== requestedWorkdirId) {
+      deps.realtime.forgetWebSocketRequest(botId, event.invocation_id)
+      abortRun(event.invocation_id)
+      deps.assistantStreams.rejectAssistantStream(
+        event.invocation_id,
+        new StreamFailureError(deps.workdirMismatchMessage(), 'startup', event),
+      )
+      return
     }
+    const workdirId = (event.workdir_id ?? '').trim()
+    deps.firstSend.admit(event.invocation_id, sessionId, workdirId)
+    // From here a resend after a reconnect goes to this session, where the
+    // server answers it with the run the invocation already has.
+    deps.realtime.bindWebSocketRequestSession(botId, event.invocation_id, sessionId)
+    replayDeferredAbort(event.invocation_id, sessionId)
+    // A held first send stays a draft until run_accepted reveals it; the
+    // server can still refuse the run after creating the session.
+    if (deps.firstSend.isAwaitingConfirmation(event.invocation_id)) {
+      revealConfirmedFirstSend(event.invocation_id, botId)
+      return
+    }
+    promoteCreatedSession(event.invocation_id, botId, sessionId, workdirId, originalSessionId)
+  }
+
+  // A stop for a run that was accepted before its session was named waits
+  // for session_created, which supplies the session the abort control needs.
+  function replayDeferredAbort(invocationId: string, sessionId: string) {
+    const deferredAbort = deferredAbortByInvocation.get(invocationId)
+    if (!deferredAbort) return
+    deferredAbortByInvocation.delete(invocationId)
+    sendAbortControl(deferredAbort.runId, deferredAbort.botId, sessionId)
+  }
+
+  // The server took a held first send once it has both named the session
+  // and accepted the run (normally session_created, then run_accepted). Its
+  // turns go on screen in the draft, then the draft becomes the session, in
+  // one step.
+  function revealConfirmedFirstSend(invocationId: string, sourceBotId: string) {
+    const entry = deps.firstSend.entryForInvocation(invocationId)
+    if (!entry || entry.revealed || !entry.sessionId || !entry.accepted) return
+    const held = deps.assistantStreams.getAssistantStream(invocationId)
+    const botId = (held?.botId || sourceBotId || deps.currentBotId.value || '').trim()
+    if (!botId || !deps.firstSend.reveal(invocationId)) return
+    // A first send leaves a draft, which has no session selected.
+    promoteCreatedSession(invocationId, botId, entry.sessionId, entry.workdirId, '')
+  }
+
+  // Turns the draft the send came from into the session the server created:
+  // the view moves, the sidebar row appears and the pane selects it.
+  function promoteCreatedSession(
+    invocationId: string,
+    botId: string,
+    sessionId: string,
+    workdirId: string,
+    originalSessionId: string,
+  ) {
+    const pending = deps.assistantStreams.getAssistantStream(invocationId)
     const viewId = pending?.viewId?.trim() || deps.focusedViewId.value
     const promoted = deps.promoteDraftView({
       botId,
@@ -133,6 +228,8 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
         session_mode: 'chat',
         runtime_type: 'model',
         title: provisionalSessionTitle(promoted.transcript.latestOptimisticUserText()),
+        // Places the row in its folder rather than Recents.
+        workdir_id: workdirId || undefined,
         created_at: now,
         updated_at: now,
       })
@@ -148,6 +245,10 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       deps.rescopeSessionCommandEventToComposer(botId, sessionId, composerScope)
     }
     deps.sessionId.value = sessionId
+    // Same selection state a created session gets anywhere else: the user
+    // chose it by sending, so a reload returns to it instead of the draft.
+    deps.explicitSessionSelection.value = true
+    deps.draftIntent.value = false
   }
 
   function handleWebSocketEvent(
@@ -183,6 +284,8 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
         event.run_id,
         turnId,
       )
+      deps.firstSend.accept(event.invocation_id)
+      revealConfirmedFirstSend(event.invocation_id, sourceBotId)
       const sessionId = event.session_id.trim()
       const botId = (
         accepted?.botId
@@ -191,11 +294,16 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
         || ''
       ).trim()
       if (sessionId && botId) {
-        deps.chatViews.getOrCreate({
-          botId,
-          sessionId,
-          viewId: deps.focusedViewId.value,
-        }).transcript.bindRuntimeTurn(
+        // A send that already ended locally (a stop, or a failed first send
+        // whose session was deleted) must not recreate a view for it.
+        const view = deps.assistantStreams.getAssistantStream(event.invocation_id)
+          ? deps.chatViews.getOrCreate({
+              botId,
+              sessionId,
+              viewId: deps.focusedViewId.value,
+            })
+          : deps.chatViews.getSession(botId, sessionId)
+        view?.transcript.bindRuntimeTurn(
           event.invocation_id,
           turnId,
           event.run_id,
@@ -223,6 +331,12 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       const invocationId = event.invocation_id.trim()
       const queued = deps.assistantStreams.getAssistantStream(invocationId)
       if (!queued) return
+      // A queued first send is confirmed by the frame itself: the server
+      // created the session and took the message into its queue, which is
+      // what the held turns were waiting for.
+      deps.firstSend.admit(invocationId, event.session_id.trim())
+      deps.firstSend.accept(invocationId)
+      revealConfirmedFirstSend(invocationId, sourceBotId)
       if (!deps.hasVisibleAssistantBlocks(queued.assistantTurn)) {
         deps.removeTurnFromSession(
           queued.botId,
@@ -239,7 +353,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       if (!rejected) return
       const message = resolveApiErrorMessage(
         event,
-        event.message || deps.sendFailedMessage(),
+        deps.sendFailedMessage(),
       )
       const stage = failureStage(
         rejected.assistantTurn,
@@ -255,7 +369,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       }
       deps.assistantStreams.rejectAssistantStream(
         invocationId,
-        new StreamFailureError(message, stage, event),
+        refusalOf(invocationId, new StreamFailureError(message, stage, event)),
       )
       return
     }
@@ -272,7 +386,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       if (event.type === 'command_error' && invocationId && pending) {
         deps.assistantStreams.rejectAssistantStream(
           invocationId,
-          new CommandStreamError(commandActionErrorMessage(event), event),
+          refusalOf(invocationId, new CommandStreamError(commandActionErrorMessage(event), event)),
         )
       }
       return
@@ -286,7 +400,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       if (!pending) return
       const message = resolveApiErrorMessage(
         event,
-        event.message || deps.sendFailedMessage(),
+        deps.sendFailedMessage(),
       )
       const stage = failureStage(
         pending.assistantTurn,
@@ -310,7 +424,7 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
       }
       deps.assistantStreams.rejectAssistantStream(
         invocationId,
-        new StreamFailureError(message, stage, event),
+        refusalOf(invocationId, new StreamFailureError(message, stage, event)),
       )
     }
   }
@@ -515,6 +629,50 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
     deps.chatViews.prune()
   }
 
+  // A socket that closes before a held first send is confirmed loses the
+  // answer, not necessarily the send: the server may have taken the run.
+  // Once the server has named the send's session, the reconnect resends the
+  // request into it (see bindWebSocketRequestSession) and the server answers
+  // with the run the invocation already has, so the send keeps waiting; the
+  // confirmation timeout still bounds the wait. Before that a resend would
+  // create a second session, so the send ends with its outcome unknown and
+  // the queued resend is dropped.
+  function handleWebSocketClosed(botId: string) {
+    const bid = botId.trim()
+    for (const invocationId of deps.firstSend.awaitingConfirmationIds()) {
+      const pending = deps.assistantStreams.getAssistantStream(invocationId)
+      if (!pending || pending.botId.trim() !== bid) continue
+      if (deps.firstSend.entryForInvocation(invocationId)?.sessionId) {
+        deps.firstSend.markResent(invocationId)
+        continue
+      }
+      deps.realtime.forgetWebSocketRequest(bid, invocationId)
+      deps.assistantStreams.rejectAssistantStream(
+        invocationId,
+        sendOutcomeUnknownError(),
+      )
+    }
+  }
+
+  // Ends a held first send the server has not confirmed in time, with its
+  // outcome unknown. The stop is recorded too, so a run_accepted that still
+  // arrives aborts the run instead of leaving it going unwatched. Returns the
+  // cancel for the send to call once it settles.
+  function watchFirstSendConfirmation(invocationId: string): () => void {
+    const timer = setTimeout(() => {
+      if (!deps.firstSend.isAwaitingConfirmation(invocationId)) return
+      const pending = deps.assistantStreams.getAssistantStream(invocationId)
+      if (!pending) return
+      deps.realtime.forgetWebSocketRequest(pending.botId, invocationId)
+      abortRun(invocationId)
+      deps.assistantStreams.rejectAssistantStream(
+        invocationId,
+        sendOutcomeUnknownError(),
+      )
+    }, FIRST_SEND_CONFIRM_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }
+
   function abortAllAssistantStreams() {
     const abortError = new Error('aborted')
     abortError.name = 'AbortError'
@@ -526,6 +684,8 @@ export function createRuntimeIntegration(deps: RuntimeIntegrationDeps) {
     handleWebSocketEvent,
     handleProjection,
     prepareSessionRuntime,
+    handleWebSocketClosed,
+    watchFirstSendConfirmation,
     abort,
     abortAllAssistantStreams,
   }

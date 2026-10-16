@@ -19,9 +19,11 @@ func TestGeneratedContractsCarryEveryMutationKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated swagger document: %v", err)
 	}
+	// Other definitions carry integer enums, so the values stay undecoded
+	// until the one definition under test is picked.
 	var doc struct {
 		Definitions map[string]struct {
-			Enum []string `json:"enum"`
+			Enum []json.RawMessage `json:"enum"`
 		} `json:"definitions"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -32,7 +34,11 @@ func TestGeneratedContractsCarryEveryMutationKind(t *testing.T) {
 		t.Fatal("generated swagger document is missing the contextfrag.MutationKind enum")
 	}
 	generated := make(map[string]bool, len(definition.Enum))
-	for _, value := range definition.Enum {
+	for _, raw := range definition.Enum {
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatalf("decode contextfrag.MutationKind value %s: %v", raw, err)
+		}
 		generated[value] = true
 	}
 	declared := make(map[string]bool)

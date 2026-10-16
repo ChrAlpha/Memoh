@@ -111,13 +111,13 @@ import {
   type AppConnectorItem,
 } from '@/composables/api/useApps'
 import {
-  connectorOAuthErrorKey,
+  connectorErrorMessage,
   isConnectorOAuthCancelled,
   openConnectorOAuthURL,
   prepareConnectorOAuthPopup,
   waitForConnectorOAuth,
 } from '@/composables/useConnectorOAuth'
-import { resolveApiErrorMessage } from '@/utils/api-error'
+import { useUserStore } from '@/store/user'
 
 const props = defineProps<{
   autoStart?: boolean
@@ -135,6 +135,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const userStore = useUserStore()
 const schema = toTypedSchema(z.object({
   auth_method: z.string().min(1, t('connectors.validation.authMethodRequired')),
   fields: z.record(z.string(), z.string().optional()),
@@ -261,8 +262,11 @@ async function connect() {
   } catch (error) {
     oauthPopup?.close()
     if (flow.signal.aborted) return
-    const oauthKey = connectorOAuthErrorKey(error)
-    errorMessage.value = oauthKey ? t(oauthKey) : resolveApiErrorMessage(error, t('connectors.connectFailed'))
+    errorMessage.value = connectorErrorMessage(error, t, {
+      role: userStore.userInfo.role,
+      connector: props.catalog?.name || props.connector?.type || '',
+      fallback: t('connectors.connectFailed'),
+    })
   } finally {
     if (flow.signal.aborted) oauthPopup?.close()
     if (attempt === flow) {

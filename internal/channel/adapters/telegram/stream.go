@@ -37,7 +37,6 @@ type telegramPreview struct {
 	isPrivateChat bool
 	draftID       int
 	closed        atomic.Bool
-	wg            sync.WaitGroup
 	mu            sync.Mutex
 	buf           strings.Builder
 	streamChatID  int64
@@ -82,29 +81,8 @@ func (s *telegramPreview) getBotAndReply(ctx context.Context) (bot *tele.Bot, re
 	return bot, replyTo, nil
 }
 
-func (s *telegramPreview) refreshTypingAction(ctx context.Context, chatID int64) error {
-	if err := s.adapter.waitStreamLimit(ctx); err != nil {
-		return err
-	}
-	bot, err := s.getBot(ctx)
-	if err != nil {
-		return err
-	}
-	return bot.Notify(tele.ChatID(chatID), tele.Typing)
-}
-
 func (s *telegramPreview) ensureStreamMessage(ctx context.Context, text string) error {
 	s.mu.Lock()
-	typingChatID := s.streamChatID
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		if err := s.refreshTypingAction(ctx, typingChatID); err != nil {
-			if s.adapter != nil && s.adapter.logger != nil {
-				s.adapter.logger.DebugContext(ctx, "refresh typing action failed", slog.Any("error", err))
-			}
-		}
-	}()
 	if s.streamMsgID != 0 {
 		s.mu.Unlock()
 		return nil
@@ -748,9 +726,6 @@ func (s *telegramPreview) pushFinal(ctx context.Context, event channel.PreparedS
 				actions = msg.Message.Actions
 			}
 			if err := sendTelegramAttachmentWithAssets(ctx, bot, s.target, att, "", to, parseMode, actions); err != nil {
-				if s.adapter.logger != nil {
-					s.adapter.logger.ErrorContext(ctx, "stream final attachment failed", slog.String("config_id", s.cfg.ID), slog.Any("error", err))
-				}
 				return err
 			}
 		}

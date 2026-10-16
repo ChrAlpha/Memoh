@@ -493,7 +493,7 @@ func (e *discussE2E) seed(ctx context.Context) {
 		)
 		INSERT INTO team_members (user_id, role) SELECT id, 'admin' FROM created_user
 	`, e.ownerID, "discuss-e2e-"+e.ownerID)
-	exec(`INSERT INTO providers (id, name, client_type, enable, config) VALUES ($1, $2, 'openai-completions', true, '{"api_key":"k","base_url":"http://127.0.0.1:1"}')`,
+	exec(`INSERT INTO providers (id, name, client_type, enable, config) VALUES ($1, $2, 'openai-completions', true, '{"api_key":"discuss-e2e-key","base_url":"http://127.0.0.1:1"}')`,
 		providerID, "discuss-e2e-provider-"+providerID)
 	exec(`INSERT INTO models (id, model_id, name, provider_id, type, enable, config) VALUES ($1, 'discuss-e2e-model', 'discuss-e2e-model', $2, 'chat', true, '{"context_window":128000,"compatibilities":["tool-call"]}')`,
 		modelID, providerID)
