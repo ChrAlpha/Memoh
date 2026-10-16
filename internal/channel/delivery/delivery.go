@@ -108,6 +108,11 @@ type State struct {
 	// it again.
 	pending   string
 	delivered string
+	// segment is the text the open preview shows that a hidden tool call has not
+	// ended yet. committed is the text of the segments hidden tool calls already
+	// ended, each of which is a message of its own by the time the run ends.
+	segment   string
+	committed []string
 }
 
 // Plan returns the actions for one event and the state that follows it. It
@@ -128,6 +133,11 @@ type State struct {
 // message of its own, unless tool calls are hidden. It holds the reply text
 // until the run ends, except that the text before an attachment is sent ahead
 // of it.
+//
+// A hidden tool call is a boundary the channel cannot show: the text the
+// preview shows before it ends as a message of its own, and what follows opens
+// a new preview. A run that then repeats that text as one of its outputs does
+// not deliver it twice.
 func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
 	if st.failed {
 		return nil, st
@@ -160,6 +170,13 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 		return planPrompt(ev, caps, st)
 	case ev.Type == channel.StreamEventToolCallStart || ev.Type == channel.StreamEventToolCallEnd:
 		if st.HideToolCalls {
+			if ev.Type == channel.StreamEventToolCallStart && caps.Preview != channel.PreviewNone && st.streamed {
+				// The text before the call is not the reply's own text, but the
+				// channel hides the call, so nothing would mark the boundary:
+				// the text ends as a message of its own and what follows opens
+				// a new preview.
+				return planSegmentBreak(ev, st)
+			}
 			return observe(ev), st
 		}
 		if ev.Type == channel.StreamEventToolCallEnd && caps.Preview == channel.PreviewNone {
@@ -171,11 +188,15 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 				st.pending += ev.Delta
 			} else {
 				st.streamed = true
+				if st.HideToolCalls {
+					st.segment += ev.Delta
+				}
 			}
 		}
 	case ev.Type == channel.StreamEventReset:
 		st.streamed = false
 		st.pending, st.delivered = "", ""
+		st.segment = ""
 	case ev.Type == channel.StreamEventAttachment:
 		return planAttach(ev, st)
 	}
@@ -217,11 +238,7 @@ func PlanEnd(caps channel.ChannelCapabilities, st State, outputs []channel.Messa
 		return actions, st
 	}
 	if suppress {
-		if !st.streamed {
-			return append(actions, Action{Kind: KindFinish}), st
-		}
-		flush := channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}
-		return append(actions, Action{Kind: KindFinish, Final: &flush}), st
+		return append(actions, finishAction(st)), st
 	}
 	if len(outputs) == 0 {
 		return append(actions, Action{Kind: KindFinish}), st
@@ -231,14 +248,47 @@ func PlanEnd(caps channel.ChannelCapabilities, st State, outputs []channel.Messa
 		return append(actions, Action{Kind: KindFail, Code: apperror.CodeChannelReplyWindowExpired}), failed(next)
 	}
 	st = next
-	rest := outputs
 	if caps.Preview != channel.PreviewNone {
-		first := finalEvent(st.outbound(outputs[0]))
-		actions = append(actions, Action{Kind: KindFinish, Final: &first})
-		rest = outputs[1:]
+		// The first output that does not repeat text the channel already
+		// delivered ends the preview; a repeat is only observed, in the order
+		// the run produced it.
+		ended := false
+		var tail []channel.Message
+		for _, out := range outputs {
+			switch {
+			case st.repeatsCommitted(out):
+				actions = append(actions, Action{Kind: KindObserve, Event: finalEvent(st.outbound(out))})
+			case !ended:
+				final := finalEvent(st.outbound(out))
+				actions = append(actions, Action{Kind: KindFinish, Final: &final})
+				ended = true
+			default:
+				tail = append(tail, out)
+			}
+		}
+		if !ended {
+			return append(actions, finishAction(st)), st
+		}
+		return append(actions, st.tailActions(tail)...), st
 	}
+	return append(actions, st.tailActions(outputs)...), st
+}
+
+// finishAction ends the preview. Text the preview shows is flushed first, so
+// that text of its own is not lost; a preview that shows none is removed.
+func finishAction(st State) Action {
+	if !st.streamed {
+		return Action{Kind: KindFinish}
+	}
+	flush := channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}
+	return Action{Kind: KindFinish, Final: &flush}
+}
+
+// tailActions sends the outputs that follow the one which ended the preview.
+func (st State) tailActions(outputs []channel.Message) []Action {
+	actions := make([]Action, 0, len(outputs))
 	delivered := strings.TrimSpace(st.delivered)
-	for _, out := range rest {
+	for _, out := range outputs {
 		whole := st.outbound(out)
 		msg := whole
 		msg.Message.Text, delivered = withoutDelivered(out.Text, delivered)
@@ -249,7 +299,26 @@ func PlanEnd(caps channel.ChannelCapabilities, st State, outputs []channel.Messa
 		// Observers get the output whole, as they would from a preview's final.
 		actions = append(actions, Action{Kind: kind, Message: msg, Event: finalEvent(whole)})
 	}
-	return actions, st
+	return actions
+}
+
+// repeatsCommitted reports whether an output only repeats text a hidden tool
+// call already ended as a message of its own. Attachments and buttons make an
+// output more than that text, so they are never a repeat.
+func (st State) repeatsCommitted(msg channel.Message) bool {
+	if len(st.committed) == 0 || len(msg.Attachments) > 0 || len(msg.Actions) > 0 {
+		return false
+	}
+	text := strings.TrimSpace(msg.PlainText())
+	if text == "" {
+		return false
+	}
+	for _, committed := range st.committed {
+		if committed == text {
+			return true
+		}
+	}
+	return false
 }
 
 // withoutDelivered drops from text what was already sent ahead of an attachment.
@@ -276,6 +345,24 @@ func SetFailure(st State, ev channel.StreamEvent) State {
 	return st
 }
 
+// planSegmentBreak ends the text that a tool call the channel hides
+// interrupts. The preview that shows that text ends holding it, so the text
+// stands as a message of its own, and a new preview carries what follows. The
+// text is remembered so that a run repeating it at the end does not deliver it
+// twice.
+func planSegmentBreak(ev channel.StreamEvent, st State) ([]Action, State) {
+	flush := channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}}
+	if text := strings.TrimSpace(st.segment); text != "" {
+		st.committed = append(st.committed, text)
+	}
+	st.segment, st.streamed = "", false
+	return []Action{
+		{Kind: KindObserve, Event: ev},
+		{Kind: KindEndPreview, Final: &flush},
+		{Kind: KindOpenPreview},
+	}, st
+}
+
 // planPrompt places a request for approval or an answer.
 func planPrompt(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([]Action, State) {
 	tc := ev.ToolCall
@@ -295,7 +382,7 @@ func planPrompt(ev channel.StreamEvent, caps channel.ChannelCapabilities, st Sta
 	actions = append(actions, Action{Kind: KindSend, Message: prompt, Event: ev})
 	if splits {
 		actions = append(actions, Action{Kind: KindOpenPreview})
-		st.streamed = false
+		st.streamed, st.segment = false, ""
 	}
 	return actions, st
 }

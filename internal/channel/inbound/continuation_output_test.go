@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -58,6 +59,50 @@ func TestContinuationSendsPlainPromptWhenChannelHasNoNativeQuestion(t *testing.T
 	for _, event := range sender.events {
 		if isUserInputEvent(&event) {
 			t.Fatalf("the question reached the stream as an event: %+v", event)
+		}
+	}
+}
+
+// A continuation that hides tool calls still hands the hidden ordinary
+// tool_call_start to the mapping layer, so the text streamed before it ends
+// there rather than being overwritten by the reply. A channel that shows the
+// tool calls keeps dropping the start, so the continuation stream never
+// flashes a tool message a completed tool state is about to replace.
+func TestContinuationHiddenToolCallEndsIMTextSegment(t *testing.T) {
+	for _, tc := range []struct {
+		channel channel.ChannelType
+		want    []string
+	}{
+		{channel: channel.ChannelType("telegram"), want: []string{"Here is the answer."}},
+		{channel: channel.ChannelType("web"), want: []string{"Let me check.", "Here is the answer."}},
+	} {
+		processor := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, nil, "", 0)
+		sender := &fakeReplySender{}
+		msg := channel.InboundMessage{Channel: tc.channel, ReplyTarget: "test-chat", Message: channel.Message{ID: "approve"}}
+		err := processor.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, func(_ context.Context, ch chan<- json.RawMessage) error {
+			ch <- json.RawMessage(`{"type":"text_delta","delta":"Let me check."}`)
+			ch <- json.RawMessage(`{"type":"tool_call_start","toolName":"read","toolCallId":"call-1"}`)
+			ch <- json.RawMessage(`{"type":"text_delta","delta":"Here is the answer."}`)
+			ch <- json.RawMessage(agentEnd(assistantText("Let me check."), assistantText("Here is the answer.")))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, event := range sender.events {
+			if event.Type == channel.StreamEventToolCallStart {
+				t.Fatalf("%s: an ordinary tool call start reached the stream: %+v", tc.channel, event)
+			}
+		}
+		var sent []string
+		for _, out := range sender.sent {
+			if out.Message.IsEmpty() {
+				continue
+			}
+			sent = append(sent, out.Message.PlainText())
+		}
+		if !reflect.DeepEqual(sent, tc.want) {
+			t.Fatalf("%s: delivered %v, want %v", tc.channel, sent, tc.want)
 		}
 	}
 }
