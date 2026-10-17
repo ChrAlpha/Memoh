@@ -28,12 +28,11 @@ import (
 
 type compactionCapabilityQueries struct {
 	dbstore.Queries
-	bot          sqlc.GetBotByIDRow
-	model        sqlc.Model
-	chatModel    sqlc.Model
-	provider     sqlc.Provider
-	settingsErr  error
-	chatModelErr error
+	bot         sqlc.GetBotByIDRow
+	model       sqlc.Model
+	chatModel   sqlc.Model
+	provider    sqlc.Provider
+	settingsErr error
 }
 
 func (q *compactionCapabilityQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotSession, error) {
@@ -61,9 +60,6 @@ func (q *compactionCapabilityQueries) GetSettingsByBotID(context.Context, pgtype
 
 func (q *compactionCapabilityQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
 	if id == q.chatModel.ID {
-		if q.chatModelErr != nil {
-			return sqlc.Model{}, q.chatModelErr
-		}
 		return q.chatModel, nil
 	}
 	return q.model, nil
@@ -126,7 +122,7 @@ func compactionCodexQueries(botID string) *compactionCapabilityQueries {
 	}
 }
 
-func compactionWindowQueries(chatConfig []byte, chatModelErr error) *compactionCapabilityQueries {
+func compactionWindowQueries() *compactionCapabilityQueries {
 	compactionModelID := testUUID("00000000-0000-0000-0000-000000000431")
 	chatModelID := testUUID("00000000-0000-0000-0000-000000000432")
 	providerID := testUUID("00000000-0000-0000-0000-000000000433")
@@ -145,7 +141,6 @@ func compactionWindowQueries(chatConfig []byte, chatModelErr error) *compactionC
 			ProviderID: providerID,
 			Type:       string(models.ModelTypeChat),
 			Enable:     true,
-			Config:     chatConfig,
 		},
 		provider: sqlc.Provider{
 			ID:         providerID,
@@ -153,7 +148,6 @@ func compactionWindowQueries(chatConfig []byte, chatModelErr error) *compactionC
 			ClientType: string(models.ClientTypeOpenAICompletions),
 			Enable:     true,
 		},
-		chatModelErr: chatModelErr,
 	}
 }
 
@@ -171,10 +165,10 @@ func compactionConfigHandler(queries *compactionCapabilityQueries) *CompactionHa
 	)
 }
 
-func TestBuildTriggerConfigUsesChatModelContextWindow(t *testing.T) {
+func TestBuildTriggerConfigUsesSummarizerWindow(t *testing.T) {
 	t.Parallel()
 
-	handler := compactionConfigHandler(compactionWindowQueries([]byte(`{"context_window":16000}`), nil))
+	handler := compactionConfigHandler(compactionWindowQueries())
 	cfg, err := handler.buildTriggerConfig(
 		context.Background(),
 		"00000000-0000-0000-0000-000000000430",
@@ -186,42 +180,8 @@ func TestBuildTriggerConfigUsesChatModelContextWindow(t *testing.T) {
 	if cfg.SummaryWindowTokens != 32000 {
 		t.Fatalf("SummaryWindowTokens = %d, want summarizer window 32000", cfg.SummaryWindowTokens)
 	}
-	if cfg.ContextWindowTokens != 16000 {
-		t.Fatalf("ContextWindowTokens = %d, want chat window 16000", cfg.ContextWindowTokens)
-	}
 	if cfg.Ratio != 100 || cfg.TotalInputTokens != 1 || !cfg.Manual {
 		t.Fatalf("manual config semantics changed: %#v", cfg)
-	}
-}
-
-func TestBuildTriggerConfigFallsBackWhenChatWindowIsUnavailable(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		chatConfig   []byte
-		chatModelErr error
-	}{
-		{name: "model lookup fails", chatConfig: []byte(`{"context_window":16000}`), chatModelErr: pgx.ErrNoRows},
-		{name: "window missing", chatConfig: []byte(`{}`)},
-		{name: "window nonpositive", chatConfig: []byte(`{"context_window":0}`)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			handler := compactionConfigHandler(compactionWindowQueries(tt.chatConfig, tt.chatModelErr))
-			cfg, err := handler.buildTriggerConfig(
-				context.Background(),
-				"00000000-0000-0000-0000-000000000430",
-				"00000000-0000-0000-0000-000000000434",
-			)
-			if err != nil {
-				t.Fatalf("buildTriggerConfig: %v", err)
-			}
-			if cfg.ContextWindowTokens != 0 {
-				t.Fatalf("ContextWindowTokens = %d, want unknown-window fallback", cfg.ContextWindowTokens)
-			}
-		})
 	}
 }
 

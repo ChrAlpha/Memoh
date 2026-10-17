@@ -216,9 +216,6 @@ func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
 		if cfg.TargetTokens != 110000 {
 			t.Fatalf("async pass %d TargetTokens = %d, want 110000", pass+1, cfg.TargetTokens)
 		}
-		if cfg.ContextWindowTokens != 200000 {
-			t.Fatalf("async pass %d ContextWindowTokens = %d, want 200000", pass+1, cfg.ContextWindowTokens)
-		}
 	}
 
 	runner.configs = nil
@@ -231,9 +228,6 @@ func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
 	}
 	if got := runner.configs[0].TargetTokens; got != 100000 {
 		t.Fatalf("sync TargetTokens = %d, want 100000 soft-share cap", got)
-	}
-	if got := runner.configs[0].ContextWindowTokens; got != 200000 {
-		t.Fatalf("sync ContextWindowTokens = %d, want 200000", got)
 	}
 }
 

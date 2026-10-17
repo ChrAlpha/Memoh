@@ -64,11 +64,8 @@ type TriggerConfig struct {
 	// declared; it bounds the summary output reserve. Zero means unknown and
 	// keeps the engine's conservative defaults.
 	SummaryWindowTokens int
-	// ContextWindowTokens is the chat model's context window. It is separate
-	// from SummaryWindowTokens, which belongs to the summarizer model.
 	ProtectedSources    []turn.ContextMessageSource
 	HistoryBudgetTokens int
-	ContextWindowTokens int
 	PromptCacheTTL      string
 
 	// Manual marks a user-initiated compaction (slash command, HTTP endpoint).
