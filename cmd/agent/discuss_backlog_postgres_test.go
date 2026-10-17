@@ -78,6 +78,8 @@ type backlogFixture struct {
 	longSummary atomic.Bool
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
+	agent       *native.Agent
+	stream      func(http.ResponseWriter, []byte)
 }
 
 func newBacklogFixture(t *testing.T) *backlogFixture {
@@ -108,6 +110,10 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 		if request.Stream {
 			f.modelCalls.Add(1)
 			f.lastRequest.Store(string(body))
+			if f.stream != nil {
+				f.stream(w, body)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = fmt.Fprint(w, "data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"BACKLOG_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			return
@@ -147,7 +153,8 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.base = time.Now().Add(time.Minute).Truncate(time.Millisecond)
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{OwnerID: uuid.NewString(), Ledger: ledger.NewPostgres(sqlc.New(f.pool), f.pool), Fence: runtimefence.NewActivator(queries)})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)}), time.UTC, time.Minute)
+	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
+	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
 	service.SetCompactionService(compaction.NewService(logger, queries))
 	service.SetContextAbsoluteMaxTokens(16000)
