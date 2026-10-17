@@ -220,50 +220,27 @@ func (f *backlogFixture) backlogRowsPrefixed(prefix string) (raw, compacted int)
 	return raw, compacted
 }
 
-// omittedInput collects the current input runs recorded as left out of the
-// provider context: omission mutations and non-selected fragment decisions.
-func (f *backlogFixture) omittedInput() map[string]bool {
-	return f.recordedOmissions("current_input_omitted", true)
-}
-
 // omittedImages collects the inputs whose images runs recorded as shed.
 func (f *backlogFixture) omittedImages() map[string]bool {
-	return f.recordedOmissions("current_input_images_omitted", false)
-}
-
-func (f *backlogFixture) recordedOmissions(kind string, withSelections bool) map[string]bool {
 	f.t.Helper()
 	omitted := map[string]bool{}
-	rows, err := f.pool.Query(f.ctx, `SELECT coalesce(snapshot->'mutations','[]'::jsonb)::text, coalesce(selection_decisions,'[]'::jsonb)::text FROM context_lifecycles WHERE session_id=$1`, f.sessionID)
+	rows, err := f.pool.Query(f.ctx, `SELECT coalesce(snapshot->'mutations','[]'::jsonb)::text FROM context_lifecycles WHERE session_id=$1`, f.sessionID)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var mutations, decisions string
-		if err := rows.Scan(&mutations, &decisions); err != nil {
+		var mutations string
+		if err := rows.Scan(&mutations); err != nil {
 			f.t.Fatal(err)
 		}
 		var records []struct{ Kind, Detail string }
 		_ = json.Unmarshal([]byte(mutations), &records)
 		for _, record := range records {
-			if record.Kind == kind {
+			if record.Kind == "current_input_images_omitted" {
 				for _, id := range strings.Split(strings.TrimPrefix(record.Detail, "sources="), ",") {
 					omitted[id] = true
 				}
-			}
-		}
-		var selections []struct {
-			SourceID string `json:"source_id"`
-			Decision string
-		}
-		_ = json.Unmarshal([]byte(decisions), &selections)
-		for _, selection := range selections {
-			if !withSelections {
-				break
-			}
-			if selection.Decision != "selected" && selection.SourceID != "" {
-				omitted[selection.SourceID] = true
 			}
 		}
 	}
@@ -316,8 +293,9 @@ func TestPostgresDiscussBacklogSummarizerFailureFailsExplicitly(t *testing.T) {
 }
 
 // A newest input that cannot fit even alone fails once, without consuming the
-// batch; the next message demotes it to compactable history and is answered.
-func TestPostgresDiscussOversizedInputFailsOnceThenNextMessageIsAnswered(t *testing.T) {
+// batch. Demoted to history, it is still more than the summarizer can read in
+// one call, so the next round fails explicitly instead of answering without it.
+func TestPostgresDiscussUnreadableOversizedInputFailsExplicitly(t *testing.T) {
 	for _, size := range []int{70_000, 600_000} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			f := newBacklogFixture(t)
@@ -326,23 +304,16 @@ func TestPostgresDiscussOversizedInputFailsOnceThenNextMessageIsAnswered(t *test
 				t.Fatalf("oversized newest input: code=%q provider_calls=%d, want one bounded protected_overflow", code, f.modelCalls.Load())
 			}
 			f.appendMessage("next-round", "next-round small message")
-			request := f.answer("next round", "next-round small message")
-			if strings.Contains(request, strings.Repeat("y", 1000)) {
-				t.Fatal("the demoted oversized input reached the provider raw")
+			if code := f.trigger(); code != "context.budget_unsatisfied" || f.modelCalls.Load() != 0 || f.summaries.Load() != 0 {
+				t.Fatalf("next round: code=%q provider_calls=%d summaries=%d, want budget_unsatisfied before any call", code, f.modelCalls.Load(), f.summaries.Load())
 			}
 			var compacted bool
 			if err := f.pool.QueryRow(f.ctx, `SELECT compact_id IS NOT NULL FROM bot_history_messages WHERE session_id=$1 AND source_message_id='oversized'`, f.sessionID).Scan(&compacted); err != nil {
 				t.Fatal(err)
 			}
-			// Within the compaction read budget it is summarized; beyond it the
-			// compaction cannot progress and the run records the omission.
-			if size == 70_000 && !compacted {
-				t.Fatal("demoted oversized input was not summarized")
+			if compacted {
+				t.Fatal("an input the summarizer could not read was marked compacted")
 			}
-			if !compacted && !f.omittedInput()["oversized"] {
-				t.Fatal("an input compaction could not summarize left the provider context without a record")
-			}
-			t.Logf("size=%d compacted=%v summaries=%d", size, compacted, f.summaries.Load())
 		})
 	}
 }

@@ -15,19 +15,31 @@ func summaryProviderReplayTokens(summary string) int {
 	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")}))
 }
 
-func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, sources []turn.ContextMessageSource) int {
+// keptReplayTokens is the history a compaction leaves raw inside the
+// caller's budget: rows it must keep that the caller did not budget as
+// current input.
+func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMessageSource) int {
+	tokens := 0
+	for _, message := range messages {
+		if (message.HasPolicy(CompactPolicyPreserveRecent) || message.HasPolicy(CompactPolicyMustKeep)) && !isProtectedSource(message, sources) {
+			tokens += messageReplayTokens(message)
+		}
+	}
+	return tokens
+}
+
+func withoutCompacted(messages []CompactionCandidate, compacted []pgtype.UUID) []CompactionCandidate {
 	selected := make(map[pgtype.UUID]bool, len(compacted))
 	for _, id := range compacted {
 		selected[id] = true
 	}
-	tokens := 0
+	rest := make([]CompactionCandidate, 0, len(messages))
 	for _, message := range messages {
-		if selected[message.ID] || isProtectedSource(message, sources) {
-			continue
+		if !selected[message.ID] {
+			rest = append(rest, message)
 		}
-		tokens += messageReplayTokens(message)
 	}
-	return tokens
+	return rest
 }
 
 func compactedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID) int {

@@ -76,8 +76,8 @@ func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *
 	service, runner := newControllerPolicyService(t, nil)
 	sources := []turn.ContextMessageSource{{Kind: "external", ID: "a", Current: true}, {Kind: "external", ID: "b", Current: true}}
 	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 100, DiscussCurrentSources: sources}
-	if !service.maybeSyncCompactDiscuss(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery") || len(runner.configs) != 1 {
-		t.Fatal("recovery did not run")
+	if recomposed, err := service.maybeSyncCompactDiscuss(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery"); !recomposed || err != nil || len(runner.configs) != 1 {
+		t.Fatalf("recovery did not run: %v", err)
 	}
 	cfg := runner.configs[0]
 	if len(cfg.ProtectedSources) != 1 || cfg.ProtectedSources[0].ID != "b" || cfg.HistoryBudgetTokens != 900 {

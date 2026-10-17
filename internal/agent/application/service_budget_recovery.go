@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -47,8 +46,8 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		}
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
-		if result := s.runBudgetCompactionSync(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-			return cfg, false, fmt.Errorf("%w: compaction status %s", contextfrag.ErrBudgetUnsatisfied, result.Status)
+		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
+			return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 		}
 		var messages []ModelMessage
 		var records []historyfrag.HistoryRecord
@@ -274,7 +273,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	}
 	originalHistory := max(0, cmd.DiscussContextTokens-newestTokens)
 	pressure = max(pressure, contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(originalHistory))))
-	if pressure <= available || available <= 0 {
+	if (pressure <= available && len(cmd.DiscussOmittedSources) == 0) || available <= 0 {
 		return cfg, shed, nil
 	}
 	// Older input of the batch stays raw while it fits, leaving a tenth of the
@@ -291,12 +290,8 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	*compacted = true
 	recovery := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, RunID: cfg.RunID, discussCurrentSources: protected}
 	recovery.historyViewFrom = discussViewFrom(cmd)
-	result := s.runBudgetCompactionSync(ctx, recovery, pressure, historyBudget, modelID)
-	if result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-		if shed {
-			return cfg, true, nil
-		}
-		return cfg, false, fmt.Errorf("%w: compaction status %s", contextfrag.ErrBudgetUnsatisfied, result.Status)
+	if err := s.compactForBudget(ctx, recovery, pressure, historyBudget, modelID); err != nil {
+		return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 	}
 	return cfg, false, native.ErrContextRecompose
 }

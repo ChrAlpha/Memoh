@@ -56,21 +56,21 @@ type TriggerConfig struct {
 	BaseURL               string
 	ChatCompletionsCompat string
 	HTTPClient            *http.Client
-	Ratio                 int
-	TotalInputTokens      int
-	MaxCompactTokens      int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
-	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
-	// SummaryWindowTokens is the summarizer model's full context window when
-	// declared; it bounds the summary output reserve. Zero means unknown and
-	// keeps the engine's conservative defaults.
+	// TotalInputTokens is the history pressure that called for this
+	// compaction, reported to hooks.
+	TotalInputTokens int
+	// SummaryWindowTokens and MaxOutputTokens are the summarizer model's
+	// declared window and output cap; they size the summarizer call.
 	SummaryWindowTokens int
+	MaxOutputTokens     int
 	// CandidatesFrom is the creation time of the oldest row the caller's
 	// request loaded. Older rows are invisible to that request, so
 	// summarizing them cannot shrink it. Zero considers the whole session.
 	CandidatesFrom   time.Time
 	ProtectedSources []turn.ContextMessageSource
-	// HistoryBudgetTokens marks a budget-driven run: the summary and the rows
-	// kept raw must fit it, and only ProtectedSources name the current turn.
+	// HistoryBudgetTokens is the room the caller's request has for the
+	// summary and the history it keeps raw; ProtectedSources are budgeted
+	// outside it.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
 }

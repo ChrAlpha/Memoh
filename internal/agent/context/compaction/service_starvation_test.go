@@ -32,7 +32,7 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 	stub := &stubModel{summary: "compacted the old exchange"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100))
+	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 	stub := &stubModel{summary: "should never be produced"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100))
+	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 10000 // smaller than one reasoning row's raw estimate
+	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
@@ -126,7 +126,7 @@ func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 10000 // smaller than the incomplete exchange's raw estimate
+	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
@@ -174,7 +174,7 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 	rows := productionStarvationCorpus(t)
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 72)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 1))
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[len(rows)-1]))
 	if err != nil || res.Status != StatusOK {
 		t.Fatalf("compaction stalled on the short head fragment: result=%+v err=%v", res, err)
 	}
@@ -209,7 +209,7 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 	}
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 20)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 1))
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[3]))
 	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 3 {
 		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
 	}
@@ -227,7 +227,6 @@ func TestBudgetCompactionSummarizesTheNewestFinishedExchange(t *testing.T) {
 	}
 	q := &fakeQueries{uncompacted: rows}
 	cfg := machineryConfig(&stubModel{summary: "the user pasted a long report"}, 0)
-	cfg.Ratio = 100
 	cfg.TotalInputTokens = 5000
 	cfg.HistoryBudgetTokens = 2700
 	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
