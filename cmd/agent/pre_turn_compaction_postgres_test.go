@@ -14,9 +14,10 @@ import (
 
 // History that does not fit the model window is summarized before the turn,
 // only from what the turn loaded, into one active summary that the next
-// compaction folds again. When the summarizer fails, the turn fails before
-// any provider call and leaves history whole; once the summarizer is back,
-// the next turn runs on a summary.
+// compaction folds again. A summary as long as the prompt allows is answered
+// without another compaction. When the summarizer fails, the turn fails
+// before any provider call and leaves history whole; once the summarizer is
+// back, the next turn runs on a summary.
 func TestPostgresPreTurnCompaction(t *testing.T) {
 	for _, entry := range []string{"chat", "discuss"} {
 		t.Run(entry, func(t *testing.T) {
@@ -31,6 +32,9 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 			f.persistHistory("hidden-", 4, 400, time.Now().Add(-48*time.Hour))
 			for round := range 2 {
 				prefix := fmt.Sprintf("round%d-", round)
+				// The second summary is as long as the prompt allows: it must
+				// pass the recheck without another compaction.
+				f.longSummary.Store(round == 1)
 				f.appendRound(entry, prefix)
 				summaries, calls := f.summaries.Load(), f.modelCalls.Load()
 				current := prefix + "current"
@@ -41,7 +45,11 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 				if strings.Count(request, "Earlier backlog summarized.") != 1 || strings.Count(request, current+" message") != 1 || f.activeSummaries() != 1 {
 					t.Fatalf("%s: summaries in request=%d current=%d active=%d, want one of each", prefix, strings.Count(request, "Earlier backlog summarized."), strings.Count(request, current+" message"), f.activeSummaries())
 				}
+				if long := strings.Count(request, " kept"); round == 1 && long < 100 {
+					t.Fatalf("%s: the long summary reached the provider with %d filler words", prefix, long)
+				}
 			}
+			f.longSummary.Store(false)
 			if raw, compacted := f.backlogRowsPrefixed("hidden-"); raw != 4 || compacted != 0 {
 				t.Fatalf("history the turn never loaded: raw=%d compacted=%d, want it left raw", raw, compacted)
 			}
