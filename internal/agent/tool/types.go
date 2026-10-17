@@ -476,6 +476,15 @@ type ToolUsage interface {
 	Usage(ctx context.Context, session SessionContext, available AvailableTools) string
 }
 
+// ToolNotice lets a provider tell the model about tools it could not
+// register this turn, for example a federated source whose upstream failed.
+// Unlike ToolUsage the text is collected even when the provider contributed
+// no tools, which is exactly when a silent gap would mislead the model.
+// Return "" to contribute nothing.
+type ToolNotice interface {
+	ToolNotice(ctx context.Context, session SessionContext) string
+}
+
 // ---- argument parsing helpers ----
 
 func StringArg(arguments map[string]any, key string) string {

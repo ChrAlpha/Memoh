@@ -30,6 +30,14 @@ type ToolSource interface {
 	CallTool(ctx context.Context, session ToolSessionContext, toolName string, arguments map[string]any) (map[string]any, error)
 }
 
+// ToolSourceDiagnostics is implemented by sources that can explain, in text
+// meant for the model, why some or all of their tools are missing from
+// ListTools. The agent surfaces the lines in the system prompt so a degraded
+// source is reported instead of silently looking empty.
+type ToolSourceDiagnostics interface {
+	ToolDiagnostics(ctx context.Context, session ToolSessionContext) []string
+}
+
 // ToolCallPayload is the MCP tools/call params payload.
 type ToolCallPayload struct {
 	Name      string         `json:"name"`

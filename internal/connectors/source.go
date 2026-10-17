@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -39,6 +40,13 @@ type cachedTools struct {
 	tools     []mcpgw.ToolDescriptor
 }
 
+// listFailure keeps the error that opened a backoff window so turns inside
+// the window report the same cause instead of an empty tool list.
+type listFailure struct {
+	until time.Time
+	err   error
+}
+
 // Source exposes all enabled Connect-It connections for a bot as one
 // aggregate MCP tool source.
 type Source struct {
@@ -48,7 +56,7 @@ type Source struct {
 	mu         sync.Mutex
 	auths      map[string]cachedSessionAuth
 	tools      map[string]cachedTools
-	retryAfter map[string]time.Time
+	retryAfter map[string]listFailure
 }
 
 func NewSource(log *slog.Logger, service *Service) *Source {
@@ -60,7 +68,7 @@ func NewSource(log *slog.Logger, service *Service) *Source {
 		service:    service,
 		auths:      map[string]cachedSessionAuth{},
 		tools:      map[string]cachedTools{},
-		retryAfter: map[string]time.Time{},
+		retryAfter: map[string]listFailure{},
 	}
 }
 
@@ -71,6 +79,17 @@ func (s *Source) Invalidate(botID string) {
 	delete(s.auths, botID)
 	delete(s.retryAfter, botID)
 	s.mu.Unlock()
+	if s.service != nil {
+		s.service.ClearToolDiscovery(botID)
+	}
+}
+
+// ToolDiagnostics explains a degraded connector tool list to the model.
+func (s *Source) ToolDiagnostics(_ context.Context, session mcpgw.ToolSessionContext) []string {
+	if s.service == nil {
+		return nil
+	}
+	return s.service.ToolDiagnostics(strings.TrimSpace(session.BotID))
 }
 
 func (s *Source) ListTools(ctx context.Context, session mcpgw.ToolSessionContext) ([]mcpgw.ToolDescriptor, error) {
@@ -78,26 +97,31 @@ func (s *Source) ListTools(ctx context.Context, session mcpgw.ToolSessionContext
 	if cached, ok := s.cachedToolList(botID); ok {
 		return cloneToolList(cached), nil
 	}
-	if s.inFailureBackoff(botID) {
-		return []mcpgw.ToolDescriptor{}, nil
+	if failure, backingOff := s.inFailureBackoff(botID); backingOff {
+		// Still failing as far as anyone knows: report the cause rather than
+		// an empty list, so the agent does not mistake the backoff for "no
+		// connectors".
+		return nil, fmt.Errorf("connector tools unavailable, retrying later: %w", failure.err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, connectorCallTimeout)
 	defer cancel()
 	clientSession, ok, err := s.connect(callCtx, botID)
 	if err != nil {
-		s.noteListFailure(botID)
+		s.noteListFailure(botID, err)
 		return nil, err
 	}
 	if !ok {
+		s.service.ClearToolDiscovery(botID)
 		return []mcpgw.ToolDescriptor{}, nil
 	}
 	defer func() { _ = clientSession.Close() }()
 
 	result, err := clientSession.ListTools(callCtx, &sdkmcp.ListToolsParams{})
 	if err != nil {
-		s.noteListFailure(botID)
+		s.noteListFailure(botID, err)
 		return nil, err
 	}
+	s.service.RecordToolDiscoverySuccess(botID)
 	tools := make([]mcpgw.ToolDescriptor, 0, len(result.Tools))
 	for _, tool := range result.Tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" {
@@ -139,16 +163,23 @@ func (s *Source) storeToolList(botID string, tools []mcpgw.ToolDescriptor) {
 	delete(s.retryAfter, botID)
 }
 
-func (s *Source) inFailureBackoff(botID string) bool {
+func (s *Source) inFailureBackoff(botID string) (listFailure, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return time.Now().Before(s.retryAfter[botID])
+	failure, ok := s.retryAfter[botID]
+	if !ok || !time.Now().Before(failure.until) {
+		return listFailure{}, false
+	}
+	return failure, true
 }
 
-func (s *Source) noteListFailure(botID string) {
+func (s *Source) noteListFailure(botID string, err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.retryAfter[botID] = time.Now().Add(listFailureBackoff)
+	s.retryAfter[botID] = listFailure{until: time.Now().Add(listFailureBackoff), err: err}
+	s.mu.Unlock()
+	if s.service != nil {
+		s.service.RecordToolDiscoveryFailure(botID, err)
+	}
 }
 
 func cloneToolList(items []mcpgw.ToolDescriptor) []mcpgw.ToolDescriptor {
@@ -234,12 +265,33 @@ func (s *Source) authHandler(
 	handler := s.service.client.MCPAuthHandler(connectsdk.MCPSessionConfig{
 		Connections: connections,
 		TTL:         time.Hour,
+		// Connect-It issues the session even when some connections could
+		// not list their tools; record those so the gap is reported per
+		// connection instead of looking like the connector has no tools.
+		OnSessionCreated: func(session connectsdk.MCPSession) {
+			s.service.RecordToolDiscoverySession(botID, discoveryFailuresFrom(session.FailedConnections))
+		},
 	})
 	s.auths[botID] = cachedSessionAuth{
 		fingerprint: fingerprint,
 		handler:     handler,
 	}
 	return handler
+}
+
+func discoveryFailuresFrom(failed []connectsdk.FailedConnection) []ToolDiscoveryFailure {
+	if len(failed) == 0 {
+		return nil
+	}
+	out := make([]ToolDiscoveryFailure, 0, len(failed))
+	for _, failure := range failed {
+		out = append(out, ToolDiscoveryFailure{
+			Alias:        strings.TrimSpace(failure.Alias),
+			ConnectionID: strings.TrimSpace(failure.ConnectionID),
+			Error:        discoveryErrorText(errors.New(failure.Error)),
+		})
+	}
+	return out
 }
 
 func connectionFingerprint(connections map[string]string) string {

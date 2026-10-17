@@ -1918,6 +1918,12 @@ definitions:
         type: boolean
       status:
         type: string
+      tool_discovery_error:
+        description: |-
+          ToolDiscoveryError is set when the last attempt to load this
+          connection's tools for the agent failed, even though the connection
+          itself is authorized. Empty when the tools loaded or were never asked.
+        type: string
     type: object
   connectors.ListResponse:
     properties:
@@ -1925,6 +1931,32 @@ definitions:
         items:
           $ref: '#/definitions/connectors.Connector'
         type: array
+      tool_discovery:
+        allOf:
+        - $ref: '#/definitions/connectors.ToolDiscoveryStatus'
+        description: |-
+          ToolDiscovery reports the last outcome of loading the bot's connector
+          tools for the agent; absent until the agent has tried.
+    type: object
+  connectors.ToolDiscoveryFailure:
+    properties:
+      alias:
+        type: string
+      connection_id:
+        type: string
+      error:
+        type: string
+    type: object
+  connectors.ToolDiscoveryStatus:
+    properties:
+      error:
+        type: string
+      failed_connections:
+        items:
+          $ref: '#/definitions/connectors.ToolDiscoveryFailure'
+        type: array
+      observed_at:
+        type: string
     type: object
   contextfrag.CacheClass:
     enum:

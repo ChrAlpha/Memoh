@@ -4032,6 +4032,7 @@
     "connectTitle": "{name} に接続",
     "awaitingAuthorization": "認証を待っています…",
     "unavailable": "利用不可",
+    "toolDiscoveryFailed": "ツールを利用できません：{error}",
     "unknown": "不明なコネクター",
     "emptyTitle": "コネクターはまだありません",
     "emptyDescription": "サービスを接続して、この Bot からツールを利用できるようにします。",

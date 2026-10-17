@@ -663,6 +663,20 @@ func (a *Agent) assembleTools(
 			})
 		}
 	}
+	// Providers that could not register their tools still get to say so:
+	// a silent gap reads as "no such tool" to the model.
+	for i, provider := range a.toolProviders {
+		noticer, ok := provider.(tools.ToolNotice)
+		if !ok {
+			continue
+		}
+		if text := strings.TrimSpace(noticer.ToolNotice(ctx, session)); text != "" {
+			usageSections = append(usageSections, toolUsageSection{
+				id:   toolNoticeSectionID(provider, i),
+				text: text,
+			})
+		}
+	}
 	usage := ""
 	if len(usageSections) > 0 {
 		texts := make([]string, 0, len(usageSections))

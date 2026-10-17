@@ -113,7 +113,11 @@ func (h *ConnectorsHandler) List(c echo.Context) error {
 	if err != nil {
 		return connectorHTTPError(err)
 	}
-	return c.JSON(http.StatusOK, connectors.ListResponse{Items: items})
+	response := connectors.ListResponse{Items: items}
+	if status, ok := h.service.ToolDiscoveryStatus(botID); ok {
+		response.ToolDiscovery = &status
+	}
+	return c.JSON(http.StatusOK, response)
 }
 
 // ListCatalog godoc

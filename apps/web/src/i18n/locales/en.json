@@ -4038,6 +4038,7 @@
     "connectTitle": "Connect {name}",
     "awaitingAuthorization": "Waiting for authorization…",
     "unavailable": "Unavailable",
+    "toolDiscoveryFailed": "Tools unavailable: {error}",
     "unknown": "Unknown connector",
     "emptyTitle": "No connectors yet",
     "emptyDescription": "Connect a service to give this Bot access to its tools.",

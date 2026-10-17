@@ -19979,6 +19979,10 @@
                 },
                 "status": {
                     "type": "string"
+                },
+                "tool_discovery_error": {
+                    "description": "ToolDiscoveryError is set when the last attempt to load this\nconnection's tools for the agent failed, even though the connection\nitself is authorized. Empty when the tools loaded or were never asked.",
+                    "type": "string"
                 }
             }
         },
@@ -19990,6 +19994,45 @@
                     "items": {
                         "$ref": "#/definitions/connectors.Connector"
                     }
+                },
+                "tool_discovery": {
+                    "description": "ToolDiscovery reports the last outcome of loading the bot's connector\ntools for the agent; absent until the agent has tried.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/connectors.ToolDiscoveryStatus"
+                        }
+                    ]
+                }
+            }
+        },
+        "connectors.ToolDiscoveryFailure": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "connectors.ToolDiscoveryStatus": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "failed_connections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/connectors.ToolDiscoveryFailure"
+                    }
+                },
+                "observed_at": {
+                    "type": "string"
                 }
             }
         },

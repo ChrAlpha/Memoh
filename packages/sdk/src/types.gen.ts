@@ -1116,10 +1116,33 @@ export type ConnectorsConnector = {
     connector_type?: string;
     enabled?: boolean;
     status?: string;
+    /**
+     * ToolDiscoveryError is set when the last attempt to load this
+     * connection's tools for the agent failed, even though the connection
+     * itself is authorized. Empty when the tools loaded or were never asked.
+     */
+    tool_discovery_error?: string;
 };
 
 export type ConnectorsListResponse = {
     items?: Array<ConnectorsConnector>;
+    /**
+     * ToolDiscovery reports the last outcome of loading the bot's connector
+     * tools for the agent; absent until the agent has tried.
+     */
+    tool_discovery?: ConnectorsToolDiscoveryStatus;
+};
+
+export type ConnectorsToolDiscoveryFailure = {
+    alias?: string;
+    connection_id?: string;
+    error?: string;
+};
+
+export type ConnectorsToolDiscoveryStatus = {
+    error?: string;
+    failed_connections?: Array<ConnectorsToolDiscoveryFailure>;
+    observed_at?: string;
 };
 
 export type ContextfragCacheClass = 'stable' | 'dynamic' | 'never';

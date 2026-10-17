@@ -4038,6 +4038,7 @@
     "connectTitle": "连接 {name}",
     "awaitingAuthorization": "等待授权…",
     "unavailable": "暂不可用",
+    "toolDiscoveryFailed": "工具不可用：{error}",
     "unknown": "未知连接器",
     "emptyTitle": "还没有连接器",
     "emptyDescription": "连接服务，让这个 Bot 可以使用服务提供的工具。",
