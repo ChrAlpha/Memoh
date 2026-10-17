@@ -52,7 +52,10 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		var messages []ModelMessage
 		var records []historyfrag.HistoryRecord
 		if layout.usePipeline {
-			messages, _, _ = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens)
+			var err error
+			if messages, _, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
+			}
 		} else {
 			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
 			if err != nil {

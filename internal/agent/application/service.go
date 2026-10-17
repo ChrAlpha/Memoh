@@ -536,7 +536,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var historyPressureTokens int
 	var currentMessageIndex *int
 	if usePipeline {
-		messages, historyPressureTokens, req.historyViewFrom = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		var loadErr error
+		messages, historyPressureTokens, req.historyViewFrom, loadErr = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		if loadErr != nil {
+			return resolvedContext{}, req, loadErr
+		}
 		currentMessageIndex = latestModelUserMessageIndex(messages)
 	} else {
 		historyFallback := historyScopeFallbackFromChatRequest(req)
