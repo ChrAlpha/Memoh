@@ -214,3 +214,24 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
 	}
 }
+
+// Before a Web chat turn its input is not persisted yet, so the newest user
+// row is a finished exchange. When that exchange alone does not fit, it is
+// the history to summarize, not the current turn.
+func TestBudgetCompactionSummarizesTheNewestFinishedExchange(t *testing.T) {
+	t.Parallel()
+
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"`+strings.Repeat("pasted report line ", 900)+`"`, 0),
+		mkRow(t, "assistant", `"noted"`, 2),
+	}
+	q := &fakeQueries{uncompacted: rows}
+	cfg := machineryConfig(&stubModel{summary: "the user pasted a long report"}, 0)
+	cfg.Ratio = 100
+	cfg.TotalInputTokens = 5000
+	cfg.HistoryBudgetTokens = 2700
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 2 {
+		t.Fatalf("the newest finished exchange stayed raw although it cannot fit: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -629,5 +630,17 @@ func TestShedOlderBatchImagesShedsOnlyTheImagesNeeded(t *testing.T) {
 	}
 	if records := cfg.ContextMutations.Records(); len(records) != 1 || records[0].Detail != "sources=album" {
 		t.Fatalf("mutations = %+v", records)
+	}
+}
+
+func TestChatBudgetRecoveryProtectsThePersistedCurrentRequest(t *testing.T) {
+	s, _, runner, cfg := chatRecoveryFixture(t)
+	cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, PersistedUserMessageID: "request-row"}, chatHistoryLayout{forkCount: 1, historyCount: 22, pressureTokens: 2500})
+	if _, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg); err != nil || len(runner.configs) == 0 {
+		t.Fatalf("recovery did not compact: error=%v calls=%d", err, len(runner.configs))
+	}
+	want := turn.ContextMessageSource{Kind: "history", ID: "request-row", Current: true}
+	if !slices.Contains(runner.configs[0].ProtectedSources, want) {
+		t.Fatalf("the persisted current request is compactable: %+v", runner.configs[0].ProtectedSources)
 	}
 }
