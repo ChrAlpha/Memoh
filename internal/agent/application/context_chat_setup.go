@@ -23,7 +23,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	// The intent is recorded before anything else: it is what lets a later
 	// process resume this run after a crash, and it has to name the run's
 	// input as it arrived rather than as setup rewrote it.
-	if err := s.recordRunResumeContext(ctx, req); err != nil {
+	if err := s.admit.RecordResume(ctx, req); err != nil {
 		return drive.RunPlan{}, err
 	}
 	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
@@ -98,7 +98,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	// Whether this run may park on a question follows the process's user input
 	// port, not its delivery end: an interruption resumed from the last process
 	// keeps asking the same way the inbound message that started it did.
-	cfg.CanRequestUserInput = s.canDeliverUserInputStream()
+	cfg.CanRequestUserInput = s.decider.CanDeliverUserInputStream()
 
 	reasoningTiming := persist.NewReasoningTimingTracker(nil)
 	var stepCommitter *persist.StepCommitter
@@ -110,7 +110,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		}
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
-	s.bindStepCompaction(&cfg, req, stepCommitter)
+	s.compact.BindStep(&cfg, req, stepCommitter)
 
 	if req.OnModelPreferenceSettled != nil {
 		req.OnModelPreferenceSettled()

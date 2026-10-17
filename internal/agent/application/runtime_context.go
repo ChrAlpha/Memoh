@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	native "github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/contextview"
@@ -72,9 +73,9 @@ func (s *Service) buildRuntimeContextSections(ctx context.Context, req runreq.Ch
 			platformIdentitiesSection = buildPlatformIdentitiesSection(identities)
 		}
 	}
-	memoryContext := memoryContextLoad{}
+	memoryContext := memory.Recalled{}
 	if s != nil {
-		memoryContext = s.loadMemoryContext(ctx, req)
+		memoryContext = s.memory.Recall(ctx, req)
 	}
 
 	sections := buildRuntimeContextSections(runtimeContextRenderInput{

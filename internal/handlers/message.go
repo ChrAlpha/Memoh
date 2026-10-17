@@ -17,8 +17,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -112,7 +112,7 @@ func (h *MessageHandler) SetToolApprovalService(svc *toolapproval.Service) {
 // for viewer_can_decide so a viewer is offered exactly what a submitted
 // decision would be allowed to do.
 type toolApprovalDecider interface {
-	CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal application.ToolApprovalPrincipal) (bool, error)
+	CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal decide.ToolApprovalPrincipal) (bool, error)
 }
 
 func (h *MessageHandler) SetToolApprovalDecider(decider toolApprovalDecider) {
@@ -424,7 +424,7 @@ func (h *MessageHandler) viewerCanDecideFn(ctx context.Context, viewerID string)
 	if h == nil || h.toolApprovalDecider == nil {
 		return nil
 	}
-	viewer := application.ToolApprovalPrincipal{UserID: viewerID, ChannelIdentityID: viewerID}
+	viewer := decide.ToolApprovalPrincipal{UserID: viewerID, ChannelIdentityID: viewerID}
 	return func(req toolapproval.Request) bool {
 		allowed, err := h.toolApprovalDecider.CanDecideToolApproval(ctx, req, viewer)
 		if err != nil {

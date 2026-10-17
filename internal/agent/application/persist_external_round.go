@@ -156,7 +156,7 @@ func (s *Service) persistExternalRound(
 		s.publishRuntimeSteerHistory(ctx, req, result.SteerInputIDs, persisted)
 	}
 	if err == nil && f == nil && (req.UserMessagePersisted || req.ReusePersistedUserMessage) && !req.SkipMemoryExtraction {
-		s.storeMemory(context.WithoutCancel(ctx), req, persisted)
+		s.memory.RoundPersisted(context.WithoutCancel(ctx), req, persisted)
 	}
 	return err
 }

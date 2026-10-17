@@ -13,12 +13,16 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/botenv"
+	"github.com/felinics/memoh/internal/agent/compact"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
@@ -30,6 +34,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
@@ -76,20 +81,20 @@ func testDeps(t *testing.T) Deps {
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{})
 	t.Cleanup(func() { _ = manager.Close() })
 	return Deps{
-		Logger:           slog.New(slog.DiscardHandler),
-		Queries:          stubQueries{},
-		Messages:         stubMessages{},
-		Sessions:         stubSessions{},
-		Settings:         &settings.Service{},
-		Accounts:         &accounts.Service{},
-		Models:           &models.Service{},
-		Agent:            &native.Agent{},
-		SessionRuntime:   manager,
-		BotPermissions:   allowAllBotPermissions{},
-		WorkspaceTargets: stubWorkspaceTargets{},
-		ToolApproval:     &toolapproval.Service{},
-		UserInput:        &userinput.Service{},
-		ResumeSecret:     "test-resume-secret",
+		Logger:              slog.New(slog.DiscardHandler),
+		Queries:             stubQueries{},
+		Messages:            stubMessages{},
+		Sessions:            stubSessions{},
+		Settings:            &settings.Service{},
+		Accounts:            &accounts.Service{},
+		Models:              &models.Service{},
+		Agent:               &native.Agent{},
+		SessionRuntime:      manager,
+		BotPermissions:      allowAllBotPermissions{},
+		WorkspaceTargets:    stubWorkspaceTargets{},
+		ToolApproval:        &toolapproval.Service{},
+		UserInput:           &userinput.Service{},
+		RunCredentialSecret: "test-resume-secret",
 	}
 }
 
@@ -138,8 +143,8 @@ func newTestService(t *testing.T, d Deps) *Service {
 	if d.UserInput == nil {
 		d.UserInput = base.UserInput
 	}
-	if d.ResumeSecret == "" {
-		d.ResumeSecret = base.ResumeSecret
+	if d.RunCredentialSecret == "" {
+		d.RunCredentialSecret = base.RunCredentialSecret
 	}
 	service, err := New(d)
 	if err != nil {
@@ -167,20 +172,20 @@ func registerACPPool(s *Service, pool acpPrompter) {
 
 func TestNewRejectsMissingRequiredDependency(t *testing.T) {
 	cases := map[string]func(*Deps){
-		"Logger":           func(d *Deps) { d.Logger = nil },
-		"Queries":          func(d *Deps) { d.Queries = nil },
-		"Messages":         func(d *Deps) { d.Messages = nil },
-		"Sessions":         func(d *Deps) { d.Sessions = nil },
-		"Settings":         func(d *Deps) { d.Settings = nil },
-		"Accounts":         func(d *Deps) { d.Accounts = nil },
-		"Models":           func(d *Deps) { d.Models = nil },
-		"Agent":            func(d *Deps) { d.Agent = nil },
-		"SessionRuntime":   func(d *Deps) { d.SessionRuntime = nil },
-		"BotPermissions":   func(d *Deps) { d.BotPermissions = nil },
-		"WorkspaceTargets": func(d *Deps) { d.WorkspaceTargets = nil },
-		"ToolApproval":     func(d *Deps) { d.ToolApproval = nil },
-		"UserInput":        func(d *Deps) { d.UserInput = nil },
-		"ResumeSecret":     func(d *Deps) { d.ResumeSecret = "" },
+		"Logger":              func(d *Deps) { d.Logger = nil },
+		"Queries":             func(d *Deps) { d.Queries = nil },
+		"Messages":            func(d *Deps) { d.Messages = nil },
+		"Sessions":            func(d *Deps) { d.Sessions = nil },
+		"Settings":            func(d *Deps) { d.Settings = nil },
+		"Accounts":            func(d *Deps) { d.Accounts = nil },
+		"Models":              func(d *Deps) { d.Models = nil },
+		"Agent":               func(d *Deps) { d.Agent = nil },
+		"SessionRuntime":      func(d *Deps) { d.SessionRuntime = nil },
+		"BotPermissions":      func(d *Deps) { d.BotPermissions = nil },
+		"WorkspaceTargets":    func(d *Deps) { d.WorkspaceTargets = nil },
+		"ToolApproval":        func(d *Deps) { d.ToolApproval = nil },
+		"UserInput":           func(d *Deps) { d.UserInput = nil },
+		"RunCredentialSecret": func(d *Deps) { d.RunCredentialSecret = "" },
 	}
 	for name, clear := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -202,9 +207,9 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if service.memoryRegistry != nil || service.skillLoader != nil ||
+	if service.skillLoader != nil ||
 		service.assetLoader != nil || service.platformIdentities != nil || service.workdirs != nil ||
-		service.compactionService != nil || service.bgManager != nil || service.eventPublisher != nil ||
+		service.bgManager != nil || service.eventPublisher != nil ||
 		service.queue != nil ||
 		service.resumeReady != nil {
 		t.Fatal("optional dependencies must stay nil when absent")
@@ -360,7 +365,7 @@ func setAllowedTeam(s *Service, teamID string) {
 // useLifecycleStore routes the lifecycle rows of an already built service to
 // store. The run ledger stays whatever the service reads from.
 func useLifecycleStore(s *Service, store lifecycle.Store) {
-	s.lifecycle = lifecycle.New(lifecycle.Deps{Store: store, Runs: s.queries, Decisions: s, Logger: s.logger})
+	s.lifecycle = lifecycle.New(lifecycle.Deps{Store: store, Runs: s.queries, Decisions: s.decider, Logger: s.logger})
 	rewireRun(s)
 }
 
@@ -376,9 +381,24 @@ func wireComponents(s *Service) *Service {
 	if s.transcript == nil {
 		s.transcript = transcriptOf(s)
 	}
+	if s.signer == nil {
+		s.signer = admit.NewSigner("")
+	}
+	if s.admit == nil {
+		s.admit = admitOf(s)
+	}
+	if s.decider == nil {
+		s.decider = decideOf(s)
+	}
+	if s.memory == nil {
+		s.memory = memoryOf(s)
+	}
+	if s.compact == nil {
+		s.compact = compactOf(s)
+	}
 	if s.lifecycle == nil {
 		// A Service built from a literal records no lifecycle rows, as before.
-		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s, Logger: s.logger})
+		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s.decider, Logger: s.logger})
 	}
 	if s.persist == nil {
 		s.persist = persistOf(s)
@@ -394,12 +414,70 @@ func wireComponents(s *Service) *Service {
 func rewireComponents(s *Service) {
 	s.botenv = botenvOf(s)
 	s.transcript = transcriptOf(s)
+	s.decider = decideOf(s)
+	rebindDecisions(s)
+	s.memory = memoryOf(s)
+	s.compact = compactOf(s)
 	rewireRun(s)
+}
+
+// rebindDecisions points the session runtime's decision callbacks at the
+// service's current decider, which a rewire replaced.
+func rebindDecisions(s *Service) {
+	if s.decisionRuntime == nil {
+		return
+	}
+	s.decisionRuntime.SetDecisionStore(s.decider)
+	s.decisionRuntime.SetLostRunDecisionCanceller(s.decider.CancelLostRunDecisions)
+	s.decisionRuntime.SetDecisionFinalizer(s.decider.FinalizeRuntimeDecisions)
+}
+
+// memoryAdjustments and compactAdjustments are the dependency overrides a test
+// named for a service's memory keeper and compactor. They outlive a rewire,
+// which rebuilds the components from the service's fields alone.
+var (
+	decideAdjustments  sync.Map // *Service -> func(*decide.Deps)
+	memoryAdjustments  sync.Map // *Service -> func(*memory.Deps)
+	compactAdjustments sync.Map // *Service -> func(*compact.Deps)
+)
+
+// useDecisions replaces the service's decider with one whose dependencies
+// adjust has changed.
+func useDecisions(s *Service, adjust func(*decide.Deps)) *Service {
+	decideAdjustments.Store(s, adjust)
+	s.decider = decideOf(s)
+	rebindDecisions(s)
+	return s
+}
+
+// useMemory replaces the service's memory keeper with one whose dependencies
+// adjust has changed.
+func useMemory(s *Service, adjust func(*memory.Deps)) *Service {
+	memoryAdjustments.Store(s, adjust)
+	s.memory = memoryOf(s)
+	rewireRun(s)
+	return s
+}
+
+// withMemory gives a Service built from a literal the memory keeper New builds
+// for registry.
+func withMemory(s *Service, registry *memprovider.Registry) *Service {
+	return useMemory(s, func(d *memory.Deps) { d.Registry = registry })
+}
+
+// useCompaction replaces the service's compactor with one whose dependencies
+// adjust has changed.
+func useCompaction(s *Service, adjust func(*compact.Deps)) *Service {
+	compactAdjustments.Store(s, adjust)
+	s.compact = compactOf(s)
+	rewireRun(s)
+	return s
 }
 
 // rewireRun rebuilds the history writer and the driver, which copy the message
 // store, the session store and the session runtime a test replaces after New.
 func rewireRun(s *Service) {
+	s.admit = admitOf(s)
 	s.persist = persistOf(s)
 	s.driver = drive.New(driveDepsOf(s))
 }
@@ -424,6 +502,7 @@ func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
 	}
 	adjustments[kind] = mutate
 	driverAdjustments.Store(s, adjustments)
+	s.admit = admitOf(s)
 	s.driver = drive.New(driveDepsOf(s))
 }
 
@@ -431,6 +510,7 @@ func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
 // history writer and the driver follow the new runtime.
 func bindRuntime(s *Service, manager *sessionruntime.Manager) {
 	s.bindSessionRuntime(manager)
+	s.admit = admitOf(s)
 	if previous, ok := driverAdjustments.Load(s); ok {
 		adjustments := map[string]func(*drive.Deps){}
 		for k, v := range previous.(map[string]func(*drive.Deps)) {
@@ -450,7 +530,7 @@ func persistOf(s *Service) *persist.Writer {
 	}
 	return persist.New(persist.Deps{
 		Logger: s.logger, Messages: s.messageService, Sessions: s.sessionService, Bot: s.botenv,
-		Runtime: runtime, Events: s.eventPublisher, Observer: persistObserver{s}, Promoted: s.queue,
+		Runtime: runtime, Events: s.eventPublisher, Rounds: s.memory, Commits: s.compact, Promoted: s.queue,
 	})
 }
 
@@ -480,4 +560,54 @@ func botenvOf(s *Service) *botenv.Env {
 
 func transcriptOf(s *Service) *transcript.Reader {
 	return transcript.New(transcript.Deps{Logger: s.logger, Messages: s.messageService, Queries: s.queries, Sessions: s.sessionService})
+}
+
+func memoryOf(s *Service) *memory.Keeper {
+	d := memory.Deps{Logger: s.logger, Messages: s.messageService, Bot: s.botenv, Transcript: s.transcript}
+	if s.settingsService != nil {
+		d.Settings = s.settingsService
+	}
+	if adjust, ok := memoryAdjustments.Load(s); ok {
+		adjust.(func(*memory.Deps))(&d)
+	}
+	return memory.New(d)
+}
+
+func compactOf(s *Service) *compact.Compactor {
+	d := compact.Deps{Logger: s.logger, Models: s.modelsService, Queries: s.queries, Transcript: s.transcript}
+	if s.settingsService != nil {
+		d.Settings = s.settingsService
+	}
+	if adjust, ok := compactAdjustments.Load(s); ok {
+		adjust.(func(*compact.Deps))(&d)
+	}
+	return compact.New(d)
+}
+
+func decideOf(s *Service) *decide.Decider {
+	d := decide.Deps{
+		Logger: s.logger, Queries: s.queries, Sessions: s.sessionService,
+		BotPermissions: s.botPermissions, ActivePrompts: s.activePrompts,
+	}
+	if s.decisionRuntime != nil {
+		d.Events = s.decisionRuntime
+	}
+	if s.agent != nil {
+		d.Limits = s.agent
+	}
+	if adjust, ok := decideAdjustments.Load(s); ok {
+		adjust.(func(*decide.Deps))(&d)
+	}
+	return decide.New(d)
+}
+
+func admitOf(s *Service) *admit.Admitter {
+	return admit.New(admit.Deps{Runtime: s.sessionRuntime, Queries: s.queries, Signer: s.signer})
+}
+
+// useSecret gives a Service built from a literal the signing key New is given.
+func useSecret(s *Service, secret string) *Service {
+	s.signer = admit.NewSigner(secret)
+	s.admit = admitOf(s)
+	return s
 }

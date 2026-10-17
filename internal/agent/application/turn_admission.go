@@ -2,25 +2,17 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 
-	"github.com/google/uuid"
-
-	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/turn"
-	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/apperror"
-	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // bindSessionRuntime attaches the durable admission gate and registers the
@@ -31,10 +23,10 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 	s.sessionManager = manager
 	s.decisionRuntime = manager
 	s.abortRuntime = manager
-	manager.SetDecisionStore(s)
-	manager.SetLostRunDecisionCanceller(s.cancelLostRunDecisions)
+	manager.SetDecisionStore(s.decider)
+	manager.SetLostRunDecisionCanceller(s.decider.CancelLostRunDecisions)
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
-	manager.SetDecisionFinalizer(s.finalizeRuntimeDecisions)
+	manager.SetDecisionFinalizer(s.decider.FinalizeRuntimeDecisions)
 	manager.SetTerminalObserver(terminalFanout(
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 			outcome.LogRunResult(ctx, s.logger, terminal)
@@ -60,238 +52,6 @@ func terminalFanout(steps ...func(context.Context, sessionruntime.TerminalRun)) 
 	}
 }
 
-// cancelLostRunDecisions closes the decisions a lost run left parked. Both
-// kinds are attempted even when one fails: a lost run has no waiter left, and
-// a stranded pending row would stay answerable.
-func (s *Service) cancelLostRunDecisions(ctx context.Context, botID, sessionID, runID string, fencingToken int64, reason string) error {
-	var errs []error
-	if canceller, ok := s.userInput.(interface {
-		CancelPendingForRun(context.Context, string, string, string, int64, string) ([]userinput.Request, error)
-	}); ok {
-		_, err := canceller.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
-		errs = append(errs, err)
-	}
-	if s.toolApproval != nil {
-		_, err := s.toolApproval.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
-}
-
-// admitTurnRun puts a StartTurnCommand through durable admission and answers in
-// the vocabulary of the turn port, which is the only agent surface its callers
-// can see.
-//
-// Three answers matter to a channel adapter, and they are deliberately distinct.
-// Busy means nothing was persisted and a redelivery will be admitted once the
-// thread frees up. Duplicate means this invocation already has a run, so the
-// redelivery has been answered and must be dropped. Anything else is a genuine
-// failure to report.
-func (s *Service) admitTurnRun(
-	ctx context.Context,
-	cmd turn.StartTurnCommand,
-	cancel context.CancelFunc,
-	ownershipCancel context.CancelCauseFunc,
-	injectCh chan turn.InjectMessage,
-) (sessionruntime.Admission, error) {
-	if s.sessionRuntime == nil {
-		return sessionruntime.Admission{}, errors.New("turn: session runtime is not configured")
-	}
-	payload, err := turnSubmissionPayload(cmd)
-	if err != nil {
-		return sessionruntime.Admission{}, fmt.Errorf("encode turn submission: %w", err)
-	}
-	invocationID := turnInvocationID(cmd)
-
-	admission, err := s.sessionRuntime.Admit(ctx, sessionruntime.AdmitInput{
-		BotID:        cmd.BotID,
-		SessionID:    cmd.ThreadID,
-		InvocationID: invocationID,
-		InitiatorID:  runreq.FirstNonEmpty(cmd.UserID, cmd.SourceChannelIdentityID),
-		Payload:      payload,
-		Execution: sessionruntime.Execution{
-			// Project the inbound user message so subscribers (an open web
-			// session on the thread) see what fired the run while it still
-			// executes — the same contract the ws and schedule admissions
-			// already honor. NewRequestUserTurn returns nil for commands that
-			// persist no user message (attachment-only), and
-			// those runs stay contentless in the projection.
-			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
-				return sessionruntime.RunAdmissionView{
-					RequestUserTurn: chatview.NewRequestUserTurn(cmd, handle.TurnID),
-				}, nil
-			},
-			Cancel:          cancel,
-			InjectCh:        injectCh,
-			OwnershipCancel: ownershipCancel,
-		},
-	})
-	switch {
-	case errors.Is(err, sessionruntime.ErrSessionBusy):
-		return sessionruntime.Admission{}, fmt.Errorf("%w: thread %s", turn.ErrSessionBusy, cmd.ThreadID)
-	case errors.Is(err, sessionruntime.ErrInvocationConflict):
-		// The same retry identity naming different content. Whichever side is
-		// wrong, running it would double-answer a message that already has a
-		// run, so it is dropped exactly like a redelivery.
-		return sessionruntime.Admission{}, fmt.Errorf("%w: %s: %w", turn.ErrDuplicateTurn, invocationID, sessionruntime.ErrInvocationConflict)
-	case err != nil:
-		return sessionruntime.Admission{}, fmt.Errorf("admit turn: %w", err)
-	}
-	if !admission.Started {
-		// Someone owns this run already, or it has finished. Either way this
-		// call has no execution to perform and the caller has its answer.
-		return sessionruntime.Admission{}, fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, invocationID)
-	}
-	return admission, nil
-}
-
-// turnRunFinisher returns the terminal write for an admitted run. Without it the
-// durable row stays active and the thread's only slot is held until the reaper
-// times the lease out, which turns one finished turn into minutes of session_busy.
-//
-// Only the stable error code reaches the run's recorded state; the error itself
-// is a private diagnostic and stays in the log.
-//
-// It returns the run's terminal record when this write ended the run. A run
-// that parked on a decision, whose owner lost it, or whose write failed returns
-// none.
-//
-// mode is the session mode the run was admitted in; it tells the run's result
-// record whether a user is waiting for the outcome.
-//
-// The write itself is the driver's: this entry only names the admitted run the
-// ending belongs to. It goes away when admission moves out of this package and
-// its callers finish the run through the driver directly.
-func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.Admission, mode string) func(outcome.RunOutcome) sessionruntime.TerminalRun {
-	if s.sessionRuntime == nil || admission.Handle.FencingToken <= 0 {
-		return nil
-	}
-	run := drive.AdmittedRun{Handle: admission.Handle, Mode: mode}
-	return func(ended outcome.RunOutcome) sessionruntime.TerminalRun {
-		return s.driver.FinishRun(ctx, run, drive.FromOutcome(ended))
-	}
-}
-
-// triggeredAdmissionView lets a triggered caller inject the subscriber-facing
-// projection for its run. The hook fires at activation, when the handle already
-// carries the allocated turn identity — which is why the view is a factory
-// rather than a value: the turn id only exists by then.
-// Nil means the run projects no request user turn (the historical default).
-type triggeredAdmissionView func(handle sessionruntime.RunHandle) *sessionruntime.RunAdmissionView
-
-// admitTriggeredRun admits a non-interactive schedule fire and returns the run
-// context to execute in plus the terminal write that
-// closes the run's record.
-//
-// These callers reach the agent directly rather than through StartTurn, but they
-// occupy a thread exactly like any other turn, so they take the same durable slot
-// on the same terms. The returned context is cancelable so a routed abort can
-// stop a long schedule run, and so a lost owner lease revokes execution instead
-// of letting a superseded owner keep writing.
-//
-// mode is the session mode of the run (schedule, subagent, or the mode of the
-// run a resume continues).
-//
-// viewFn optionally supplies the subscriber-facing admission view (the request
-// user turn projection); nil keeps the run contentless in the projection, the
-// historical default for triggers and subagents alike.
-//
-// The finish function is always returned non-nil when the error is nil, so a
-// caller can defer it unconditionally. It takes the run's outcome; an outcome
-// without a status is resolved from its cause and the run context.
-//
-// stopCause is what a routed abort ends the run context with. A run this
-// package drives names its ending from the driver's own stop marker; a run
-// another layer executes keeps the plain cancellation it already reads.
-func (s *Service) admitTriggeredRun(ctx context.Context, mode, botID, threadID, invocationID string, submission []byte, viewFn triggeredAdmissionView, stopCause error, resumeRunIDs ...string) (context.Context, sessionruntime.Admission, func(outcome.RunOutcome), func(), error) {
-	if s.sessionRuntime == nil {
-		return nil, sessionruntime.Admission{}, nil, nil, errors.New("session runtime is not configured")
-	}
-	resumeRunID := ""
-	if len(resumeRunIDs) > 0 {
-		resumeRunID = resumeRunIDs[0]
-	}
-	runCtx, cancelCause := context.WithCancelCause(ctx)
-	admission, err := s.sessionRuntime.Admit(runCtx, sessionruntime.AdmitInput{
-		BotID:        botID,
-		SessionID:    threadID,
-		InvocationID: invocationID,
-		Payload:      submission,
-		ResumeRunID:  resumeRunID,
-		Execution: sessionruntime.Execution{
-			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
-				if viewFn == nil {
-					return sessionruntime.RunAdmissionView{}, nil
-				}
-				if view := viewFn(handle); view != nil {
-					return *view, nil
-				}
-				return sessionruntime.RunAdmissionView{}, nil
-			},
-			Cancel:          func() { cancelCause(stopCause) },
-			OwnershipCancel: cancelCause,
-		},
-	})
-	if err != nil {
-		cancelCause(context.Canceled)
-		return nil, sessionruntime.Admission{}, nil, nil, err
-	}
-	if !admission.Started {
-		// A trigger that finds its own invocation already admitted has nothing to
-		// do: the run exists and either someone owns it or it has finished.
-		cancelCause(context.Canceled)
-		return nil, sessionruntime.Admission{}, nil, nil, fmt.Errorf("%w: %s", sessionruntime.ErrInvocationConflict, invocationID)
-	}
-	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
-	finishRun := s.turnRunFinisher(runCtx, admission, mode)
-	// release ends the admission without naming the run's outcome, for a
-	// caller that writes the terminal state itself.
-	release := func() { cancelCause(context.Canceled) }
-	finish := func(ended outcome.RunOutcome) {
-		defer release()
-		if finishRun == nil {
-			return
-		}
-		if strings.TrimSpace(ended.Status) != "" {
-			finishRun(ended)
-			return
-		}
-		cause := ended.Cause
-		failureCause := cause
-		if privateCause := apperror.CauseOf(cause); privateCause != nil {
-			failureCause = privateCause
-		}
-		explicitlyCanceled := cause != nil &&
-			errors.Is(failureCause, context.Canceled) &&
-			errors.Is(context.Cause(runCtx), context.Canceled)
-		switch {
-		case cause != nil && !explicitlyCanceled:
-			finishRun(outcome.RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: cause})
-		case runCtx.Err() != nil:
-			finishRun(outcome.RunOutcome{Status: sessionruntime.RunStatusAborted})
-		default:
-			finishRun(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted})
-		}
-	}
-	return runCtx, admission, finish, release, nil
-}
-
-func (s *Service) withAdmissionRuntimeFence(ctx context.Context, admission sessionruntime.Admission) context.Context {
-	if !s.usesDurableTerminalObserver() {
-		return ctx
-	}
-	return runtimefence.WithContext(ctx, runtimefence.Fence{
-		BotID:     admission.Handle.BotID,
-		SessionID: admission.Handle.SessionID,
-		Token:     admission.Handle.FencingToken,
-	})
-}
-
-func (s *Service) usesDurableTerminalObserver() bool {
-	_, durable := s.sessionRuntime.(*sessionruntime.Manager)
-	return durable
-}
-
 // AdmitSubagentRun puts a spawned agent's turn through the same durable
 // admission every other turn takes, and answers in the vocabulary of the turn
 // port so the tool layer never sees a runtime type.
@@ -309,7 +69,10 @@ func (s *Service) AdmitSubagentRun(
 	if beginErr != nil {
 		return nil, tools.SubagentAdmission{}, nil, beginErr
 	}
-	runCtx, admission, finish, _, err := s.admitTriggeredRun(ctx, sessionmode.Subagent, botID, threadID, invocationID, submission, nil, context.Canceled)
+	runCtx, admission, release, err := s.admit.Triggered(ctx, admit.Trigger{
+		BotID: botID, ThreadID: threadID, InvocationID: invocationID,
+		Submission: submission, StopCause: context.Canceled,
+	})
 	if err != nil {
 		endActiveTurn()
 	}
@@ -361,74 +124,10 @@ func (s *Service) AdmitSubagentRun(
 				lifecycleCause,
 				true,
 			)
-			finish(outcome.RunOutcome{Status: status, Cause: result.Cause})
+			defer release()
+			s.driver.FinishRun(runCtx, drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Subagent},
+				drive.FromOutcome(outcome.RunOutcome{Status: status, Cause: result.Cause}.Resolve(runCtx)))
 		})
 	}
 	return runCtx, toolAdmission, terminal, nil
-}
-
-// turnInvocationID resolves the command's retry identity.
-//
-// Channel adapters derive IdempotencyKey from the platform's external message
-// id, which is what makes a webhook redelivery the same invocation rather than a
-// second turn. When the platform offers nothing stable there is nothing to
-// deduplicate against, so each attempt is honestly its own submission — minting
-// here keeps that explicit instead of letting an empty id reach admission.
-func turnInvocationID(cmd turn.StartTurnCommand) string {
-	if key := strings.TrimSpace(cmd.IdempotencyKey); key != "" {
-		return key
-	}
-	return "turn:" + uuid.NewString()
-}
-
-// turnSubmissionPayload encodes what the caller actually submitted, and only
-// that. The fingerprint of this payload decides whether a repeated invocation id
-// is the same submission or a conflict, so it must not carry anything that
-// varies between two deliveries of one message: no timestamps, no tokens, no
-// per-attempt ids, and attachments by content hash rather than by bytes.
-func turnSubmissionPayload(cmd turn.StartTurnCommand) ([]byte, error) {
-	return json.Marshal(struct {
-		Mode              string   `json:"mode"`
-		BotID             string   `json:"bot_id"`
-		ThreadID          string   `json:"thread_id"`
-		ExternalMessageID string   `json:"external_message_id,omitempty"`
-		Query             string   `json:"query,omitempty"`
-		UserVisibleText   string   `json:"user_visible_text,omitempty"`
-		UserMessageKind   string   `json:"user_message_kind,omitempty"`
-		Attachments       []string `json:"attachments,omitempty"`
-	}{
-		Mode:              string(cmd.Mode),
-		BotID:             strings.TrimSpace(cmd.BotID),
-		ThreadID:          strings.TrimSpace(cmd.ThreadID),
-		ExternalMessageID: strings.TrimSpace(cmd.ExternalMessageID),
-		Query:             cmd.Query,
-		UserVisibleText:   cmd.UserVisibleText,
-		UserMessageKind:   strings.TrimSpace(cmd.UserMessageKind),
-		Attachments:       attachmentIdentities(cmd.Attachments),
-	})
-}
-
-// attachmentIdentities names each attachment by the most stable identity it
-// carries. Base64 bytes are deliberately not used: the same upload can arrive
-// re-encoded, and the payload is a fingerprint input rather than a copy.
-func attachmentIdentities(attachments []turn.Attachment) []string {
-	if len(attachments) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(attachments))
-	for _, a := range attachments {
-		switch {
-		case strings.TrimSpace(a.ContentHash) != "":
-			out = append(out, "hash:"+strings.TrimSpace(a.ContentHash))
-		case strings.TrimSpace(a.PlatformKey) != "":
-			out = append(out, "platform:"+strings.TrimSpace(a.PlatformKey))
-		case strings.TrimSpace(a.URL) != "":
-			out = append(out, "url:"+strings.TrimSpace(a.URL))
-		case strings.TrimSpace(a.Path) != "":
-			out = append(out, "path:"+strings.TrimSpace(a.Path))
-		default:
-			out = append(out, "type:"+strings.TrimSpace(a.Type))
-		}
-	}
-	return out
 }

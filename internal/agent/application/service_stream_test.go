@@ -192,18 +192,17 @@ func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
 func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 	t.Parallel()
 
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 2)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 2)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := wireComponents(&Service{
+	registry.Register(agenttest.MemoryProviderID, memory)
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  &agenttest.RecordingMessages{},
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 
 	req := runreq.ChatRequest{
-		BotID:    storeRoundBotID,
+		BotID:    agenttest.MemoryBotID,
 		ThreadID: "session-1",
 		Query:    "hello",
 	}
@@ -219,7 +218,7 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 	select {
-	case <-memory.afterChat:
+	case <-memory.AfterChat:
 	case <-time.After(time.Second):
 		t.Fatal("expected ordinary terminal snapshot to write memory")
 	}
@@ -237,7 +236,7 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error with skip memory: %v", err)
 	}
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		t.Fatalf("expected skip memory extraction to suppress memory write, got %#v", got)
 	case <-time.After(100 * time.Millisecond):
 	}

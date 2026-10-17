@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -13,11 +14,13 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
 type controlQueries struct {
@@ -168,5 +171,34 @@ func TestPlanModePersistsWithoutReplacingPermission(t *testing.T) {
 		if metadata["permission_mode"] != "yolo" || metadata["collaboration_mode"] != mode || metadata["keep"] != "value" || q.writes != 1 || driver.mode != "" {
 			t.Fatalf("mode isolation: %s", q.row.RuntimeMetadata)
 		}
+	}
+}
+
+type failingCompactDriver struct{ *controlDriver }
+
+func (*failingCompactDriver) Compact(context.Context, external.PromptInput) (external.CompactionResult, error) {
+	return external.CompactionResult{}, errors.New("compaction unavailable")
+}
+
+// A control command that fails ends its run through the driver's one terminal
+// write, so the run has its lifecycle row without a reconcile pass.
+func TestRuntimeControlFailureLeavesALifecycleRow(t *testing.T) {
+	svc, _, driver, _, req := runtimeControlFixture(t)
+	svc.externalDrivers["codex"] = &failingCompactDriver{driver}
+	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID: "owner-control", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: abortAlignmentFence{},
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	store := &agenttest.RecordingLifecycleStore{}
+	bindRuntime(svc, manager)
+	useLifecycleStore(svc, store)
+	manager.SetTerminalObserver(svc.lifecycle.ReconcileTerminal)
+
+	req.Command = "shrink"
+	if _, err := svc.ExecuteRuntimeCommand(t.Context(), req); err == nil {
+		t.Fatal("the failing control reported success")
+	}
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("lifecycle rows = %d, want the failed control run's row", len(store.TerminalUpserts))
 	}
 }

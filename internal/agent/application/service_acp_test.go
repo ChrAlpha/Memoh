@@ -41,11 +41,6 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-const (
-	storeRoundBotID            = "11111111-1111-1111-1111-111111111111"
-	storeRoundMemoryProviderID = "22222222-2222-2222-2222-222222222222"
-)
-
 func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 	t.Parallel()
 
@@ -1093,7 +1088,7 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 	}
 	resolver := wireComponents(&Service{
 		messageService:  messages,
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		botPermissions:  allowWorkspaceExecForBot(agenttest.MemoryBotID, "user-1"),
 		modelsService:   models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:         queries,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &acpContextBudgetSettingsQueries{chatModelID: modelID}, nil, nil),
@@ -1101,7 +1096,7 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:    sessionID,
-					BotID: storeRoundBotID,
+					BotID: agenttest.MemoryBotID,
 					Type:  session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id":             "codex",
@@ -1118,7 +1113,7 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
 		runreq.ChatRequest{
-			BotID:    storeRoundBotID,
+			BotID:    agenttest.MemoryBotID,
 			ThreadID: "session-1",
 			Query:    "inspect the app",
 		},
@@ -1461,20 +1456,19 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
+	registry.Register(agenttest.MemoryProviderID, memory)
 	pool := &recordingACPPrompter{err: errors.New("missing codex-acp")}
-	resolver := wireComponents(&Service{
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
+		botPermissions:  allowWorkspaceExecForBot(agenttest.MemoryBotID, "user-1"),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:    sessionID,
-					BotID: storeRoundBotID,
+					BotID: agenttest.MemoryBotID,
 					Type:  session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id":             "codex",
@@ -1485,14 +1479,14 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 	registerACPPool(resolver, pool)
 
 	eventCh := make(chan runreq.WSStreamEvent, 8)
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
 		runreq.ChatRequest{
-			BotID:    storeRoundBotID,
+			BotID:    agenttest.MemoryBotID,
 			ThreadID: "session-1",
 			Query:    "inspect",
 		},
@@ -1533,7 +1527,7 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 		t.Fatalf("terminal abort messages = %s (%v), want none", abort.Messages, err)
 	}
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		t.Fatalf("memory was called for ACP stream despite SkipMemory=true: %#v", got)
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -1546,9 +1540,9 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
+	registry.Register(agenttest.MemoryProviderID, memory)
 	started := make(chan struct{})
 	pool := &recordingACPPrompter{
 		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
@@ -1559,15 +1553,14 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 			}), context.Canceled
 		},
 	}
-	resolver := wireComponents(&Service{
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
+		botPermissions:  allowWorkspaceExecForBot(agenttest.MemoryBotID, "user-1"),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
-					ID: sessionID, BotID: storeRoundBotID, Type: session.TypeACPAgent,
+					ID: sessionID, BotID: agenttest.MemoryBotID, Type: session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id": "codex", "project_path": "/data/app",
 						"runtime_owner_account_id": "user-1",
@@ -1576,14 +1569,14 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 	registerACPPool(resolver, pool)
 
 	abortCh := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
 		done <- ignoreOutcome(resolver.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+			BotID: agenttest.MemoryBotID, ThreadID: "session-1", Query: "inspect",
 		}, make(chan runreq.WSStreamEvent, 8), abortCh))
 	}()
 	select {
@@ -1611,7 +1604,7 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 		}
 	}
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		t.Fatalf("memory extraction ran on a stopped turn: %#v", got)
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -1624,9 +1617,9 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
+	registry.Register(agenttest.MemoryProviderID, memory)
 	started := make(chan struct{})
 	pool := &recordingACPPrompter{
 		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
@@ -1638,15 +1631,14 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 			}), nil
 		},
 	}
-	resolver := wireComponents(&Service{
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
+		botPermissions:  allowWorkspaceExecForBot(agenttest.MemoryBotID, "user-1"),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
-					ID: sessionID, BotID: storeRoundBotID, Type: session.TypeACPAgent,
+					ID: sessionID, BotID: agenttest.MemoryBotID, Type: session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id": "codex", "project_path": "/data/app",
 						"runtime_owner_account_id": "user-1",
@@ -1655,7 +1647,7 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 	registerACPPool(resolver, pool)
 
 	abortCh := make(chan struct{})
@@ -1663,7 +1655,7 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- ignoreOutcome(resolver.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: storeRoundBotID, ThreadID: "session-1", Query: "inspect",
+			BotID: agenttest.MemoryBotID, ThreadID: "session-1", Query: "inspect",
 		}, eventCh, abortCh))
 	}()
 	select {
@@ -1692,7 +1684,7 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 		t.Fatalf("events = %#v, want abort terminal without end", events)
 	}
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		t.Fatalf("memory extraction ran on a stopped turn: %#v", got)
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -1778,32 +1770,31 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	memory := &storeRoundMemoryProvider{
-		beforeChat: &memprovider.BeforeChatResult{
+	memory := &agenttest.MemoryProvider{
+		BeforeChat: &memprovider.BeforeChatResult{
 			ContextText:   "remembered fact",
 			RetrievalMode: "graph",
 			ResultCount:   1,
 			ResultRefs:    []string{"memory-1"},
 		},
-		afterChat: make(chan memprovider.AfterChatRequest, 1),
+		AfterChat: make(chan memprovider.AfterChatRequest, 1),
 	}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
+	registry.Register(agenttest.MemoryProviderID, memory)
 	pool := &recordingACPPrompter{
 		result: withTranscriptOutput(acpclient.PromptResult{
 			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
 		}),
 	}
-	resolver := wireComponents(&Service{
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		botPermissions:  allowWorkspaceExecForBot(storeRoundBotID, "user-1"),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
+		botPermissions:  allowWorkspaceExecForBot(agenttest.MemoryBotID, "user-1"),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:    sessionID,
-					BotID: storeRoundBotID,
+					BotID: agenttest.MemoryBotID,
 					Type:  session.TypeACPAgent,
 					Metadata: map[string]any{
 						"acp_agent_id":             "codex",
@@ -1814,13 +1805,13 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 	registerACPPool(resolver, pool)
 
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
 		runreq.ChatRequest{
-			BotID:    storeRoundBotID,
+			BotID:    agenttest.MemoryBotID,
 			ThreadID: "session-1",
 			Query:    "inspect",
 		},
@@ -1831,7 +1822,7 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	}
 
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		if len(got.Messages) != 2 {
 			t.Fatalf("memory messages = %#v, want user + assistant", got.Messages)
 		}
@@ -1859,7 +1850,7 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	if snapshot == nil || snapshot.MemoryRecall == nil {
 		t.Fatalf("ACP lifecycle missing memory trace: %#v", snapshot)
 	}
-	if snapshot.MemoryRecall.ProviderID != storeRoundMemoryProviderID || snapshot.MemoryRecall.CacheState != "miss" ||
+	if snapshot.MemoryRecall.ProviderID != agenttest.MemoryProviderID || snapshot.MemoryRecall.CacheState != "miss" ||
 		snapshot.MemoryRecall.Result.Count != 1 || !slices.Equal(snapshot.MemoryRecall.Result.Refs, []string{"memory-1"}) {
 		t.Fatalf("ACP memory trace = %#v", snapshot.MemoryRecall)
 	}
@@ -2128,38 +2119,6 @@ type recordingACPPrompter struct {
 	closeErr     error
 }
 
-type storeRoundMemoryProvider struct {
-	memprovider.Provider
-	beforeChat *memprovider.BeforeChatResult
-	afterChat  chan memprovider.AfterChatRequest
-}
-
-func (*storeRoundMemoryProvider) Type() string {
-	return "test"
-}
-
-func (p *storeRoundMemoryProvider) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
-	return p.beforeChat, nil
-}
-
-func (p *storeRoundMemoryProvider) OnAfterChat(_ context.Context, req memprovider.AfterChatRequest) error {
-	p.afterChat <- req
-	return nil
-}
-
-type storeRoundSettingsQueries struct {
-	dbstore.Queries
-}
-
-func (*storeRoundSettingsQueries) GetSettingsByBotID(_ context.Context, botID pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
-	return sqlc.GetSettingsByBotIDRow{
-		BotID:                   botID,
-		ReasoningEffort:         "medium",
-		CompactionTargetPercent: pgtype.Int4{},
-		MemoryProviderID:        flowTestUUID(storeRoundMemoryProviderID),
-	}, nil
-}
-
 func flowTestUUID(value string) pgtype.UUID {
 	var out pgtype.UUID
 	if err := out.Scan(value); err != nil {
@@ -2336,75 +2295,6 @@ func transcriptModelMessages(result acpclient.PromptResult) []runreq.ModelMessag
 func withTranscriptOutput(result acpclient.PromptResult) acpclient.PromptResult {
 	result.Output = acpclient.TranscriptFromEvents(result.Events, result.Text)
 	return result
-}
-
-// TestACPDecisionAuthorityRequiresLiveWorkspaceExec pins the decision-time
-// authority model: the runtime owner has no standing beyond their live grants,
-// so a revoked or offboarded owner loses approval/response authority, while
-// any member holding workspace_exec (the disclosed widened semantics) keeps it.
-func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
-	t.Parallel()
-
-	const (
-		ownerID    = "owner-user"
-		memberID   = "member-user"
-		chatOnlyID = "chat-only-user"
-	)
-	perms := &agenttest.PermissionChecker{
-		Values: map[string]bool{
-			"bot-1:" + ownerID + ":" + bots.PermissionWorkspaceExec:  true,
-			"bot-1:" + memberID + ":" + bots.PermissionWorkspaceExec: true,
-			"bot-1:" + chatOnlyID + ":" + bots.PermissionChat:        true,
-		},
-	}
-	svc := wireComponents(&Service{
-		botPermissions: perms,
-		sessionService: &agenttest.Sessions{
-			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
-				return session.Thread{
-					ID:          sessionID,
-					BotID:       "bot-1",
-					Type:        session.TypeACPAgent,
-					RuntimeType: session.RuntimeACPAgent,
-					RuntimeMetadata: map[string]any{
-						"runtime_owner_account_id": ownerID,
-					},
-				}, nil
-			},
-		},
-	})
-	inputTarget := userinput.Request{BotID: "bot-1", SessionID: "session-1"}
-	svc.queries = runInitiatorQueries{initiators: map[string]string{approvalTestRunID: ownerID}}
-	rewireComponents(svc)
-	approvalTarget := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", RunID: approvalTestRunID, Operation: toolapproval.OperationExec}
-
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); err != nil {
-		t.Fatalf("owner user-input authorization error = %v", err)
-	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); err != nil {
-		t.Fatalf("owner approval authorization error = %v", err)
-	}
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: memberID}); err != nil {
-		t.Fatalf("workspace_exec member user-input authorization error = %v", err)
-	}
-	// The member's grant does not reach a run the owner started.
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: memberID}); !errors.Is(err, toolapproval.ErrForbidden) {
-		t.Fatalf("workspace_exec member approval authorization error = %v, want forbidden", err)
-	}
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("chat-only user-input authorization error = %v, want forbidden", err)
-	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, toolapproval.ErrForbidden) {
-		t.Fatalf("chat-only approval authorization error = %v, want forbidden", err)
-	}
-
-	delete(perms.Values, "bot-1:"+ownerID+":"+bots.PermissionWorkspaceExec)
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); !errors.Is(err, userinput.ErrForbidden) {
-		t.Fatalf("revoked owner user-input authorization error = %v, want forbidden", err)
-	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); !errors.Is(err, toolapproval.ErrForbidden) {
-		t.Fatalf("revoked owner approval authorization error = %v, want forbidden", err)
-	}
 }
 
 // streamACPAgentWS is the test entry for an ACP session's Web send over the

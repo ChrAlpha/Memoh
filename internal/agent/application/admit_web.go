@@ -16,7 +16,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
-	"github.com/felinics/memoh/internal/errs"
 )
 
 // WebAdmitInput is one Web submission as the WebSocket names it.
@@ -80,9 +79,6 @@ type WebAdmission struct {
 // inheriting the caller's cancellation, and is stopped only by a routed abort,
 // a lost ownership, or the caller's own context naming a reason.
 func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmission, error) {
-	if s.sessionRuntime == nil {
-		return nil, errs.New("session runtime is not configured")
-	}
 	if queued, err := s.queueWebRunBehindInput(ctx, in); queued != nil || err != nil {
 		return queued, err
 	}
@@ -142,7 +138,7 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 		TurnID:       admission.TurnID,
 		TurnPosition: admission.TurnPosition,
 		Cursor:       admission.Cursor,
-		ctx:          s.withAdmissionRuntimeFence(runCtx, admission),
+		ctx:          s.admit.Fence(runCtx, admission),
 		stop:         stopRun,
 		handle:       admission.Handle,
 		// The run reads steering from its queue; the channel only lets the
@@ -260,7 +256,7 @@ func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, deli
 // the session waits for the run: compacting history a run is still appending
 // to would summarize a turn that is not finished.
 func (s *Service) startWebRun(admission *WebAdmission, spec drive.RunSpec) {
-	releaseCompaction := s.DeferSessionCompaction(spec.Req.BotID, spec.Req.ThreadID, admission.RunID)
+	releaseCompaction := s.compact.Defer(spec.Req.BotID, spec.Req.ThreadID, admission.RunID)
 	go func() {
 		defer admission.endActive()
 		defer admission.stop(outcome.ErrRunStopped)

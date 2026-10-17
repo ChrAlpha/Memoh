@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,56 +23,38 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-func TestToProviderMessagesKeepsPersistedContentAndSourceAligned(t *testing.T) {
-	t.Parallel()
-
-	persisted := []messagepkg.Message{
-		storedMemoryTestMessage(t, "msg-a", "sess-1", "assistant", "first stored answer"),
-		storedMemoryTestMessage(t, "msg-b", "sess-1", "assistant", "second stored answer"),
-	}
-	got := toProviderMessages(persisted)
-	if len(got) != 2 {
-		t.Fatalf("provider messages = %v, want two persisted messages", got)
-	}
-	wantRefs := []string{"sess-1/msg-a", "sess-1/msg-b"}
-	for i, want := range wantRefs {
-		if got[i].SourceMessageID != want {
-			t.Fatalf("provider message %d source = %q, want %q", i, got[i].SourceMessageID, want)
-		}
-	}
-	if got[0].Content != "first stored answer" || got[1].Content != "second stored answer" {
-		t.Fatalf("provider message content is misaligned: %v", got)
-	}
-}
-
-func TestToProviderMessagesUsesPrunedPersistedContent(t *testing.T) {
+// What the memory provider is handed is the pruned content the history row
+// holds, not the tool result as the model saw it.
+func TestMemoryReceivesPrunedPersistedContent(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := wireComponents(&Service{
+	memoryProvider := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(agenttest.MemoryProviderID, memoryProvider)
+	service := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 	unit := "large tool result "
 	huge := strings.Repeat(unit, textprune.DefaultMaxBytes/len(unit)+2)
 	err := service.persist.StoreRound(context.Background(), runreq.ChatRequest{
-		BotID: storeRoundBotID, ThreadID: "session-1",
-	}, []runreq.ModelMessage{{Role: "tool", Content: runreq.NewTextContent(huge)}}, "", persist.RoundOptions{SkipMemory: true, AllowPendingToolCalls: true})
+		BotID: agenttest.MemoryBotID, ThreadID: "session-1",
+	}, []runreq.ModelMessage{{Role: "tool", Content: runreq.NewTextContent(huge)}}, "", persist.RoundOptions{AllowPendingToolCalls: true})
 	if err != nil {
 		t.Fatalf("StoreRound() error = %v", err)
 	}
-	if len(messages.Persisted) != 1 {
-		t.Fatalf("persisted %d rows, want the one tool message", len(messages.Persisted))
-	}
-	got := toProviderMessages([]messagepkg.Message{{
-		ID: "msg-tool", SessionID: "session-1", Role: "tool", Content: messages.Persisted[0].Content,
-	}})
-	if len(got) != 1 {
-		t.Fatalf("provider messages = %v, want one persisted tool message", got)
-	}
-	if got[0].Content == huge || !strings.Contains(got[0].Content, textprune.DefaultMarker) {
-		t.Fatalf("provider message did not use pruned persisted content: %.120q", got[0].Content)
+	select {
+	case got := <-memoryProvider.AfterChat:
+		if len(got.Messages) != 1 {
+			t.Fatalf("provider messages = %v, want one persisted tool message", got.Messages)
+		}
+		if got.Messages[0].Content == huge || !strings.Contains(got.Messages[0].Content, textprune.DefaultMarker) {
+			t.Fatalf("provider message did not use pruned persisted content: %.120q", got.Messages[0].Content)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("memory provider was not handed the round")
 	}
 }
 
@@ -108,18 +89,17 @@ func TestStoreRoundPassesSourceRefsToMemory(t *testing.T) {
 	t.Parallel()
 
 	messages := &refsRecordingMessageService{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := wireComponents(&Service{
+	registry.Register(agenttest.MemoryProviderID, memory)
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 
 	if err := resolver.persist.StoreRound(context.Background(), runreq.ChatRequest{
-		BotID:    storeRoundBotID,
+		BotID:    agenttest.MemoryBotID,
 		ThreadID: "session-1",
 		Query:    "hello",
 	}, []runreq.ModelMessage{
@@ -130,7 +110,7 @@ func TestStoreRoundPassesSourceRefsToMemory(t *testing.T) {
 	}
 
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		if got.SkipFormation {
 			t.Fatal("native model turns must retain memory formation")
 		}
@@ -153,22 +133,21 @@ func TestPersistRuntimeRoundSkipsMemoryFormation(t *testing.T) {
 	for _, kind := range []runtimekind.Kind{runtimekind.Codex, runtimekind.ClaudeCode, runtimekind.ACPAgent} {
 		for _, eagerUser := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/eager_user=%t", kind, eagerUser), func(t *testing.T) {
-				memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+				memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 				registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-				registry.Register(storeRoundMemoryProviderID, memory)
-				user := storedMemoryTestMessage(t, "message-id", "session-1", "user", "remember this")
+				registry.Register(agenttest.MemoryProviderID, memory)
+				user := agenttest.StoredMessage(t, "message-id", "session-1", "user", "remember this")
 				messages := &agenttest.RecordingMessages{}
 				if eagerUser {
 					messages.Persisted = []messagepkg.PersistInput{{SessionID: user.SessionID, Role: user.Role, Content: user.Content}}
 				}
-				service := wireComponents(&Service{
+				service := withMemory(wireComponents(&Service{
 					messageService:  messages,
-					memoryRegistry:  registry,
-					settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+					settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
 					logger:          slog.New(slog.DiscardHandler),
-				})
+				}), registry)
 				req := runreq.ChatRequest{
-					BotID: storeRoundBotID, ThreadID: user.SessionID, Query: "remember this",
+					BotID: agenttest.MemoryBotID, ThreadID: user.SessionID, Query: "remember this",
 					UserMessagePersisted: eagerUser, PersistedUserMessageID: user.ID,
 				}
 				err := service.persistExternalRound(t.Context(), req, string(kind), "/data", external.PromptResult{
@@ -178,7 +157,7 @@ func TestPersistRuntimeRoundSkipsMemoryFormation(t *testing.T) {
 					t.Fatal(err)
 				}
 				select {
-				case got := <-memory.afterChat:
+				case got := <-memory.AfterChat:
 					if !got.SkipFormation {
 						t.Fatal("external runtime turns must not form memory on the platform's models")
 					}
@@ -193,59 +172,21 @@ func TestPersistRuntimeRoundSkipsMemoryFormation(t *testing.T) {
 	}
 }
 
-func TestStoreMemoryUsesPersistedUserContent(t *testing.T) {
-	t.Parallel()
-
-	user := storedMemoryTestMessage(t, "msg-user", "session-1", "user", "persisted user question")
-	messages := &agenttest.RecordingMessages{Persisted: []messagepkg.PersistInput{{
-		SessionID: user.SessionID, Role: user.Role, Content: user.Content,
-	}}}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
-	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
-	service := wireComponents(&Service{
-		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-		logger:          slog.New(slog.DiscardHandler),
-	})
-
-	service.storeMemory(context.Background(), runreq.ChatRequest{
-		BotID: storeRoundBotID, ThreadID: "session-1",
-		Query:                "runtime query with generated headers",
-		UserMessagePersisted: true, PersistedUserMessageID: "msg-user",
-	}, []messagepkg.Message{
-		storedMemoryTestMessage(t, "msg-assistant", "session-1", "assistant", "stored answer"),
-	})
-
-	got := <-memory.afterChat
-	if len(got.Messages) != 2 {
-		t.Fatalf("memory messages = %v, want persisted user and assistant", got.Messages)
-	}
-	if got.Messages[0].Content != "persisted user question" || got.Messages[0].SourceMessageID != "session-1/msg-user" {
-		t.Fatalf("persisted user message = %#v", got.Messages[0])
-	}
-	if got.Messages[1].Content != "stored answer" || got.Messages[1].SourceMessageID != "session-1/msg-assistant" {
-		t.Fatalf("persisted assistant message = %#v", got.Messages[1])
-	}
-}
-
 func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 	t.Parallel()
 
 	messages := &partialRefsMessageService{}
-	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
+	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := wireComponents(&Service{
+	registry.Register(agenttest.MemoryProviderID, memory)
+	resolver := withMemory(wireComponents(&Service{
 		messageService:  messages,
-		memoryRegistry:  registry,
-		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	})
+	}), registry)
 
 	if err := resolver.persist.StoreRound(context.Background(), runreq.ChatRequest{
-		BotID: storeRoundBotID, ThreadID: "session-1", Query: "hello",
+		BotID: agenttest.MemoryBotID, ThreadID: "session-1", Query: "hello",
 	}, []runreq.ModelMessage{
 		{Role: "user", Content: runreq.NewTextContent("hello")},
 		{Role: "assistant", Content: runreq.NewTextContent("hi there")},
@@ -254,17 +195,8 @@ func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 	}
 
 	select {
-	case got := <-memory.afterChat:
+	case got := <-memory.AfterChat:
 		t.Fatalf("memory extraction ran for partial persistence: %+v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
-}
-
-func storedMemoryTestMessage(t *testing.T, id, sessionID, role, text string) messagepkg.Message {
-	t.Helper()
-	content, err := json.Marshal(runreq.ModelMessage{Role: role, Content: runreq.NewTextContent(text)})
-	if err != nil {
-		t.Fatalf("marshal stored message: %v", err)
-	}
-	return messagepkg.Message{ID: id, SessionID: sessionID, Role: role, Content: content}
 }

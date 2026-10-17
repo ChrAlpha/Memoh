@@ -431,7 +431,7 @@ func (c *StepCommitter) RecordFailure(ctx context.Context, partialText string, f
 }
 
 // Finish closes the run's history once its steps are committed: it records the
-// workspace target, links the assets the run produced, and tells the observer
+// workspace target, links the assets the run produced, and tells the observers
 // what the run wrote. A run that committed nothing has nothing to close.
 func (c *StepCommitter) Finish(ctx context.Context, inputTokens int) error {
 	if c == nil {
@@ -463,10 +463,10 @@ func (c *StepCommitter) Finish(ctx context.Context, inputTokens int) error {
 		c.writer.LinkOutboundAssets(ctx, c.req.BotID, c.req.ThreadID, runreq.OutboundAssetRefsToMessageRefs(c.req.OutboundAssetCollector()))
 	}
 	if !c.req.SkipMemoryExtraction && len(memoryPersisted) == len(messages) && len(memoryPersisted) > 0 {
-		c.writer.observer.RoundPersisted(ctx, c.req, memoryPersisted)
+		c.writer.rounds.RoundPersisted(ctx, c.req, memoryPersisted)
 	}
 	if inputTokens > 0 {
-		c.writer.observer.RunCommitted(ctx, c.req, c.rc, inputTokens)
+		c.writer.commits.RunCommitted(ctx, c.req, c.rc, inputTokens)
 	}
 	return nil
 }

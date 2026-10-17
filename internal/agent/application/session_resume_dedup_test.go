@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
@@ -41,7 +42,7 @@ func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 	}
 	fixture.service.messageService = history
 	rewireComponents(fixture.service)
-	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
+	raw, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 		Version: 1, Query: directLifecyclePrompt, ChatID: agenttest.LifecycleBotID, UserID: "im-user-1",
 	}})
 	if err != nil {

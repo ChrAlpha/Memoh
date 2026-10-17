@@ -132,8 +132,8 @@ func newTestAgentService(t *testing.T, d application.Deps) *application.Service 
 	if d.UserInput == nil {
 		d.UserInput = &userinput.Service{}
 	}
-	if d.ResumeSecret == "" {
-		d.ResumeSecret = "handlers-test-secret"
+	if d.RunCredentialSecret == "" {
+		d.RunCredentialSecret = "handlers-test-secret"
 	}
 	service, err := application.New(d)
 	if err != nil {

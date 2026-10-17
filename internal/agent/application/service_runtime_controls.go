@@ -285,12 +285,8 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 		if errors.Is(resultErr, context.Canceled) || runCtx.Err() != nil {
 			status = sessionruntime.RunStatusAborted
 		}
-		ended := outcome.RunOutcome{Status: status, Cause: resultErr}
-		finishCtx, finishCancel := context.WithTimeout(outcome.WithRunOutcome(context.WithoutCancel(runCtx), handle.RunID, ended), drive.TerminalWriteTimeout)
-		defer finishCancel()
-		if _, err := s.sessionRuntime.FinishRunWithErrorCode(finishCtx, handle, status, string(apperror.CodeOf(publicRuntimeControlError(resultErr)))); err != nil {
-			resultErr = errors.Join(resultErr, err)
-		}
+		s.driver.FinishRun(runCtx, drive.AdmittedRun{Handle: handle},
+			drive.FromOutcome(outcome.RunOutcome{Status: status, Cause: publicRuntimeControlError(resultErr)}))
 	}()
 	// Re-read after admission: a queued send or another mode change may have
 	// won while this request was validating its initial snapshot.

@@ -51,7 +51,7 @@ func (h wsStepHistoryHarness) startProcess(t *testing.T) resumeProcess {
 	t.Helper()
 	manager := h.restarted(t)
 	service, _ := newWSStepHistoryService(t, wsStepHistorySuccess, postgresstore.NewQueriesWithPool(h.pool, dbsqlc.New(h.pool)), manager)
-	service.resumeSecret = "history-reset-resume"
+	useSecret(service, "history-reset-resume")
 	service.teamScopes = runreq.SingleTeam(team.DefaultTeamID)
 	service.queries = resumeLedgerQueries{noDecisionQueries: service.queries.(noDecisionQueries), db: dbsqlc.New(h.pool)}
 	rewireComponents(service)
@@ -76,7 +76,7 @@ func (h wsStepHistoryHarness) interruptedTurn(t *testing.T, p resumeProcess, tas
 		t.Fatalf("admit turn = (%+v, %v)", admission, err)
 	}
 	fenced := runtimefence.WithContext(ctx, runtimefence.Fence{BotID: h.botID, SessionID: h.sessionID, Token: admission.Handle.FencingToken})
-	if err := p.service.recordRunResumeContext(fenced, runreq.ChatRequest{RunID: admission.RunID, ChatID: h.botID, Query: task}); err != nil {
+	if err := p.service.admit.RecordResume(fenced, runreq.ChatRequest{RunID: admission.RunID, ChatID: h.botID, Query: task}); err != nil {
 		t.Fatalf("record resume intent: %v", err)
 	}
 	if err := p.manager.InterruptForShutdown(ctx); err != nil {

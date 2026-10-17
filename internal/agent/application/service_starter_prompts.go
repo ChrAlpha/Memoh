@@ -229,7 +229,7 @@ func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterP
 }
 
 func (s *Service) starterPromptMemories(ctx context.Context, botID string) []string {
-	provider := s.resolveMemoryProvider(ctx, botID)
+	provider := s.memory.Provider(ctx, botID)
 	if provider == nil {
 		return nil
 	}

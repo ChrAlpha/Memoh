@@ -108,7 +108,7 @@ func (w *Writer) TerminalSnapshotResult(ctx context.Context, req runreq.ChatRequ
 	}
 
 	if inputTokens := ExtractInputTokensFromUsage(snap.Usage); inputTokens > 0 {
-		w.observer.RunCommitted(context.WithoutCancel(ctx), req, rc, inputTokens)
+		w.commits.RunCommitted(context.WithoutCancel(ctx), req, rc, inputTokens)
 	}
 
 	return persisted, nil

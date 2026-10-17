@@ -24,14 +24,18 @@ Memoh/
 │   ├── agent/                  #   Agent bounded package; root is a namespace, not a Go package
 │   │   ├── activeprompt/       #     In-process output hub of the running external runtime prompt of a session
 │   │   ├── adapter/            #     Adapters from lower-level domain ports to runtime implementations
+│   │   ├── admit/              #     Admission of runs, the resume record of a run, signing of server-issued run credentials
 │   │   ├── application/        #     Turn orchestration: context, persistence, memory, approvals, runtime dispatch
 │   │   ├── background/         #     Background task manager (spawned subagents, video tasks)
 │   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
+│   │   ├── compact/            #     Compaction policy and runs: before a turn, between model calls, after a run, session barrier
 │   │   ├── context/            #     Context fragments, history projection, compaction, and output limits
+│   │   ├── decide/             #     Tool approval and ask_user decisions: authority, recording answers, closing a run's decisions
 │   │   ├── decision/           #     User input, tool approval, and stable user-facing feedback
 │   │   ├── drive/              #     Run driver: consumes, publishes and delivers a run's events, writes its terminal state
 │   │   ├── event/              #     Agent events and transport payload vocabulary
 │   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
+│   │   ├── memory/             #     Memory recall for a turn and hand-off of finished rounds to the memory provider
 │   │   ├── notify/             #     Background task notifications into the originating conversation
 │   │   ├── persist/            #     History writes: turn and step rows, failure rows, terminal snapshots, replaced turns
 │   │   ├── runtime/            #     Runtime implementations

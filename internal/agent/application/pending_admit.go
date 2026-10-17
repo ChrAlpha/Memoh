@@ -229,7 +229,7 @@ func (s *Service) signQueuedCommand(ctx context.Context, cmd *turn.StartTurnComm
 	if claims == nil {
 		return
 	}
-	chatToken, token, err := auth.IssueRouteCredentials(*claims, s.resumeSecret, discussCredentialTTL)
+	chatToken, token, err := s.signer.IssueRoute(*claims)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WarnContext(ctx, "issue route credentials for a queued turn failed", slog.Any("error", err))

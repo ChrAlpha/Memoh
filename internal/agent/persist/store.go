@@ -87,7 +87,7 @@ func (w *Writer) StoreRoundResult(ctx context.Context, req runreq.ChatRequest, m
 		return persisted, nil
 	}
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
-		w.observer.RoundPersisted(context.WithoutCancel(ctx), req, persisted)
+		w.rounds.RoundPersisted(context.WithoutCancel(ctx), req, persisted)
 	}
 
 	return persisted, nil

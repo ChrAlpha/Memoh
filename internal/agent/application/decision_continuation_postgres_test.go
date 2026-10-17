@@ -120,7 +120,7 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			svc := wireComponents(&Service{queries: store})
-			instruction, err := svc.interruptedDecisionContext(ctx, row, saved.Checkpoints)
+			instruction, err := svc.decider.InterruptedContext(ctx, row, saved.Checkpoints)
 			if err != nil || instruction == "" || !strings.Contains(instruction, "Do not automatically replay") {
 				t.Fatalf("decision recovery context=%q err=%v", instruction, err)
 			}
@@ -132,7 +132,7 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 			}
 			// A different run must never inherit this accepted authority.
 			row.RunID = db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001")
-			if _, err := svc.interruptedDecisionContext(ctx, row, saved.Checkpoints); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
+			if _, err := svc.decider.InterruptedContext(ctx, row, saved.Checkpoints); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
 				t.Fatalf("cross-run checkpoint accepted: %v", err)
 			}
 		})

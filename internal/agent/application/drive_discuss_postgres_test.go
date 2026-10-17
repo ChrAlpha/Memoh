@@ -18,7 +18,9 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -456,7 +458,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 	rewireComponents(svc)
 	svc.queries = discussStore{Queries: base, pg: pg}
 	rewireComponents(svc)
-	svc.resumeSecret = discussTestSecret
+	useSecret(svc, discussTestSecret)
 	setAllowedTeam(svc, "")
 	svc.sessionService = &agenttest.Sessions{
 		GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
@@ -489,7 +491,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		tools.NewMessageProvider(nil, sender, goldenMessagingReactor{}, goldenChannelResolver{}, nil),
 	})
 	svc.agent = agent
-	svc.userInput = &agenttest.UserInput{}
+	useDecisions(svc, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	return &discussProcess{svc: svc, manager: manager, provider: provider, sender: sender}
 }
 
@@ -570,7 +572,7 @@ func TestDiscussAnswersPendingInputThroughSend(t *testing.T) {
 	// it came in on; the session acts for the bot's owner. They are recorded
 	// for a later resume like any other run's, and are what the inbound path
 	// signs for the same participant: its tests hold it to the same scenario.
-	var resume resumeContext
+	var resume admit.ResumeContext
 	if err := json.Unmarshal(run.input["resume"], &resume); err != nil {
 		t.Fatalf("resume context: %v (%s)", err, run.input["resume"])
 	}
@@ -652,7 +654,7 @@ func TestDiscussAmbiguousParticipantNamesNoAccount(t *testing.T) {
 	}
 	waitDiscussRun(t, done)
 	run := env.waitRunState(t, env.invocation(hw), "completed")
-	var resume resumeContext
+	var resume admit.ResumeContext
 	if err := json.Unmarshal(run.input["resume"], &resume); err != nil {
 		t.Fatal(err)
 	}

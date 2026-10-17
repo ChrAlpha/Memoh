@@ -24,6 +24,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -1729,7 +1730,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				failWSControl(streamBaseCtx, h.logger, writer, botID, ref, "ws.control.tool_approval", msg.Type, controlID, string(apperror.CodeToolApprovalOperationFailed), apperror.New(apperror.CodeToolApprovalOperationFailed, nil))
 				continue
 			}
-			payload, err := json.Marshal(application.ToolApprovalResponseInput{
+			payload, err := json.Marshal(decide.ToolApprovalResponseInput{
 				ControlID:                  controlID,
 				BotID:                      botID,
 				ThreadID:                   sessionID,
@@ -1789,7 +1790,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				failWSControl(streamBaseCtx, h.logger, writer, botID, ref, "ws.control.user_input", msg.Type, controlID, string(apperror.CodeUserInputOperationFailed), apperror.New(apperror.CodeUserInputOperationFailed, nil))
 				continue
 			}
-			payload, err := json.Marshal(application.UserInputResponseInput{
+			payload, err := json.Marshal(decide.UserInputResponseInput{
 				ControlID:                  controlID,
 				BotID:                      botID,
 				ThreadID:                   sessionID,
@@ -2517,7 +2518,7 @@ func (h *LocalChannelHandler) runtimeViewerDecider(channelIdentityID string) run
 	if h.agentService == nil {
 		return nil
 	}
-	viewer := application.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
+	viewer := decide.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
 	return func(ctx context.Context, approvalID string) bool {
 		allowed, err := h.agentService.ViewerCanDecideToolApproval(ctx, approvalID, viewer)
 		if err != nil {

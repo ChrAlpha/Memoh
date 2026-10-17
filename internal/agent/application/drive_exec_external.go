@@ -368,7 +368,7 @@ func (e *externalExecutor) rollback(ctx context.Context) {
 // records it, and a round or a failure row is anchored to it besides. A run
 // another owner took is not cleaned up at all: nothing here speaks for it.
 func (e *externalExecutor) cleanup(ctx context.Context) {
-	e.service.cancelPendingRuntimeApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
+	e.service.decider.CancelPendingApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
 	if e.roundUnwritable && e.input != outcome.InputAccepted && e.plan.leadingUser != nil {
 		e.service.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
@@ -423,8 +423,8 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		ChannelIdentityID:        e.req.SourceChannelIdentityID,
 		SessionToken:             e.req.Token,
 		ToolHTTPURL:              e.req.ToolHTTPURL,
-		ToolOutputLimit:          e.service.toolOutputLimit(),
-		CanRequestUserInput:      !e.unattended && e.service.canDeliverUserInputStream(),
+		ToolOutputLimit:          e.service.decider.ToolOutputLimit(),
+		CanRequestUserInput:      !e.unattended && e.service.decider.CanDeliverUserInputStream(),
 		Sink:                     external.EventSinkFunc(func(ev native.StreamEvent) { e.deliver(ctx, emit, ev) }),
 	}
 }

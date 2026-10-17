@@ -1,6 +1,11 @@
 package outcome
 
 import (
+	"context"
+	"errors"
+	"strings"
+
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 )
 
@@ -46,4 +51,30 @@ type RunOutcome struct {
 // travels in its own column; it is never written as the run's error message.
 func (o RunOutcome) ErrorCode() string {
 	return string(PublicFailureCode(o.Cause))
+}
+
+// Resolve names the status of an ending whose owner reported only a cause: a
+// failure the owner holds is an errored run, unless it is the plain
+// cancellation of a run that was stopped; a run whose context has ended was
+// aborted; anything else completed. An outcome that already has a status is
+// returned as it is.
+func (o RunOutcome) Resolve(runCtx context.Context) RunOutcome {
+	if strings.TrimSpace(o.Status) != "" {
+		return o
+	}
+	failureCause := o.Cause
+	if privateCause := apperror.CauseOf(o.Cause); privateCause != nil {
+		failureCause = privateCause
+	}
+	explicitlyCanceled := o.Cause != nil &&
+		errors.Is(failureCause, context.Canceled) &&
+		errors.Is(context.Cause(runCtx), context.Canceled)
+	switch {
+	case o.Cause != nil && !explicitlyCanceled:
+		return RunOutcome{Status: sessionruntime.RunStatusErrored, Cause: o.Cause}
+	case runCtx.Err() != nil:
+		return RunOutcome{Status: sessionruntime.RunStatusAborted}
+	default:
+		return RunOutcome{Status: sessionruntime.RunStatusCompleted}
+	}
 }

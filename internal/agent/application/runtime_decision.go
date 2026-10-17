@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
+	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -20,112 +18,11 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/db"
-	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
-// ResolveRuntimeDecision reads the authoritative decision row before any live
-// owner lookup. Terminal rows are returned too: the router needs to distinguish
-// a known, already-decided request from an unfenced ACP/MCP request.
-func (s *Service) ResolveRuntimeDecision(ctx context.Context, commandType, decisionID string) (sessionruntime.DecisionTarget, error) {
-	if s == nil || s.queries == nil {
-		return sessionruntime.DecisionTarget{}, errors.New("runtime decision store is not configured")
-	}
-	id, err := db.ParseUUID(decisionID)
-	if err != nil {
-		return sessionruntime.DecisionTarget{}, fmt.Errorf("%w: %w", sessionruntime.ErrDecisionNotFound, err)
-	}
-	switch commandType {
-	case sessionruntime.CommandToolApprovalResponse:
-		row, err := s.queries.GetToolApprovalRequest(ctx, id)
-		if err != nil {
-			return sessionruntime.DecisionTarget{}, runtimeDecisionReadError(err)
-		}
-		return toolApprovalDecisionTarget(row), nil
-	case sessionruntime.CommandUserInputResponse:
-		row, err := s.queries.GetUserInputRequest(ctx, id)
-		if err != nil {
-			return sessionruntime.DecisionTarget{}, runtimeDecisionReadError(err)
-		}
-		return userInputDecisionTarget(row), nil
-	default:
-		return sessionruntime.DecisionTarget{}, fmt.Errorf("unsupported runtime decision command %q", commandType)
-	}
-}
-
-// PendingRuntimeDecisions resolves every durable decision that parked runID.
-// It is used only by expired-owner recovery, where preserving the exact rows
-// is required before advancing the run's fencing token — a turn can park on
-// several approvals and user inputs at once, and dropping any of them here
-// would supersede a decision the user can still answer.
-func (s *Service) PendingRuntimeDecisions(ctx context.Context, runID string) ([]sessionruntime.DecisionTarget, error) {
-	if s == nil || s.queries == nil {
-		return nil, errors.New("runtime decision store is not configured")
-	}
-	id, err := db.ParseUUID(runID)
-	if err != nil {
-		return nil, err
-	}
-	approvals, err := s.queries.ListPendingToolApprovalsByRun(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("read pending tool approvals for run: %w", err)
-	}
-	inputs, err := s.queries.ListPendingUserInputsByRun(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("read pending user inputs for run: %w", err)
-	}
-	out := make([]sessionruntime.DecisionTarget, 0, len(approvals)+len(inputs))
-	for _, approval := range approvals {
-		out = append(out, toolApprovalDecisionTarget(approval))
-	}
-	for _, input := range inputs {
-		out = append(out, userInputDecisionTarget(input))
-	}
-	// Recovery decides by session runtime whether the parked run is
-	// resumable at all; every pending decision here shares one session.
-	if len(out) > 0 && s.sessionService != nil {
-		sess, sessErr := s.sessionService.Get(ctx, out[0].SessionID)
-		if sessErr != nil {
-			return nil, fmt.Errorf("read waiting-decision session runtime: %w", sessErr)
-		}
-		for i := range out {
-			out[i].SessionRuntime = sess.RuntimeType
-		}
-	}
-	return out, nil
-}
-
-func runtimeDecisionReadError(err error) error {
-	if errors.Is(err, pgx.ErrNoRows) {
-		return sessionruntime.ErrDecisionNotFound
-	}
-	return err
-}
-
-func toolApprovalDecisionTarget(row dbsqlc.ToolApprovalRequest) sessionruntime.DecisionTarget {
-	return sessionruntime.DecisionTarget{
-		Type: sessionruntime.CommandToolApprovalResponse, ID: runreq.PGUUIDString(row.ID),
-		BotID: runreq.PGUUIDString(row.BotID), SessionID: runreq.PGUUIDString(row.SessionID),
-		RunID: runreq.PGUUIDString(row.RunID), TurnID: runreq.PGUUIDString(row.TurnID),
-		Status: row.Status, FencingToken: runreq.PGInt64(row.RuntimeFencingToken),
-		InlineDecision: isCapabilityManagementApproval(toolapproval.Request{ToolName: row.ToolName}),
-		ControlID:      db.TextToString(row.ResponseControlID), PayloadHash: db.TextToString(row.ResponsePayloadHash),
-	}
-}
-
-func userInputDecisionTarget(row dbsqlc.UserInputRequest) sessionruntime.DecisionTarget {
-	return sessionruntime.DecisionTarget{
-		Type: sessionruntime.CommandUserInputResponse, ID: runreq.PGUUIDString(row.ID),
-		BotID: runreq.PGUUIDString(row.BotID), SessionID: runreq.PGUUIDString(row.SessionID),
-		RunID: runreq.PGUUIDString(row.RunID), TurnID: runreq.PGUUIDString(row.TurnID),
-		Status: row.Status, FencingToken: runreq.PGInt64(row.RuntimeFencingToken),
-		ControlID: db.TextToString(row.ResponseControlID), PayloadHash: db.TextToString(row.ResponsePayloadHash),
-	}
-}
-
-func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
+func (s *Service) routeToolApprovalResponse(ctx context.Context, input decide.ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if s == nil || s.decisionRuntime == nil {
 		return false, nil
 	}
@@ -168,7 +65,7 @@ func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolAppro
 	return true, nil
 }
 
-func (s *Service) routeUserInputResponse(ctx context.Context, input UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
+func (s *Service) routeUserInputResponse(ctx context.Context, input decide.UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if s == nil || s.decisionRuntime == nil {
 		return false, nil
 	}
@@ -230,7 +127,7 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 	}
 	switch command.Type {
 	case sessionruntime.CommandUserInputResponse:
-		var input UserInputResponseInput
+		var input decide.UserInputResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			runCancel()
 			return err
@@ -246,24 +143,24 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 			ControlID: input.ControlID, PayloadHash: command.PayloadHash,
 		})
 
-		committed, err := s.CommitUserInputResponse(ctx, input)
+		committed, err := s.decider.CommitUserInputResponse(ctx, input)
 		if err != nil {
 			runCancel()
 			return err
 		}
-		committed.runID = command.RunID
-		committed.runHandle = runHandle
+		committed = committed.ForRun(command.RunID, runHandle)
+		answered := committed.Request()
 		s.publishCommittedRuntimeDecision(runCtx, command, native.StreamEvent{
 			Type:        native.EventUserInputRequest,
-			ToolName:    committed.request.ToolName,
-			ToolCallID:  committed.request.ToolCallID,
-			UserInputID: committed.request.ID,
-			ShortID:     committed.request.ShortID,
-			Status:      committed.request.Status,
-			Input:       committed.request.Input,
-			Metadata:    userinput.DeferredMetadata(committed.request),
+			ToolName:    answered.ToolName,
+			ToolCallID:  answered.ToolCallID,
+			UserInputID: answered.ID,
+			ShortID:     answered.ShortID,
+			Status:      answered.Status,
+			Input:       answered.Input,
+			Metadata:    userinput.DeferredMetadata(answered),
 		})
-		if committed.isExternalAgent || committed.ackOnly {
+		if committed.IsExternalAgent() || committed.AckOnly() {
 			defer runCancel()
 			s.ackInlineRuntimeDecision(runCtx, command)
 			return nil
@@ -274,7 +171,7 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 		}()
 		return nil
 	case sessionruntime.CommandToolApprovalResponse:
-		var input ToolApprovalResponseInput
+		var input decide.ToolApprovalResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			runCancel()
 			return err
@@ -290,25 +187,25 @@ func (s *Service) handleRuntimeDecisionCommand(ctx context.Context, command sess
 			ControlID: input.ControlID, PayloadHash: command.PayloadHash,
 		})
 
-		committed, err := s.CommitToolApprovalResponse(ctx, input)
+		committed, err := s.decider.CommitToolApprovalResponse(ctx, input)
 		if err != nil {
 			runCancel()
 			return err
 		}
-		committed.runID = command.RunID
-		committed.runHandle = runHandle
+		committed = committed.ForRun(command.RunID, runHandle)
+		approved := committed.Request()
 		s.publishCommittedRuntimeDecision(runCtx, command, native.StreamEvent{
 			Type:           native.EventToolApprovalRequest,
-			ToolName:       committed.request.ToolName,
-			InlineDecision: committed.usesDecisionWaiter,
-			ToolCallID:     committed.request.ToolCallID,
-			ApprovalID:     committed.request.ID,
-			ShortID:        committed.request.ShortID,
-			Status:         committed.request.Status,
-			Input:          committed.request.ToolInput,
-			Metadata:       approvalResultMetadata(committed.request),
+			ToolName:       approved.ToolName,
+			InlineDecision: committed.UsesDecisionWaiter(),
+			ToolCallID:     approved.ToolCallID,
+			ApprovalID:     approved.ID,
+			ShortID:        approved.ShortID,
+			Status:         approved.Status,
+			Input:          approved.ToolInput,
+			Metadata:       decide.ApprovalResultMetadata(approved),
 		})
-		if committed.usesDecisionWaiter || committed.ackOnly {
+		if committed.UsesDecisionWaiter() || committed.AckOnly() {
 			defer runCancel()
 			s.ackInlineRuntimeDecision(runCtx, command)
 			return nil
@@ -465,7 +362,7 @@ func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatReq
 	}
 	timing := persist.NewReasoningTimingTracker(nil)
 	persist.ConfigureNativeReasoningTiming(&cfg, timing, committer)
-	s.bindStepCompaction(&cfg, req, committer)
+	s.compact.BindStep(&cfg, req, committer)
 	rc.RunConfig = cfg
 	return drive.RunPlan{
 		Exec: &nativeExecutor{

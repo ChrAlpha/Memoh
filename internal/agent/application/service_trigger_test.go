@@ -5,12 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
-	"github.com/felinics/memoh/internal/agent/outcome"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/sessionmode"
-	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/schedule"
 )
@@ -48,64 +44,6 @@ func (*fakeTriggeredAdmitter) FinishRunWithErrorCode(context.Context, sessionrun
 
 func (*fakeTriggeredAdmitter) FinishRunWithFailure(context.Context, sessionruntime.RunHandle, string, string, map[string]string) (sessionruntime.TerminalRun, error) {
 	return sessionruntime.TerminalRun{}, nil
-}
-
-func TestAdmitTriggeredRunInjectsAdmissionView(t *testing.T) {
-	t.Parallel()
-
-	admitter := &fakeTriggeredAdmitter{}
-	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
-
-	viewFn := func(handle sessionruntime.RunHandle) *sessionruntime.RunAdmissionView {
-		return &sessionruntime.RunAdmissionView{
-			RequestUserTurn: &chatview.UITurn{
-				TurnID:    handle.TurnID,
-				Role:      "user",
-				Text:      "run scheduled task",
-				Timestamp: time.Now(),
-			},
-		}
-	}
-
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), viewFn, outcome.ErrRunStopped)
-	if err != nil {
-		t.Fatalf("admitTriggeredRun() error = %v", err)
-	}
-	if admitter.admitInput.Execution.Admission == nil {
-		t.Fatal("runtime admission hook is nil")
-	}
-	view, err := admitter.admitInput.Execution.Admission(ctx, admission.Handle)
-	if err != nil {
-		t.Fatalf("admission hook error = %v", err)
-	}
-	if view.RequestUserTurn == nil {
-		t.Fatal("request user turn is nil, want the injected projection")
-	}
-	if view.RequestUserTurn.Text != "run scheduled task" {
-		t.Fatalf("request user turn text = %q, want the schedule command", view.RequestUserTurn.Text)
-	}
-	if view.RequestUserTurn.TurnID != admission.TurnID {
-		t.Fatalf("request user turn turn id = %q, want the admitted turn %q", view.RequestUserTurn.TurnID, admission.TurnID)
-	}
-}
-
-func TestAdmitTriggeredRunWithoutViewKeepsEmptyProjection(t *testing.T) {
-	t.Parallel()
-
-	admitter := &fakeTriggeredAdmitter{}
-	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
-
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil, outcome.ErrRunStopped)
-	if err != nil {
-		t.Fatalf("admitTriggeredRun() error = %v", err)
-	}
-	view, err := admitter.admitInput.Execution.Admission(ctx, admission.Handle)
-	if err != nil {
-		t.Fatalf("admission hook error = %v", err)
-	}
-	if view.RequestUserTurn != nil {
-		t.Fatalf("request user turn = %#v, want nil without a view factory", view.RequestUserTurn)
-	}
 }
 
 func (*fakeTriggeredAdmitter) MarkInlineDecisionRun(string, string, string) {}

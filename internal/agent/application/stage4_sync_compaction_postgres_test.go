@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -96,10 +97,11 @@ func stage4DriveSession(t *testing.T) (*agenttest.CompactionSession, directLifec
 	fixture.service.messageService = &pgContextMessages{db: s.Messages, sessionID: s.SessionID}
 	rewireComponents(fixture.service)
 	fixture.service.queries = stage4Queries{noDecisionQueries: fixture.service.queries.(noDecisionQueries), real: s.Queries}
+	useCompaction(fixture.service, func(d *compact.Deps) {
+		d.Runner = withoutModelRecord{s.Compaction}
+		d.HTTPClient = &http.Client{Transport: s.Summarizer}
+	})
 	rewireComponents(fixture.service)
-	rewireComponents(fixture.service)
-	fixture.service.compactionService = withoutModelRecord{s.Compaction}
-	fixture.service.compactionHTTPClient = &http.Client{Transport: s.Summarizer}
 	return s, fixture, recorder
 }
 
@@ -215,7 +217,7 @@ func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 		t.Fatalf("assemble: %v", err)
 	}
 	before := agenttest.CompactionLabels(assembled.Messages)
-	after, err := fixture.service.compactBeforeTurn(s.Ctx, req, "", 60000, assembled, &turnRequestEstimate{service: fixture.service, ctx: s.Ctx, sessionID: req.ThreadID})
+	after, err := fixture.service.compact.BeforeTurn(s.Ctx, req, "", 60000, assembled, fixture.service.compact.NewEstimate(s.Ctx, req.ThreadID, nil))
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}

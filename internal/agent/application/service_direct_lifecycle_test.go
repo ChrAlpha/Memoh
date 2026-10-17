@@ -56,6 +56,12 @@ func (q *directLifecycleQueries) GetSettingsByBotID(
 
 // GetLatestContextLifecycleBySession reports no earlier run plan, so a
 // turn's pressure is its rows and own messages.
+// SaveSessionRunResumeContext accepts the resume intent every fenced chat run
+// records.
+func (*directLifecycleQueries) SaveSessionRunResumeContext(context.Context, sqlc.SaveSessionRunResumeContextParams) (int64, error) {
+	return 1, nil
+}
+
 func (*directLifecycleQueries) GetLatestContextLifecycleBySession(context.Context, pgtype.UUID) ([]byte, error) {
 	return nil, pgx.ErrNoRows
 }

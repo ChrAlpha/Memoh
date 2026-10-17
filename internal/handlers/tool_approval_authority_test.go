@@ -15,6 +15,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -54,7 +55,7 @@ type verdictDecisionRuntime struct {
 }
 
 func (*verdictDecisionRuntime) RouteDecisionResponse(_ context.Context, response sessionruntime.DecisionResponse) (sessionruntime.DecisionResponseResult, error) {
-	var input application.ToolApprovalResponseInput
+	var input decide.ToolApprovalResponseInput
 	if err := json.Unmarshal(response.Payload, &input); err != nil {
 		return sessionruntime.DecisionResponseResult{}, err
 	}
@@ -222,13 +223,13 @@ func TestRuntimeSubscriptionAnswersViewerCanDecidePerConnection(t *testing.T) {
 }
 
 type recordingApprovalDecider struct {
-	principal application.ToolApprovalPrincipal
+	principal decide.ToolApprovalPrincipal
 	approval  toolapproval.Request
 	allow     bool
 	err       error
 }
 
-func (d *recordingApprovalDecider) CanDecideToolApproval(_ context.Context, approval toolapproval.Request, principal application.ToolApprovalPrincipal) (bool, error) {
+func (d *recordingApprovalDecider) CanDecideToolApproval(_ context.Context, approval toolapproval.Request, principal decide.ToolApprovalPrincipal) (bool, error) {
 	d.approval, d.principal = approval, principal
 	return d.allow, d.err
 }

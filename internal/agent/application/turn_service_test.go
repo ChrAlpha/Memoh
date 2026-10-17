@@ -138,18 +138,6 @@ func TestStartTurnRequiresTeamID(t *testing.T) {
 	}
 }
 
-// A command that cannot be admitted must not be started: without a durable
-// admission there is no owner, no fencing token, and nothing that would ever
-// drive the run to a terminal state.
-func TestStartTurnRequiresSessionRuntime(t *testing.T) {
-	service := wireComponents(&Service{})
-	if _, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
-		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
-	}); err == nil {
-		t.Fatal("StartTurn() error = nil, want an unconfigured session runtime error")
-	}
-}
-
 // A chat turn's events reach its caller with the run's identity and a counter
 // that starts at one and never repeats, and the turn ends with the terminal
 // record its run wrote.

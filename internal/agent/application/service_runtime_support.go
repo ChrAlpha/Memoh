@@ -579,27 +579,3 @@ func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runr
 	}
 	return nil
 }
-
-// cancelPendingRuntimeApprovals closes the residual approval window when a turn
-// dies abnormally: any pending row for the session belonged to that turn (the
-// pool's turn slot guarantees one turn per session), and its waiter is gone -
-// left pending, the persisted card would stay actionable forever and a late
-// approve would flip a row nobody executes.
-func (s *Service) cancelPendingRuntimeApprovals(ctx context.Context, req runreq.ChatRequest, reason string) {
-	if s == nil || s.toolApproval == nil {
-		return
-	}
-	cancelled, err := s.toolApproval.CancelPendingForSession(ctx, req.BotID, req.ThreadID, reason)
-	if err != nil {
-		s.logger.WarnContext(ctx, "cancel pending External Agent approvals failed",
-			slog.String("bot_id", req.BotID),
-			slog.String("session_id", req.ThreadID),
-			slog.Any("error", err))
-		return
-	}
-	if len(cancelled) > 0 {
-		s.logger.InfoContext(ctx, "cancelled pending External Agent approvals with their turn",
-			slog.String("session_id", req.ThreadID),
-			slog.Int("count", len(cancelled)))
-	}
-}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -52,8 +53,8 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 				}
 				inputs := &agenttest.UserInput{Target: request, Resolved: resolved}
 				var logs bytes.Buffer
-				service := wireComponents(&Service{
-					decisionRuntime: manager, userInput: inputs, logger: slog.New(slog.NewTextHandler(&logs, nil)),
+				service := useDecisions(wireComponents(&Service{
+					decisionRuntime: manager, logger: slog.New(slog.NewTextHandler(&logs, nil)),
 					botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{handle.BotID + ":" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true}},
 					sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 						return session.Thread{
@@ -61,8 +62,8 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 							RuntimeMetadata: map[string]any{"runtime_owner_account_id": testACPUserInputOwnerID},
 						}, nil
 					}},
-				})
-				payload, err := json.Marshal(UserInputResponseInput{
+				}), func(d *decide.Deps) { d.UserInput = inputs })
+				payload, err := json.Marshal(decide.UserInputResponseInput{
 					ActorUserID: testACPUserInputOwnerID, Canceled: canceled,
 					Answers: []userinput.QuestionAnswer{{QuestionID: "q", Text: "answer"}},
 				})

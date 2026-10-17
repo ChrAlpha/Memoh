@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drivetest"
@@ -340,7 +341,7 @@ func spanTestEntries() []spanTestEntry {
 		{name: "session_resume", start: func(t *testing.T, service *Service) (func(), func()) {
 			const teamID = "00000000-0000-0000-0000-000000000001"
 			setAllowedTeam(service, teamID)
-			raw, err := json.Marshal(map[string]any{"resume": resumeContext{
+			raw, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 				Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
 			}})
 			if err != nil {

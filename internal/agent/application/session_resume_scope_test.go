@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -159,7 +160,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 				t.Fatal(err)
 			}
 		}
-		raw, _ := json.Marshal(map[string]any{"resume": resumeContext{Version: 1, ChatID: botID, Query: "resume scoped task"}})
+		raw, _ := json.Marshal(map[string]any{"resume": admit.ResumeContext{Version: 1, ChatID: botID, Query: "resume scoped task"}})
 		if _, err := admin.Exec(ctx, `INSERT INTO session_runs(team_id,run_id,bot_id,session_id,invocation_id,turn_id,turn_position,state,input_json,input_fingerprint,error_code)
    VALUES($1,$2,$3,$4,'original',$5,1,'lost',$6,'fixture','session_runtime.interrupted')`, teamID, uuid.NewString(), botID, sessionID, uuid.NewString(), raw); err != nil {
 			t.Fatal(err)

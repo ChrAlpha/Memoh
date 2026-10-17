@@ -9,6 +9,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -28,7 +29,7 @@ func TestExternalPromptInputCarriesWhetherTheRunCanAskTheUser(t *testing.T) {
 	newExecutor := func(unattended bool, hasInputPort bool) *externalExecutor {
 		svc := wireComponents(&Service{})
 		if hasInputPort {
-			svc.userInput = &agenttest.UserInput{}
+			useDecisions(svc, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 		}
 		return &externalExecutor{service: svc, unattended: unattended}
 	}
@@ -128,17 +129,17 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 		t.Run(entry.name, func(t *testing.T) {
 			messages := &agenttest.RecordingMessages{}
 			lifecycles := &agenttest.RecordingLifecycleStore{}
-			memory := &storeRoundMemoryProvider{
-				beforeChat: &memprovider.BeforeChatResult{
+			memory := &agenttest.MemoryProvider{
+				BeforeChat: &memprovider.BeforeChatResult{
 					ContextText: "remembered fact", RetrievalMode: "graph", ResultCount: 1, ResultRefs: []string{"memory-1"},
 				},
-				afterChat: make(chan memprovider.AfterChatRequest, 1),
+				AfterChat: make(chan memprovider.AfterChatRequest, 1),
 			}
 			registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-			registry.Register(storeRoundMemoryProviderID, memory)
+			registry.Register(agenttest.MemoryProviderID, memory)
 			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, lifecycles)
-			service.memoryRegistry = registry
-			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil)
+			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil)
+			withMemory(service, registry)
 			rewireComponents(service)
 			service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 			rewireRun(service)

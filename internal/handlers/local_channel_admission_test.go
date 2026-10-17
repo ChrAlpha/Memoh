@@ -479,30 +479,6 @@ func TestAdmitWSRunRejectionsCarryStableCodes(t *testing.T) {
 	}
 }
 
-// Without durable admission there is no single-active-run guarantee to fall back
-// on, so the turn is refused rather than run unprotected.
-func TestAdmitWSRunRequiresConfiguredRuntime(t *testing.T) {
-	t.Parallel()
-
-	writer := &wsWriter{ch: make(chan []byte, 4), stop: make(chan struct{}), done: make(chan struct{})}
-	handler := &LocalChannelHandler{
-		logger:       slog.New(slog.DiscardHandler),
-		agentService: &application.Service{},
-	}
-	released := false
-	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, "", wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, nil, func() { released = true })
-	if admitted != nil {
-		t.Fatalf("admission = %+v, want a refusal", admitted)
-	}
-	if !released {
-		t.Fatal("a refused admission kept what the handler reserved for it")
-	}
-	var frame map[string]any
-	if err := json.Unmarshal(<-writer.ch, &frame); err != nil || frame["type"] != "error" {
-		t.Fatalf("frame = %#v, %v; want one error", frame, err)
-	}
-}
-
 // A run that fails before its context was assembled still leaves a context
 // lifecycle row once its terminal state is written, and the row keeps the
 // failure's text private.

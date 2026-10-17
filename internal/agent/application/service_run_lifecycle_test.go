@@ -9,73 +9,10 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
-	"github.com/felinics/memoh/internal/agent/outcome"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/apperror"
 )
-
-func TestTurnRunFinisherCreatesFallbackOnlyAfterFencedTerminalFinish(t *testing.T) {
-	abortedCtx, cancel := context.WithCancelCause(context.Background())
-	cancel(context.Canceled)
-	tests := []struct {
-		name        string
-		ctx         context.Context
-		status      string
-		cause       error
-		finishErr   error
-		wantCreates int
-		wantStatus  string
-	}{
-		{
-			name:        "pre-context failure",
-			ctx:         context.Background(),
-			status:      sessionruntime.RunStatusErrored,
-			cause:       apperror.New(apperror.CodeWorkspaceUnreachable, nil),
-			wantCreates: 1,
-			wantStatus:  lifecycle.StatusFailedProvider,
-		},
-		{name: "decision pause", ctx: context.Background()},
-		{
-			name:        "explicit abort",
-			ctx:         abortedCtx,
-			status:      sessionruntime.RunStatusAborted,
-			wantCreates: 1,
-			wantStatus:  lifecycle.StatusAborted,
-		},
-		{
-			name:      "lost fence",
-			ctx:       context.Background(),
-			status:    sessionruntime.RunStatusErrored,
-			cause:     errors.New("late failure"),
-			finishErr: sessionruntime.ErrRunOwnershipLost,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			admitter := &agenttest.LifecycleAdmitter{FinishErr: tt.finishErr}
-			store := &agenttest.RecordingLifecycleStore{}
-			service := wireComponents(&Service{sessionRuntime: admitter, lifecycle: lifecycle.New(lifecycle.Deps{Store: store})})
-			admission := lifecycleTestAdmission()
-
-			service.turnRunFinisher(tt.ctx, admission, sessionmode.Chat)(outcome.RunOutcome{Status: tt.status, Cause: tt.cause})
-
-			if len(admitter.Finishes) != 1 {
-				t.Fatalf("FinishRun calls = %d, want 1", len(admitter.Finishes))
-			}
-			if tt.name == "pre-context failure" && admitter.Finishes[0].Message != string(apperror.CodeWorkspaceUnreachable) {
-				t.Fatalf("stable finish code = %q", admitter.Finishes[0].Message)
-			}
-			if len(store.Creates) != tt.wantCreates {
-				t.Fatalf("lifecycle creates = %d, want %d", len(store.Creates), tt.wantCreates)
-			}
-			if tt.wantCreates > 0 && store.Creates[0].Status != tt.wantStatus {
-				t.Fatalf("lifecycle status = %q, want %q", store.Creates[0].Status, tt.wantStatus)
-			}
-		})
-	}
-}
 
 func TestSubagentTerminalPersistsSnapshotAndPreContextFallbackExactlyOnce(t *testing.T) {
 	tests := []struct {

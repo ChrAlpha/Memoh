@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -19,38 +20,17 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/runtimefence"
 	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 )
 
-type finishDecisionQueries struct {
-	dbstore.Queries
-	row      sqlc.UserInputRequest
-	approval sqlc.ToolApprovalRequest
-}
-
-func (q *finishDecisionQueries) ListToolApprovalsByRun(_ context.Context, runID pgtype.UUID) ([]sqlc.ToolApprovalRequest, error) {
-	if q.approval.RunID == runID {
-		return []sqlc.ToolApprovalRequest{q.approval}, nil
-	}
-	return nil, nil
-}
-
-func (q *finishDecisionQueries) ListUserInputsByRun(_ context.Context, runID pgtype.UUID) ([]sqlc.UserInputRequest, error) {
-	if q.row.RunID == runID {
-		return []sqlc.UserInputRequest{q.row}, nil
-	}
-	return nil, nil
-}
-
 func (f *finishingInputService) Get(context.Context, string) (userinput.Request, error) {
-	return userinput.Request{ID: f.q.row.ID.String(), Status: f.q.row.Status}, nil
+	return userinput.Request{ID: f.q.Row.ID.String(), Status: f.q.Row.Status}, nil
 }
 
 type finishingInputService struct {
 	agenttest.UserInput
-	q         *finishDecisionQueries
+	q         *agenttest.DecisionQueries
 	wantFence int64
 	t         *testing.T
 }
@@ -61,7 +41,7 @@ func (f *finishingInputService) Cancel(ctx context.Context, input userinput.Canc
 		f.t.Fatalf("cancel received wrong fence: %#v", fence)
 	}
 	f.CancelCalls++
-	f.q.row.Status = userinput.StatusCanceled
+	f.q.Row.Status = userinput.StatusCanceled
 	return userinput.Request{ID: input.RequestID, Status: userinput.StatusCanceled}, nil
 }
 
@@ -69,15 +49,15 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 	for _, surface := range []string{"web", "channel"} {
 		t.Run(surface, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
-			q := &finishDecisionQueries{row: sqlc.UserInputRequest{
+			q := &agenttest.DecisionQueries{Row: sqlc.UserInputRequest{
 				ID:    db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"),
 				BotID: db.ParseUUIDOrEmpty(handle.BotID), SessionID: db.ParseUUIDOrEmpty(handle.SessionID),
 				RunID: db.ParseUUIDOrEmpty(handle.RunID), Status: userinput.StatusPending,
 				RuntimeFencingToken: pgtype.Int8{Int64: handle.FencingToken, Valid: true},
 			}}
 			input := &finishingInputService{q: q, wantFence: handle.FencingToken, t: t}
-			service := wireComponents(&Service{queries: q, userInput: input, decisionRuntime: manager, abortRuntime: manager, allowedTeam: "team-1"})
-			manager.SetDecisionFinalizer(service.finalizeRuntimeDecisions)
+			service := useDecisions(wireComponents(&Service{queries: q, decisionRuntime: manager, abortRuntime: manager, allowedTeam: "team-1"}), func(d *decide.Deps) { d.UserInput = input })
+			manager.SetDecisionFinalizer(service.decider.FinalizeRuntimeDecisions)
 			manager.SetCommandHandler(func(context.Context, sessionruntime.Command) error {
 				t.Error("stop must not resume the model")
 				return nil
@@ -89,11 +69,11 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 			} else {
 				stopped, err = service.StopTurn(context.Background(), turn.StopCommand{TeamID: "team-1", BotID: handle.BotID, ThreadID: handle.SessionID})
 			}
-			if err != nil || !stopped || input.CancelCalls != 1 || q.row.Status != userinput.StatusCanceled {
-				t.Fatalf("stop = %v, %v; cancel calls=%d status=%s", stopped, err, input.CancelCalls, q.row.Status)
+			if err != nil || !stopped || input.CancelCalls != 1 || q.Row.Status != userinput.StatusCanceled {
+				t.Fatalf("stop = %v, %v; cancel calls=%d status=%s", stopped, err, input.CancelCalls, q.Row.Status)
 			}
 			// After ownership is released, replay may not publish through the old handle.
-			if err := service.finalizeRuntimeDecisions(context.Background(), handle); !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.CancelCalls != 1 {
+			if err := service.decider.FinalizeRuntimeDecisions(context.Background(), handle); !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.CancelCalls != 1 {
 				t.Fatalf("cleanup replay: %v, calls=%d", err, input.CancelCalls)
 			}
 			// The runtime must release the slot as well as the decision row.
@@ -102,23 +82,6 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 				t.Fatalf("next run blocked: %v", err)
 			}
 		})
-	}
-}
-
-func TestRunDecisionCleanupRejectsSuccessorFence(t *testing.T) {
-	q := &finishDecisionQueries{row: sqlc.UserInputRequest{
-		ID:    db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"),
-		BotID: db.ParseUUIDOrEmpty(agenttest.LifecycleBotID), SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
-		RunID: db.ParseUUIDOrEmpty(agenttest.LifecycleRunID), Status: userinput.StatusPending,
-		RuntimeFencingToken: pgtype.Int8{Int64: 8, Valid: true},
-	}}
-	input := &agenttest.UserInput{}
-	s := wireComponents(&Service{queries: q, userInput: input})
-	err := s.finalizeRuntimeDecisions(context.Background(), sessionruntime.RunHandle{
-		BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 7,
-	})
-	if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.CancelCalls != 0 {
-		t.Fatalf("successor decision changed: %v, calls=%d", err, input.CancelCalls)
 	}
 }
 
@@ -173,10 +136,6 @@ func TestDecisionCleanupFailureKeepsRunUntilRetry(t *testing.T) {
 	t.Fatal("retry did not finish the run after cleanup recovered")
 }
 
-func (q *finishDecisionQueries) GetToolApprovalRequest(context.Context, pgtype.UUID) (sqlc.ToolApprovalRequest, error) {
-	return q.approval, nil
-}
-
 func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T) {
 	for _, failPublish := range []bool{false, true} {
 		name := "delivered"
@@ -187,19 +146,19 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 			backend := &failNextRuntimeDecisionBackend{MemoryBackend: sessionruntime.NewMemoryBackend(), err: errors.New("projection unavailable")}
 			manager, handle := newWaitingDecisionRuntime(t, backend)
 			manager.MarkInlineDecisionRun(handle.BotID, handle.SessionID, handle.RunID)
-			q := &finishDecisionQueries{row: sqlc.UserInputRequest{
+			q := &agenttest.DecisionQueries{Row: sqlc.UserInputRequest{
 				ID:    db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"),
 				BotID: db.ParseUUIDOrEmpty(handle.BotID), SessionID: db.ParseUUIDOrEmpty(handle.SessionID), RunID: db.ParseUUIDOrEmpty(handle.RunID),
 				Status: userinput.StatusSubmitted, RuntimeFencingToken: pgtype.Int8{Int64: handle.FencingToken, Valid: true},
-			}, approval: sqlc.ToolApprovalRequest{
+			}, Approval: sqlc.ToolApprovalRequest{
 				ID:    db.ParseUUIDOrEmpty("66666666-6666-4666-8666-666666666666"),
 				BotID: db.ParseUUIDOrEmpty(handle.BotID), SessionID: db.ParseUUIDOrEmpty(handle.SessionID), RunID: db.ParseUUIDOrEmpty(handle.RunID),
 				Status: toolapproval.StatusRejected, RuntimeFencingToken: pgtype.Int8{Int64: handle.FencingToken, Valid: true},
 				ToolCallID: "approval-call", ToolName: "exec", ToolInput: []byte(`{"command":"pwd"}`),
 			}}
-			input := &agenttest.UserInput{Target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted, ToolCallID: "input-call", ToolName: "ask_user", Result: map[string]any{"answers": []any{map[string]any{"question_id": "q1", "text": "chosen answer"}}}}}
-			service := wireComponents(&Service{queries: q, userInput: input, toolApproval: toolapproval.NewService(nil, q, nil), decisionRuntime: manager})
-			if _, err := manager.HandleAgentEvent(t.Context(), handle, native.StreamEvent{Type: native.EventToolApprovalRequest, ApprovalID: q.approval.ID.String(), ToolCallID: "approval-call", ToolName: "exec", Status: "pending"}); err != nil {
+			input := &agenttest.UserInput{Target: userinput.Request{ID: q.Row.ID.String(), Status: userinput.StatusSubmitted, ToolCallID: "input-call", ToolName: "ask_user", Result: map[string]any{"answers": []any{map[string]any{"question_id": "q1", "text": "chosen answer"}}}}}
+			service := useDecisions(wireComponents(&Service{queries: q, decisionRuntime: manager}), func(d *decide.Deps) { d.UserInput = input; d.ToolApproval = toolapproval.NewService(nil, q, nil) })
+			if _, err := manager.HandleAgentEvent(t.Context(), handle, native.StreamEvent{Type: native.EventToolApprovalRequest, ApprovalID: q.Approval.ID.String(), ToolCallID: "approval-call", ToolName: "exec", Status: "pending"}); err != nil {
 				t.Fatal(err)
 			}
 			// Close dropped both decision notifications; the application still emits
@@ -231,7 +190,7 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 				if calls.Add(1) == 1 && failPublish {
 					backend.failNext.Store(true)
 				}
-				return service.finalizeRuntimeDecisions(ctx, h)
+				return service.decider.FinalizeRuntimeDecisions(ctx, h)
 			})
 			_, err := manager.FinishRun(t.Context(), handle, "")
 			if failPublish && !errors.Is(err, backend.err) {
@@ -252,10 +211,10 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 					}
 					approvalSeen, inputSeen := false, false
 					for _, msg := range snap.CurrentRunView.Messages {
-						if msg.Approval != nil && msg.Approval.ApprovalID == q.approval.ID.String() {
+						if msg.Approval != nil && msg.Approval.ApprovalID == q.Approval.ID.String() {
 							approvalSeen = msg.Approval.Status == toolapproval.StatusRejected && !msg.Approval.PendingAlive
 						}
-						if msg.UserInput != nil && msg.UserInput.UserInputID == q.row.ID.String() {
+						if msg.UserInput != nil && msg.UserInput.UserInputID == q.Row.ID.String() {
 							inputSeen = msg.UserInput.Status == userinput.StatusSubmitted && !msg.UserInput.CanRespond && len(msg.UserInput.Answers) == 1
 						}
 					}
@@ -279,43 +238,5 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 				t.Fatalf("next run blocked: %v", err)
 			}
 		})
-	}
-}
-
-func TestRunDecisionFinishFenceRules(t *testing.T) {
-	for _, tt := range []struct {
-		name, status string
-		fence        int64
-		wantLost     bool
-	}{
-		{"old_terminal", userinput.StatusSubmitted, 6, false},
-		{"successor_terminal", userinput.StatusSubmitted, 8, true},
-		{"old_pending", userinput.StatusPending, 6, true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			q := &finishDecisionQueries{row: sqlc.UserInputRequest{ID: db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"), BotID: db.ParseUUIDOrEmpty(agenttest.LifecycleBotID), SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID), RunID: db.ParseUUIDOrEmpty(agenttest.LifecycleRunID), Status: tt.status, RuntimeFencingToken: pgtype.Int8{Int64: tt.fence, Valid: true}}}
-			input := &agenttest.UserInput{Target: userinput.Request{ID: q.row.ID.String(), Status: tt.status}}
-			service := wireComponents(&Service{queries: q, userInput: input})
-			err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 7})
-			if errors.Is(err, sessionruntime.ErrRunOwnershipLost) != tt.wantLost || (err != nil && !tt.wantLost) || input.CancelCalls != 0 {
-				t.Fatalf("fence result: %v, mutations=%d", err, input.CancelCalls)
-			}
-		})
-	}
-}
-
-func TestFinishRereadsConcurrentUserDecision(t *testing.T) {
-	q := &finishDecisionQueries{row: sqlc.UserInputRequest{ID: db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"), BotID: db.ParseUUIDOrEmpty(agenttest.LifecycleBotID), SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID), RunID: db.ParseUUIDOrEmpty(agenttest.LifecycleRunID), Status: userinput.StatusPending, RuntimeFencingToken: pgtype.Int8{Int64: 7, Valid: true}}}
-	input := &agenttest.UserInput{CancelErr: userinput.ErrAlreadyDecided, Target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted}}
-	service := wireComponents(&Service{queries: q, userInput: input})
-	if err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 7}); err != nil {
-		t.Fatal(err)
-	}
-	if input.CancelCalls != 1 {
-		t.Fatal("pending row was not resolved")
-	}
-	input.Target.Status = userinput.StatusPending
-	if err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 7}); err == nil {
-		t.Fatal("unresolved decision allowed finish")
 	}
 }

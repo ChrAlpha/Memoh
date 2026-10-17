@@ -49,6 +49,6 @@ func (s *Service) prepareContinuationRunConfig(
 	// A question asked with nobody receiving the run's events could never be
 	// answered, so asking one is only offered to a run someone follows live.
 	base.LiveToolStream = live
-	base.CanRequestUserInput = live && s.userInput != nil
+	base.CanRequestUserInput = live && s.decider.CanDeliverUserInputStream()
 	return s.prepareRunConfig(ctx, base), nil
 }

@@ -309,12 +309,12 @@ func assertStrings(t *testing.T, what string, got, want []string) {
 	}
 }
 
-// Scenario 10 through turnRunFinisher: whatever the cause, only its catalogued
+// Scenario 10 through FinishRun: whatever the cause, only its catalogued
 // code reaches the runtime.
 //
 // Current behavior: a cause without a code finishes as runtime_run_failed; an
 // External Agent cause finishes with its code.
-func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
+func TestCharacterizeFinishRunCodes_CurrentBehavior(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
@@ -348,7 +348,7 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 			if err != nil {
 				t.Fatalf("admit: %v", err)
 			}
-			service.turnRunFinisher(context.Background(), admission, sessionmode.Chat)(outcome.RunOutcome{Status: tc.status, Cause: tc.cause})
+			service.driver.FinishRun(context.Background(), drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Chat}, drive.FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
 			run, err := runs.Get(context.Background(), admission.RunID)
 			if err != nil {
 				t.Fatalf("load run: %v", err)

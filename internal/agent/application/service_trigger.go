@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -61,7 +62,10 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 			},
 		}
 	}
-	runCtx, admission, _, release, err := s.admitTriggeredRun(ctx, sessionmode.Schedule, botID, payload.SessionID, scheduleInvocationID(payload), submission, viewFn, outcome.ErrRunStopped)
+	runCtx, admission, release, err := s.admit.Triggered(ctx, admit.Trigger{
+		BotID: botID, ThreadID: payload.SessionID, InvocationID: scheduleInvocationID(payload),
+		Submission: submission, View: viewFn, StopCause: outcome.ErrRunStopped,
+	})
 	if errors.Is(err, sessionruntime.ErrSessionBusy) {
 		// A fire that cannot take the thread's slot has no value once the next
 		// one is due, so it is dropped rather than retried here.
@@ -160,7 +164,7 @@ func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayl
 		// External schedules identify the triggering user as the channel
 		// identity, matching the native path (nativeSchedulePlan's cfg.Identity).
 		req.SourceChannelIdentityID = payload.OwnerUserID
-		if err := s.recordRunResumeContext(setupCtx, req); err != nil {
+		if err := s.admit.RecordResume(setupCtx, req); err != nil {
 			return drive.RunPlan{}, err
 		}
 		if dispatch.kind == dispatchExternal {
@@ -208,7 +212,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 	if committer != nil {
 		committer.BindContinuation(&cfg)
 	}
-	s.bindStepCompaction(&cfg, req, committer)
+	s.compact.BindStep(&cfg, req, committer)
 	return drive.RunPlan{
 		Exec: &nativeExecutor{
 			agent:     s.agent,

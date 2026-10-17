@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -15,6 +16,11 @@ import (
 )
 
 var _ turn.Service = (*Service)(nil)
+
+// AdvancePlainTextUserInput answers a pending question with a plain-text reply.
+func (s *Service) AdvancePlainTextUserInput(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
+	return s.decider.AdvancePlainTextUserInput(ctx, input)
+}
 
 // StartTurn validates the command, admits it durably, starts the underlying
 // stream, and returns a handle whose Events/Errs mirror the application stream.
@@ -49,12 +55,12 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	cancel := func() { stopRun(outcome.ErrRunStopped) }
 
 	injectCh := make(chan turn.InjectMessage, 16)
-	admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, injectCh)
+	admission, err := s.admit.Turn(runCtx, cmd, cancel, stopRun, injectCh)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	runCtx = s.withAdmissionRuntimeFence(runCtx, admission)
+	runCtx = s.admit.Fence(runCtx, admission)
 
 	events := make(chan turn.Event, 16)
 	errs := make(chan error, 1)

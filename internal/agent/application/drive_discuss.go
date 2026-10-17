@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -30,11 +30,6 @@ import (
 // failed or lost run has not, so its batch stays pending and is answered with
 // the next external input.
 var discussCoverStates = []string{string(ledger.StateCompleted)}
-
-// discussCredentialTTL is the lifetime of the credentials a discuss admission
-// signs. It is the inbound path's, so a discuss run holds the same credentials
-// however it was started.
-const discussCredentialTTL = 5 * time.Minute
 
 // DiscussAdmission is what one CheckAndAdmitDiscuss call did.
 type DiscussAdmission int
@@ -166,7 +161,10 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	if err != nil {
 		return 0, nil, err
 	}
-	runCtx, admission, finish, release, err := s.admitTriggeredRun(ctx, sessionmode.Discuss, botID, sessionID, discussInvocationID(sessionID, hw), payload, nil, outcome.ErrRunStopped)
+	runCtx, admission, release, err := s.admit.Triggered(ctx, admit.Trigger{
+		BotID: botID, ThreadID: sessionID, InvocationID: discussInvocationID(sessionID, hw),
+		Submission: payload, StopCause: outcome.ErrRunStopped,
+	})
 	if err != nil {
 		endActiveTurn()
 		switch {
@@ -183,13 +181,16 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	// session's slot, this read is current, and a batch it already covers ends
 	// here instead of being answered twice.
 	current, err := s.discussCover(runCtx, pgSessionID)
+	discussRun := drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Discuss}
 	if err != nil {
-		finish(outcome.RunOutcome{Cause: err})
+		s.driver.FinishRun(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Cause: err}.Resolve(runCtx)))
+		release()
 		endActiveTurn()
 		return 0, nil, err
 	}
 	if current >= hw {
-		finish(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted})
+		s.driver.FinishRun(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted}))
+		release()
 		endActiveTurn()
 		return DiscussNothingPending, nil, nil
 	}
@@ -270,7 +271,7 @@ func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, p
 	if sess.RouteID.Valid {
 		routeID = sess.RouteID.String()
 	}
-	chatToken, sessionBearer, err := auth.IssueRouteCredentials(auth.RouteCredentials{
+	chatToken, sessionBearer, err := s.signer.IssueRoute(auth.RouteCredentials{
 		BotID:              botID,
 		ChatID:             botID,
 		RouteID:            routeID,
@@ -280,7 +281,7 @@ func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, p
 		ExternalRuntime:    externalRuntime,
 		RuntimeOwnerUserID: sess.RuntimeOwnerAccountID,
 		BotOwnerUserID:     bot.OwnerUserID.String(),
-	}, s.resumeSecret, discussCredentialTTL)
+	})
 	if err != nil {
 		return runreq.ChatRequest{}, fmt.Errorf("issue discuss credentials: %w", err)
 	}

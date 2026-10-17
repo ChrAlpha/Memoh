@@ -48,10 +48,6 @@ type Termination struct {
 	args map[string]string
 	// lifecycleCause is what the run's context lifecycle records.
 	lifecycleCause error
-	// stageMinimal says the run has no plan lifecycle of its own, so a
-	// content-light candidate is staged before the write and the fallback row
-	// is written after it only when staging was not possible.
-	stageMinimal bool
 	// lost says another owner names the run, so nothing is written for it.
 	lost bool
 }
@@ -88,7 +84,6 @@ func FromOutcome(ended outcome.RunOutcome) Termination {
 		result:         ended,
 		code:           ended.ErrorCode(),
 		lifecycleCause: cause,
-		stageMinimal:   true,
 	}
 }
 
@@ -99,31 +94,34 @@ func FromOutcome(ended outcome.RunOutcome) Termination {
 // that failed, which it records as an errlog event rather than raising,
 // because by the time it runs there is no caller left who could act on it.
 //
-// The lifecycle write is part of this, not a callback the entry supplies: it
-// has to be staged before the terminal write and completed after it, and two
-// callers ordering that themselves is how the two orders drift apart.
+// The lifecycle write is part of this, not a callback the entry supplies. A
+// content-light candidate is staged before the terminal write, so the terminal
+// observer that runs inside the write settles it; a candidate the run's plan
+// staged already is better and stays. A run that cannot stage one, because it
+// has no fence, gets its row written after the terminal write.
 func (d *Driver) FinishRun(ctx context.Context, run AdmittedRun, t Termination) sessionruntime.TerminalRun {
 	if d.runtime == nil || run.Handle.FencingToken <= 0 || t.lost {
 		return sessionruntime.TerminalRun{}
 	}
 	handle := run.Handle
+	status := t.result.Status
+	// A run whose own lifecycle terminal was never written (it failed before
+	// the plan had one) still needs a row: the diagnostic table is how a
+	// finished run that wrote no context is told apart from one that wrote
+	// nothing at all. A parked run has ended nothing and needs none.
+	needsRow := status != "" || t.lifecycleCause != nil
 	staged := false
-	if t.stageMinimal {
+	if needsRow {
 		minimal := lifecycle.MinimalSnapshot()
 		staged = d.lifecycle.StageCandidate(ctx, handle.RunID, handle.BotID, handle.SessionID, &minimal, t.lifecycleCause, lifecycle.CandidateMinimal)
 	}
-	status := t.result.Status
 	writeCtx := outcome.WithRunOutcomeInMode(context.WithoutCancel(ctx), handle.RunID, t.result, run.Mode)
 	writeCtx, cancel := context.WithTimeout(writeCtx, TerminalWriteTimeout)
 	defer cancel()
 	terminal, err := d.runtime.FinishRunWithFailure(writeCtx, handle, status, t.code, t.args)
 	switch {
 	case err == nil:
-		if !staged && (status != "" || t.lifecycleCause != nil) {
-			// A run whose own lifecycle terminal was never written (it failed
-			// before the plan had one) still needs a row: the diagnostic table
-			// is how a finished run that wrote no context is told apart from
-			// one that wrote nothing at all.
+		if needsRow && !staged {
 			d.lifecycle.EnsureTerminal(ctx, handle.RunID, handle.BotID, handle.SessionID, t.lifecycleCause)
 		}
 		return terminal

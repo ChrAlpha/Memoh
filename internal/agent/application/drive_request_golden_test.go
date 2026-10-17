@@ -16,7 +16,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
@@ -125,7 +127,7 @@ func newDriveRequestFixture(t *testing.T) (directLifecycleFixture, *driveRequest
 		tools.NewAskUserProvider(nil),
 	})
 	fixture.service.agent = agent
-	fixture.service.userInput = &agenttest.UserInput{}
+	useDecisions(fixture.service, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	// The run offers tools only to a model that can call them.
 	queries := fixture.service.queries.(*directLifecycleQueries)
 	for key, model := range queries.models {
@@ -465,7 +467,7 @@ func driveResume(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	setAllowedTeam(fixture.service, driveTeamID)
-	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
+	raw, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 		Version:           1,
 		Query:             directLifecyclePrompt,
 		ChatID:            agenttest.LifecycleBotID,
@@ -567,14 +569,12 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 		ToolCallID: driveToolCallID, ToolName: "container_exec",
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 	}
-	input := ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
+	input := decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	result := sdk.ToolResultPart{
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
 	}
-	cont := fixture.service.toolApprovalContinuation(context.Background(), CommittedToolApprovalResponse{
-		request: approval, input: input, runID: agenttest.LifecycleRunID,
-	}, true)
+	cont := fixture.service.toolApprovalContinuation(context.Background(), decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, sessionruntime.RunHandle{}), true)
 	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
 		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
 	}
@@ -600,8 +600,8 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 		Result: map[string]any{"answers": []any{map[string]any{"text": "blue"}}},
 	}
-	fixture.service.userInput = &agenttest.UserInput{Target: answered, Resolved: answered}
-	committed, err := fixture.service.CommitUserInputResponse(context.Background(), UserInputResponseInput{
+	useDecisions(fixture.service, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{Target: answered, Resolved: answered} })
+	committed, err := fixture.service.decider.CommitUserInputResponse(context.Background(), decide.UserInputResponseInput{
 		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, UserInputID: answered.ID,
 	})
 	if err != nil {
@@ -679,7 +679,7 @@ func newDrivePromptFixture(t *testing.T) (*Service, *drivePromptRecorder) {
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	rewireRun(service)
-	service.userInput = &agenttest.UserInput{}
+	useDecisions(service, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	recorder := &drivePromptRecorder{}
 	registerExternalDrivers(service, recorder)
 	return service, recorder

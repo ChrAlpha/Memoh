@@ -259,3 +259,13 @@ func (s *Service) SubagentRunObserver(ctx context.Context) native.SpawnRunObserv
 		return observation
 	}
 }
+
+// SubagentStepCompactor is the between-calls compactor of a spawned run whose
+// steps SubagentStepCommit commits to its thread as they complete.
+func (s *Service) SubagentStepCompactor(ctx context.Context, run native.SpawnCompaction) native.StepContextCompactor {
+	handle, ok := SubagentRunHandleFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return s.compact.SubagentStep(run, handle.RunID)
+}

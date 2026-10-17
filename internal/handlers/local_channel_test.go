@@ -23,6 +23,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -775,7 +776,7 @@ func TestLocalChannelWSRoutesUserInputResponseByRunAndDecision(t *testing.T) {
 		if call.commandType != sessionruntime.CommandUserInputResponse || call.targetID != decisionID {
 			t.Fatalf("decision route = %#v", call)
 		}
-		var input application.UserInputResponseInput
+		var input decide.UserInputResponseInput
 		if err := json.Unmarshal(call.payload, &input); err != nil {
 			t.Fatalf("decode routed payload: %v", err)
 		}

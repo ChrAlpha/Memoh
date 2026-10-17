@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -153,7 +154,7 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 	// the continuation against, and what the intent was saved on.
 	interruptedID := uuid.NewString()
 	deadline := time.Now().Add(time.Minute)
-	intent, err := json.Marshal(map[string]any{"resume": resumeContext{
+	intent, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 		Version: 1, ChatID: botID, UserID: "im-user-1", Query: "finish the task", DeadlineAt: &deadline,
 	}})
 	if err != nil {

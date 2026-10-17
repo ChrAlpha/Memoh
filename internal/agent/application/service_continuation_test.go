@@ -10,11 +10,11 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
 
 type continuationTurnRequestResolverService struct {
@@ -48,7 +48,7 @@ func TestContinuationTurnRequestMessageIDUsesAdmittedTurn(t *testing.T) {
 func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *testing.T) {
 	t.Parallel()
 
-	resolver := wireComponents(&Service{userInput: &userinput.Service{}})
+	resolver := useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = &userinput.Service{} })
 	staleIndex := 0
 	staleMemoryIndex := 0
 	base := native.RunConfig{
@@ -124,21 +124,12 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 	}
 }
 
-func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) {
-	sentinel := errors.New("session unavailable")
-	service := wireComponents(&Service{queries: &agenttest.AbortedLifecycleQueries{Pending: true}, sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (sessionpkg.Thread, error) { return sessionpkg.Thread{}, sentinel }}})
-	got, err := service.PendingRuntimeDecisions(t.Context(), "00000000-0000-0000-0000-000000000001")
-	if !errors.Is(err, sentinel) || got != nil {
-		t.Fatalf("runtime lookup error treated as native: %v %v", got, err)
-	}
-}
-
 // A continuation offers ask_user, and streams tool progress, only to a run
 // someone follows live: a question nobody receives could never be answered.
 func TestPrepareContinuationRunConfigOffersQuestionsOnlyToALiveRun(t *testing.T) {
 	t.Parallel()
 
-	resolver := wireComponents(&Service{userInput: &agenttest.UserInput{}})
+	resolver := useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	for _, live := range []bool{true, false} {
 		got, err := resolver.prepareContinuationRunConfig(context.Background(), native.RunConfig{}, historyfrag.ScopeFallback{}, contextfrag.Scope{}, live)
 		if err != nil {

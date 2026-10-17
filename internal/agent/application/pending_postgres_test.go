@@ -711,7 +711,7 @@ func TestQueuedTurnIsSignedWhenItStartsNotWhenItWasQueued(t *testing.T) {
 	ctx := context.Background()
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
-	proc.svc.resumeSecret = "queue-test-secret"
+	useSecret(proc.svc, "queue-test-secret")
 	cmd := env.turnCommand("m1", "hello")
 	payload := queuedPayload(t, cmd, time.Now())
 	stored := turnwire.ParseQueuedInput(payload)

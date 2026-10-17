@@ -166,6 +166,10 @@ var applicationLayerDirs = []string{
 	"internal/agent/persist",
 	"internal/agent/drive",
 	"internal/agent/drivetest",
+	"internal/agent/memory",
+	"internal/agent/compact",
+	"internal/agent/decide",
+	"internal/agent/admit",
 	"internal/agent/agenttest",
 }
 

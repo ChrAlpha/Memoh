@@ -9,95 +9,31 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
-	"github.com/felinics/memoh/internal/runtimefence"
 )
 
-type resumeSaveQueries struct {
-	dbstore.Queries
-	saved sqlc.SaveSessionRunResumeContextParams
-	calls int
-}
-
-func (q *resumeSaveQueries) SaveSessionRunResumeContext(_ context.Context, arg sqlc.SaveSessionRunResumeContextParams) (int64, error) {
-	q.saved = arg
-	q.calls++
-	return 1, nil
-}
-
-func TestResumeContextPreservesDeadlineAndScopesWithoutCredentials(t *testing.T) {
-	secret := "resume-test-secret"
-	bearer, _, err := auth.GenerateToken("account", secret, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scoped, _, err := auth.GenerateChatToken(auth.ChatToken{BotID: "bot", ChatID: "chat", UserID: "sender", RouteID: "route"}, secret, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := &resumeSaveQueries{}
-	svc := wireComponents(&Service{queries: q, resumeSecret: secret})
-	deadline := time.Now().Add(time.Minute)
-	ctx, cancel := context.WithDeadline(runtimefence.WithContext(t.Context(), runtimefence.Fence{BotID: "bot", SessionID: "session", Token: 7}), deadline)
-	defer cancel()
-	req := runreq.ChatRequest{RunID: uuid.NewString(), UserID: "sender", ChatID: "chat", Token: "Bearer " + bearer, ChatToken: "Bearer " + scoped, Query: "do the work"}
-	if err := svc.recordRunResumeContext(ctx, req); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(q.saved.ResumeContext), bearer) || strings.Contains(string(q.saved.ResumeContext), scoped) || strings.Contains(string(q.saved.ResumeContext), secret) {
-		t.Fatal("credential persisted")
-	}
-	var saved resumeContext
-	if err := json.Unmarshal(q.saved.ResumeContext, &saved); err != nil {
-		t.Fatal(err)
-	}
-	if saved.DeadlineAt == nil || !saved.DeadlineAt.Equal(deadline) || saved.ChatClaims["route_id"] != "route" || saved.TokenClaims["user_id"] != "account" {
-		t.Fatalf("saved context=%+v", saved)
-	}
-	req.ShutdownResume = true
-	if err := svc.recordRunResumeContext(ctx, req); err != nil {
-		t.Fatal(err)
-	}
-	if q.calls != 1 {
-		t.Fatal("resume rewrote the original recovery intent")
-	}
-}
-
-func TestResumeRejectsInvalidCredentialAndForeignBotScope(t *testing.T) {
-	s := wireComponents(&Service{resumeSecret: "resume-secret"})
-	token, _, err := auth.GenerateToken("account", "other-secret", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.resumeClaims(token); err == nil {
-		t.Fatal("accepted invalid signature")
-	}
+func TestResumeRenewalChecksScopeAndAuthorization(t *testing.T) {
+	s := wireComponents(&Service{signer: admit.NewSigner("resume-secret")})
 	if _, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"typ": "chat_route", "bot_id": "other", "chat_id": "chat"}); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
 		t.Fatalf("cross-bot credential = %v, want an unrecoverable intent", err)
 	}
 	if _, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"sub": "account"}); err == nil {
 		t.Fatal("renewed account without reauthorization")
 	}
-	token, err = s.renewResumeCredential(t.Context(), "bot", map[string]string{"typ": "chat_route", "bot_id": "bot", "chat_id": "chat", "route_id": "route", "user_id": "sender"})
-	if err != nil {
-		t.Fatal(err)
+	token, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"typ": "chat_route", "bot_id": "bot", "chat_id": "chat", "route_id": "route", "user_id": "sender"})
+	if err != nil || token == "" {
+		t.Fatalf("renewed chat-route credential = %q, %v", token, err)
 	}
-	parsed, err := jwt.Parse(strings.TrimPrefix(token, "Bearer "), func(_ *jwt.Token) (any, error) { return []byte(s.resumeSecret), nil }, jwt.WithValidMethods([]string{"HS256"}))
-	if err != nil || !parsed.Valid {
-		t.Fatal("renewed token invalid")
-	}
-	claims := parsed.Claims.(jwt.MapClaims)
-	if claims["route_id"] != "route" || claims["typ"] != "chat_route" {
-		t.Fatal("scope widened")
+	if got, err := s.renewResumeCredential(t.Context(), "bot", nil); got != "" || err != nil {
+		t.Fatalf("no claims = %q, %v, want nothing to renew", got, err)
 	}
 }
 
@@ -110,7 +46,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	service := fixture.fixture.service
 	setAllowedTeam(service, "00000000-0000-0000-0000-000000000001")
 	deadline := time.Now().Add(time.Minute)
-	data := resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
+	data := admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
 	raw, err := json.Marshal(map[string]any{"resume": data})
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +109,7 @@ func TestResumeWaitsForWorkspaceBeforeAdmission(t *testing.T) {
 	s, admitter := newAdmittedTurnTestService()
 	setAllowedTeam(s, "00000000-0000-0000-0000-000000000001")
 	s.resumeReady = func(context.Context, string, string) error { return errors.New("bridge not ready") }
-	raw, _ := json.Marshal(map[string]any{"resume": resumeContext{Version: 1, ChatID: "chat", Query: "work"}})
+	raw, _ := json.Marshal(map[string]any{"resume": admit.ResumeContext{Version: 1, ChatID: "chat", Query: "work"}})
 	done, err := s.resumeInterruptedSession(t.Context(), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"), InputJson: raw})
 	if err == nil || done != nil {
 		t.Fatal("unready workspace admitted")
@@ -222,17 +158,17 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 		return nil
 	}
 	future, past := time.Now().Add(time.Minute), time.Now().Add(-time.Second)
-	row := func(botID string, data resumeContext) sqlc.SessionRun {
+	row := func(botID string, data admit.ResumeContext) sqlc.SessionRun {
 		raw, err := json.Marshal(map[string]any{"resume": data})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(teamID), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(botID), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
 	}
-	expired := row(uuid.NewString(), resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "late", DeadlineAt: &past})
-	unsupported := row(uuid.NewString(), resumeContext{Version: 2, ChatID: agenttest.LifecycleBotID, Query: "future format"})
-	unready := row(unreadyBot, resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "wait", DeadlineAt: &future})
-	resumable := row(uuid.NewString(), resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "go on", DeadlineAt: &future})
+	expired := row(uuid.NewString(), admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "late", DeadlineAt: &past})
+	unsupported := row(uuid.NewString(), admit.ResumeContext{Version: 2, ChatID: agenttest.LifecycleBotID, Query: "future format"})
+	unready := row(unreadyBot, admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "wait", DeadlineAt: &future})
+	resumable := row(uuid.NewString(), admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "go on", DeadlineAt: &future})
 	// The resumable row runs the whole turn, so the store the fixture serves
 	// stays underneath the resume-specific reads this test added.
 	q := &retireResumeQueries{Queries: s.queries, rows: []sqlc.SessionRun{expired, unsupported, unready, resumable}}

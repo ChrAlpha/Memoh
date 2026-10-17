@@ -2,14 +2,18 @@ package drive
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // finishWrite is one terminal write the runtime was asked for.
@@ -106,5 +110,126 @@ func TestFinishRunWithoutARuntimeWritesNothing(t *testing.T) {
 	driver := newFinishDriver(nil)
 	if terminal := driver.FinishRun(context.Background(), admittedForFinish(1), fromEnd(outcome.EndCompleted, nil)); terminal.State != "" {
 		t.Fatalf("terminal = %+v, want none", terminal)
+	}
+}
+
+// observingRuntime ends runs the way the session runtime does: the terminal
+// observer settles the run's lifecycle row inside the write.
+type observingRuntime struct{ lifecycle *lifecycle.Recorder }
+
+func (r observingRuntime) FinishRunWithFailure(ctx context.Context, h sessionruntime.RunHandle, status, code string, _ map[string]string) (sessionruntime.TerminalRun, error) {
+	state := map[string]string{
+		sessionruntime.RunStatusCompleted: "completed",
+		sessionruntime.RunStatusAborted:   "aborted",
+		sessionruntime.RunStatusErrored:   "failed",
+	}[status]
+	terminal := sessionruntime.TerminalRun{RunID: h.RunID, BotID: h.BotID, SessionID: h.SessionID, FencingToken: h.FencingToken, State: state, ErrorCode: code, Applied: true}
+	r.lifecycle.ReconcileTerminal(ctx, terminal)
+	return terminal, nil
+}
+
+const (
+	fencedBotID     = "00000000-0000-0000-0000-0000000000b1"
+	fencedSessionID = "00000000-0000-0000-0000-0000000000c1"
+	fencedRunID     = "00000000-0000-0000-0000-0000000000d1"
+)
+
+func fencedFinishRun(recorder *lifecycle.Recorder) (*Driver, context.Context, AdmittedRun) {
+	d := New(Deps{Logger: slog.New(slog.DiscardHandler), Runtime: observingRuntime{recorder}, Lifecycle: recorder})
+	handle := sessionruntime.RunHandle{BotID: fencedBotID, SessionID: fencedSessionID, RunID: fencedRunID, FencingToken: 3}
+	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: fencedBotID, SessionID: fencedSessionID, Token: 3})
+	return d, ctx, AdmittedRun{Handle: handle, Mode: "chat"}
+}
+
+// A fenced run that failed before its plan had a lifecycle has its row when
+// FinishRun returns: the candidate is staged before the write, so the terminal
+// observer inside the write settles it. No reconcile pass runs.
+func TestFinishRunWritesTheLifecycleRowOfASetupFailureBeforeReturning(t *testing.T) {
+	t.Parallel()
+
+	store := &agenttest.RecordingLifecycleStore{}
+	recorder := lifecycle.New(lifecycle.Deps{Store: store, Logger: slog.New(slog.DiscardHandler)})
+	d, ctx, run := fencedFinishRun(recorder)
+
+	cause := apperror.New(apperror.CodeContextBudgetUnsatisfied, nil)
+	d.FinishRun(ctx, run, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: cause}))
+
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("lifecycle rows after FinishRun = %d, want 1 without a reconcile pass", len(store.TerminalUpserts))
+	}
+	if got := store.TerminalUpserts[0].Status; got != lifecycle.StatusFailedBudget {
+		t.Fatalf("lifecycle status = %q, want the cause's %q", got, lifecycle.StatusFailedBudget)
+	}
+}
+
+// What the plan staged is the complete candidate; the minimal one FinishRun
+// stages does not replace it.
+func TestFinishRunKeepsTheCandidateThePlanStaged(t *testing.T) {
+	t.Parallel()
+
+	store := &agenttest.RecordingLifecycleStore{}
+	recorder := lifecycle.New(lifecycle.Deps{Store: store, Logger: slog.New(slog.DiscardHandler)})
+	d, ctx, run := fencedFinishRun(recorder)
+
+	full := lifecycle.MinimalSnapshot()
+	full.Version = 7
+	recorder.PersistSnapshot(ctx, fencedRunID, fencedBotID, fencedSessionID, &full, nil, true)
+	d.FinishRun(ctx, run, fromEnd(outcome.EndCompleted, nil))
+
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("lifecycle rows = %d, want 1", len(store.TerminalUpserts))
+	}
+	var got contextfrag.LifecycleSnapshot
+	if err := json.Unmarshal(store.TerminalUpserts[0].Snapshot, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 7 {
+		t.Fatalf("lifecycle snapshot version = %d, want the plan's complete candidate (7)", got.Version)
+	}
+}
+
+// A run without a fence has nothing to stage; its row is written right after
+// the terminal write, and only for a run that ended.
+func TestFinishRunWritesTheLifecycleRowAfterTheWriteWhenThereIsNoFence(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		aborted    bool
+		admitter   *agenttest.LifecycleAdmitter
+		status     string
+		cause      error
+		wantStatus string
+		wantRows   int
+	}{
+		{"pre-context failure", false, &agenttest.LifecycleAdmitter{}, sessionruntime.RunStatusErrored, apperror.New(apperror.CodeWorkspaceUnreachable, nil), lifecycle.StatusFailedProvider, 1},
+		{"explicit abort", true, &agenttest.LifecycleAdmitter{}, sessionruntime.RunStatusAborted, nil, lifecycle.StatusAborted, 1},
+		{"decision pause", false, &agenttest.LifecycleAdmitter{}, "", nil, "", 0},
+		{"lost fence", false, &agenttest.LifecycleAdmitter{FinishErr: sessionruntime.ErrRunOwnershipLost}, sessionruntime.RunStatusErrored, errors.New("late failure"), "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &agenttest.RecordingLifecycleStore{}
+			d := New(Deps{Logger: slog.New(slog.DiscardHandler), Runtime: tc.admitter, Lifecycle: lifecycle.New(lifecycle.Deps{Store: store})})
+			run := AdmittedRun{Handle: sessionruntime.RunHandle{BotID: fencedBotID, SessionID: fencedSessionID, RunID: fencedRunID, FencingToken: 1}, Mode: "chat"}
+
+			ctx := context.Background()
+			if tc.aborted {
+				var cancel context.CancelCauseFunc
+				ctx, cancel = context.WithCancelCause(ctx)
+				cancel(context.Canceled)
+			}
+			d.FinishRun(ctx, run, FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
+
+			if len(tc.admitter.Finishes) != 1 {
+				t.Fatalf("terminal writes = %d, want 1", len(tc.admitter.Finishes))
+			}
+			if len(store.Creates) != tc.wantRows {
+				t.Fatalf("lifecycle creates = %d, want %d", len(store.Creates), tc.wantRows)
+			}
+			if tc.wantRows > 0 && store.Creates[0].Status != tc.wantStatus {
+				t.Fatalf("lifecycle status = %q, want %q", store.Creates[0].Status, tc.wantStatus)
+			}
+		})
 	}
 }

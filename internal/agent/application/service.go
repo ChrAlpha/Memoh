@@ -19,21 +19,24 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/botenv"
+	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -92,10 +95,6 @@ type workspaceTargetResolver interface {
 	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
 }
 
-type compactionRunner interface {
-	RunCompactionSync(context.Context, compaction.TriggerConfig) (compaction.Result, error)
-}
-
 // Service orchestrates chat with the internal agent.
 type Service struct {
 	activeTurns          runreq.ActiveTurnTracker
@@ -105,7 +104,8 @@ type Service struct {
 	lifecycle            *lifecycle.Recorder
 	persist              *persist.Writer
 	driver               *drive.Driver
-	resumeSecret         string
+	admit                *admit.Admitter
+	signer               *admit.Signer
 	teamScopes           runreq.TeamScopes
 	resumeReady          func(context.Context, string, string) error
 	resumeStop           context.CancelFunc
@@ -113,13 +113,11 @@ type Service struct {
 	agent                *native.Agent
 	modelsService        *models.Service
 	queries              dbstore.Queries
-	memoryRegistry       *memprovider.Registry
 	messageService       messagepkg.Service
 	settingsService      *settings.Service
 	accountService       *accounts.Service
 	sessionService       runreq.SessionService
 	externalDrivers      map[string]external.Driver
-	compactionService    compactionRunner
 	eventPublisher       messageevent.Publisher
 	skillLoader          SkillLoader
 	assetLoader          gatewayAssetLoader
@@ -129,19 +127,14 @@ type Service struct {
 	workspaceTargets     workspaceTargetResolver
 	workdirs             sessionWorkdirResolver
 	streamHTTPClient     *http.Client
-	compactionHTTPClient *http.Client
 	bgManager            *background.Manager
-	toolApproval         *toolapproval.Service
-	userInput            userInputService
-	memoryContextMu      sync.Mutex
-	memoryContextCache   *memprovider.MemoryContextCache
+	decider              *decide.Decider
+	memory               *memory.Keeper
+	compact              *compact.Compactor
 	starterPromptFlights singleflight.Group
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error)
-	sessionCompactionMu sync.Mutex
-	sessionCompactions  map[string]*sessionCompactionGate
-	memorySearchTimeout time.Duration
+	continueUserInputFn func(ctx context.Context, req userinput.Request, input decide.UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error)
 	logger              *slog.Logger
 	allowedTeam         string
 	sessionRuntime      runreq.TurnAdmitter
@@ -189,9 +182,9 @@ type Deps struct {
 	ToolApproval *toolapproval.Service
 	// UserInput stores and resolves user input decisions.
 	UserInput *userinput.Service
-	// ResumeSecret signs the credentials of runs the server starts itself and of
-	// resumed sessions.
-	ResumeSecret string
+	// RunCredentialSecret signs the credentials of runs the server starts itself
+	// and of resumed sessions.
+	RunCredentialSecret string
 
 	// Optional.
 
@@ -267,7 +260,7 @@ func (d Deps) validate() error {
 		{"WorkspaceTargets", d.WorkspaceTargets == nil},
 		{"ToolApproval", d.ToolApproval == nil},
 		{"UserInput", d.UserInput == nil},
-		{"ResumeSecret", d.ResumeSecret == ""},
+		{"RunCredentialSecret", d.RunCredentialSecret == ""},
 	}
 	for _, r := range required {
 		if r.missing {
@@ -300,15 +293,6 @@ func New(d Deps) (*Service, error) {
 	streamHTTPClient := &http.Client{
 		Transport: streamTransport,
 	}
-	// The summarizer sends one large cold prompt whose first byte routinely
-	// takes 60-93s upstream; the interactive 30s header deadline would kill
-	// every automatic pass while manual /compact (SDK default client) works.
-	compactionTransport := streamTransport.Clone()
-	compactionTransport.ResponseHeaderTimeout = 3 * time.Minute
-	compactionHTTPClient := &http.Client{
-		Transport: compactionTransport,
-		Timeout:   10 * time.Minute,
-	}
 
 	teamScopes := d.TeamScopes
 	if teamScopes == nil {
@@ -316,35 +300,40 @@ func New(d Deps) (*Service, error) {
 	}
 
 	service := &Service{
-		agent:                d.Agent,
-		modelsService:        d.Models,
-		queries:              d.Queries,
-		messageService:       d.Messages,
-		settingsService:      d.Settings,
-		accountService:       d.Accounts,
-		sessionService:       d.Sessions,
-		botPermissions:       d.BotPermissions,
-		workspaceTargets:     d.WorkspaceTargets,
-		toolApproval:         d.ToolApproval,
-		userInput:            d.UserInput,
-		resumeSecret:         d.ResumeSecret,
-		memoryRegistry:       d.Memory,
-		skillLoader:          d.Skills,
-		assetLoader:          d.Assets,
-		platformIdentities:   d.PlatformIdentities,
-		workdirs:             d.Workdirs,
-		bgManager:            d.Background,
-		eventPublisher:       d.Events,
-		externalDrivers:      externalDriverMap(d.ExternalRuntimes...),
-		resumeReady:          d.ResumeReadiness,
-		teamScopes:           teamScopes,
-		allowedTeam:          d.AllowedTeam,
-		streamHTTPClient:     streamHTTPClient,
-		compactionHTTPClient: compactionHTTPClient,
-		memorySearchTimeout:  defaultMemorySearchTimeout,
-		logger:               d.Logger.With(slog.String("service", "agent/application")),
+		agent:              d.Agent,
+		modelsService:      d.Models,
+		queries:            d.Queries,
+		messageService:     d.Messages,
+		settingsService:    d.Settings,
+		accountService:     d.Accounts,
+		sessionService:     d.Sessions,
+		botPermissions:     d.BotPermissions,
+		workspaceTargets:   d.WorkspaceTargets,
+		skillLoader:        d.Skills,
+		assetLoader:        d.Assets,
+		platformIdentities: d.PlatformIdentities,
+		workdirs:           d.Workdirs,
+		bgManager:          d.Background,
+		eventPublisher:     d.Events,
+		externalDrivers:    externalDriverMap(d.ExternalRuntimes...),
+		resumeReady:        d.ResumeReadiness,
+		teamScopes:         teamScopes,
+		allowedTeam:        d.AllowedTeam,
+		streamHTTPClient:   streamHTTPClient,
+		logger:             d.Logger.With(slog.String("service", "agent/application")),
 	}
 	service.activePrompts = activeprompt.New()
+	service.decider = decide.New(decide.Deps{
+		Logger:         d.Logger.With(slog.String("service", "agent/decide")),
+		Queries:        d.Queries,
+		Sessions:       d.Sessions,
+		ToolApproval:   d.ToolApproval,
+		UserInput:      d.UserInput,
+		BotPermissions: d.BotPermissions,
+		ActivePrompts:  service.activePrompts,
+		Events:         d.SessionRuntime,
+		Limits:         d.Agent,
+	})
 	service.botenv = botenv.New(botenv.Deps{
 		Logger:        d.Logger.With(slog.String("service", "agent/botenv")),
 		Queries:       d.Queries,
@@ -364,13 +353,30 @@ func New(d Deps) (*Service, error) {
 	service.lifecycle = lifecycle.New(lifecycle.Deps{
 		Store:     d.Queries,
 		Runs:      d.Queries,
-		Decisions: service,
+		Decisions: service.decider,
 		Logger:    d.Logger.With(slog.String("service", "agent/lifecycle")),
 	})
+	service.memory = memory.New(memory.Deps{
+		Logger:     d.Logger.With(slog.String("service", "agent/memory")),
+		Settings:   d.Settings,
+		Messages:   d.Messages,
+		Bot:        service.botenv,
+		Transcript: service.transcript,
+		Registry:   d.Memory,
+	})
 	// A typed nil stored in an interface would read as configured.
+	var runner compact.Runner
 	if d.Compaction != nil {
-		service.compactionService = d.Compaction
+		runner = d.Compaction
 	}
+	service.compact = compact.New(compact.Deps{
+		Logger:     d.Logger.With(slog.String("service", "agent/compact")),
+		Settings:   d.Settings,
+		Models:     d.Models,
+		Queries:    d.Queries,
+		Transcript: service.transcript,
+		Runner:     runner,
+	})
 	if d.QueuedInputs != nil {
 		service.queue = d.QueuedInputs
 	}
@@ -381,9 +387,12 @@ func New(d Deps) (*Service, error) {
 		Bot:      service.botenv,
 		Runtime:  d.SessionRuntime,
 		Events:   d.Events,
-		Observer: persistObserver{service},
+		Rounds:   service.memory,
+		Commits:  service.compact,
 		Promoted: service.queue,
 	})
+	service.signer = admit.NewSigner(d.RunCredentialSecret)
+	service.admit = admit.New(admit.Deps{Runtime: d.SessionRuntime, Queries: d.Queries, Signer: service.signer})
 	service.driver = drive.New(drive.Deps{
 		Logger:       d.Logger.With(slog.String("service", "agent/drive")),
 		Runtime:      d.SessionRuntime,
@@ -521,7 +530,7 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 		runCfg.Identity.IsSubagent = true
 	}
 	runCfg.RunID = runreq.RunID(req.RunID)
-	memoryContext := s.loadMemoryContext(ctx, req)
+	memoryContext := s.memory.Recall(ctx, req)
 	if memoryContext.Trace != nil && runCfg.ContextLifecycle != nil {
 		runCfg.ContextLifecycle.SetMemoryRecall(*memoryContext.Trace)
 	}
@@ -553,13 +562,9 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	if !req.ReusePersistedUserMessage {
 		ownMessages = append(ownMessages, reqMessages...)
 	}
-	estimate := &turnRequestEstimate{
-		service:   s,
-		ctx:       ctx,
-		sessionID: req.ThreadID,
-		own:       append(runreq.ModelMessagesToSDKMessages(ownMessages), currentUserMessageEstimate(req, modelQuery)...),
-	}
-	assembled, err = s.compactBeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled, estimate)
+	estimate := s.compact.NewEstimate(ctx, req.ThreadID,
+		append(runreq.ModelMessagesToSDKMessages(ownMessages), compact.UserMessageEstimate(req, modelQuery)...))
+	assembled, err = s.compact.BeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled, estimate)
 	if err != nil {
 		s.logger.ErrorContext(ctx, "resolve: assemble context failed",
 			slog.String("bot_id", req.BotID),
@@ -568,7 +573,7 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 		)
 		return runreq.ResolvedContext{}, req, err
 	}
-	pressure := runreq.NewRunPressure(runCfg.ContextLifecycle, estimate.conversation(assembled.Messages))
+	pressure := runreq.NewRunPressure(runCfg.ContextLifecycle, estimate.Conversation(assembled.Messages))
 	messages := assembled.Messages
 	historyRecords := assembled.Records
 	estimatedTokens := assembled.EstimatedTokens
@@ -840,9 +845,16 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 			ReplyTarget:       strings.TrimSpace(p.ReplyTarget),
 		},
 	}
-	if s.toolApproval != nil || s.userInput != nil {
-		cfg.ToolApprovalHandler = s.buildToolApprovalHandler(p)
-	}
+	cfg.ToolApprovalHandler = s.decider.ApprovalHandler(decide.HandlerParams{
+		BotID:             p.BotID,
+		SessionID:         p.SessionID,
+		RouteID:           p.RouteID,
+		ChannelIdentityID: p.ChannelIdentityID,
+		CurrentPlatform:   p.CurrentPlatform,
+		ReplyTarget:       p.ReplyTarget,
+		ConversationType:  p.ConversationType,
+		DecisionMode:      p.Facts.DecisionMode,
+	})
 	// Entries here carry no end user to authorize: the target was authorized
 	// when the entry (or the session's workdir) chose it, so no principal.
 	_, ws, wsErr := s.resolveWorkspace(ctx, workspaceInput{
@@ -861,10 +873,6 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 	}
 
 	return cfg, chatModel, provider, nil
-}
-
-func (s *Service) canDeliverUserInputStream() bool {
-	return s.userInput != nil
 }
 
 func supportsImageInputForModel(m models.GetResponse) bool {
@@ -916,193 +924,6 @@ func resolveReasoningConfig(chatModel models.GetResponse, botSettings settings.S
 		stored,
 		requestedEffort,
 	)
-}
-
-func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
-	return func(ctx context.Context, call sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
-		if strings.TrimSpace(call.ToolName) == userinput.ToolNameAskUser {
-			if err := userinput.ValidateAskUserInput(toolexec.ArgumentsValue(call.Input)); err != nil {
-				// Let the tool's Execute handler return an instructional tool result
-				// to the model instead of creating a fake pending request.
-				return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
-			}
-			if s.userInput == nil {
-				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   "user input service is not configured",
-				}, call.ToolName), nil
-			}
-			if p.Facts.DecisionMode != sessionfacts.DecisionPark {
-				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   "user input requested in a non-interactive session",
-				}, call.ToolName), nil
-			}
-			// No ExpiresAt here: application requests have no in-process
-			// waiter — the run pauses and resumes whenever the user answers,
-			// even much later. Only waiter-backed (ACP/MCP) requests expire.
-			req, err := s.userInput.CreatePending(ctx, userinput.CreatePendingInput{
-				BotID:                        p.BotID,
-				SessionID:                    p.SessionID,
-				RouteID:                      p.RouteID,
-				ChannelIdentityID:            p.ChannelIdentityID,
-				RequestedByChannelIdentityID: p.ChannelIdentityID,
-				ToolCallID:                   call.ToolCallID,
-				ToolName:                     call.ToolName,
-				Input:                        toolexec.ArgumentsValue(call.Input),
-				SourcePlatform:               p.CurrentPlatform,
-				ReplyTarget:                  p.ReplyTarget,
-				ConversationType:             p.ConversationType,
-				WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
-			})
-			if err != nil {
-				return toolexec.ToolApprovalResult{}, err
-			}
-			if req.Status != userinput.StatusPending {
-				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision:   toolexec.ToolApprovalDecisionRejected,
-					ApprovalID: req.ID,
-					Reason:     "ask_user request is already " + req.Status,
-					Metadata:   userinput.DeferredMetadata(req),
-				}, call.ToolName), nil
-			}
-			return toolexec.ToolApprovalResult{
-				Decision:   toolexec.ToolApprovalDecisionDeferred,
-				ApprovalID: req.ID,
-				Metadata:   userinput.DeferredMetadata(req),
-			}, nil
-		}
-		input := toolapproval.CreatePendingInput{
-			BotID:                        p.BotID,
-			SessionID:                    p.SessionID,
-			RouteID:                      p.RouteID,
-			ChannelIdentityID:            p.ChannelIdentityID,
-			RequestedByChannelIdentityID: p.ChannelIdentityID,
-			ToolCallID:                   call.ToolCallID,
-			ToolName:                     call.ToolName,
-			ToolInput:                    toolexec.ArgumentsValue(call.Input),
-			SourcePlatform:               p.CurrentPlatform,
-			ReplyTarget:                  p.ReplyTarget,
-			ConversationType:             p.ConversationType,
-			WorkspaceTargeted:            isWorkspaceTargetTool(call.ToolName),
-			WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
-		}
-		forcedApprovalReason, forcedApproval := native.HookForcedApprovalReason(ctx)
-		if s.toolApproval == nil {
-			if forcedApproval {
-				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   runreq.FirstNonEmpty(forcedApprovalReason, "hook requested approval but tool approval is not configured"),
-				}, call.ToolName), nil
-			}
-			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
-		}
-		eval, err := s.toolApproval.EvaluatePolicy(ctx, input)
-		if err != nil {
-			if input.WorkspaceTargeted && errors.Is(err, workspace.ErrWorkspaceTargetNotFound) {
-				requestedTargetID := ""
-				if args, ok := toolexec.ArgumentsValue(call.Input).(map[string]any); ok {
-					requestedTargetID = strings.TrimSpace(runreq.ReadAnyString(args["target_id"]))
-				}
-				if s.logger != nil {
-					s.logger.Warn("workspace tool target not found during approval",
-						slog.String("bot_id", p.BotID),
-						slog.String("tool_name", call.ToolName),
-						slog.String("tool_call_id", call.ToolCallID),
-						slog.String("requested_target_id", requestedTargetID),
-					)
-				}
-				// Twilight treats approval handler errors as fatal to the whole run.
-				// A missing target is invalid model input, so let the tool execute
-				// and return its normal, instructional error instead. This is safe
-				// only for not-found targets: they cannot execute or bypass policy.
-				return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
-			}
-			return toolexec.ToolApprovalResult{}, err
-		}
-		input.ExecutionLocation = eval.ExecutionLocation
-		locationMetadata := executionLocationResultMetadata(eval.ExecutionLocation)
-		// The policy resolved the workspace target and pinned it on the
-		// argument map it evaluated. The executor takes these arguments for
-		// the call, so the tool runs where the policy looked and the persisted
-		// call names that target (call.Input is a copy the handler cannot
-		// mutate).
-		var approvedInput *sdk.ToolArguments
-		if input.WorkspaceTargeted {
-			rewritten := toolexec.ArgumentsFromValue(input.ToolInput)
-			approvedInput = &rewritten
-		}
-		if eval.Decision == toolapproval.DecisionDeny {
-			return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-				Decision: toolexec.ToolApprovalDecisionRejected,
-				Reason:   toolapproval.PolicyDeniedReason,
-				Metadata: locationMetadata,
-			}, call.ToolName), nil
-		}
-		if eval.Decision == toolapproval.DecisionBypass && !forcedApproval {
-			return toolexec.ToolApprovalResult{
-				Decision: toolexec.ToolApprovalDecisionApproved,
-				Metadata: locationMetadata,
-				Input:    approvedInput,
-			}, nil
-		}
-		if p.Facts.DecisionMode != sessionfacts.DecisionPark {
-			reason := "tool execution requires approval, but this session type cannot request approval"
-			rejected, err := s.toolApproval.CreateSystemRejected(ctx, input, reason)
-			if err != nil {
-				return toolexec.ToolApprovalResult{}, err
-			}
-			return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
-				Decision:   toolexec.ToolApprovalDecisionRejected,
-				ApprovalID: rejected.ID,
-				Reason:     reason,
-				Metadata:   approvalResultMetadata(rejected),
-			}, call.ToolName), nil
-		}
-		req, err := s.toolApproval.CreatePending(ctx, input)
-		if err != nil {
-			return toolexec.ToolApprovalResult{}, err
-		}
-		return toolexec.ToolApprovalResult{
-			Decision:   toolexec.ToolApprovalDecisionDeferred,
-			ApprovalID: req.ID,
-			Metadata:   approvalResultMetadata(req),
-			Input:      approvedInput,
-		}, nil
-	}
-}
-
-func isWorkspaceTargetTool(toolName string) bool {
-	if toolName == "mcp_manage" || toolName == "app_manage" {
-		return false
-	}
-	_, ok := toolapproval.OperationForTool(toolName)
-	return ok
-}
-
-func approvalResultMetadata(req toolapproval.Request) map[string]any {
-	metadata := map[string]any{
-		"short_id":     req.ShortID,
-		"status":       req.Status,
-		"tool_name":    req.ToolName,
-		"operation":    req.Operation,
-		"tool_call_id": req.ToolCallID,
-		// The nested approval payload is what the stream converter reads for
-		// option-aware cards; without it the committed-decision publish path
-		// drops the agent's options and the recorded selection.
-		"approval": toolapproval.RequestMetadata(req),
-	}
-	if req.ExecutionLocation != nil {
-		metadata[toolapproval.ExecutionLocationMetadataKey] = req.ExecutionLocation
-	}
-	return metadata
-}
-
-func executionLocationResultMetadata(location *toolapproval.ExecutionLocation) map[string]any {
-	if location == nil {
-		return nil
-	}
-	return map[string]any{toolapproval.ExecutionLocationMetadataKey: location}
 }
 
 // requestRunFacts returns the facts a chat request runs under. A request that

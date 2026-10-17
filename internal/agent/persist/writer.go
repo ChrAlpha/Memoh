@@ -36,14 +36,16 @@ type SteerRuntime interface {
 	PublishQueueUserTurns(ctx context.Context, handle sessionruntime.RunHandle, update sessionruntime.QueueUserTurnUpdate) error
 }
 
-// RoundObserver is told what the writer has made durable. Memory extraction
-// and context compaction are policies of a higher layer; the writer only says
-// when their input exists.
+// RoundObserver is told which rows a round made durable. Memory extraction is
+// a policy of a higher layer; the writer only says when its input exists.
 type RoundObserver interface {
-	// RoundPersisted reports the rows a round wrote.
 	RoundPersisted(ctx context.Context, req runreq.ChatRequest, persisted []messagepkg.Message)
-	// RunCommitted reports that a run's history is written, with the input
-	// token count the run was accounted with.
+}
+
+// CommitObserver is told that a run's history is written, with the input token
+// count the run was accounted with. Context compaction is a policy of a higher
+// layer; the writer only says when its input exists.
+type CommitObserver interface {
 	RunCommitted(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, inputTokens int)
 }
 
@@ -67,8 +69,11 @@ type Deps struct {
 	Runtime SteerRuntime
 	// Events broadcasts the rows of a replaced turn; without it none are sent.
 	Events messageevent.Publisher
-	// Observer is told what was written; without it nothing follows a write.
-	Observer RoundObserver
+	// Rounds is told which rows a round wrote; without it nothing follows.
+	Rounds RoundObserver
+	// Commits is told when a run's history is written; without it nothing
+	// follows.
+	Commits CommitObserver
 	// Promoted records applied promoted inputs; without it none are recorded.
 	Promoted PromotedInputs
 }
@@ -81,7 +86,8 @@ type Writer struct {
 	botenv   *botenv.Env
 	runtime  SteerRuntime
 	events   messageevent.Publisher
-	observer RoundObserver
+	rounds   RoundObserver
+	commits  CommitObserver
 	promoted PromotedInputs
 }
 
@@ -95,14 +101,18 @@ func New(d Deps) *Writer {
 		botenv:   d.Bot,
 		runtime:  d.Runtime,
 		events:   d.Events,
-		observer: d.Observer,
+		rounds:   d.Rounds,
+		commits:  d.Commits,
 		promoted: d.Promoted,
 	}
 	if w.events == nil {
 		w.events = noEvents{}
 	}
-	if w.observer == nil {
-		w.observer = noObserver{}
+	if w.rounds == nil {
+		w.rounds = noRounds{}
+	}
+	if w.commits == nil {
+		w.commits = noCommits{}
 	}
 	if w.promoted == nil {
 		w.promoted = noPromoted{}
@@ -114,11 +124,13 @@ type noEvents struct{}
 
 func (noEvents) Publish(messageevent.Event) {}
 
-type noObserver struct{}
+type noRounds struct{}
 
-func (noObserver) RoundPersisted(context.Context, runreq.ChatRequest, []messagepkg.Message) {}
+func (noRounds) RoundPersisted(context.Context, runreq.ChatRequest, []messagepkg.Message) {}
 
-func (noObserver) RunCommitted(context.Context, runreq.ChatRequest, runreq.ResolvedContext, int) {}
+type noCommits struct{}
+
+func (noCommits) RunCommitted(context.Context, runreq.ChatRequest, runreq.ResolvedContext, int) {}
 
 type noPromoted struct{}
 
