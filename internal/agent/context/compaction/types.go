@@ -11,7 +11,7 @@ import (
 const (
 	StatusProgress = "progress" // compacted history still exceeds the requested replay budget
 	StatusOK       = "ok"       // messages were compacted into a summary
-	StatusNoop     = "noop"     // nothing to compact (already compact, cooled down, or in flight)
+	StatusNoop     = "noop"     // nothing to compact (already compact or in flight)
 )
 
 // Result is the scoped outcome of a synchronous compaction. Callers use it to
@@ -64,13 +64,16 @@ type TriggerConfig struct {
 	SummaryWindowTokens int
 	MaxOutputTokens     int
 	// CandidatesFrom is the creation time of the oldest row the caller's
-	// request loaded. Older rows are invisible to that request, so
-	// summarizing them cannot shrink it. Zero considers the whole session.
+	// request loaded and CandidatesBefore the cutoff an edit or retry
+	// replays history before. Rows outside are invisible to that request,
+	// so summarizing them cannot shrink it. Zero leaves that side open.
 	CandidatesFrom   time.Time
+	CandidatesBefore time.Time
+	// ProtectedSources stay raw. Current ones are the caller's current input,
+	// budgeted outside HistoryBudgetTokens; the rest are history it keeps.
 	ProtectedSources []turn.ContextMessageSource
 	// HistoryBudgetTokens is the room the caller's request has for the
-	// summary and the history it keeps raw; ProtectedSources are budgeted
-	// outside it.
+	// summary and the history it keeps raw.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
 }

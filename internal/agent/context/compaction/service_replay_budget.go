@@ -19,13 +19,34 @@ func summaryProviderReplayTokens(summary string) int {
 // caller's budget: rows it must keep that the caller did not budget as
 // current input.
 func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMessageSource) int {
+	current := make([]turn.ContextMessageSource, 0, len(sources))
+	for _, source := range sources {
+		if source.Current {
+			current = append(current, source)
+		}
+	}
 	tokens := 0
 	for _, message := range messages {
-		if (message.HasPolicy(CompactPolicyPreserveRecent) || message.HasPolicy(CompactPolicyMustKeep)) && !isProtectedSource(message, sources) {
+		if (message.HasPolicy(CompactPolicyPreserveRecent) || message.HasPolicy(CompactPolicyMustKeep)) && !isProtectedSource(message, current) {
 			tokens += messageReplayTokens(message)
 		}
 	}
 	return tokens
+}
+
+// currentRequestEntries renders the protected rows the work continues from,
+// so the summarizer knows the goal its summary serves.
+func currentRequestEntries(messages []CompactionCandidate, sources []turn.ContextMessageSource) []messageEntry {
+	var entries []messageEntry
+	for _, message := range messages {
+		if !isProtectedSource(message, sources) {
+			continue
+		}
+		if content := renderCandidateEntry(message.Record); strings.TrimSpace(content) != "" {
+			entries = append(entries, messageEntry{Role: message.Record.ModelMessage.Role, Content: content})
+		}
+	}
+	return entries
 }
 
 func withoutCompacted(messages []CompactionCandidate, compacted []pgtype.UUID) []CompactionCandidate {

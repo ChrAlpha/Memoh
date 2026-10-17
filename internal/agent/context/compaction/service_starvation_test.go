@@ -48,10 +48,9 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 			t.Fatalf("summarizer prompt missing %q:\n%s", frag, stub.prompt)
 		}
 	}
-	for _, frag := range []string{"current question", "chain of thought"} {
-		if strings.Contains(stub.prompt, frag) {
-			t.Fatalf("summarizer prompt leaked raw-retained content %q:\n%s", frag, stub.prompt)
-		}
+	conversation, _, _ := strings.Cut(stub.prompt, "</conversation>")
+	if strings.Contains(conversation, "current question") || strings.Contains(stub.prompt, "chain of thought") || !strings.Contains(stub.prompt, "<current_request>\nuser: current question") {
+		t.Fatalf("summarizer prompt must read the current question only as the request it serves:\n%s", stub.prompt)
 	}
 }
 

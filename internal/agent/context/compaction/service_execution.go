@@ -20,12 +20,15 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if cfg.HistoryBudgetTokens <= 0 || cfg.SummaryWindowTokens <= 0 {
 		return Result{}, fmt.Errorf("%w: history_budget=%d window=%d", errCompactionUnsized, cfg.HistoryBudgetTokens, cfg.SummaryWindowTokens)
 	}
-	// The summarizer may write as much as the model can answer; the input is
-	// whatever room the window leaves beside that and the fixed prompt.
-	outputTokens := models.ResolveGenerationLimits(models.ClientType(cfg.ClientType), nil, cfg.SummaryWindowTokens, cfg.MaxOutputTokens).MaxOutputTokens
-	inputTokens := cfg.SummaryWindowTokens - outputTokens - estimateBytesAsTokens(systemPrompt) - compactionPromptFramingTokens
-	if inputTokens <= 0 {
-		return Result{}, fmt.Errorf("%w: window=%d output_reserve=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, outputTokens)
+	// The summarizer may write as much as the model declares it can answer;
+	// a model that declares nothing gets the output its runs get.
+	capability := cfg.MaxOutputTokens
+	if capability <= 0 {
+		capability = models.ResolveGenerationLimits(models.ClientType(cfg.ClientType), nil, cfg.SummaryWindowTokens, 0).MaxOutputTokens
+	}
+	promptWindow := cfg.SummaryWindowTokens - estimateBytesAsTokens(systemPrompt) - compactionPromptFramingTokens
+	if promptWindow <= 0 {
+		return Result{}, fmt.Errorf("%w: window=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens)
 	}
 
 	frontier, err := NewArtifactProjection(s.queries).LoadActiveSession(ctx, ArtifactOwner{BotID: cfg.BotID, SessionID: cfg.SessionID, SessionIDKnown: true})
@@ -37,9 +40,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	parents := frontier.Artifacts
 	createdFrom := pgtype.Timestamptz{Time: cfg.CandidatesFrom, Valid: !cfg.CandidatesFrom.IsZero()}
+	createdBefore := pgtype.Timestamptz{Time: cfg.CandidatesBefore, Valid: !cfg.CandidatesBefore.IsZero()}
 	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
-		SessionID:   sessionUUID,
-		CreatedFrom: createdFrom,
+		SessionID:     sessionUUID,
+		CreatedFrom:   createdFrom,
+		CreatedBefore: createdBefore,
 	})
 	if err != nil {
 		return Result{}, err
@@ -47,11 +52,12 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if measure.CandidateCount == 0 && len(parents) == 0 {
 		return Result{Status: StatusNoop}, nil
 	}
-	readMaxBytes := compactionReadMaxBytes(inputTokens)
+	readMaxBytes := compactionReadMaxBytes(promptWindow)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
-		SessionID:   sessionUUID,
-		CreatedFrom: createdFrom,
-		MaxBytes:    readMaxBytes,
+		SessionID:     sessionUUID,
+		CreatedFrom:   createdFrom,
+		CreatedBefore: createdBefore,
+		MaxBytes:      readMaxBytes,
 	})
 	if err != nil {
 		return Result{}, err
@@ -82,8 +88,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			slog.String("session_id", cfg.SessionID),
 		)
 	}
+	var backfills []sqlc.BackfillCompactionArtifactCoverageParams
 	if len(parents) > 0 {
-		if parents, err = s.backfillLegacyCoverage(ctx, parents); err != nil {
+		if parents, backfills, err = s.backfillLegacyCoverage(ctx, parents); err != nil {
 			return Result{}, err
 		}
 	}
@@ -97,11 +104,15 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	// The summary replaces everything it reads; what the request keeps beside
 	// it bounds how long it may be.
 	room := summaryRoom{HistoryTokens: cfg.HistoryBudgetTokens, KeptTokens: keptReplayTokens(messages, cfg.ProtectedSources)}
-	summaryLimit := summaryOutputLimit(room.HistoryTokens-room.KeptTokens, outputTokens)
+	summaryLimit := summaryOutputLimit(room.HistoryTokens-room.KeptTokens, capability)
 	if summaryLimit <= 0 {
 		return Result{}, fmt.Errorf("%w: history_budget=%d kept=%d", errNoSummaryRoom, room.HistoryTokens, room.KeptTokens)
 	}
-	room.SummaryTokens = summaryLimit
+	current := currentRequestEntries(messages, cfg.ProtectedSources)
+	inputTokens := promptWindow - summaryLimit - entriesPromptCost(current)
+	if inputTokens <= 0 {
+		return Result{}, fmt.Errorf("%w: window=%d summary_limit=%d current_request_tokens=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, summaryLimit, entriesPromptCost(current))
+	}
 
 	foldable := foldableItems(messages)
 	toCompact := trimCompactMessages(foldable, inputTokens-earlierSummariesCost(earlier))
@@ -116,10 +127,16 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			return Result{Status: StatusNoop}, nil
 		}
 	}
-	if cost := entriesPromptCost(entries) + earlierSummariesCost(earlier); cost > inputTokens {
-		return Result{}, fmt.Errorf("%w: entries=%d entry_tokens=%d input_tokens=%d", errCompactionInputOverflow, len(entries), cost, inputTokens)
+	readTokens := entriesPromptCost(entries) + earlierSummariesCost(earlier)
+	if readTokens > inputTokens {
+		return Result{}, fmt.Errorf("%w: entries=%d entry_tokens=%d input_tokens=%d", errCompactionInputOverflow, len(entries), readTokens, inputTokens)
 	}
 	_, remaining := buildEntriesAndIDs(withoutCompacted(foldable, compactedMessageIDs))
+	// A summary must be shorter than what it replaces, so the bound the
+	// prompt states never exceeds that.
+	replacedTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs)) + earlierTokens
+	room.SummaryTokens = min(summaryLimit, replacedTokens-1)
+	maxTokens := min(capability, promptWindow-readTokens-entriesPromptCost(current))
 
 	expectedCompactIDs, err := expectedCompactionClaims(rows, compactedMessageIDs)
 	if err != nil {
@@ -206,13 +223,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	systemPromptDecorated, sdkMessages, _ := models.ApplyPromptCache(
 		model, cfg.PromptCacheTTL,
-		systemPrompt, []sdk.Message{sdk.UserMessage(buildUserPrompt(earlier, entries, room))}, nil,
+		systemPrompt, []sdk.Message{sdk.UserMessage(buildUserPrompt(earlier, entries, current, room))}, nil,
 	)
 
 	request := sdk.Request{
 		System:    systemPromptDecorated,
 		Messages:  sdkMessages,
-		MaxTokens: &outputTokens,
+		MaxTokens: &maxTokens,
 	}
 	result, err := modelretry.Do(models.WithModelSession(ctx, cfg.SessionID), s.logger, "agent.compaction", modelretry.Config{}, modelretry.Retryable,
 		func(ctx context.Context) (sdk.ModelResult, error) { return model.Generate(ctx, request) })
@@ -231,7 +248,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	replacedTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs)) + earlierTokens
 	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacedTokens {
 		err = fmt.Errorf("%w: summary_tokens=%d replaced_tokens=%d", errIneffectiveSummary, summaryTokens, replacedTokens)
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
@@ -246,9 +262,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	usageJSON, _ := json.Marshal(result.Usage)
 
 	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelRecordID)
-	if len(parents) > 0 {
+	switch err = s.persistBackfills(persistCtx, backfills); {
+	case err != nil:
+	case len(parents) > 0:
 		err = s.completeRollupLog(persistCtx, logID, summary, len(compactedMessageIDs), usageJSON, modelUUID, artifact, parents)
-	} else {
+	default:
 		err = s.completeLog(persistCtx, logID, "ok", summary, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact)
 	}
 	if err != nil {
@@ -281,19 +299,23 @@ func (s *Service) loadAbsorbedRows(ctx context.Context, artifact Artifact) ([]sq
 	return converted, nil
 }
 
-func (s *Service) backfillLegacyCoverage(ctx context.Context, parents []Artifact) ([]Artifact, error) {
+// backfillLegacyCoverage reads the coverage of legacy summaries back from
+// their rows. The caller persists it only with a summary that supersedes
+// them, so a failed attempt changes nothing that reads see.
+func (s *Service) backfillLegacyCoverage(ctx context.Context, parents []Artifact) ([]Artifact, []sqlc.BackfillCompactionArtifactCoverageParams, error) {
 	filled := append([]Artifact(nil), parents...)
+	var backfills []sqlc.BackfillCompactionArtifactCoverageParams
 	for i := range filled {
 		if len(filled[i].Coverage) > 0 {
 			continue
 		}
 		rows, err := s.loadAbsorbedRows(ctx, filled[i])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		items, _ := candidatesFromRows(rows)
 		if len(items) == 0 {
-			return nil, fmt.Errorf("%w: artifact_id=%s", errIncompleteAbsorbedCoverage, filled[i].ID)
+			return nil, nil, fmt.Errorf("%w: artifact_id=%s", errIncompleteAbsorbedCoverage, filled[i].ID)
 		}
 		ids := make([]pgtype.UUID, 0, len(items))
 		for _, item := range items {
@@ -301,26 +323,33 @@ func (s *Service) backfillLegacyCoverage(ctx context.Context, parents []Artifact
 		}
 		metadata, err := artifactMetadataFor(items, ids)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if filled[i].Coverage, err = DecodeArtifactCoverage(metadata.Coverage); err != nil {
-			return nil, fmt.Errorf("backfill coverage of artifact %s: %w", filled[i].ID, err)
+			return nil, nil, fmt.Errorf("backfill coverage of artifact %s: %w", filled[i].ID, err)
 		}
 		id, err := db.ParseUUID(filled[i].ID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := s.queries.BackfillCompactionArtifactCoverage(ctx, sqlc.BackfillCompactionArtifactCoverageParams{
+		backfills = append(backfills, sqlc.BackfillCompactionArtifactCoverageParams{
 			ID:            id,
 			Coverage:      metadata.Coverage,
 			AnchorStartMs: metadata.AnchorStartMs,
 			AnchorEndMs:   metadata.AnchorEndMs,
-		}); err != nil {
-			return nil, err
-		}
+		})
 		filled[i].AnchorStartMs, filled[i].AnchorEndMs = metadata.AnchorStartMs, metadata.AnchorEndMs
 	}
-	return filled, nil
+	return filled, backfills, nil
+}
+
+func (s *Service) persistBackfills(ctx context.Context, backfills []sqlc.BackfillCompactionArtifactCoverageParams) error {
+	for _, backfill := range backfills {
+		if err := s.queries.BackfillCompactionArtifactCoverage(ctx, backfill); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func expectedCompactionClaims(rows []sqlc.ListUncompactedMessagesBySessionRow, messageIDs []pgtype.UUID) ([]pgtype.UUID, error) {
