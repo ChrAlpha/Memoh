@@ -21,7 +21,6 @@ func (*fakeQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotS
 func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {
 	stub := &stubModel{summary: "short replacement"}
 	cfg := machineryConfig(stub, 800)
-	cfg.ContextWindowTokens = 2000
 	parents := fusionParentLogs(t, cfg, strings.Repeat("s", 2040), strings.Repeat("t", 2040))
 	rows := fusionQualityRows(t, cfg)
 	rows = rows[len(rows)-1:]
@@ -37,7 +36,6 @@ func TestSummaryRecoveryFailureKeepsParentsActive(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			stub := &stubModel{summary: "short replacement"}
 			cfg := machineryConfig(stub, 800)
-			cfg.ContextWindowTokens = 2000
 			parents := fusionParentLogs(t, cfg, strings.Repeat("s", 2040), strings.Repeat("t", 2040))
 			q := &fakeQueries{priorLogs: parents}
 			ctx, cancel := context.WithCancel(t.Context())
@@ -81,7 +79,6 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 		t.Run(strings.Repeat("parent", parentCount), func(t *testing.T) {
 			stub := &stubModel{summary: "short replacement"}
 			cfg := machineryConfig(stub, 800)
-			cfg.ContextWindowTokens = 2000
 			cfg.MaxCompactTokens = 50000
 			summaries := make([]string, parentCount)
 			for i := range summaries {

@@ -63,7 +63,6 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 	stub := &stubModel{summary: "concise whole frontier replacement"}
 	cfg := machineryConfig(stub, 200)
 	cfg.MaxCompactTokens = 50000
-	cfg.ContextWindowTokens = 10000
 	cfg.SummaryWindowTokens = 50000
 
 	absorbedOldest := "absorbed-oldest:" + strings.Repeat("a", 18800)

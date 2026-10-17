@@ -164,9 +164,6 @@ func TestMaybeSyncCompactDiscussActiveCompactsAtHardThreshold(t *testing.T) {
 		t.Fatalf("summarizer runs = %d, want 1", len(runner.configs))
 	}
 	cfg := runner.configs[0]
-	if cfg.ContextWindowTokens != 1000 {
-		t.Fatalf("ContextWindowTokens = %d, want 1000", cfg.ContextWindowTokens)
-	}
 	if cfg.TargetTokens != 400 {
 		t.Fatalf("TargetTokens = %d, want 400 (default 40%% target under the soft-share cap)", cfg.TargetTokens)
 	}

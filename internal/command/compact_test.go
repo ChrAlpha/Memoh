@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
@@ -26,7 +25,6 @@ type compactConfigQueries struct {
 	compactionModel sqlc.Model
 	chatModel       sqlc.Model
 	provider        sqlc.Provider
-	chatModelErr    error
 }
 
 func (q *compactConfigQueries) GetSettingsByBotID(context.Context, pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
@@ -43,9 +41,6 @@ func (q *compactConfigQueries) GetSettingsByBotID(context.Context, pgtype.UUID) 
 
 func (q *compactConfigQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
 	if id == q.chatModel.ID {
-		if q.chatModelErr != nil {
-			return sqlc.Model{}, q.chatModelErr
-		}
 		return q.chatModel, nil
 	}
 	return q.compactionModel, nil
@@ -55,7 +50,7 @@ func (q *compactConfigQueries) GetProviderByID(context.Context, pgtype.UUID) (sq
 	return q.provider, nil
 }
 
-func compactConfigHarness(chatConfig []byte, chatModelErr error) (*Handler, CommandContext) {
+func compactConfigHarness() (*Handler, CommandContext) {
 	compactionModelID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000511"), Valid: true}
 	chatModelID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000512"), Valid: true}
 	providerID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000513"), Valid: true}
@@ -74,7 +69,6 @@ func compactConfigHarness(chatConfig []byte, chatModelErr error) (*Handler, Comm
 			ProviderID: providerID,
 			Type:       string(models.ModelTypeChat),
 			Enable:     true,
-			Config:     chatConfig,
 		},
 		provider: sqlc.Provider{
 			ID:         providerID,
@@ -82,7 +76,6 @@ func compactConfigHarness(chatConfig []byte, chatModelErr error) (*Handler, Comm
 			ClientType: string(models.ClientTypeOpenAICompletions),
 			Enable:     true,
 		},
-		chatModelErr: chatModelErr,
 	}
 	logger := slog.New(slog.DiscardHandler)
 	handler := &Handler{
@@ -118,10 +111,10 @@ func TestCompactRunErrorKeepsDiagnosticsOutOfChat(t *testing.T) {
 	}
 }
 
-func TestBuildCompactConfigUsesChatModelContextWindow(t *testing.T) {
+func TestBuildCompactConfigUsesSummarizerWindow(t *testing.T) {
 	t.Parallel()
 
-	handler, commandContext := compactConfigHarness([]byte(`{"context_window":200000}`), nil)
+	handler, commandContext := compactConfigHarness()
 	cfg, err := handler.buildCompactConfig(commandContext, "00000000-0000-0000-0000-000000000514")
 	if err != nil {
 		t.Fatalf("buildCompactConfig: %v", err)
@@ -129,37 +122,7 @@ func TestBuildCompactConfigUsesChatModelContextWindow(t *testing.T) {
 	if cfg.SummaryWindowTokens != 32000 {
 		t.Fatalf("SummaryWindowTokens = %d, want summarizer window 32000", cfg.SummaryWindowTokens)
 	}
-	if cfg.ContextWindowTokens != 200000 {
-		t.Fatalf("ContextWindowTokens = %d, want chat window 200000", cfg.ContextWindowTokens)
-	}
 	if cfg.Ratio != 100 || cfg.TotalInputTokens != 1 || !cfg.Manual {
 		t.Fatalf("manual config semantics changed: %#v", cfg)
-	}
-}
-
-func TestBuildCompactConfigFallsBackWhenChatWindowIsUnavailable(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name         string
-		chatConfig   []byte
-		chatModelErr error
-	}{
-		{name: "model lookup fails", chatConfig: []byte(`{"context_window":200000}`), chatModelErr: pgx.ErrNoRows},
-		{name: "window missing", chatConfig: []byte(`{}`)},
-		{name: "window nonpositive", chatConfig: []byte(`{"context_window":0}`)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			handler, commandContext := compactConfigHarness(tt.chatConfig, tt.chatModelErr)
-			cfg, err := handler.buildCompactConfig(commandContext, "00000000-0000-0000-0000-000000000514")
-			if err != nil {
-				t.Fatalf("buildCompactConfig: %v", err)
-			}
-			if cfg.ContextWindowTokens != 0 {
-				t.Fatalf("ContextWindowTokens = %d, want unknown-window fallback", cfg.ContextWindowTokens)
-			}
-		})
 	}
 }
