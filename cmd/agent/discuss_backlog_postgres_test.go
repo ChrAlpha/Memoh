@@ -60,6 +60,7 @@ type backlogFixture struct {
 	botID       string
 	sessionID   string
 	chatModel   string
+	providerURL string
 	rc          timeline.RenderedContext
 	base        time.Time
 	messages    messagepkg.Service
@@ -110,6 +111,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 		_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"Earlier backlog summarized."},"finish_reason":"stop"}]}`)
 	}))
 	t.Cleanup(server.Close)
+	f.providerURL = server.URL
 	chatModel, compactModel, providerID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	f.chatModel = chatModel
 	providerConfig, _ := json.Marshal(map[string]string{"base_url": server.URL, "api_key": "test-key"})

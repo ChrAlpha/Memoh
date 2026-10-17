@@ -15,7 +15,7 @@ func summaryProviderReplayTokens(summary string) int {
 	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")}))
 }
 
-func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, frontier []Artifact, fusing bool, sources []turn.ContextMessageSource) int {
+func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, sources []turn.ContextMessageSource) int {
 	selected := make(map[pgtype.UUID]bool, len(compacted))
 	for _, id := range compacted {
 		selected[id] = true
@@ -26,11 +26,6 @@ func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUI
 			continue
 		}
 		tokens += messageReplayTokens(message)
-	}
-	if !fusing {
-		for _, artifact := range frontier {
-			tokens += summaryProviderReplayTokens(artifact.Summary)
-		}
 	}
 	return tokens
 }

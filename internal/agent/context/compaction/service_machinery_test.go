@@ -121,6 +121,12 @@ type fakeQueries struct {
 	completeErrors  []error
 	rollupCompleted sqlc.CompleteCompactionRollupParams
 	rollupCalls     []sqlc.CompleteCompactionRollupParams
+	backfills       []sqlc.BackfillCompactionArtifactCoverageParams
+}
+
+func (f *fakeQueries) BackfillCompactionArtifactCoverage(_ context.Context, arg sqlc.BackfillCompactionArtifactCoverageParams) error {
+	f.backfills = append(f.backfills, arg)
+	return nil
 }
 
 func (f *fakeQueries) CreateCompactionLog(_ context.Context, arg sqlc.CreateCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
@@ -367,30 +373,6 @@ func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	}
 	if strings.Contains(stub.prompt, `{"type":"text"`) || strings.Contains(stub.prompt, `"toolCallId"`) {
 		t.Fatalf("raw JSON-envelope noise leaked into prompt:\n%s", stub.prompt)
-	}
-}
-
-func TestDoCompactionSkipsWhitespaceOnlyPriorSummaries(t *testing.T) {
-	rows := machineryCorpus(t)
-	stub := &stubModel{summary: "S3"}
-	cfg := machineryConfig(stub, 450)
-	q := &fakeQueries{
-		uncompacted: rows,
-		priorLogs: []sqlc.BotHistoryMessageCompact{{
-			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
-			BotID:     pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true},
-			SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true},
-			Summary:   "  \n\t",
-			Status:    "ok",
-		}},
-	}
-	svc := newMachineryService(q)
-
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if strings.Contains(stub.prompt, "The following are summaries of earlier parts") {
-		t.Fatalf("whitespace-only prior summary injected as prior context:\n%s", stub.prompt)
 	}
 }
 

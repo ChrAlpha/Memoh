@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const backfillCompactionArtifactCoverage = `-- name: BackfillCompactionArtifactCoverage :exec
+UPDATE bot_history_message_compacts
+SET coverage = $1,
+    anchor_start_ms = $2,
+    anchor_end_ms = $3
+WHERE team_id = public.memoh_current_team_id()
+  AND id = $4
+  AND status = 'ok'
+  AND superseded_by IS NULL
+  AND coverage = '[]'::jsonb
+`
+
+type BackfillCompactionArtifactCoverageParams struct {
+	Coverage      []byte      `json:"coverage"`
+	AnchorStartMs int64       `json:"anchor_start_ms"`
+	AnchorEndMs   int64       `json:"anchor_end_ms"`
+	ID            pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) BackfillCompactionArtifactCoverage(ctx context.Context, arg BackfillCompactionArtifactCoverageParams) error {
+	_, err := q.db.Exec(ctx, backfillCompactionArtifactCoverage,
+		arg.Coverage,
+		arg.AnchorStartMs,
+		arg.AnchorEndMs,
+		arg.ID,
+	)
+	return err
+}
+
 const completeCompactionLog = `-- name: CompleteCompactionLog :one
 WITH target_compact AS MATERIALIZED (
   SELECT compact.id, compact.session_id, compact.team_id
