@@ -639,3 +639,16 @@ func TestChatBudgetRecoveryProtectsThePersistedCurrentRequest(t *testing.T) {
 		t.Fatalf("the persisted current request is compactable: %+v", runner.configs[0].ProtectedSources)
 	}
 }
+
+func TestDiscussRecoveryFailsWhenOmittedInputHasNoHistoryRoom(t *testing.T) {
+	s, _, runner, cfg := chatRecoveryFixture(t)
+	cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 100}
+	cfg.ContextSourceFrags = []contextfrag.ContextFrag{contextfrag.TextFrag(contextfrag.TextFragInput{
+		ID: "memory", Kind: contextfrag.KindMemoryRecall, Role: sdk.MessageRoleUser,
+		Slot: contextfrag.SlotAfterHistoryBeforeCurrent, Text: strings.Repeat("m", 2000), Trust: contextfrag.TrustExternal,
+	})}
+	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussOmittedSources: []turn.ContextMessageSource{{Kind: "external", ID: "omitted", Current: true}}}
+	if _, _, err := s.recoverDiscussContextBudget(t.Context(), cmd, nil, "", cfg, new(bool)); !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 0 {
+		t.Fatalf("err=%v compactions=%d, want omitted input without history room to fail the run", err, len(runner.configs))
+	}
+}

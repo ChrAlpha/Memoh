@@ -393,3 +393,26 @@ func TestDiscussFailedCompactionRunsOnceAfterShedding(t *testing.T) {
 		t.Fatalf("compactions=%d, want one attempt per run", len(compactor.configs))
 	}
 }
+
+func TestDiscussSummariesOverTheModelBudgetAreCompactedInTheRun(t *testing.T) {
+	service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
+	configureDiscussLifecycle(service)
+	for i := range 20 {
+		cmd.DiscussMessages[i].Content = strings.Repeat("s", 4000)
+	}
+	handle, err := service.StartTurn(context.Background(), cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recomposed := false
+	for event := range handle.Events() {
+		recomposed = recomposed || event.Kind == turn.DiscussEventRecompose
+	}
+	var failures []error
+	for err := range handle.Errs() {
+		failures = append(failures, err)
+	}
+	if !recomposed || len(failures) != 0 || len(compactor.configs) != 1 || provider.callCount() != 0 {
+		t.Fatalf("recompose=%v errors=%v compactions=%d provider=%d, want the summaries folded once before dispatch", recomposed, failures, len(compactor.configs), provider.callCount())
+	}
+}
