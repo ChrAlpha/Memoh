@@ -72,6 +72,9 @@ type TriggerConfig struct {
 	// ProtectedSources stay raw. Current ones are the caller's current input,
 	// budgeted outside HistoryBudgetTokens; the rest are history it keeps.
 	ProtectedSources []turn.ContextMessageSource
+	// CurrentRequest is the caller's current input, shown to the summarizer
+	// when no protected source is a history row yet.
+	CurrentRequest string
 	// HistoryBudgetTokens is the room the caller's request has for the
 	// summary and the history it keeps raw.
 	HistoryBudgetTokens int
