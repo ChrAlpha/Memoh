@@ -599,7 +599,7 @@ They complement but never replace black-box acceptance.
 | source outage | frontier or history load fails on long thread | Request fails with a retryable error; no recomposition, no smaller context; input unconsumed | CM-ADM-003 |
 | compaction | request over budget | One compaction before the model call; rebuilt context in budget; no second compaction for the same request | CM-CMP-001 |
 | summary density | histories of different densities | Summary length follows the content; a valid summary within the stated bound continues without another compaction | CM-CMP-001 |
-| compaction failure | summarizer error / no reduction / still too large / unreadable item | `context.budget_unsatisfied`; no provider call; input unconsumed; history unchanged | CM-CMP-001, CM-ADM-002 |
+| compaction failure | summarizer error / no reduction / still too large / unreadable item | `context.budget_unsatisfied`; no provider call; input unconsumed; a committed summary stays, nothing else changes | CM-CMP-001, CM-ADM-002 |
 | compaction latency | request over budget | Outcome, passes, and duration recorded per compaction | CM-CMP-003 |
 | long tool loop | in-run growth past budget | Same rule inside the run | CM-CMP-001 |
 | ACP long thread | Discuss ACP, oversized history | Prompt built within budget; no unbounded `Query` | CM-ADM-001 |

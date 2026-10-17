@@ -38,8 +38,8 @@ type ChatRequest struct {
 	ChatID   string `json:"-"`
 	ThreadID string `json:"-"`
 	// RunID is the server-minted identity of this turn's run. Downstream state
-	// that must agree on "which turn is this" — the compaction barrier, the ACP
-	// session, interactive tool headers — keys on it.
+	// that must agree on "which turn is this" — the ACP session, interactive
+	// tool headers — keys on it.
 	RunID string `json:"-"`
 	// RunHandle is the server-owned execution capability for durable step and
 	// queue commits. Transport callers cannot supply it.
