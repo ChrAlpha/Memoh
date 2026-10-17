@@ -211,11 +211,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button, Spinner, SurfaceCard } from '@felinic/ui'
 import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-vue-next'
-import { useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
+import { useDocumentVisibility, useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'
 import { captureDisplaySnapshot } from '@/utils/display-snapshot'
 
@@ -267,7 +267,12 @@ const emit = defineEmits<{
   snapshot: [payload: { tabId: string; sessionId?: string; dataUrl: string }]
 }>()
 
-const connection = useBotDisplayConnection(props.botId)
+const documentVisibility = useDocumentVisibility()
+const viewing = computed(() => !!props.active && documentVisibility.value === 'visible')
+const connection = useBotDisplayConnection(props.botId, viewing)
+watch(viewing, (active) => {
+  if (!active) cleanupLocalUI()
+}, { flush: 'sync' })
 
 interface PrepareStage {
   key: string
@@ -310,7 +315,6 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 }
 
 const ACTIVE_SNAPSHOT_INTERVAL_MS = 10000
-const INACTIVE_SNAPSHOT_INTERVAL_MS = 5000
 const FIRST_SNAPSHOT_DELAY_MS = 350
 const BITRATE_SAMPLE_LIMIT = 60
 const BITRATE_AXIS_MIN_KBPS = 100
@@ -340,9 +344,9 @@ const statsMenu = reactive({
 })
 let pointerMask = 0
 let lastPointerPoint: { x: number; y: number } | null = null
-let snapshotTimer: ReturnType<typeof window.setTimeout> | null = null
+let snapshotTimer: number | null = null
 let snapshotFrameRequest: number | null = null
-let statsTimer: ReturnType<typeof window.setInterval> | null = null
+let statsTimer: number | null = null
 let lastStatsSample: StatsSample | null = null
 
 const statusLabel = computed(() => {
@@ -467,7 +471,7 @@ function closeDisplayWindow() {
 }
 
 function startSnapshotCapture() {
-  if (snapshotTimer || snapshotFrameRequest !== null || document.visibilityState === 'hidden') return
+  if (snapshotTimer || snapshotFrameRequest !== null || !viewing.value) return
   scheduleSnapshotCapture(FIRST_SNAPSHOT_DELAY_MS)
 }
 
@@ -483,16 +487,11 @@ function stopSnapshotCapture() {
   snapshotFrameRequest = null
 }
 
-function restartSnapshotCapture() {
-  if (status.value !== 'connected') return
-  stopSnapshotCapture()
-  startSnapshotCapture()
-}
-
-function scheduleSnapshotCapture(delayMs = snapshotIntervalMs()) {
-  if (status.value !== 'connected' || document.visibilityState === 'hidden') return
+function scheduleSnapshotCapture(delayMs = ACTIVE_SNAPSHOT_INTERVAL_MS) {
+  if (status.value !== 'connected' || !viewing.value) return
   snapshotTimer = window.setTimeout(() => {
     snapshotTimer = null
+    if (!viewing.value) return
     const video = videoRef.value as VideoWithFrameCallback | null
     if (video?.requestVideoFrameCallback) {
       snapshotFrameRequest = video.requestVideoFrameCallback(() => {
@@ -507,11 +506,8 @@ function scheduleSnapshotCapture(delayMs = snapshotIntervalMs()) {
   }, delayMs)
 }
 
-function snapshotIntervalMs() {
-  return props.active ? ACTIVE_SNAPSHOT_INTERVAL_MS : INACTIVE_SNAPSHOT_INTERVAL_MS
-}
-
 function captureSnapshot() {
+  if (!viewing.value) return
   const video = videoRef.value
   if (!video) {
     return
@@ -556,7 +552,7 @@ function toggleStatsOverlay() {
 }
 
 function startStatsPolling() {
-  if (statsTimer || status.value !== 'connected' || document.visibilityState === 'hidden') return
+  if (statsTimer || status.value !== 'connected' || !viewing.value) return
   void updateDisplayStats()
   statsTimer = window.setInterval(() => {
     void updateDisplayStats()
@@ -585,6 +581,7 @@ async function updateDisplayStats() {
   }
   try {
     const report = await peer.getStats()
+    if (!viewing.value || connection.peer.value !== peer) return
     const now = Date.now()
     const inbound = findStats(report, item =>
       item.type === 'inbound-rtp'
@@ -640,7 +637,7 @@ function sendInput(payload: Record<string, unknown>) {
   // Only the active pane drives input. There is one shared input channel per
   // bot, so a background/inactive pane forwarding pointer + key events would
   // race the focused pane's input on the desktop.
-  if (!props.active) return
+  if (!viewing.value) return
   connection.sendInput(payload)
 }
 
@@ -883,7 +880,7 @@ function shortID(value: string) {
 function bindStream() {
   const video = videoRef.value
   const stream = connection.stream.value
-  if (!video || !stream) return
+  if (!viewing.value || !video || !stream) return
   // Skip if already bound to this exact stream — multiple watchers (stream,
   // status, connect) can fire bindStream back-to-back and re-assigning
   // srcObject aborts the in-flight play() promise (AbortError).
@@ -896,17 +893,20 @@ function bindStream() {
   // play() resolves once playback begins; set videoReady here as the
   // authoritative signal instead of relying solely on the @playing event,
   // which can race or fail to fire when the panel visibility transitions.
-  video.play().then(() => { videoReady.value = true }).catch(() => {})
+  video.play().then(() => {
+    if (viewing.value && video.srcObject === stream) videoReady.value = true
+  }).catch(() => {})
 }
 
 async function connect() {
+  if (!viewing.value) return
   const ok = await connection.acquireConnection()
   if (ok) bindStream()
 }
 
 // Snapshot/stats follow the shared peer state + this pane's visibility, so a
 // background pane never captures and a connected pane resumes on focus.
-watch([() => status.value, () => props.active], ([st, active]) => {
+watch([() => status.value, viewing], ([st, active]) => {
   if (st === 'connected' && active) {
     bindStream()
     startSnapshotCapture()
@@ -915,59 +915,17 @@ watch([() => status.value, () => props.active], ([st, active]) => {
     stopSnapshotCapture()
     stopStatsPolling()
   }
-})
+}, { immediate: true, flush: 'post' })
 
 // The track event can land before connectionstatechange flips to 'connected'
 // (track is negotiated at setRemoteDescription, ICE may still be gathering),
 // so bind as soon as the stream arrives rather than gating on status.
-watch(() => connection.stream.value, () => {
+// Also bind an existing shared stream when a new pane's video element mounts.
+watch([connection.stream, videoRef, viewing], () => {
   bindStream()
-})
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    stopSnapshotCapture()
-    stopStatsPolling()
-    return
-  }
-  if (status.value === 'connected' && props.active) {
-    startSnapshotCapture()
-    if (statsVisible.value) startStatsPolling()
-    return
-  }
-  // The peer can die while the tab is hidden (ICE timeout in a backgrounded
-  // browser tab). On return, auto-reconnect a dead peer instead of leaving a
-  // disconnected pane for a manual Reconnect click. acquireConnection is
-  // idempotent (concurrent callers share acquirePromise), so this is safe even
-  // if a reconnect is already in flight.
-  if (props.active && status.value !== 'connected') {
-    void connect()
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  if (props.active) {
-    void connect()
-  }
-})
-
-watch(() => props.active, (active) => {
-  if (!active) {
-    stopSnapshotCapture()
-    stopStatsPolling()
-    return
-  }
-  if (status.value === 'connected') {
-    bindStream()
-    restartSnapshotCapture()
-    return
-  }
-  void connect()
-})
+}, { immediate: true, flush: 'post' })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (fullScreenIconTimer) {
     clearTimeout(fullScreenIconTimer)
     fullScreenIconTimer = null

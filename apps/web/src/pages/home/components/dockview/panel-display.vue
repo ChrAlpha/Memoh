@@ -14,6 +14,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import type { DockviewApi, DockviewPanelApi } from 'dockview-vue'
 import { useChatStore } from '@/store/chat-list'
@@ -22,8 +24,8 @@ import DisplayPane from '../display-pane.vue'
 import { usePanelVisible } from './use-panel-visible'
 import DockPanelFrame from './panel-frame.vue'
 
-// No KeepAlive/v-if: the WebRTC video element must stay attached. The panel
-// is added with renderer 'always'.
+// Keep the panel mounted for dock layout state; DisplayPane acquires a viewer
+// only while this panel and the browser document are visible.
 const props = defineProps<{
   params: {
     params: Record<string, unknown>
@@ -36,7 +38,10 @@ const chatStore = useChatStore()
 const displaySnapshots = useDisplaySnapshotsStore()
 const { currentBotId } = storeToRefs(chatStore)
 
-const visible = usePanelVisible(props.params.api)
+const panelVisible = usePanelVisible(props.params.api)
+const route = useRoute()
+// Settings cover the persistent chat workspace without unmounting its panels.
+const visible = computed(() => panelVisible.value && (route.name === 'home' || route.name === 'bot'))
 
 function handleSnapshot(payload: { tabId: string; sessionId?: string; dataUrl: string }) {
   const botId = currentBotId.value

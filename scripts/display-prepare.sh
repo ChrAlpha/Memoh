@@ -186,9 +186,38 @@ display_ready() {
 }
 
 prepare_lock=/tmp/memoh-display-prepare.lock
+prepare_owner=0
+
+prepare_process_alive() {
+  prepare_pid="$1"
+  [ -n "$prepare_pid" ] || return 1
+  kill -0 "$prepare_pid" 2>/dev/null || return 1
+  [ -r "/proc/$prepare_pid/cmdline" ] || return 1
+  tr '\000' ' ' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Fq 'display-prepare.sh'
+}
+
+release_prepare_lock() {
+  rm -f "$prepare_lock/pid"
+  rmdir "$prepare_lock" 2>/dev/null || true
+}
+
+takeover_stale_prepare_lock() {
+  [ -f "$prepare_lock/pid" ] || return 1
+  prepare_pid="$(cat "$prepare_lock/pid" 2>/dev/null || true)"
+  [ -n "$prepare_pid" ] || return 1
+  prepare_process_alive "$prepare_pid" && return 1
+  rm -f "$prepare_lock/pid"
+  rmdir "$prepare_lock" 2>/dev/null || return 1
+  mkdir "$prepare_lock" 2>/dev/null
+}
+
 if mkdir "$prepare_lock" 2>/dev/null; then
-  trap 'rmdir "$prepare_lock" 2>/dev/null || true' EXIT INT TERM
-else
+  prepare_owner=1
+elif takeover_stale_prepare_lock; then
+  prepare_owner=1
+fi
+
+if [ "$prepare_owner" -ne 1 ]; then
   progress 12 checking "Waiting for another desktop preparation"
   wait_i=0
   while [ -d "$prepare_lock" ] && [ "$wait_i" -lt 180 ]; do
@@ -196,15 +225,28 @@ else
       emit_complete
       exit 0
     fi
+    if takeover_stale_prepare_lock; then
+      prepare_owner=1
+      break
+    fi
     sleep 1
     wait_i=$((wait_i + 1))
   done
-  if display_ready; then
+  if [ "$prepare_owner" -ne 1 ] && display_ready; then
     emit_complete
     exit 0
   fi
-  echo "Another desktop preparation is still running." >&2
-  exit 1
+  if [ "$prepare_owner" -ne 1 ]; then
+    echo "Another desktop preparation is still running." >&2
+    exit 1
+  fi
+fi
+
+if [ "$prepare_owner" -eq 1 ]; then
+  # A forced process-group kill cannot run the EXIT trap. Record the owner so
+  # a later preparation can distinguish that stale lock from an active one.
+  trap release_prepare_lock EXIT INT TERM
+  printf '%s\n' "$$" >"$prepare_lock/pid"
 fi
 
 progress 10 checking "Checking display runtime"
