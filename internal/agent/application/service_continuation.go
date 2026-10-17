@@ -35,12 +35,14 @@ func (s *Service) prepareContinuationRunConfig(
 	fallback historyfrag.ScopeFallback,
 	summaryScope contextfrag.Scope,
 	eventCh chan<- WSStreamEvent,
+	req ChatRequest,
 ) (native.RunConfig, error) {
 	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, defaultMaxContextMinutes, 0)
 	if err != nil {
 		return native.RunConfig{}, err
 	}
 	loaded = pruneHistoryForGateway(loaded)
+	req.historyViewFrom = historyRecordsViewFrom(loaded)
 	loaded, err = s.replaceCompactedMessages(ctx, summaryScope.SessionID, summaryScope, loaded, compactionArtifactBoundary{})
 	if err != nil {
 		return native.RunConfig{}, err
@@ -49,8 +51,10 @@ func (s *Service) prepareContinuationRunConfig(
 	messages, retained, _ := trimMessagesAndRecordsByTokens(s.logger, loaded, 0)
 	messages = sanitizeMessages(messages)
 	historyEstimates := make([]int, len(messages))
+	pressure := 0
 	for i := range messages {
 		historyEstimates[i] = estimateMessageTokens(messages[i])
+		pressure += historyEstimates[i]
 	}
 	base.ContextHistoryTokenEstimates = historyEstimates
 	base.ContextTrimmableMessages = len(messages)
@@ -69,5 +73,6 @@ func (s *Service) prepareContinuationRunConfig(
 	base.Query = ""
 	base.LiveToolStream = eventCh != nil
 	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
+	base.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{historyCount: len(messages), pressureTokens: pressure})
 	return s.prepareRunConfig(ctx, base), nil
 }

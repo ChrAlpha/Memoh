@@ -243,13 +243,17 @@ func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testi
 			for err := range handle.Errs() {
 				failures = append(failures, err)
 			}
-			if len(failures) != 1 || apperror.CodeOf(failures[0]) != apperror.CodeContextProtectedOverflow {
-				t.Fatalf("errors = %v, want original protected overflow", failures)
+			wantCode := apperror.CodeContextProtectedOverflow
+			if wantCompactions > 0 {
+				wantCode = apperror.CodeContextBudgetUnsatisfied
+			}
+			if len(failures) != 1 || apperror.CodeOf(failures[0]) != wantCode {
+				t.Fatalf("errors = %v, want %s", failures, wantCode)
 			}
 			if len(compactor.configs) != wantCompactions || provider.callCount() != 0 || resolver.storeCalls != 0 {
 				t.Fatalf("compaction/provider/history calls = %d/%d/%d, want %d/0/0", len(compactor.configs), provider.callCount(), resolver.storeCalls, wantCompactions)
 			}
-			assertDeferredLifecycleRow(t, lifecycles.creates, handle.RunID(), contextLifecycleStatusFailedBudget, string(apperror.CodeContextProtectedOverflow))
+			assertDeferredLifecycleRow(t, lifecycles.creates, handle.RunID(), contextLifecycleStatusFailedBudget, string(wantCode))
 		})
 	}
 }

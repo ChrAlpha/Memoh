@@ -380,6 +380,7 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
+	compacted := recoveryAttempts > 0
 	if (recoveryAttempts == 0 || (budgetPlan != nil && providerHistoryCost(cfg.ContextSourceFrags) > budgetPlan.HistoryBudget)) && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
 		recoveryAttempts < 3 && cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
 		budgetPlan.ActualSystemCost <= budgetPlan.SystemBudget && ctx.Err() == nil {
@@ -398,6 +399,10 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		if recovered && recoveryErr == nil && !reflect.DeepEqual(recovery.ContextSourceFrags, cfg.ContextSourceFrags) {
 			return applyProviderRunConfigAttempt(ctx, logger, recovery, recoveryAttempts+1)
 		}
+		compacted = compacted || recovered || errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied)
+	}
+	if compacted && errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		err = fmt.Errorf("%w: compaction did not make the context fit: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 	}
 	if budgetErr != nil {
 		recordContextBudgetFailure(ledger, budgetErr)

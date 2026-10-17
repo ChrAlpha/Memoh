@@ -156,7 +156,7 @@ func TestChatBudgetRecoveryCannotBypassFailure(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) || len(runner.configs) != 1 {
+			if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 1 {
 				t.Fatalf("unrecovered error=%v calls=%d", err, len(runner.configs))
 			}
 		})
