@@ -282,17 +282,14 @@ func budgetPlanApplies(snapshot contextfrag.LifecycleSnapshot, resolvedModel str
 }
 
 // autoCompactionArmed mirrors the trigger's precondition: a summarizer resolves
-// through the same candidate chain the manual trigger uses, otherwise the mark
+// from the session's latest model or the bot chat model, otherwise the mark
 // would label a level that never fires.
 func (h *SessionInfoHandler) autoCompactionArmed(ctx context.Context, botSettings settings.Settings, sessionID string) bool {
 	if h.modelsService == nil {
 		return true
 	}
-	sessionModelID := ""
-	if strings.TrimSpace(botSettings.CompactionModelID) == "" {
-		sessionModelID = models.LatestSessionModelID(ctx, h.queries, sessionID)
-	}
-	_, err := models.ResolveCompactionModel(ctx, h.modelsService, h.queries, botSettings.CompactionModelID, sessionModelID, botSettings.ChatModelID)
+	sessionModelID := models.LatestSessionModelID(ctx, h.queries, sessionID)
+	_, err := models.ResolveCompactionModel(ctx, h.modelsService, h.queries, sessionModelID, botSettings.ChatModelID)
 	return !models.IsCompactionModelUnavailable(err)
 }
 

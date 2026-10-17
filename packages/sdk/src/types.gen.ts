@@ -4084,10 +4084,6 @@ export type SettingsSettings = {
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
-    compaction_model_id?: string;
-    compaction_target_percent?: number | null;
-    compaction_threshold?: number;
     default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
@@ -4155,16 +4151,12 @@ export type SettingsUpsertRequest = {
      * Reference fields below use pointer semantics so autosaving clients can
      * clear a selection: nil = keep current, "" = clear, value = set. The
      * service mirrors each into a `<field>_set` SQL flag (same pattern as
-     * FetchProviderID / CompactionModelID); plain strings would make ""
+     * FetchProviderID / MemoryLLMModelID); plain strings would make ""
      * indistinguishable from "not sent".
      */
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
-    compaction_model_id?: string;
-    compaction_target_percent?: number;
-    compaction_threshold?: number;
     default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;

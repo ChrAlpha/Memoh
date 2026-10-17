@@ -31,17 +31,13 @@ func (r *recordingCompactionRunner) RunCompactionSync(_ context.Context, cfg com
 	return compaction.Result{Status: compaction.StatusOK}, nil
 }
 
-func newControllerPolicyService(t *testing.T, targetPercent *int) (*Service, *recordingCompactionRunner) {
+func newControllerPolicyService(t *testing.T) (*Service, *recordingCompactionRunner) {
 	t.Helper()
 	const (
 		modelUUID    = "00000000-0000-0000-0000-000000000451"
 		providerUUID = "00000000-0000-0000-0000-000000000452"
 		botUUID      = "00000000-0000-0000-0000-000000000453"
 	)
-	target := pgtype.Int4{}
-	if targetPercent != nil {
-		target = pgtype.Int4{Int32: int32(*targetPercent), Valid: true} //nolint:gosec // test values stay within 1..99
-	}
 	queries := &controllerQueries{
 		compactionConfigQueries: &compactionConfigQueries{
 			model: sqlc.Model{
@@ -61,11 +57,9 @@ func newControllerPolicyService(t *testing.T, targetPercent *int) (*Service, *re
 			},
 		},
 		settings: sqlc.GetSettingsByBotIDRow{
-			BotID:                   compactionConfigUUID(t, botUUID),
-			ReasoningEffort:         "medium",
-			CompactionEnabled:       true,
-			CompactionTargetPercent: target,
-			CompactionModelID:       compactionConfigUUID(t, modelUUID),
+			BotID:           compactionConfigUUID(t, botUUID),
+			ReasoningEffort: "medium",
+			ChatModelID:     compactionConfigUUID(t, modelUUID),
 		},
 	}
 	runner := &recordingCompactionRunner{}

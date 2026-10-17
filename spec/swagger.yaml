@@ -6916,15 +6916,6 @@ definitions:
         type: string
       command_ui_language:
         type: string
-      compaction_enabled:
-        type: boolean
-      compaction_model_id:
-        type: string
-      compaction_target_percent:
-        type: integer
-        x-nullable: true
-      compaction_threshold:
-        type: integer
       default_bot_agent_id:
         type: string
       discuss_probe_model_id:
@@ -7040,21 +7031,13 @@ definitions:
           Reference fields below use pointer semantics so autosaving clients can
           clear a selection: nil = keep current, "" = clear, value = set. The
           service mirrors each into a `<field>_set` SQL flag (same pattern as
-          FetchProviderID / CompactionModelID); plain strings would make ""
+          FetchProviderID / MemoryLLMModelID); plain strings would make ""
           indistinguishable from "not sent".
         type: string
       chat_runtime:
         type: string
       command_ui_language:
         type: string
-      compaction_enabled:
-        type: boolean
-      compaction_model_id:
-        type: string
-      compaction_target_percent:
-        type: integer
-      compaction_threshold:
-        type: integer
       default_bot_agent_id:
         type: string
       discuss_probe_model_id:

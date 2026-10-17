@@ -16,7 +16,7 @@ const (
 
 func TestDiscussBatchThatDoesNotFitRunsWholeWithoutPreTurnCompaction(t *testing.T) {
 	for _, runtimeType := range []string{sessionpkg.RuntimeModel, sessionpkg.RuntimeACPAgent} {
-		service, runner := newControllerPolicyService(t, nil)
+		service, runner := newControllerPolicyService(t)
 		var messages []turn.DiscussMessage
 		for _, id := range []string{"a", "b", "c", "d", "e"} {
 			messages = append(messages, turn.DiscussMessage{Role: "user", Content: strings.Repeat(id, 1000), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
@@ -32,7 +32,7 @@ func TestDiscussBatchThatDoesNotFitRunsWholeWithoutPreTurnCompaction(t *testing.
 }
 
 func TestDiscussCurrentInputAloneTooLargeDoesNotRunCompaction(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	fired, err := service.maybeSyncCompactDiscuss(t.Context(), turn.StartTurnCommand{
 		BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
 		DiscussMessages: []turn.DiscussMessage{{Role: "user", Content: strings.Repeat("c", 4004)}},
@@ -50,7 +50,7 @@ func TestDiscussCurrentInputAloneTooLargeDoesNotRunCompaction(t *testing.T) {
 }
 
 func TestDiscussAdmissionOverflowRunsRecovery(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	fired, err := service.maybeSyncCompactDiscuss(t.Context(), turn.StartTurnCommand{
 		BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
 		DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 500,
@@ -61,7 +61,7 @@ func TestDiscussAdmissionOverflowRunsRecovery(t *testing.T) {
 }
 
 func TestDiscussRecoveryHonorsCancellation(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	fired, err := service.maybeSyncCompactDiscuss(ctx, turn.StartTurnCommand{
@@ -76,7 +76,7 @@ func TestDiscussRecoveryHonorsCancellation(t *testing.T) {
 func TestMaybeSyncCompactDiscussFittingInputNoop(t *testing.T) {
 	t.Parallel()
 
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	fired, err := service.maybeSyncCompactDiscuss(context.Background(), turn.StartTurnCommand{
 		BotID:           syncCompactBotID,
 		ThreadID:        syncCompactThreadID,
@@ -91,7 +91,7 @@ func TestMaybeSyncCompactDiscussFittingInputNoop(t *testing.T) {
 func TestMaybeSyncCompactDiscussMissingWindowUsesAbsoluteCap(t *testing.T) {
 	t.Parallel()
 
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	service.SetContextAbsoluteMaxTokens(1000)
 	fired, err := service.maybeSyncCompactDiscuss(context.Background(), turn.StartTurnCommand{
 		BotID: syncCompactBotID, ThreadID: syncCompactThreadID,

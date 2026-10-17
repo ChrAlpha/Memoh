@@ -73,7 +73,7 @@ func TestDiscussAdmissionKeepsNewestFittingSuffixOfCurrentBatch(t *testing.T) {
 }
 
 func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	sources := []turn.ContextMessageSource{{Kind: "external", ID: "a", Current: true}, {Kind: "external", ID: "b", Current: true}}
 	cmd := turn.StartTurnCommand{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, DiscussContextOverflow: true, DiscussContextTokens: 2000, DiscussCurrentTokens: 100, DiscussCurrentSources: sources}
 	if recomposed, err := service.maybeSyncCompactDiscuss(t.Context(), cmd, ResolveRunConfigResult{ContextBudgetMaxTokens: 1000}, "recovery"); !recomposed || err != nil || len(runner.configs) != 1 {

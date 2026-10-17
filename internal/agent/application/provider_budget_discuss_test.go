@@ -115,7 +115,7 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 	}}
 	agent := native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
 	service := newDiscussTestService(&fakeRunner{}, agent, resolver)
-	policyService, _ := newControllerPolicyService(t, nil)
+	policyService, _ := newControllerPolicyService(t)
 	service.settingsService = policyService.settingsService
 	service.modelsService = policyService.modelsService
 	service.queries = policyService.queries

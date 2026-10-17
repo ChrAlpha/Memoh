@@ -72,22 +72,17 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		}
 	}))
 	defer server.Close()
-	chatModel, compactModel, providerID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	chatModel, providerID := uuid.NewString(), uuid.NewString()
 	providerConfig, _ := json.Marshal(map[string]string{"base_url": server.URL, "api_key": "test-key"})
 	if _, err := pool.Exec(ctx, `INSERT INTO providers(id,name,client_type,config) VALUES($1,$2,'openai-completions',$3)`, providerID, providerID, providerConfig); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM providers WHERE id=$1`, providerID) })
-	for _, model := range []struct {
-		id, slug string
-		window   int
-	}{{chatModel, "chat-model", 8000}, {compactModel, "compact-model", 6000}} {
-		config, _ := json.Marshal(map[string]any{"context_window": model.window, "compatibilities": []string{}})
-		if _, err := pool.Exec(ctx, `INSERT INTO models(id,model_id,provider_id,config) VALUES($1,$2,$3,$4)`, model.id, model.slug, providerID, config); err != nil {
-			t.Fatal(err)
-		}
+	config, _ := json.Marshal(map[string]any{"context_window": 8000, "compatibilities": []string{}})
+	if _, err := pool.Exec(ctx, `INSERT INTO models(id,model_id,provider_id,config) VALUES($1,'chat-model',$2,$3)`, chatModel, providerID, config); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE bots SET chat_model_id=$2,compaction_model_id=$3 WHERE id=$1`, botID, chatModel, compactModel); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE bots SET chat_model_id=$2 WHERE id=$1`, botID, chatModel); err != nil {
 		t.Fatal(err)
 	}
 	var rc timeline.RenderedContext
