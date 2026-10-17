@@ -213,7 +213,7 @@ func NewService(
 	}
 	// The summarizer sends one large cold prompt whose first byte routinely
 	// takes 60-93s upstream; the interactive 30s header deadline would kill
-	// every automatic pass while manual /compact (SDK default client) works.
+	// every pass.
 	compactionTransport := streamTransport.Clone()
 	compactionTransport.ResponseHeaderTimeout = 3 * time.Minute
 	compactionHTTPClient := &http.Client{
