@@ -206,7 +206,15 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	if budgetTokens <= 0 {
 		budgetTokens = s.contextAbsoluteMaxTokens()
 	}
-	_, admission := admitDiscussMessages(cmd.DiscussMessages, budgetTokens)
+	// Summaries are compacted by the run's budget check like any history; only
+	// input that cannot fit on its own stops the turn here.
+	unpinned := make([]turn.DiscussMessage, 0, len(cmd.DiscussMessages))
+	for _, message := range cmd.DiscussMessages {
+		if message.CompactionArtifactID == "" {
+			unpinned = append(unpinned, message)
+		}
+	}
+	_, admission := admitDiscussMessages(unpinned, budgetTokens)
 	if admission.ProtectedOverflow {
 		s.logger.ErrorContext(ctx, "context_admission_rejected",
 			slog.String("path", "discuss_turn"),

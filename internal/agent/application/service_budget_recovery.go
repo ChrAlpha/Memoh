@@ -276,7 +276,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	}
 	originalHistory := max(0, cmd.DiscussContextTokens-newestTokens)
 	pressure = max(pressure, contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(originalHistory))))
-	if (pressure <= available && len(cmd.DiscussOmittedSources) == 0) || available <= 0 {
+	if pressure <= available && len(cmd.DiscussOmittedSources) == 0 {
 		return cfg, shed, nil
 	}
 	// Older input of the batch stays raw while it fits, leaving a tenth of the
@@ -288,6 +288,9 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		historyBudget -= older[i].cost
 	}
 	if historyBudget <= 0 {
+		if len(cmd.DiscussOmittedSources) > 0 {
+			return cfg, false, fmt.Errorf("%w: no history room for input Channel omitted", contextfrag.ErrBudgetUnsatisfied)
+		}
 		return cfg, shed, nil
 	}
 	*compacted = true
