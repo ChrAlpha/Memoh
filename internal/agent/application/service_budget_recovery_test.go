@@ -101,7 +101,7 @@ func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *reco
 		InjectCh:                       make(chan native.InjectMessage),
 	}
 	cfg.ContextSourceFrags = buildProviderSourceFrags(t.Context(), cfg, []native.SystemSection{{ID: "system", Kind: contextfrag.KindSystemPrompt, Text: strings.Repeat("s", 3200)}}, nil)
-	cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}, chatHistoryLayout{forkCount: 1, historyCount: 22, pressureTokens: 2500})
+	cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, Query: "current request"}, chatHistoryLayout{forkCount: 1, historyCount: 22, pressureTokens: 2500})
 	return s, history, runner, cfg
 }
 
@@ -116,6 +116,9 @@ func TestChatBudgetRecoveryReloadsOnlyHistory(t *testing.T) {
 	}
 	if compactionCfg := runner.configs[0]; compactionCfg.HistoryBudgetTokens != 984 || compactionCfg.TotalInputTokens != 3900 {
 		t.Fatalf("recovery did not subtract fixed history content: %#v", compactionCfg)
+	}
+	if goal := runner.configs[0].CurrentRequest; goal != "current request" {
+		t.Fatalf("compaction goal = %q, want the unsaved current request", goal)
 	}
 	if got.RunID != cfg.RunID || got.Model != cfg.Model || got.InjectCh != cfg.InjectCh || !reflect.DeepEqual(got.ContextToolDefs, cfg.ContextToolDefs) {
 		t.Fatal("recovery replaced the active run configuration")

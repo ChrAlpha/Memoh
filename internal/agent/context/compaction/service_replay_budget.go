@@ -34,9 +34,10 @@ func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMess
 	return tokens
 }
 
-// currentRequestEntries renders the protected rows the work continues from,
-// so the summarizer knows the goal its summary serves.
-func currentRequestEntries(messages []CompactionCandidate, sources []turn.ContextMessageSource) []messageEntry {
+// currentRequestEntries renders what the work continues from, so the
+// summarizer knows the goal its summary serves: the protected rows, or the
+// request itself before it is stored.
+func currentRequestEntries(messages []CompactionCandidate, sources []turn.ContextMessageSource, request string) []messageEntry {
 	var entries []messageEntry
 	for _, message := range messages {
 		if !isProtectedSource(message, sources) {
@@ -45,6 +46,9 @@ func currentRequestEntries(messages []CompactionCandidate, sources []turn.Contex
 		if content := renderCandidateEntry(message.Record); strings.TrimSpace(content) != "" {
 			entries = append(entries, messageEntry{Role: message.Record.ModelMessage.Role, Content: content})
 		}
+	}
+	if len(entries) == 0 && strings.TrimSpace(request) != "" {
+		entries = append(entries, messageEntry{Role: "user", Content: request})
 	}
 	return entries
 }
