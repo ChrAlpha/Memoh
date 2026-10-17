@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,5 +128,58 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 	}
 	if len(got) != 0 {
 		t.Fatalf("cross-team history leaked %d rows", len(got))
+	}
+}
+
+// Rows a usable summary replaced cost nothing in either history window and
+// load once, to place the summary; rows of a failed summary still count.
+func TestPostgresHistoryWindowsSkipFoldedRows(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	compacts := map[string]string{}
+	for _, status := range []string{"ok", "error"} {
+		var id string
+		if err := tx.QueryRow(ctx, `INSERT INTO bot_history_message_compacts (bot_id, session_id, status, summary) VALUES ($1, $2, $3, 'summary') RETURNING id::text`,
+			postgresMessageTestBotID, postgresMessageTestSessionID, status).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		compacts[status] = id
+	}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, row := range []struct{ name, compact string }{{"beyond", ""}, {"older", ""}, {"folded-0", "ok"}, {"folded-1", "ok"}, {"folded-2", "ok"}, {"failed", "error"}, {"newest", ""}} {
+		var compactID any
+		if row.compact != "" {
+			compactID = compacts[row.compact]
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, compact_id, created_at, turn_position, turn_message_seq, turn_id, turn_visible)
+   VALUES (gen_random_uuid(), $1, $2, 'assistant', jsonb_build_object('role', 'assistant', 'content', $3 || ' ' || repeat('x', 1000)), $4, $5, $6, 0, gen_random_uuid(), true)`,
+			postgresMessageTestBotID, postgresMessageTestSessionID, row.name, compactID, base.Add(time.Duration(i)*time.Second), i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(messages []Message) []string {
+		out := make([]string, 0, len(messages))
+		for _, m := range messages {
+			var content struct{ Content string }
+			if err := json.Unmarshal(m.Content, &content); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, strings.Fields(content.Content)[0])
+		}
+		return out
+	}
+	full, err := svc.ListActiveSinceBySessionWithinBytes(ctx, postgresMessageTestSessionID, base, 2500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses, err := svc.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, postgresMessageTestSessionID, base, 2500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"older", "folded-0", "failed", "newest"}
+	if got := names(full); !slices.Equal(got, want) || !slices.Equal(names(responses), want) {
+		t.Fatalf("windows=%v and %v, want %v", got, names(responses), want)
 	}
 }

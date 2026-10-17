@@ -1739,7 +1739,8 @@ WHERE m.team_id = public.memoh_current_team_id()
 -- Turn-response (TR) composition, in Discuss and in pipeline chat, only needs
 -- content and the interrupted-checkpoint flag. Never return full metadata:
 -- legacy context_lifecycle snapshots can dwarf the content budget. Preserve
--- the active-history window, including its crossing row and turn order.
+-- the active-history window, including its crossing row and turn order, and
+-- the summary placement ListActiveMessagesSinceBySessionWithinBytes keeps.
 SELECT
   ranked.id,
   ranked.role,
@@ -1755,25 +1756,39 @@ FROM (
     m.turn_position,
     m.turn_message_seq,
     COALESCE(m.metadata->'agent_step_interrupted' = 'true'::jsonb, false)::boolean AS interrupted,
-    (SUM(octet_length(m.content::text)) OVER (
+    c.id IS NOT NULL AS folded,
+    ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY m.turn_position, m.turn_message_seq, m.created_at, m.id) AS folded_rank,
+    (SUM(CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END) OVER (
       ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+    ) - CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END)::BIGINT AS preceding_bytes
   FROM bot_visible_history_messages m
+  LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN bot_history_message_compacts c
+    ON c.team_id = public.memoh_current_team_id()
+   AND c.id = m.compact_id
+   AND c.bot_id = m.bot_id
+   AND c.session_id = s.id
+   AND c.compaction_epoch = s.compaction_epoch
+   AND c.status = 'ok'
+   AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.created_at >= sqlc.arg(created_at)
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
+  AND (NOT ranked.folded OR ranked.folded_rank = 1)
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
 
 -- name: ListActiveMessagesSinceBySessionWithinBytes :many
 -- Byte-budgeted variant of ListActiveMessagesSinceBySession (CM-ADM-001):
 -- rows are admitted newest-first until their running content byte total
 -- crosses max_bytes (the crossing row is kept, so the newest row always
--- loads), then returned in ascending order. Only content is budgeted: full
--- rows, metadata included, still load, so callers that need content alone
--- use ListTurnResponseSourcesSinceBySessionWithinBytes.
+-- loads), then returned in ascending order. Rows a usable summary replaced
+-- cost nothing, and only the first of each such group loads, to mark where
+-- the summary goes. Only content is budgeted: full rows, metadata included,
+-- still load, so callers that need content alone use
+-- ListTurnResponseSourcesSinceBySessionWithinBytes.
 SELECT
   ranked.id,
   ranked.bot_id,
@@ -1819,18 +1834,29 @@ FROM (
     ci.display_name AS sender_display_name,
     ci.avatar_url AS sender_avatar_url,
     s.channel_type AS platform,
-    (SUM(octet_length(m.content::text)) OVER (
+    c.id IS NOT NULL AS folded,
+    ROW_NUMBER() OVER (PARTITION BY c.id ORDER BY m.turn_position, m.turn_message_seq, m.created_at, m.id) AS folded_rank,
+    (SUM(CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END) OVER (
       ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+    ) - CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END)::BIGINT AS preceding_bytes
   FROM bot_visible_history_messages m
   LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN bot_history_message_compacts c
+    ON c.team_id = public.memoh_current_team_id()
+   AND c.id = m.compact_id
+   AND c.bot_id = m.bot_id
+   AND c.session_id = s.id
+   AND c.compaction_epoch = s.compaction_epoch
+   AND c.status = 'ok'
+   AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.created_at >= sqlc.arg(created_at)
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
+  AND (NOT ranked.folded OR ranked.folded_rank = 1)
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
 
 -- name: ListActiveMessagesSinceWithinBytes :many
