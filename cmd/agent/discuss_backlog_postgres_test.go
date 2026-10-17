@@ -70,6 +70,7 @@ type backlogFixture struct {
 	broadcaster *recordingFailureBroadcaster
 	images      *backlogImageLoader
 	summaries   atomic.Int32
+	failSummary atomic.Bool
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
 }
@@ -107,6 +108,10 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			return
 		}
 		f.summaries.Add(1)
+		if f.failSummary.Load() {
+			http.Error(w, "summarizer down", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"Earlier backlog summarized."},"finish_reason":"stop"}]}`)
 	}))
@@ -209,7 +214,7 @@ func (f *backlogFixture) backlogRows() (raw, compacted int) {
 
 func (f *backlogFixture) backlogRowsPrefixed(prefix string) (raw, compacted int) {
 	f.t.Helper()
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE compact_id IS NULL), count(*) FILTER (WHERE compact_id IS NOT NULL) FROM bot_history_messages WHERE session_id=$1 AND source_message_id LIKE $2`, f.sessionID, prefix+"%").Scan(&raw, &compacted); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE c.status IS DISTINCT FROM 'ok'), count(*) FILTER (WHERE c.status = 'ok') FROM bot_history_messages h LEFT JOIN bot_history_message_compacts c ON c.id=h.compact_id WHERE h.session_id=$1 AND h.source_message_id LIKE $2`, f.sessionID, prefix+"%").Scan(&raw, &compacted); err != nil {
 		f.t.Fatal(err)
 	}
 	return raw, compacted
