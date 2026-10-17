@@ -10,13 +10,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
-// toolOutputMaxBytes bounds the tool-result outcome rendered into the summarizer
-// input. Stored tool payloads are already gateway-pruned; this keeps the summary
-// input compact while preserving the outcome gist.
-const (
-	toolOutputMaxBytes    = 2048
-	entryMetadataMaxBytes = 256
-)
+const entryMetadataMaxBytes = 256
 
 var (
 	dataURIRe = regexp.MustCompile(`data:[a-zA-Z0-9.+/-]+;base64,[A-Za-z0-9+/=]+`)
@@ -116,7 +110,7 @@ func cleanEntryMetadataValue(value string) string {
 
 // renderEntryContent turns a stored history message into clean text for the
 // summarizer prompt: plain text is surfaced directly, media is reduced to a
-// marker, tool calls show their name and bounded arguments, and tool results
+// marker, tool calls show their name and arguments, and tool results
 // show their outcome text (falling back to a marker) instead of dumping the
 // raw stored JSON.
 func renderEntryContent(mm turn.ModelMessage) string {
@@ -197,7 +191,7 @@ func toolCallMarker(name string, input json.RawMessage) string {
 }
 
 // renderToolResult surfaces a tool result's outcome for the summarizer: a clean
-// string when one can be extracted, otherwise a bounded, media-scrubbed
+// string when one can be extracted, otherwise a media-scrubbed
 // serialization of the raw outcome so real output (stdout, search results,
 // structured data) survives. Falls back to a marker only when there is nothing.
 func renderToolResult(candidates ...json.RawMessage) string {
@@ -210,13 +204,13 @@ func renderToolResult(candidates ...json.RawMessage) string {
 	return "[tool result]"
 }
 
-// sanitizeToolText bounds and de-medias any tool outcome text before it reaches
-// the summarizer, applied uniformly to both the clean-text and raw-JSON paths so
-// neither can leak base64/data-URI payloads or unbounded output.
+// sanitizeToolText de-medias any tool outcome text before it reaches the
+// summarizer, applied uniformly to both the clean-text and raw-JSON paths so
+// neither can leak base64/data-URI payloads. The text itself reaches the
+// summarizer whole: a summary covers only what its model read.
 func sanitizeToolText(s string) string {
 	s = dataURIRe.ReplaceAllString(s, "[media]")
-	s = base64BlobRe.ReplaceAllString(s, "[media]")
-	return truncateBytes(s, toolOutputMaxBytes)
+	return base64BlobRe.ReplaceAllString(s, "[media]")
 }
 
 // firstOutputText returns the first cleanly extractable string from a tool

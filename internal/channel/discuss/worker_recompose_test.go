@@ -113,21 +113,21 @@ func TestHandleReplyWithTurn_RecomposeLimitDefersToNextTrigger(t *testing.T) {
 	}
 }
 
-func TestHandleReplyWithTurnThirdRecoveryCompletesOriginalInput(t *testing.T) {
-	svc := &fakeTurnService{recomposeRuns: 3}
+func TestHandleReplyWithTurnRecoveryCompletesOriginalInput(t *testing.T) {
+	svc := &fakeTurnService{recomposeRuns: 1}
 	svc.onStart = func(cmd turn.StartTurnCommand) {
-		if cmd.DiscussRecoveryExhausted != (svc.calls == 4) {
+		if cmd.DiscussRecoveryExhausted != (svc.calls == 2) {
 			t.Errorf("attempt %d exhausted=%v", svc.calls, cmd.DiscussRecoveryExhausted)
 		}
 	}
 	driver := NewDiscussDriver(DiscussDriverDeps{})
 	sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
 	driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
-	if svc.calls != 4 || sess.lastProcessed.SourceCursor != 200 {
-		t.Fatalf("calls=%d cursor=%+v; third recovery must complete original input", svc.calls, sess.lastProcessed)
+	if svc.calls != 2 || sess.lastProcessed.SourceCursor != 200 {
+		t.Fatalf("calls=%d cursor=%+v; the attempt after recovery must complete original input", svc.calls, sess.lastProcessed)
 	}
 	driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
-	if svc.calls != 4 {
+	if svc.calls != 2 {
 		t.Fatal("same input processed twice")
 	}
 }

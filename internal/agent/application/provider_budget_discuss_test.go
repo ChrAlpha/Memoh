@@ -157,7 +157,7 @@ func TestDiscussProviderBudgetRecoveryRecomposesBeforeProviderDispatch(t *testin
 	if len(compactor.configs) != 1 {
 		t.Fatalf("compaction calls = %d, want 1 after actual provider-budget rejection; events=%v", len(compactor.configs), kinds)
 	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 3740 || cfg.Ratio != 100 || cfg.HistoryBudgetTokens != 998 || cfg.SessionID != cmd.ThreadID {
+	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 3740 || cfg.HistoryBudgetTokens != 998 || cfg.SessionID != cmd.ThreadID {
 		t.Fatalf("compaction config = %#v, want total pressure=3740 compacted whole into history allowance=998 in the same session", cfg)
 	}
 	if len(kinds) != 2 || kinds[0] != turn.DiscussEventRunResolved || kinds[1] != turn.DiscussEventRecompose {
@@ -271,7 +271,7 @@ func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *t
 	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 || resolver.storeCalls != 0 {
 		t.Fatalf("recompose=%t compaction/provider/history=%d/%d/%d, want recovery before trimmed provider dispatch", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
 	}
-	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.Ratio != 100 || cfg.HistoryBudgetTokens != 998 {
+	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.HistoryBudgetTokens != 998 {
 		t.Fatalf("ordinary history recovery config = %#v, want raw=2500 compacted whole into 998", cfg)
 	}
 }

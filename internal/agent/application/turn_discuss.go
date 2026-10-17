@@ -168,14 +168,21 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		}
 		return
 	}
-	if !cmd.DiscussRecoveryExhausted && s.maybeSyncCompactDiscuss(ctx, cmd, resolved, h.id) {
+	recompose, compactErr := s.maybeSyncCompactDiscuss(ctx, cmd, resolved, h.id)
+	if recompose {
 		if h.emit(turn.DiscussEventRecompose, nil) {
 			h.contentLightTerminal = true
 		}
 		return
 	}
-	if cmd.DiscussContextOverflow {
+	if cmd.DiscussRecoveryExhausted && len(cmd.DiscussOmittedSources) > 0 {
+		compactErr = errors.New("channel omitted input after compaction")
+	}
+	if compactErr != nil || cmd.DiscussContextOverflow {
 		cause := apperror.New(apperror.CodeContextProtectedOverflow, nil)
+		if compactErr != nil {
+			cause = apperror.Wrap(apperror.CodeContextBudgetUnsatisfied, compactErr, nil)
+		}
 		cfg := resolved.RunConfig
 		cfg.RunID = h.id
 		cfg.Identity.BotID, cfg.Identity.SessionID = cmd.BotID, cmd.ThreadID
@@ -199,7 +206,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	if budgetTokens <= 0 {
 		budgetTokens = s.contextAbsoluteMaxTokens()
 	}
-	admitted, admission := admitDiscussMessages(cmd.DiscussMessages, budgetTokens)
+	_, admission := admitDiscussMessages(cmd.DiscussMessages, budgetTokens)
 	if admission.ProtectedOverflow {
 		s.logger.ErrorContext(ctx, "context_admission_rejected",
 			slog.String("path", "discuss_turn"),
@@ -219,18 +226,10 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	if runConfig.ContextMutations == nil {
 		runConfig.ContextMutations = contextfrag.NewMutationLedger()
 	}
-	recordOmittedCurrentInput(runConfig.ContextMutations, cmd.DiscussOmittedSources, admission.OmittedSources)
-	if admission.DroppedMessages > 0 {
-		cmd.DiscussContextTokens = max(cmd.DiscussContextTokens, admission.EstimatedTokens)
-		s.logger.InfoContext(ctx, "context_admission",
-			slog.String("path", "discuss_turn"),
-			slog.String("bot_id", cmd.BotID),
-			slog.String("session_id", cmd.ThreadID),
-			slog.Int("estimated_tokens", admission.EstimatedTokens),
-			slog.Int("selected_tokens", admission.SelectedTokens),
-			slog.Int("budget_tokens", admission.BudgetTokens),
-			slog.Int("dropped_messages", admission.DroppedMessages))
-	}
+	recordOmittedCurrentInput(runConfig.ContextMutations, cmd.DiscussOmittedSources)
+	// The whole batch runs; what does not fit is compacted by the run's
+	// budget check, never dropped here.
+	admitted := cmd.DiscussMessages
 	runConfig.Messages = discussMessagesToSDK(admitted)
 	runConfig.SessionType = sessionpkg.TypeDiscuss
 	runConfig.Query = ""

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 			ProviderID: compactionConfigUUID(t, providerUUID),
 			Type:       "chat",
 			Enable:     true,
-			Config:     []byte(`{"context_window":200000}`),
+			Config:     []byte(`{"context_window":200000,"max_output_tokens":32000}`),
 		},
 		provider: sqlc.Provider{
 			ID:         compactionConfigUUID(t, providerUUID),
@@ -86,9 +87,6 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 		t.Fatalf("buildCompactionConfig: %v", err)
 	}
 
-	if cfg.Ratio != 0 {
-		t.Fatalf("Ratio = %d, want 0 because automatic compaction is target-driven", cfg.Ratio)
-	}
 	if cfg.TotalInputTokens != 150000 {
 		t.Fatalf("TotalInputTokens = %d, want 150000", cfg.TotalInputTokens)
 	}
@@ -98,8 +96,8 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 	if cfg.ModelRecordID == "" {
 		t.Fatal("ModelRecordID must carry the models row UUID for artifact provenance")
 	}
-	if cfg.MaxCompactTokens != 170000 {
-		t.Fatalf("MaxCompactTokens = %d, want 170000 (85%% of the summarizer window)", cfg.MaxCompactTokens)
+	if cfg.MaxOutputTokens != 32000 {
+		t.Fatalf("MaxOutputTokens = %d, want the model's declared output cap", cfg.MaxOutputTokens)
 	}
 }
 
@@ -136,11 +134,8 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 		CompactionModelID:       modelUUID,
 		CompactionTargetPercent: intPointer(20),
 	}, 150000, "")
-	if err != nil {
-		t.Fatalf("buildCompactionConfig() error = %v, want nil", err)
-	}
-	if cfg.ModelID != "" {
-		t.Fatalf("buildCompactionConfig() ModelID = %q, want empty config", cfg.ModelID)
+	if !errors.Is(err, models.ErrCompactionOutputLimitUnsupported) || cfg.ModelID != "" {
+		t.Fatalf("buildCompactionConfig() = %q, %v; want the unsupported summarizer reported", cfg.ModelID, err)
 	}
 }
 

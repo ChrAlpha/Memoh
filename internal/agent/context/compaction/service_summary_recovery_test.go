@@ -12,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
 )
 
 func (*fakeQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotSession, error) {
@@ -24,6 +25,7 @@ func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {
 	parents := fusionParentLogs(t, cfg, strings.Repeat("s", 2040), strings.Repeat("t", 2040))
 	rows := fusionQualityRows(t, cfg)
 	rows = rows[len(rows)-1:]
+	cfg.ProtectedSources = historySources(rows[0])
 	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
 	res, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
 	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 0 || res.MessageCount != 0 {
@@ -79,7 +81,6 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 		t.Run(strings.Repeat("parent", parentCount), func(t *testing.T) {
 			stub := &stubModel{summary: "short replacement"}
 			cfg := machineryConfig(stub, 800)
-			cfg.MaxCompactTokens = 50000
 			summaries := make([]string, parentCount)
 			for i := range summaries {
 				summaries[i] = strings.Repeat("s", 4080/parentCount)
@@ -107,16 +108,14 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 	for _, summary := range []string{"short replacement", strings.Repeat("s", 2400)} {
 		stub := &stubModel{summary: summary}
-		cfg := machineryConfig(stub, 200)
-		cfg.HistoryBudgetTokens = 500
-		cfg.SummaryWindowTokens = 128000
+		cfg := machineryConfig(stub, 500)
 		parents := fusionParentLogs(t, cfg, strings.Repeat("p", 8000))
 		q := &fakeQueries{priorLogs: parents}
 		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-		if limit := statedSummaryLimit(t, stub.prompt); limit > 200 {
-			t.Fatalf("stated summary limit=%d exceeds target=200", limit)
+		if limit := statedSummaryLimit(t, stub.prompt); limit > 500 {
+			t.Fatalf("stated summary limit=%d exceeds the 500-token room", limit)
 		}
-		if len(summary) > 200 {
+		if len(summary) > 2000 {
 			if err == nil || result.Status == StatusOK || len(q.rollupCalls) > 0 {
 				t.Fatalf("oversized replay accepted: result=%+v err=%v", result, err)
 			}
@@ -129,54 +128,50 @@ func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 
 func TestSummaryBudgetIsStatedNotUsedAsOutputCap(t *testing.T) {
 	stub := &stubModel{summary: "short summary", reasoning: 300}
-	cfg := machineryConfig(stub, 200)
-	cfg.HistoryBudgetTokens = 500
+	cfg := machineryConfig(stub, 500)
 	q := &fakeQueries{uncompacted: qualityRows(t)}
 	result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
 	if err != nil || result.Status != StatusOK {
 		t.Fatalf("reasoning summarizer failed under a small replay budget: result=%+v err=%v", result, err)
 	}
-	if stub.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("output cap=%d, want the summarizer cap %d", stub.maxTokens, maxCompactionSummaryTokens)
+	if stub.maxTokens != models.DefaultOutputReserveTokens {
+		t.Fatalf("output cap=%d, want the model's output allowance %d", stub.maxTokens, models.DefaultOutputReserveTokens)
 	}
-	if limit := statedSummaryLimit(t, stub.prompt); limit <= 0 || limit > 200 {
-		t.Fatalf("stated summary limit=%d, want within the 200-token target", limit)
+	if limit := statedSummaryLimit(t, stub.prompt); limit <= 0 || limit > 500 {
+		t.Fatalf("stated summary limit=%d, want within the 500-token room", limit)
 	}
 }
 
 func statedSummaryLimit(t *testing.T, prompt string) int {
 	t.Helper()
-	at := strings.LastIndex(prompt, "Keep the summary under ")
+	at := strings.LastIndex(prompt, "must stay under ")
 	var limit int
 	if at < 0 {
 		t.Fatal("prompt does not state the summary limit")
 	}
-	if _, err := fmt.Sscanf(prompt[at:], "Keep the summary under %d tokens.", &limit); err != nil {
+	if _, err := fmt.Sscanf(prompt[at:], "must stay under %d tokens", &limit); err != nil {
 		t.Fatalf("parse stated summary limit: %v", err)
 	}
 	return limit
 }
 
-func TestSummaryRecoveryReservesRetainedRawReplay(t *testing.T) {
-	for _, tailBytes := range []int{1200, 2400} {
+func TestSummaryRecoveryReservesKeptRawReplay(t *testing.T) {
+	for _, keptBytes := range []int{1200, 2400} {
 		stub := &stubModel{summary: "short summary"}
-		cfg := machineryConfig(stub, 200)
-		cfg.HistoryBudgetTokens = 500
+		cfg := machineryConfig(stub, 500)
 		rows := qualityRows(t)
-		rows[2] = mkRow(t, "user", jsonStr(strings.Repeat("u", tailBytes)), 100)
+		rows[3] = mkRow(t, "assistant", jsonStr(strings.Repeat("u", keptBytes)), 0)
+		cfg.ProtectedSources = historySources(rows[2])
 		q := &fakeQueries{uncompacted: rows}
 		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-		if err != nil {
-			t.Fatal(err)
+		if keptBytes == 2400 {
+			if !errors.Is(err, errNoSummaryRoom) || stub.calls != 0 || q.created {
+				t.Fatalf("kept history over the room: result=%+v err=%v calls=%d, want no room before any claim", result, err, stub.calls)
+			}
+			continue
 		}
-		if tailBytes == 2400 {
-			if result.Status != StatusProgress {
-				t.Fatalf("reported admission success despite retained overflow: %+v", result)
-			}
-		} else {
-			if limit := statedSummaryLimit(t, stub.prompt); result.Status != StatusOK || limit >= 100 {
-				t.Fatalf("failed to reserve retained raw: result=%+v stated limit=%d", result, limit)
-			}
+		if limit := statedSummaryLimit(t, stub.prompt); err != nil || result.Status != StatusOK || limit >= 200 {
+			t.Fatalf("failed to reserve kept raw: result=%+v err=%v stated limit=%d", result, err, limit)
 		}
 	}
 }
