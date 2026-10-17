@@ -324,6 +324,17 @@ func prepareProviderAttempt(
 	inputAllowance := stepReselectionAllowance(cfg)
 	reselectionDetail := ""
 	protectedPruned := 0
+	before := len(params.Messages)
+	dropped, err := cfg.contextSwitch.fold(ctx, cfg, params, prefixCount, inputAllowance)
+	if err != nil {
+		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
+	}
+	if dropped > 0 {
+		// The summary is the whole recovery: nothing trims the request after it.
+		reselector = nil
+		dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, shiftDynamicSourceRefs(dynamicRefs, -dropped), params.Messages)
+		cfg.ContextMutations.Record(contextfrag.MutationContextSwitch, fmt.Sprintf("step=%d messages=%d->%d input_tokens=%d", stepIndex, before, len(params.Messages), contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)))
+	}
 	if reselector != nil && prefixCount < len(params.Messages) {
 		beforeMessages := append([]sdk.Message(nil), params.Messages...)
 		selection := reselector(ctx, ContextStepSelectionInput{
@@ -351,6 +362,9 @@ func prepareProviderAttempt(
 		case selection.FatalError != nil:
 			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, selection.FatalError)
 		case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, prefixCount):
+			if len(selection.Messages) != len(beforeMessages) {
+				cfg.contextSwitch.invalidate()
+			}
 			dynamicRefs = remapDynamicRefs(dynamicRefs, beforeMessages, selection.Messages, prefixCount, selection)
 			params.Messages = selection.Messages
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeApplied

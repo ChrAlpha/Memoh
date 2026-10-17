@@ -185,8 +185,11 @@ type RunConfig struct {
 	ContextToolDefsResolved        bool
 	ContextBudgetMaxTokens         int
 	// ModelMaxOutputTokens is the model's configured output cap; zero means unknown.
-	ModelMaxOutputTokens         int
-	RecoverContextBudget         func(context.Context, RunConfig) (RunConfig, bool, error)
+	ModelMaxOutputTokens int
+	RecoverContextBudget func(context.Context, RunConfig) (RunConfig, bool, error)
+	// SwitchContext summarizes the run's earlier committed steps when a step
+	// request no longer fits; nil leaves the request as it is.
+	SwitchContext                func(context.Context, ContextSwitchInput) (sdk.Message, error)
 	ContextRecentProtectTokens   *int
 	ContextHistoryTokenEstimates []int
 	ContextTrimmableMessages     int
@@ -200,6 +203,7 @@ type RunConfig struct {
 	providerAttemptState         *providerAttemptState
 	retryDynamicRefs             []dynamicSourceRef
 	dynamicInputs                *loopDynamicInputs
+	contextSwitch                *contextSwitchState
 	contextStepFailure           func(error)
 	SessionType                  string
 	LiveToolStream               bool

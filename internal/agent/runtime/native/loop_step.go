@@ -47,6 +47,7 @@ func (t *stepThread) reset(dispatch generateDispatch) {
 	t.dispatch = dispatch
 	t.params = dispatch.params
 	t.messages = append([]sdk.Message(nil), dispatch.params.Messages...)
+	dispatch.contextSwitch.restart(dispatch.initialMessageCount)
 }
 
 // advance prepares the request for the next model call. A pending capability
@@ -66,6 +67,7 @@ func (t *stepThread) advance(cfg RunConfig, dynamic *loopDynamicInputs, boundary
 		if cfg.BackgroundManager != nil {
 			t.messages = removeBackgroundSummaryMessages(t.messages, t.dispatch.initialMessageCount)
 		}
+		t.dispatch.contextSwitch.boundary(len(t.messages))
 		t.messages = drainReadMediaMessage(boundary.readMedia, dynamic, cfg.ContextMutations, boundary.committed, t.messages)
 		if boundary.drainInjected != nil {
 			t.messages = boundary.drainInjected(boundary.committed, t.messages)
@@ -86,8 +88,10 @@ func (t *stepThread) advance(cfg RunConfig, dynamic *loopDynamicInputs, boundary
 	return request
 }
 
-// extend appends a committed step's messages to the conversation.
-func (t *stepThread) extend(messages []sdk.Message) {
+// extend appends the messages of the committed durable step to the
+// conversation.
+func (t *stepThread) extend(step int, messages []sdk.Message) {
+	t.dispatch.contextSwitch.committed(step)
 	t.messages = append(t.messages, messages...)
 }
 

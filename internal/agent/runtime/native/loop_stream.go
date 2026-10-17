@@ -157,6 +157,9 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// live InjectCh messages and read-media carriers.
 	dynamic := newLoopDynamicInputs(cfg.StepIndexOffset)
 	cfg.dynamicInputs = dynamic
+	if cfg.SwitchContext != nil {
+		cfg.contextSwitch = &contextSwitchState{}
+	}
 	prepareStep := a.wrapPrepareStepWithModelHook(streamCtx, cfg, nil)
 	var err error
 	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
@@ -748,7 +751,7 @@ func (e *streamEngine) checkpointSteeredStep(
 	}
 	e.takeDirective(dir)
 	e.resetRefused()
-	e.extend(steerCheckpointMessages(snapshot.Messages))
+	e.extend(stepIndex, steerCheckpointMessages(snapshot.Messages))
 	return false, nil
 }
 
@@ -1024,7 +1027,7 @@ partLoop:
 		if !e.continues() {
 			return true, nil
 		}
-		e.extend(sr.Messages)
+		e.extend(e.nextDurableStep-1, sr.Messages)
 		return false, nil
 	}
 	// A tool-loop abort raised by the batch stops the run after the step
@@ -1042,7 +1045,7 @@ partLoop:
 		e.aborted = true
 		return true, nil
 	}
-	e.extend(sr.Messages)
+	e.extend(e.nextDurableStep-1, sr.Messages)
 	return false, nil
 }
 

@@ -2237,6 +2237,7 @@ definitions:
     - current_input_omitted
     - current_input_images_omitted
     - run_abort_observed
+    - context_switch
     type: string
     x-enum-varnames:
     - MutationBeforeModelCallHook
@@ -2254,6 +2255,7 @@ definitions:
     - MutationCurrentInputOmitted
     - MutationCurrentInputImagesOmitted
     - MutationRunAbortObserved
+    - MutationContextSwitch
   contextfrag.MutationRecord:
     properties:
       detail:

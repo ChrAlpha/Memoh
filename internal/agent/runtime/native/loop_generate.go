@@ -110,6 +110,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	// (read-media carriers here; the stream loop adds live injections).
 	dynamic := newLoopDynamicInputs(cfg.StepIndexOffset)
 	cfg.dynamicInputs = dynamic
+	if cfg.SwitchContext != nil {
+		cfg.contextSwitch = &contextSwitchState{}
+	}
 	prepareStep := a.wrapPrepareStepWithModelHook(genCtx, cfg, nil)
 	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
 	if err != nil {
@@ -256,7 +259,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			// answered steps committed.
 			return nil, ErrToolLoopDetected
 		}
-		thread.extend(sr.Messages)
+		thread.extend(sdkStep+cfg.StepIndexOffset, sr.Messages)
 	}
 
 	// Drain collected tool-emitted side effects into the result.
@@ -351,6 +354,7 @@ type generateDispatch struct {
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
 	systemPrepended bool
+	contextSwitch   *contextSwitchState
 }
 
 // buildGenerateDispatch assembles the single-call input for the Memoh-owned
@@ -484,6 +488,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		approve:             approvalHandler,
 		initialMessageCount: initialProviderMessageCount,
 		systemPrepended:     systemPrepended,
+		contextSwitch:       cfg.contextSwitch,
 	}, nil
 }
 
