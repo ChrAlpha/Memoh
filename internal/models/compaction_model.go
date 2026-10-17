@@ -11,10 +11,10 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-// Compaction model resolution failures. Automatic triggers map them to a
-// silent skip; manual surfaces translate them into user-facing errors.
+// Compaction model resolution failures. A run that must compact reports them
+// as the reason it cannot continue.
 var (
-	ErrCompactionModelNotConfigured     = errors.New("no compaction or chat model configured")
+	ErrCompactionModelNotConfigured     = errors.New("no chat model configured for compaction")
 	ErrCompactionModelNotChat           = errors.New("compaction model is not a chat model")
 	ErrCompactionModelDisabled          = errors.New("compaction model is disabled")
 	ErrCompactionProviderDisabled       = errors.New("compaction model provider is disabled")
@@ -36,9 +36,9 @@ type CompactionModelResolution struct {
 // validates that it can act as a summarizer: a chat-type, enabled model on an
 // enabled LLM provider that honors output caps and declares a context window
 // (the summary budget derives from it, so an unknown window fails closed).
-// Callers compose the candidate chain: automatic triggers pass the override
-// and the turn's actually-resolved model; manual surfaces prefer the
-// session's latest model before the bot default.
+// Callers compose the candidate chain: a run passes its actually-resolved
+// model first; the session info surface prefers the session's latest model
+// before the bot default.
 func ResolveCompactionModel(
 	ctx context.Context,
 	modelsService *Service,

@@ -162,9 +162,8 @@ func TestGetSessionInfoOmitsCompactionForACPRuntime(t *testing.T) {
 			}),
 		}},
 		settingsRow: sqlc.GetSettingsByBotIDRow{
-			BotID:             testUUID(lifecycleTestBotID),
-			ReasoningEffort:   "medium",
-			CompactionEnabled: true,
+			BotID:           testUUID(lifecycleTestBotID),
+			ReasoningEffort: "medium",
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)
@@ -354,9 +353,8 @@ func TestGetSessionInfoFallsBackToLegacyLifecycleMetadata(t *testing.T) {
 			CreatedAt: pgtype.Timestamptz{Valid: true},
 		}},
 		settingsRow: sqlc.GetSettingsByBotIDRow{
-			BotID:             testUUID(lifecycleTestBotID),
-			ReasoningEffort:   "medium",
-			CompactionEnabled: true,
+			BotID:           testUUID(lifecycleTestBotID),
+			ReasoningEffort: "medium",
 		},
 	}
 	logger := slog.New(slog.DiscardHandler)

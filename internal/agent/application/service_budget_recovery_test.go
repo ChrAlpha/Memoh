@@ -62,7 +62,7 @@ func (r *recoveryCompactionRunner) RunCompactionSync(_ context.Context, cfg comp
 
 func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *recoveryCompactionRunner, native.RunConfig) {
 	t.Helper()
-	s, _ := newControllerPolicyService(t, nil)
+	s, _ := newControllerPolicyService(t)
 	s.queries = &recoveryHistoryQueries{controllerQueries: s.queries.(*controllerQueries)}
 	history := &recoveryHistoryService{}
 	s.messageService = history
@@ -302,7 +302,6 @@ func slowRecoveryFixture(t *testing.T) (directLifecycleFixture, *delayedRecovery
 	t.Helper()
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	queries := fixture.service.queries.(*directLifecycleQueries)
-	queries.compactionEnabled = true
 	model := queries.models["direct-lifecycle-model"]
 	model.Config = []byte(`{"context_window":8000}`)
 	queries.models["direct-lifecycle-model"] = model

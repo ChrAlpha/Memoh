@@ -74,23 +74,23 @@ func compactionResolverEnv(t *testing.T, queries *compactionModelQueries) *Servi
 func TestResolveCompactionModelPrefersEarlierCandidates(t *testing.T) {
 	t.Parallel()
 
-	const overrideID = "00000000-0000-0000-0000-00000000a001"
+	const firstID = "00000000-0000-0000-0000-00000000a001"
 	const turnID = "00000000-0000-0000-0000-00000000a002"
 	queries := &compactionModelQueries{
 		models: map[pgtype.UUID]sqlc.Model{
-			compactionTestUUID(t, overrideID): compactionTestModel(t, overrideID, "override/model", 200000, true),
-			compactionTestUUID(t, turnID):     compactionTestModel(t, turnID, "turn/model", 200000, true),
+			compactionTestUUID(t, firstID): compactionTestModel(t, firstID, "first/model", 200000, true),
+			compactionTestUUID(t, turnID):  compactionTestModel(t, turnID, "turn/model", 200000, true),
 		},
 		provider: compactionTestProvider("anthropic-messages"),
 	}
 	svc := compactionResolverEnv(t, queries)
 
-	resolution, err := ResolveCompactionModel(context.Background(), svc, queries, overrideID, turnID)
+	resolution, err := ResolveCompactionModel(context.Background(), svc, queries, firstID, turnID)
 	if err != nil {
 		t.Fatalf("ResolveCompactionModel() error = %v", err)
 	}
-	if resolution.Model.ID != overrideID {
-		t.Fatalf("resolved = %s, want the explicit override first", resolution.Model.ID)
+	if resolution.Model.ID != firstID {
+		t.Fatalf("resolved = %s, want the first candidate", resolution.Model.ID)
 	}
 
 	resolution, err = ResolveCompactionModel(context.Background(), svc, queries, "", turnID)
@@ -98,7 +98,7 @@ func TestResolveCompactionModelPrefersEarlierCandidates(t *testing.T) {
 		t.Fatalf("ResolveCompactionModel() fallback error = %v", err)
 	}
 	if resolution.Model.ID != turnID {
-		t.Fatalf("resolved = %s, want the turn model when no override is set", resolution.Model.ID)
+		t.Fatalf("resolved = %s, want the next candidate when the first is empty", resolution.Model.ID)
 	}
 	if resolution.WindowTokens != 200000 {
 		t.Fatalf("WindowTokens = %d, want the declared window", resolution.WindowTokens)

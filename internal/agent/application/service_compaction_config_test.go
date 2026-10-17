@@ -19,10 +19,14 @@ import (
 type compactionConfigQueries struct {
 	dbstore.Queries
 	model    sqlc.Model
+	models   map[pgtype.UUID]sqlc.Model
 	provider sqlc.Provider
 }
 
-func (q *compactionConfigQueries) GetModelByID(context.Context, pgtype.UUID) (sqlc.Model, error) {
+func (q *compactionConfigQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
+	if model, ok := q.models[id]; ok {
+		return model, nil
+	}
 	return q.model, nil
 }
 
@@ -79,10 +83,7 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 	cfg, err := r.buildCompactionConfig(context.Background(), ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000403",
 		ThreadID: "00000000-0000-0000-0000-000000000404",
-	}, settings.Settings{
-		CompactionModelID:       modelUUID,
-		CompactionTargetPercent: intPointer(40),
-	}, 150000, "")
+	}, settings.Settings{ChatModelID: modelUUID}, 150000, "")
 	if err != nil {
 		t.Fatalf("buildCompactionConfig: %v", err)
 	}
@@ -130,28 +131,34 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 	cfg, err := service.buildCompactionConfig(context.Background(), ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000413",
 		ThreadID: "00000000-0000-0000-0000-000000000414",
-	}, settings.Settings{
-		CompactionModelID:       modelUUID,
-		CompactionTargetPercent: intPointer(20),
-	}, 150000, "")
+	}, settings.Settings{ChatModelID: modelUUID}, 150000, "")
 	if !errors.Is(err, models.ErrCompactionOutputLimitUnsupported) || cfg.ModelID != "" {
 		t.Fatalf("buildCompactionConfig() = %q, %v; want the unsupported summarizer reported", cfg.ModelID, err)
 	}
 }
 
-func TestBuildCompactionConfigUsesTurnModelWhenNoOverride(t *testing.T) {
+func TestBuildCompactionConfigPrefersTurnModelOverChatModel(t *testing.T) {
 	t.Parallel()
 
-	const modelUUID = "00000000-0000-0000-0000-000000000431"
-	const providerUUID = "00000000-0000-0000-0000-000000000432"
-	queries := &compactionConfigQueries{
-		model: sqlc.Model{
-			ID:         compactionConfigUUID(t, modelUUID),
-			ModelID:    "turn-selected-model",
+	const (
+		turnModelUUID = "00000000-0000-0000-0000-000000000431"
+		chatModelUUID = "00000000-0000-0000-0000-000000000435"
+		providerUUID  = "00000000-0000-0000-0000-000000000432"
+	)
+	summarizer := func(id, slug string) sqlc.Model {
+		return sqlc.Model{
+			ID:         compactionConfigUUID(t, id),
+			ModelID:    slug,
 			ProviderID: compactionConfigUUID(t, providerUUID),
 			Type:       "chat",
 			Enable:     true,
 			Config:     []byte(`{"context_window":128000}`),
+		}
+	}
+	queries := &compactionConfigQueries{
+		models: map[pgtype.UUID]sqlc.Model{
+			compactionConfigUUID(t, turnModelUUID): summarizer(turnModelUUID, "turn-selected-model"),
+			compactionConfigUUID(t, chatModelUUID): summarizer(chatModelUUID, "bot-chat-model"),
 		},
 		provider: sqlc.Provider{
 			ID:         compactionConfigUUID(t, providerUUID),
@@ -166,18 +173,29 @@ func TestBuildCompactionConfigUsesTurnModelWhenNoOverride(t *testing.T) {
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:       queries,
 	}
-
-	cfg, err := service.buildCompactionConfig(context.Background(), ChatRequest{
+	req := ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000433",
 		ThreadID: "00000000-0000-0000-0000-000000000434",
-	}, settings.Settings{}, 90000, modelUUID)
-	if err != nil {
-		t.Fatalf("buildCompactionConfig: %v", err)
 	}
-	if cfg.ModelRecordID != modelUUID {
-		t.Fatalf("ModelRecordID = %q, want the turn's actually-resolved model %q", cfg.ModelRecordID, modelUUID)
-	}
-	if cfg.ModelID != "turn-selected-model" {
-		t.Fatalf("ModelID = %q, want the turn model slug", cfg.ModelID)
+	botSettings := settings.Settings{ChatModelID: chatModelUUID}
+
+	for _, tc := range []struct {
+		name      string
+		turnModel string
+		wantID    string
+		wantSlug  string
+	}{
+		{name: "turn model wins", turnModel: turnModelUUID, wantID: turnModelUUID, wantSlug: "turn-selected-model"},
+		{name: "chat model without a turn model", wantID: chatModelUUID, wantSlug: "bot-chat-model"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := service.buildCompactionConfig(context.Background(), req, botSettings, 90000, tc.turnModel)
+			if err != nil {
+				t.Fatalf("buildCompactionConfig: %v", err)
+			}
+			if cfg.ModelRecordID != tc.wantID || cfg.ModelID != tc.wantSlug {
+				t.Fatalf("summarizer = %q (%q), want %q (%q)", cfg.ModelRecordID, cfg.ModelID, tc.wantID, tc.wantSlug)
+			}
+		})
 	}
 }

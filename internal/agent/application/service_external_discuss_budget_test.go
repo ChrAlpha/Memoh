@@ -100,7 +100,7 @@ func TestExternalDiscussOversizedBatchCompactsOlderInputOrFails(t *testing.T) {
 		messages = append(messages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("x", 1200), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
 	}
 	for _, exhausted := range []bool{false, true} {
-		service, compactor := newControllerPolicyService(t, nil)
+		service, compactor := newControllerPolicyService(t)
 		service.SetContextAbsoluteMaxTokens(1000)
 		got, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussMessages: messages, discussRecoveryExhausted: exhausted}, "", 0)
 		if !exhausted {
@@ -140,7 +140,7 @@ func externalResumeService(t *testing.T) (*Service, *recordingACPPrompter, *resu
 	service.SetACPSessionPool(pool)
 	service.SetContextAbsoluteMaxTokens(1000)
 	saved := &resumeSaveQueries{}
-	policy, _ := newControllerPolicyService(t, nil)
+	policy, _ := newControllerPolicyService(t)
 	service.queries = externalResumeQueries{externalDiscussQueries: &externalDiscussQueries{&recoveryHistoryQueries{policy.queries.(*controllerQueries)}}, saved: saved}
 	service.resumeSecret = "resume-test-secret"
 	ctx := runtimefence.WithContext(t.Context(), runtimefence.Fence{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, Token: 7})
@@ -260,7 +260,7 @@ func TestExternalShutdownResumeBoundsInstructionPromptAndRuntimeContext(t *testi
 
 func TestExternalDiscussFinalAdmissionRejectsIrreducibleContext(t *testing.T) {
 	for _, images := range []int{0, 1} {
-		service, compactor := newControllerPolicyService(t, nil)
+		service, compactor := newControllerPolicyService(t)
 		service.SetContextAbsoluteMaxTokens(1000)
 		_, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{
 			BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
@@ -285,7 +285,7 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 	service.SetACPSessionPool(pool)
 	service.turnHooks.streamChat = nil
 	service.SetContextAbsoluteMaxTokens(1000)
-	policy, compactor := newControllerPolicyService(t, nil)
+	policy, compactor := newControllerPolicyService(t)
 	service.settingsService, service.modelsService = policy.settingsService, policy.modelsService
 	service.queries = &externalDiscussQueries{recoveryHistoryQueries: &recoveryHistoryQueries{controllerQueries: policy.queries.(*controllerQueries)}}
 	service.compactionService = compactor
@@ -324,7 +324,7 @@ func TestExternalDiscussFinalAdmissionControlNeverReachesRuntimeOrHistory(t *tes
 }
 
 func TestExternalDiscussRecoversPretrimmedHistoryPressure(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	service.SetContextAbsoluteMaxTokens(1000)
 	req := ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussContextTokens: 20000, discussMessages: []turn.DiscussMessage{{Role: "user", Content: "current"}}}
 	_, err := service.prepareExternalDiscussContext(t.Context(), req, "runtime context", 0)
@@ -334,7 +334,7 @@ func TestExternalDiscussRecoversPretrimmedHistoryPressure(t *testing.T) {
 }
 
 func TestExternalDiscussOriginalPressureUsesFinalHistoryAllowance(t *testing.T) {
-	service, runner := newControllerPolicyService(t, nil)
+	service, runner := newControllerPolicyService(t)
 	service.SetContextAbsoluteMaxTokens(1000)
 	req := ChatRequest{BotID: syncCompactBotID, ThreadID: syncCompactThreadID, discussContextTokens: 900, discussMessages: []turn.DiscussMessage{{Role: "user", Content: "current"}}}
 	_, err := service.prepareExternalDiscussContext(t.Context(), req, strings.Repeat("m", 2800), 0)
@@ -346,7 +346,7 @@ func TestExternalDiscussOriginalPressureUsesFinalHistoryAllowance(t *testing.T) 
 // A context that compaction could have made fit is not reported as oversized
 // input when the compaction fails.
 func TestExternalDiscussFailedRecoveryReportsBudgetUnsatisfied(t *testing.T) {
-	service, _ := newControllerPolicyService(t, nil)
+	service, _ := newControllerPolicyService(t)
 	runner := &recoveryCompactionRunner{run: func() (compaction.Result, error) {
 		return compaction.Result{}, errors.New("summarizer down")
 	}}
