@@ -115,11 +115,14 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if summaryLimit <= 0 {
 		return Result{}, fmt.Errorf("%w: history_budget=%d kept=%d", errNoSummaryRoom, room.HistoryTokens, room.KeptTokens)
 	}
-	current := currentRequestEntries(messages, cfg.ProtectedSources)
-	inputTokens := promptWindow - summaryLimit - entriesPromptCost(current)
-	if inputTokens <= 0 {
-		return Result{}, fmt.Errorf("%w: window=%d summary_limit=%d current_request_tokens=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, summaryLimit, entriesPromptCost(current))
+	current := currentRequestEntries(messages, cfg.ProtectedSources, cfg.CurrentRequest)
+	readWindow := promptWindow - entriesPromptCost(current)
+	if readWindow <= 0 {
+		return Result{}, fmt.Errorf("%w: window=%d current_request_tokens=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, entriesPromptCost(current))
 	}
+	// A summary is shorter than what it replaces, so reading r tokens leaves
+	// room for r plus min(summaryLimit, r).
+	inputTokens := readWindow - min(summaryLimit, readWindow/2)
 
 	foldable := foldableItems(messages)
 	toCompact := trimCompactMessages(foldable, inputTokens-earlierSummariesCost(earlier))
@@ -142,8 +145,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	// A summary must be shorter than what it replaces, so the bound the
 	// prompt states never exceeds that.
 	replacedTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs)) + earlierTokens
-	room.SummaryTokens = min(summaryLimit, replacedTokens-1)
-	maxTokens := min(capability, promptWindow-readTokens-entriesPromptCost(current))
+	maxTokens := min(capability, readWindow-readTokens)
+	room.SummaryTokens = min(summaryLimit, replacedTokens-1, maxTokens)
 
 	expectedCompactIDs, err := expectedCompactionClaims(rows, compactedMessageIDs)
 	if err != nil {
@@ -307,8 +310,8 @@ func (s *Service) loadAbsorbedRows(ctx context.Context, artifact Artifact) ([]sq
 }
 
 // backfillLegacyCoverage reads the coverage of legacy summaries back from
-// their rows. The caller persists it only with a summary that supersedes
-// them, so a failed attempt changes nothing that reads see.
+// their rows. The caller persists it only once a summary that supersedes them
+// is ready to commit.
 func (s *Service) backfillLegacyCoverage(ctx context.Context, parents []Artifact) ([]Artifact, []sqlc.BackfillCompactionArtifactCoverageParams, error) {
 	filled := append([]Artifact(nil), parents...)
 	var backfills []sqlc.BackfillCompactionArtifactCoverageParams

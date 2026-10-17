@@ -124,3 +124,36 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 		t.Fatal("attempt row was created: fail closed before claiming sources")
 	}
 }
+
+func TestRunCompactionReadsAsMuchWhateverOutputTheModelDeclares(t *testing.T) {
+	t.Parallel()
+
+	for _, declared := range []int{0, 32000, 131072} {
+		stub := &stubModel{summary: "SUMMARY"}
+		cfg := machineryConfig(stub, 108000)
+		cfg.SummaryWindowTokens = 131072
+		cfg.MaxOutputTokens = declared
+		rows := qualityRows(t)
+		rows[0] = mkRow(t, "user", jsonStr(strings.Repeat("large item ", 16000)), 100)
+		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(context.Background(), cfg); err != nil || stub.calls != 1 {
+			t.Fatalf("declared output %d: err=%v calls=%d, want the large item summarized", declared, err, stub.calls)
+		}
+		if limit := statedSummaryLimit(t, stub.prompt); limit > stub.maxTokens {
+			t.Fatalf("declared output %d: stated limit %d exceeds the request's max_tokens %d", declared, limit, stub.maxTokens)
+		}
+	}
+}
+
+func TestRunCompactionShowsAnUnsavedRequestAsTheGoal(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "SUMMARY"}
+	cfg := machineryConfig(stub, 200)
+	cfg.CurrentRequest = "deploy the staging build"
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfg); err != nil {
+		t.Fatalf("RunCompactionSync: %v", err)
+	}
+	if !strings.Contains(stub.prompt, "<current_request>\nuser: deploy the staging build") {
+		t.Fatalf("summarizer prompt lacks the unsaved request:\n%s", stub.prompt)
+	}
+}

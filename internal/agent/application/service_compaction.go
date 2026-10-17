@@ -1,6 +1,7 @@
 package application
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
+	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	cfg.CandidatesFrom = req.historyViewFrom
 	if cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoff != "" {
 		message, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, cutoff)
