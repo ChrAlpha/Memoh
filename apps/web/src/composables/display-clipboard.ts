@@ -1,20 +1,6 @@
 export const MAX_CLIPBOARD_BYTES = 48 * 1024
 export const MAX_CLIPBOARD_MESSAGE_BYTES = 64 * 1024
 
-export function remoteCopyKeys(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>, mac: boolean) {
-  const key = event.key.toLowerCase()
-  if (event.altKey || !['c', 'x'].includes(key) || !(event.ctrlKey || (mac && event.metaKey))) return null
-  const character = [{ type: 'key', keysym: key.codePointAt(0)!, down: true }, { type: 'key', keysym: key.codePointAt(0)!, down: false }]
-  if (event.ctrlKey) return character
-  return [
-    { type: 'key', keysym: 0xffeb, down: false },
-    { type: 'key', keysym: 0xffe3, down: true },
-    ...character,
-    { type: 'key', keysym: 0xffe3, down: false },
-    { type: 'key', keysym: 0xffeb, down: true },
-  ]
-}
-
 export function encodeClipboardPaste(text: string, shift = false): string | null {
   return encodeClipboardText(text, 'clipboard', shift)
 }
