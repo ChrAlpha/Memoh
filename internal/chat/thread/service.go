@@ -1191,6 +1191,10 @@ type ListFilter struct {
 	// passes VisibilityUser so schedule-created sessions surface by
 	// visibility rather than by widening the legacy type filter.
 	Visibility Visibility
+	// HideScheduleRuns drops the sessions schedule fires created, which the
+	// sidebar shows under their schedule instead. A schedule-created session
+	// that a schedule still runs in (its existing_session target) stays.
+	HideScheduleRuns bool
 }
 
 // IsZero reports whether the cursor carries neither half — the start-of-list
@@ -1244,6 +1248,7 @@ func (s *Service) ListByBotPagedWithFilter(ctx context.Context, botID string, ty
 		WorkdirID:         workdirID,
 		UseVisibility:     useVisibility,
 		Visibility:        visibility,
+		HideScheduleRuns:  filter.HideScheduleRuns,
 		UseCursor:         useCursor,
 		CursorUpdatedAt:   cursorUpdatedAt,
 		CursorID:          cursorID,
@@ -1304,6 +1309,7 @@ func (s *Service) ListByBotAndCreatedByUserPagedWithFilter(ctx context.Context, 
 		WorkdirID:         workdirID,
 		UseVisibility:     useVisibility,
 		Visibility:        visibility,
+		HideScheduleRuns:  filter.HideScheduleRuns,
 		UseCursor:         useCursor,
 		CursorUpdatedAt:   cursorUpdatedAt,
 		CursorID:          cursorID,

@@ -90,20 +90,24 @@ export function formatDateTimeShort(
  * point here is a precise, readable time the reader can trust at a glance.
  * Today/Yesterday are produced via `Intl.RelativeTimeFormat` so the words are
  * localized (zh → 今天 / 昨天) without a translation table.
+ * `hour12: false` switches to a zero-padded 24-hour clock ("Today 08:00"), for
+ * surfaces that already show times that way, such as the schedule panel.
  */
 export function formatCalendarTime(
   value: string | null | undefined,
-  options: FormatDateOptions = {},
+  options: FormatDateOptions & { hour12?: boolean } = {},
 ): string {
   if (!value) return options.fallback ?? ''
   const parsed = parseDate(value)
   if (!parsed) return resolveInvalid(value, options)
 
-  const time = parsed.toLocaleTimeString(options.locale, {
-    hour: 'numeric',
+  const hour12 = options.hour12 ?? true
+  const clock: Intl.DateTimeFormatOptions = {
+    hour: hour12 ? 'numeric' : '2-digit',
     minute: '2-digit',
-    hour12: true,
-  })
+    hour12,
+  }
+  const time = parsed.toLocaleTimeString(options.locale, clock)
 
   const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
   const dayDiff = Math.round((startOfDay(parsed) - startOfDay(new Date())) / 86_400_000)
@@ -119,9 +123,7 @@ export function formatCalendarTime(
     year: sameYear ? undefined : 'numeric',
     month: 'short',
     day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
+    ...clock,
   })
 }
 

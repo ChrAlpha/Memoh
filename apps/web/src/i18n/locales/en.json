@@ -3779,6 +3779,7 @@
       "edit": "Edit Task",
       "delete": "Delete",
       "deleteConfirm": "Delete task \"{name}\"? This cannot be undone.",
+      "deleteConfirmRunSessions": "Delete task \"{name}\"? This cannot be undone. The sessions its runs created will no longer show in Schedule or Recents; you can only find them with search.",
       "deleteSuccess": "Task deleted",
       "deleteFailed": "Delete failed",
       "saveSuccess": "Task saved",
@@ -3876,6 +3877,13 @@
         "oct": "October",
         "nov": "November",
         "dec": "December"
+      },
+      "sessions": {
+        "pinned": "Runs in one conversation",
+        "openPinned": "Open the conversation this schedule runs in",
+        "failed": "This run failed",
+        "notStarted": "This run did not start, so it has no conversation",
+        "empty": "No runs yet"
       }
     },
     "history": {

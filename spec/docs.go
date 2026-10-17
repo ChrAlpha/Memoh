@@ -8258,6 +8258,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/schedule/{id}/sessions": {
+            "get": {
+                "description": "List a schedule's runs newest first, each with the session it ran in. Runs whose session was deleted are omitted; a run that failed before it had a session is included with an empty session_id. status is running until the run completes.",
+                "tags": [
+                    "schedule"
+                ],
+                "summary": "List the sessions a schedule's runs created",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Schedule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Page size (1..100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque cursor returned as next_cursor on a previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/schedule.ListRunSessionsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions": {
             "get": {
                 "tags": [
@@ -8288,6 +8358,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Only include sessions bound to this workdir. The literal none selects sessions with no workdir.",
                         "name": "workdir_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.",
+                        "name": "hide_schedule_runs",
                         "in": "query"
                     },
                     {
@@ -26414,6 +26490,20 @@ const docTemplate = `{
                 }
             }
         },
+        "schedule.ListRunSessionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/schedule.RunSession"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "schedule.Log": {
             "type": "object",
             "properties": {
@@ -26459,6 +26549,43 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "integer"
+                }
+            }
+        },
+        "schedule.RunSession": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "description": "CompletedAt is null while the fire is still running.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "error_code": {
+                    "type": "string"
+                },
+                "log_id": {
+                    "description": "LogID identifies the fire (schedule_logs.id).",
+                    "type": "string"
+                },
+                "session_id": {
+                    "description": "SessionID is empty when the fire failed before any session existed.",
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is running while the fire has not completed, then ok or error.",
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "ok",
+                        "error"
+                    ]
+                },
+                "title": {
+                    "description": "Title is the session title, empty when there is no session.",
+                    "type": "string"
                 }
             }
         },

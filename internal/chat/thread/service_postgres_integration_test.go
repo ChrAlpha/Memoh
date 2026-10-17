@@ -997,3 +997,74 @@ func assertPostgresSessionRepairMarker(t *testing.T, ctx context.Context, tx pgx
 		t.Fatalf("session %s repair marker %s = %v, want %v", sessionID, marker, got, want)
 	}
 }
+
+func TestPostgresListHidesScheduleRunSessionsButKeepsPinnedTargets(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresSessionTestTx(t, ctx)
+	setupPostgresSessionForkFixtures(t, ctx, tx)
+
+	const (
+		runSessionID    = "00000000-0000-0000-0000-000000075301"
+		pinnedRunID     = "00000000-0000-0000-0000-000000075302"
+		pinnedChatID    = "00000000-0000-0000-0000-000000075303"
+		orphanRunID     = "00000000-0000-0000-0000-000000075304"
+		runScheduleID   = "00000000-0000-0000-0000-000000075311"
+		pinnedRunSchID  = "00000000-0000-0000-0000-000000075312"
+		pinnedChatSchID = "00000000-0000-0000-0000-000000075313"
+	)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO bot_sessions (id, bot_id, type, session_mode, visibility, title)
+		VALUES
+			($1, $5, 'schedule', 'schedule', 'user', 'run of a new-session schedule'),
+			($2, $5, 'schedule', 'schedule', 'user', 'old run now hosting a pinned schedule'),
+			($3, $5, 'chat', 'chat', 'user', 'chat hosting a pinned schedule'),
+			($4, $5, 'schedule', 'schedule', 'user', 'run whose schedule is gone')
+	`, runSessionID, pinnedRunID, pinnedChatID, orphanRunID, postgresSessionTestBotID); err != nil {
+		t.Fatalf("insert sessions: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO schedule (id, name, description, pattern, command, bot_id, run_target, target_session_id)
+		VALUES
+			($1, 'new session', '', '0 8 * * *', 'run', $4, 'new_session', NULL),
+			($2, 'pinned to a run', '', '0 8 * * *', 'run', $4, 'existing_session', $5),
+			($3, 'pinned to a chat', '', '0 8 * * *', 'run', $4, 'existing_session', $6)
+	`, runScheduleID, pinnedRunSchID, pinnedChatSchID, postgresSessionTestBotID, pinnedRunID, pinnedChatID); err != nil {
+		t.Fatalf("insert schedules: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO schedule_logs (schedule_id, bot_id, session_id, status)
+		VALUES ($1, $2, $3, 'ok')
+	`, runScheduleID, postgresSessionTestBotID, runSessionID); err != nil {
+		t.Fatalf("insert schedule log: %v", err)
+	}
+
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)), nil)
+	types := []string{TypeChat, TypeSchedule}
+	listed := func(filter ListFilter) map[string]bool {
+		t.Helper()
+		threads, err := svc.ListByBotPagedWithFilter(ctx, postgresSessionTestBotID, types, Cursor{}, 50, filter)
+		if err != nil {
+			t.Fatalf("list sessions: %v", err)
+		}
+		ids := map[string]bool{}
+		for _, thread := range threads {
+			ids[thread.ID] = true
+		}
+		return ids
+	}
+
+	all := listed(ListFilter{})
+	for _, id := range []string{runSessionID, pinnedRunID, pinnedChatID, orphanRunID} {
+		if !all[id] {
+			t.Fatalf("unfiltered list is missing %s", id)
+		}
+	}
+
+	hidden := listed(ListFilter{HideScheduleRuns: true})
+	if hidden[runSessionID] || hidden[orphanRunID] {
+		t.Fatalf("schedule run sessions should be hidden, got %v", hidden)
+	}
+	if !hidden[pinnedRunID] || !hidden[pinnedChatID] || !hidden[postgresSessionTestSessionID] {
+		t.Fatalf("pinned targets and chats must stay listed, got %v", hidden)
+	}
+}

@@ -400,6 +400,7 @@ type Queries interface {
 	ListRecentContextLifecyclesBySession(ctx context.Context, arg dbsqlc.ListRecentContextLifecyclesBySessionParams) ([]dbsqlc.ListRecentContextLifecyclesBySessionRow, error)
 	ListScheduleLogsByBot(ctx context.Context, arg dbsqlc.ListScheduleLogsByBotParams) ([]dbsqlc.ListScheduleLogsByBotRow, error)
 	ListScheduleLogsBySchedule(ctx context.Context, arg dbsqlc.ListScheduleLogsByScheduleParams) ([]dbsqlc.ListScheduleLogsByScheduleRow, error)
+	ListScheduleRunSessions(ctx context.Context, arg dbsqlc.ListScheduleRunSessionsParams) ([]dbsqlc.ListScheduleRunSessionsRow, error)
 	ListSchedulesByBot(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.Schedule, error)
 	ListSearchProviders(ctx context.Context) ([]dbsqlc.SearchProvider, error)
 	ListSearchProvidersByProvider(ctx context.Context, provider string) ([]dbsqlc.SearchProvider, error)

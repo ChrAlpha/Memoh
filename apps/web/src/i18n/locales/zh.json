@@ -3779,6 +3779,7 @@
       "edit": "编辑任务",
       "delete": "删除",
       "deleteConfirm": "确定删除任务 \"{name}\"？此操作不可撤销。",
+      "deleteConfirmRunSessions": "确定删除任务 \"{name}\"？此操作不可撤销。删除后，这个任务每次运行创建的会话不会再出现在日程和最近中，只能通过搜索找到。",
       "deleteSuccess": "任务已删除",
       "deleteFailed": "删除失败",
       "saveSuccess": "任务已保存",
@@ -3876,6 +3877,13 @@
         "oct": "十月",
         "nov": "十一月",
         "dec": "十二月"
+      },
+      "sessions": {
+        "pinned": "在同一个对话中运行",
+        "openPinned": "打开这个定时任务所在的对话",
+        "failed": "这次运行失败了",
+        "notStarted": "这次运行没能开始，没有对应的对话",
+        "empty": "还没有运行过"
       }
     },
     "history": {

@@ -37,7 +37,7 @@
     <ConfirmDeleteDialog
       :open="!!deleteTarget"
       :title="t('bots.schedule.deleteTitle')"
-      :description="t('bots.schedule.deleteConfirm', { name: deleteTarget?.name ?? '' })"
+      :description="t(scheduleDeleteConfirmKey(deleteTarget), { name: deleteTarget?.name ?? '' })"
       :cancel-label="t('common.cancel')"
       :confirm-label="t('bots.schedule.delete')"
       :loading="isDeleting"
@@ -60,6 +60,7 @@ import type { ScheduleSchedule } from '@memohai/sdk'
 import type { DockviewApi, DockviewPanelApi } from 'dockview-vue'
 import { useChatStore } from '@/store/chat-list'
 import { resolveApiErrorMessage } from '@/utils/api-error'
+import { scheduleDeleteConfirmKey } from '@/utils/schedule-delete'
 import ScheduleEditor from '@/pages/bots/components/schedule-editor.vue'
 
 const props = defineProps<{

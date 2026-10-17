@@ -128,7 +128,7 @@
     <ConfirmDeleteDialog
       :open="!!deleteTarget"
       :title="$t('bots.schedule.deleteTitle')"
-      :description="$t('bots.schedule.deleteConfirm', { name: deleteTarget?.name ?? '' })"
+      :description="$t(scheduleDeleteConfirmKey(deleteTarget), { name: deleteTarget?.name ?? '' })"
       :cancel-label="$t('common.cancel')"
       :confirm-label="$t('bots.schedule.delete')"
       :loading="isDeleting"
@@ -163,6 +163,7 @@ import type { ScheduleSchedule } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { formatCalendarTime } from '@/utils/date-time'
 import { describeCron, nextRuns } from '@/utils/cron-pattern'
+import { scheduleDeleteConfirmKey } from '@/utils/schedule-delete'
 import { useChatStore } from '@/store/chat-list'
 import ScheduleEditor from './schedule-editor.vue'
 

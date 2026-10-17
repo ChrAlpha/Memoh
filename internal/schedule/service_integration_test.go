@@ -246,3 +246,80 @@ func TestIntegrationFailedFireLogStoresCode(t *testing.T) {
 		t.Fatalf("earlier server's log = %+v, want its message and no code", legacy)
 	}
 }
+
+// A schedule's run list returns live sessions newest first with their titles,
+// keeps a fire that failed before it had a session, drops fires whose session
+// was soft- or hard-deleted, and pages by keyset without duplicates.
+func TestIntegrationListRunSessions(t *testing.T) {
+	svc, q, pool, _, cleanup := setupScheduleIntegrationTest(t)
+	defer cleanup()
+	ctx := t.Context()
+	owner, bot, id := createUserBotAndSchedule(ctx, t, q)
+	defer cleanupScheduleTestData(context.Background(), t, q, pool, owner, bot, id)
+
+	newSession := func(title string) string {
+		var sessionID string
+		if err := pool.QueryRow(ctx, "INSERT INTO bot_sessions(bot_id,type,title) VALUES ($1,'schedule',$2) RETURNING id", bot, title).Scan(&sessionID); err != nil {
+			t.Fatal(err)
+		}
+		return sessionID
+	}
+	addLog := func(sessionID any, status string, minutesAgo int, completed bool) string {
+		var logID string
+		completedAt := "NULL"
+		if completed {
+			completedAt = "now() - make_interval(mins => $5) + interval '30 seconds'"
+		}
+		err := pool.QueryRow(ctx, `INSERT INTO schedule_logs (schedule_id, bot_id, session_id, status, started_at, completed_at)
+			VALUES ($1, $2, $3, $4, now() - make_interval(mins => $5), `+completedAt+`) RETURNING id`,
+			id, bot, sessionID, status, minutesAgo).Scan(&logID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return logID
+	}
+
+	running := addLog(newSession("newest run"), "ok", 1, false)
+	failedEarly := addLog(nil, "error", 2, true)
+	softDeleted := newSession("soft deleted")
+	addLog(softDeleted, "ok", 3, true)
+	if _, err := pool.Exec(ctx, "UPDATE bot_sessions SET deleted_at = now() WHERE id = $1", softDeleted); err != nil {
+		t.Fatal(err)
+	}
+	addLog(nil, "ok", 4, true) // hard-deleted session: the FK nulled session_id
+	older := addLog(newSession("older run"), "ok", 5, true)
+	oldest := addLog(newSession("oldest run"), "error", 6, true)
+
+	first, err := svc.ListRunSessions(ctx, bot, id, 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == "" {
+		t.Fatalf("first page = %+v, want two items and a cursor", first)
+	}
+	if first.Items[0].LogID != running || first.Items[0].Title != "newest run" || first.Items[0].Status != schedule.RunStatusRunning || first.Items[0].CompletedAt != nil {
+		t.Fatalf("newest item = %+v, want the running fire with its title", first.Items[0])
+	}
+	if first.Items[1].LogID != failedEarly || first.Items[1].SessionID != "" || first.Items[1].Status != schedule.RunStatusError {
+		t.Fatalf("second item = %+v, want the fire that failed before it had a session", first.Items[1])
+	}
+	second, err := svc.ListRunSessions(ctx, bot, id, 2, first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 2 || second.NextCursor != "" {
+		t.Fatalf("second page = %+v, want the last two items and no cursor", second)
+	}
+	if second.Items[0].LogID != older || second.Items[0].Title != "older run" || second.Items[1].LogID != oldest || second.Items[1].Status != schedule.RunStatusError {
+		t.Fatalf("second page items = %+v, want older then oldest without deleted sessions", second.Items)
+	}
+
+	otherOwner, otherBot, otherSchedule := createUserBotAndSchedule(ctx, t, q)
+	defer cleanupScheduleTestData(context.Background(), t, q, pool, otherOwner, otherBot, otherSchedule)
+	if _, err := svc.ListRunSessions(ctx, otherBot, id, 10, ""); !errors.Is(err, schedule.ErrScheduleNotFound) {
+		t.Fatalf("schedule of another bot error = %v, want ErrScheduleNotFound", err)
+	}
+	if _, err := svc.ListRunSessions(ctx, bot, otherSchedule, 10, ""); !errors.Is(err, schedule.ErrScheduleNotFound) {
+		t.Fatalf("another bot's schedule error = %v, want ErrScheduleNotFound", err)
+	}
+}

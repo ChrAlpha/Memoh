@@ -6503,6 +6503,15 @@ definitions:
           $ref: '#/definitions/schedule.Schedule'
         type: array
     type: object
+  schedule.ListRunSessionsResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/schedule.RunSession'
+        type: array
+      next_cursor:
+        type: string
+    type: object
   schedule.Log:
     properties:
       bot_id:
@@ -6536,6 +6545,34 @@ definitions:
         type: boolean
       value:
         type: integer
+    type: object
+  schedule.RunSession:
+    properties:
+      completed_at:
+        description: CompletedAt is null while the fire is still running.
+        type: string
+        x-nullable: true
+      error_code:
+        type: string
+      log_id:
+        description: LogID identifies the fire (schedule_logs.id).
+        type: string
+      session_id:
+        description: SessionID is empty when the fire failed before any session existed.
+        type: string
+      started_at:
+        type: string
+      status:
+        description: Status is running while the fire has not completed, then ok or
+          error.
+        enum:
+        - running
+        - ok
+        - error
+        type: string
+      title:
+        description: Title is the session title, empty when there is no session.
+        type: string
     type: object
   schedule.Schedule:
     properties:
@@ -12853,6 +12890,56 @@ paths:
       summary: List schedule logs by schedule
       tags:
       - schedule
+  /bots/{bot_id}/schedule/{id}/sessions:
+    get:
+      description: List a schedule's runs newest first, each with the session it ran
+        in. Runs whose session was deleted are omitted; a run that failed before it
+        had a session is included with an empty session_id. status is running until
+        the run completes.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: Schedule ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 20
+        description: Page size (1..100)
+        in: query
+        name: limit
+        type: integer
+      - description: Opaque cursor returned as next_cursor on a previous page
+        in: query
+        name: cursor
+        type: string
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/schedule.ListRunSessionsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.Problem'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/server.Problem'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/server.Problem'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.Problem'
+      summary: List the sessions a schedule's runs created
+      tags:
+      - schedule
   /bots/{bot_id}/schedule/logs:
     delete:
       description: Delete all schedule execution logs for a bot
@@ -12932,6 +13019,11 @@ paths:
         in: query
         name: workdir_id
         type: string
+      - description: Leave out sessions schedule runs created, except one a schedule
+          still runs in. The sidebar lists them under their schedule.
+        in: query
+        name: hide_schedule_runs
+        type: boolean
       - description: Page size (1..200). Defaults to 50.
         in: query
         name: limit

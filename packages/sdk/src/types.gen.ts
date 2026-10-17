@@ -3815,6 +3815,11 @@ export type ScheduleListResponse = {
     items?: Array<ScheduleSchedule>;
 };
 
+export type ScheduleListRunSessionsResponse = {
+    items?: Array<ScheduleRunSession>;
+    next_cursor?: string;
+};
+
 export type ScheduleLog = {
     bot_id?: string;
     completed_at?: string;
@@ -3836,6 +3841,31 @@ export type ScheduleLog = {
 export type ScheduleNullableInt = {
     set?: boolean;
     value?: number;
+};
+
+export type ScheduleRunSession = {
+    /**
+     * CompletedAt is null while the fire is still running.
+     */
+    completed_at?: string | null;
+    error_code?: string;
+    /**
+     * LogID identifies the fire (schedule_logs.id).
+     */
+    log_id?: string;
+    /**
+     * SessionID is empty when the fire failed before any session existed.
+     */
+    session_id?: string;
+    started_at?: string;
+    /**
+     * Status is running while the fire has not completed, then ok or error.
+     */
+    status?: 'running' | 'ok' | 'error';
+    /**
+     * Title is the session title, empty when there is no session.
+     */
+    title?: string;
 };
 
 export type ScheduleSchedule = {
@@ -10953,6 +10983,61 @@ export type GetBotsByBotIdScheduleByIdLogsResponses = {
 
 export type GetBotsByBotIdScheduleByIdLogsResponse = GetBotsByBotIdScheduleByIdLogsResponses[keyof GetBotsByBotIdScheduleByIdLogsResponses];
 
+export type GetBotsByBotIdScheduleByIdSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Schedule ID
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * Page size (1..100)
+         */
+        limit?: number;
+        /**
+         * Opaque cursor returned as next_cursor on a previous page
+         */
+        cursor?: string;
+    };
+    url: '/bots/{bot_id}/schedule/{id}/sessions';
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsError = GetBotsByBotIdScheduleByIdSessionsErrors[keyof GetBotsByBotIdScheduleByIdSessionsErrors];
+
+export type GetBotsByBotIdScheduleByIdSessionsResponses = {
+    /**
+     * OK
+     */
+    200: ScheduleListRunSessionsResponse;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsResponse = GetBotsByBotIdScheduleByIdSessionsResponses[keyof GetBotsByBotIdScheduleByIdSessionsResponses];
+
 export type GetBotsByBotIdSessionsData = {
     body?: never;
     path: {
@@ -10974,6 +11059,10 @@ export type GetBotsByBotIdSessionsData = {
          * Only include sessions bound to this workdir. The literal none selects sessions with no workdir.
          */
         workdir_id?: string;
+        /**
+         * Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.
+         */
+        hide_schedule_runs?: boolean;
         /**
          * Page size (1..200). Defaults to 50.
          */

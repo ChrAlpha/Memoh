@@ -535,6 +535,7 @@ func (h *SessionHandler) ModelPreferenceSeed(c echo.Context) error {
 // @Param types query string false "Comma-separated session types to include. Defaults to user-facing types (chat,discuss,acp_agent), or subagent when parent_session_id is set."
 // @Param parent_session_id query string false "Only include child sessions under this parent session."
 // @Param workdir_id query string false "Only include sessions bound to this workdir. The literal none selects sessions with no workdir."
+// @Param hide_schedule_runs query bool false "Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule."
 // @Param limit query int false "Page size (1..200). Defaults to 50."
 // @Param cursor query string false "Opaque cursor returned as next_cursor on a previous page."
 // @Success 200 {object} listSessionsResponse
@@ -575,7 +576,10 @@ func (h *SessionHandler) ListSessions(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	filter := session.ListFilter{ParentThreadID: parentSessionID}
+	filter := session.ListFilter{
+		ParentThreadID:   parentSessionID,
+		HideScheduleRuns: strings.EqualFold(c.QueryParam("hide_schedule_runs"), "true"),
+	}
 	if defaultVisibility {
 		filter.Visibility = session.VisibilityUser
 	}

@@ -163,6 +163,26 @@ func TestListSessionsPassesExplicitTypesFilter(t *testing.T) {
 	}
 }
 
+func TestListSessionsHidesScheduleRunsOnlyWhenAsked(t *testing.T) {
+	botID := "11111111-1111-1111-1111-111111111111"
+	queries := &sessionListQueries{bot: testBotRow(botID, nil)}
+	handler := newListSessionHandler(t, queries)
+
+	if _, err := callListSessions(handler, botID, "types=chat,schedule"); err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if queries.pagedCall.HideScheduleRuns {
+		t.Fatalf("schedule runs should stay listed unless hide_schedule_runs is set")
+	}
+
+	if _, err := callListSessions(handler, botID, "types=chat,schedule&hide_schedule_runs=true"); err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if !queries.pagedCall.HideScheduleRuns {
+		t.Fatalf("hide_schedule_runs=true should reach the paged query")
+	}
+}
+
 func TestListSessionsRejectsUnknownType(t *testing.T) {
 	botID := "11111111-1111-1111-1111-111111111111"
 	queries := &sessionListQueries{bot: testBotRow(botID, nil)}
