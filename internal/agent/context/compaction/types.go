@@ -67,8 +67,10 @@ type TriggerConfig struct {
 	// CandidatesFrom is the creation time of the oldest row the caller's
 	// request loaded. Older rows are invisible to that request, so
 	// summarizing them cannot shrink it. Zero considers the whole session.
-	CandidatesFrom      time.Time
-	ProtectedSources    []turn.ContextMessageSource
+	CandidatesFrom   time.Time
+	ProtectedSources []turn.ContextMessageSource
+	// HistoryBudgetTokens marks a budget-driven run: the summary and the rows
+	// kept raw must fit it, and only ProtectedSources name the current turn.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
 

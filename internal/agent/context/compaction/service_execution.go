@@ -75,7 +75,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			slog.Bool("truncated", truncatedRead))
 	}
 
-	messages, barrierCount := itemsFromRows(rows)
+	classify := itemsFromRows
+	if cfg.HistoryBudgetTokens > 0 {
+		classify = candidatesFromRows
+	}
+	messages, barrierCount := classify(rows)
 	protectCurrentSources(messages, cfg.ProtectedSources)
 	if barrierCount > 0 {
 		s.logger.WarnContext(ctx, "compaction: kept unparseable history rows as span barriers",

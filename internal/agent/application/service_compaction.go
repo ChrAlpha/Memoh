@@ -320,8 +320,10 @@ func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 	if req.ExternalMessageID != "" {
 		sources = append(sources, turn.ContextMessageSource{Kind: "external", ID: req.ExternalMessageID, Current: true})
 	}
-	if req.RequiredHistoryMessageID != "" {
-		sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: req.RequiredHistoryMessageID, Current: true})
+	for _, id := range []string{req.RequiredHistoryMessageID, req.PersistedUserMessageID} {
+		if id != "" {
+			sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: id, Current: true})
+		}
 	}
 	return sources
 }

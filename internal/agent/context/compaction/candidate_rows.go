@@ -18,6 +18,15 @@ import (
 // aborting the whole compaction. Keeping its position prevents compact spans on
 // either side from sharing an ID and being reordered by the read path.
 func itemsFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]CompactionCandidate, int) {
+	items, barrierCount := candidatesFromRows(rows)
+	markSelectionPolicies(items)
+	return items, barrierCount
+}
+
+// candidatesFromRows classifies rows like itemsFromRows without treating the
+// newest user row as the current turn, for callers that name the current turn
+// through ProtectedSources.
+func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]CompactionCandidate, int) {
 	items := make([]CompactionCandidate, 0, len(rows))
 	barrierCount := 0
 	for _, row := range rows {
@@ -50,7 +59,6 @@ func itemsFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Compactio
 	if len(items) > 0 {
 		protectPendingUserInput(items)
 		propagateMustKeepAcrossToolExchanges(items)
-		markSelectionPolicies(items)
 	}
 	return items, barrierCount
 }
