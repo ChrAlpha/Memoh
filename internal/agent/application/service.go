@@ -573,7 +573,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var compactableTokensKnown bool
 	var currentMessageIndex *int
 	if usePipeline {
-		messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		messages, compactableTokens, historyPressureTokens, req.historyViewFrom = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 		compactableTokensKnown = true
 		// Pre-turn synchronous compaction backstop (CM-CMP-001), gated per
 		// CM-CMP-003. Mirrors the legacy path below: only a pass that
@@ -603,7 +603,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 					slog.Int("pressure_tokens", compactableTokens),
 					slog.Int("threshold_tokens", threshold))
 				if res.Status == compaction.StatusOK {
-					messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+					messages, compactableTokens, historyPressureTokens, _ = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 				}
 			}
 		}
@@ -624,6 +624,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		estimatedTokens = prepared.estimatedTokens
 		compactableTokens = prepared.compactableTokens
 		historyPressureTokens = prepared.pressureTokens
+		req.historyViewFrom = prepared.viewFrom
 		compactableTokensKnown = true
 		if syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
 			compactionThreshold := hardCompactionThreshold(contextTokenBudget)

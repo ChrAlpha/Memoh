@@ -2,6 +2,7 @@ package application
 
 import (
 	"encoding/json"
+	"time"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -17,6 +18,9 @@ type ChatRequest struct {
 	discussMessages          []turn.DiscussMessage
 	discussContextTokens     int
 	discussRecoveryExhausted bool
+	// historyViewFrom is when the oldest history row this request loaded was
+	// created; compaction leaves older rows, which the request cannot see.
+	historyViewFrom time.Time
 	// discussPromptPrefix and discussPromptSuffix wrap the admitted discuss
 	// prompt; a shutdown resume puts its instructions there.
 	discussPromptPrefix string
