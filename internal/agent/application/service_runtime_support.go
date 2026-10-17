@@ -14,6 +14,7 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
@@ -342,7 +343,7 @@ func (s *Service) prepareRuntimeAttachments(ctx context.Context, req runreq.Chat
 	// An External Agent's image support is discovered when the prompt is sent
 	// — the runtime retries with files on ErrImagePromptUnsupported — so there
 	// is no capability bit to read here and images are always prepared.
-	prepared := s.prepareGatewayAttachments(ctx, req, true)
+	prepared := s.runconfig.PrepareGatewayAttachments(ctx, req, true)
 	result := runtimePreparedAttachments{
 		Images:                   make([]external.Image, 0, len(prepared)),
 		Context:                  make([]runreq.ChatAttachment, 0, len(prepared)),
@@ -360,11 +361,11 @@ func (s *Service) prepareRuntimeAttachments(ctx context.Context, req runreq.Chat
 			Metadata:    item.Metadata,
 		}
 		reference := strings.TrimSpace(item.FallbackPath)
-		if reference == "" && item.Transport == gatewayTransportPublicURL {
+		if reference == "" && item.Transport == runconfig.GatewayTransportPublicURL {
 			reference = strings.TrimSpace(item.Payload)
 		}
 		if reference != "" {
-			if isLikelyPublicURL(reference) {
+			if runconfig.IsLikelyPublicURL(reference) {
 				contextAttachment.URL = reference
 			} else {
 				contextAttachment.Path = reference
@@ -375,9 +376,9 @@ func (s *Service) prepareRuntimeAttachments(ctx context.Context, req runreq.Chat
 		// isNativeImageAttachment is the same gate the capability router uses, so
 		// media withheld from the vision lane cannot re-enter it through an
 		// External Agent prompt.
-		inlineBytes := item.Transport == gatewayTransportInlineDataURL && strings.TrimSpace(item.Payload) != ""
+		inlineBytes := item.Transport == runconfig.GatewayTransportInlineDataURL && strings.TrimSpace(item.Payload) != ""
 		switch {
-		case attachmentType == "image" && inlineBytes && isNativeImageAttachment(item):
+		case attachmentType == "image" && inlineBytes && runconfig.IsNativeImageAttachment(item):
 			payloads := item.Frames
 			if len(payloads) == 0 {
 				payloads = []string{item.Payload}

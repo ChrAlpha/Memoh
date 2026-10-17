@@ -440,9 +440,9 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		t.Fatalf("fixture queries = %T", svc.queries)
 	}
 	// The run offers tools only to a model that can call them.
-	for key, model := range base.models {
+	for key, model := range base.Models {
 		model.Config = []byte(`{"context_window":128000,"compatibilities":["tool-call"]}`)
-		base.models[key] = model
+		base.Models[key] = model
 	}
 	pg := postgresstore.NewQueriesWithPool(env.pool, dbsqlc.New(env.pool))
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
@@ -488,7 +488,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		},
 	})
 	agent.SetToolProviders([]tools.ToolProvider{
-		tools.NewMessageProvider(nil, sender, goldenMessagingReactor{}, goldenChannelResolver{}, nil),
+		tools.NewMessageProvider(nil, sender, agenttest.MessageReactor{}, agenttest.ChannelParser{}, nil),
 	})
 	svc.agent = agent
 	useDecisions(svc, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })

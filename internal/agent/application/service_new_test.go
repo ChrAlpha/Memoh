@@ -24,11 +24,13 @@ import (
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/subagent"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -36,6 +38,7 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/providers"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 	"github.com/felinics/memoh/internal/workspace"
@@ -207,9 +210,7 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if service.skillLoader != nil ||
-		service.assetLoader != nil || service.platformIdentities != nil || service.workdirs != nil ||
-		service.bgManager != nil || service.eventPublisher != nil ||
+	if service.eventPublisher != nil ||
 		service.queue != nil ||
 		service.resumeReady != nil {
 		t.Fatal("optional dependencies must stay nil when absent")
@@ -400,11 +401,17 @@ func wireComponents(s *Service) *Service {
 		// A Service built from a literal records no lifecycle rows, as before.
 		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s.decider, Logger: s.logger})
 	}
+	if s.runconfig == nil {
+		s.runconfig = runconfigOf(s)
+	}
 	if s.persist == nil {
 		s.persist = persistOf(s)
 	}
 	if s.driver == nil {
 		s.driver = drive.New(driveDepsOf(s))
+	}
+	if s.subagent == nil {
+		s.subagent = subagentOf(s)
 	}
 	return s
 }
@@ -436,10 +443,19 @@ func rebindDecisions(s *Service) {
 // named for a service's memory keeper and compactor. They outlive a rewire,
 // which rebuilds the components from the service's fields alone.
 var (
-	decideAdjustments  sync.Map // *Service -> func(*decide.Deps)
-	memoryAdjustments  sync.Map // *Service -> func(*memory.Deps)
-	compactAdjustments sync.Map // *Service -> func(*compact.Deps)
+	runconfigAdjustments sync.Map // *Service -> func(*runconfig.Deps)
+	decideAdjustments    sync.Map // *Service -> func(*decide.Deps)
+	memoryAdjustments    sync.Map // *Service -> func(*memory.Deps)
+	compactAdjustments   sync.Map // *Service -> func(*compact.Deps)
 )
+
+// useRunconfig replaces the service's run configuration builder with one whose
+// dependencies adjust has changed.
+func useRunconfig(s *Service, adjust func(*runconfig.Deps)) *Service {
+	runconfigAdjustments.Store(s, adjust)
+	s.runconfig = runconfigOf(s)
+	return s
+}
 
 // useDecisions replaces the service's decider with one whose dependencies
 // adjust has changed.
@@ -447,6 +463,7 @@ func useDecisions(s *Service, adjust func(*decide.Deps)) *Service {
 	decideAdjustments.Store(s, adjust)
 	s.decider = decideOf(s)
 	rebindDecisions(s)
+	s.runconfig = runconfigOf(s)
 	return s
 }
 
@@ -478,8 +495,10 @@ func useCompaction(s *Service, adjust func(*compact.Deps)) *Service {
 // store, the session store and the session runtime a test replaces after New.
 func rewireRun(s *Service) {
 	s.admit = admitOf(s)
+	s.runconfig = runconfigOf(s)
 	s.persist = persistOf(s)
 	s.driver = drive.New(driveDepsOf(s))
+	s.subagent = subagentOf(s)
 }
 
 // driverAdjustments are the dependency overrides a test named for a service's
@@ -504,6 +523,7 @@ func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
 	driverAdjustments.Store(s, adjustments)
 	s.admit = admitOf(s)
 	s.driver = drive.New(driveDepsOf(s))
+	s.subagent = subagentOf(s)
 }
 
 // bindRuntime is bindSessionRuntime for a Service built from a literal: the
@@ -601,6 +621,35 @@ func decideOf(s *Service) *decide.Decider {
 	return decide.New(d)
 }
 
+func runconfigOf(s *Service) *runconfig.Builder {
+	d := runconfig.Deps{
+		Logger: s.logger, Credentials: providers.NewService(nil, s.queries, ""), Models: s.modelsService,
+		Sessions: s.sessionService, Agent: s.agent, Bot: s.botenv, Transcript: s.transcript,
+		Memory: s.memory, Compact: s.compact, Decider: s.decider, BotPermissions: s.botPermissions,
+	}
+	if s.queries != nil {
+		d.Queries = s.queries
+	}
+	if adjust, ok := runconfigAdjustments.Load(s); ok {
+		adjust.(func(*runconfig.Deps))(&d)
+	}
+	return runconfig.New(d)
+}
+
+func subagentOf(s *Service) *subagent.Host {
+	d := subagent.Deps{
+		Logger: s.logger, Admit: s.admit, Driver: s.driver, Lifecycle: s.lifecycle,
+		Compact: s.compact, ActiveTurns: &s.activeTurns,
+	}
+	if s.decisionRuntime != nil {
+		d.Events = s.decisionRuntime
+	}
+	if persister, ok := s.messageService.(messagepkg.AgentStepPersister); ok {
+		d.Steps = persister
+	}
+	return subagent.New(d)
+}
+
 func admitOf(s *Service) *admit.Admitter {
 	return admit.New(admit.Deps{Runtime: s.sessionRuntime, Queries: s.queries, Signer: s.signer})
 }
@@ -609,5 +658,15 @@ func admitOf(s *Service) *admit.Admitter {
 func useSecret(s *Service, secret string) *Service {
 	s.signer = admit.NewSigner(secret)
 	s.admit = admitOf(s)
+	s.subagent = subagentOf(s)
 	return s
+}
+
+// newModelSelectionService is a Service whose model catalog and queries are fake.
+func newModelSelectionService(t *testing.T, fake *agenttest.ModelQueries) *Service {
+	t.Helper()
+	return wireComponents(&Service{
+		modelsService: models.NewService(slog.New(slog.DiscardHandler), fake),
+		queries:       fake,
+	})
 }

@@ -700,3 +700,25 @@ func TestTerminalLifecycleRepairKeepsRicherExistingOverMinimalCandidate(t *testi
 		t.Fatalf("repaired terminal status = %q, want richer existing fallback preserved", upsert.Status)
 	}
 }
+
+func TestDiscardCandidateDropsOnlyTheNamedFence(t *testing.T) {
+	store := &agenttest.RecordingLifecycleStore{}
+	service := New(Deps{Store: store})
+	snapshot := lifecycleRichSnapshot(t)
+	for _, token := range []int64{3, 4} {
+		service.StageCandidate(
+			lifecycleFencedContext(token),
+			agenttest.LifecycleRunID, agenttest.LifecycleBotID, agenttest.LifecycleSessionID,
+			&snapshot, nil, CandidateAuthoritative,
+		)
+	}
+
+	service.DiscardCandidate(agenttest.LifecycleRunID, 3)
+
+	if _, ok := service.contextLifecycleCandidateFor(lifecycleTerminalRun(3, "completed", "")); ok {
+		t.Fatal("candidate of the discarded fence is still staged")
+	}
+	if _, ok := service.contextLifecycleCandidateFor(lifecycleTerminalRun(4, "completed", "")); !ok {
+		t.Fatal("candidate of another fence was discarded")
+	}
+}

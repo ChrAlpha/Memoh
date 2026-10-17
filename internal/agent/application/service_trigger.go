@@ -179,14 +179,15 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 	// The run acts for the bot's owner, who holds every permission, so there
 	// is no principal to check; binding the workspace here puts the target on
 	// the history rows the run writes.
-	ctx, req, err := s.bindRequestWorkspace(ctx, req, nil, true)
+	ctx, req, err := s.runconfig.BindRequestWorkspace(ctx, req, nil, true)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
-	rc, req, err := s.resolve(ctx, req)
+	rc, req, err := s.runconfig.Resolve(ctx, req)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
+	s.settleResolved(ctx, req, &rc)
 	req.RunID = rc.RunConfig.RunID
 
 	cfg := rc.RunConfig
@@ -204,7 +205,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 	// Nobody is on the other end of a scheduled run.
 	cfg.LiveToolStream = false
 	cfg.CanRequestUserInput = false
-	cfg = s.prepareRunConfig(ctx, cfg)
+	cfg = s.runconfig.Prepare(ctx, cfg)
 
 	timing := persist.NewReasoningTimingTracker(nil)
 	committer := s.persist.NewStepCommitter(ctx, req, rc)

@@ -123,16 +123,16 @@ func newDriveRequestFixture(t *testing.T) (directLifecycleFixture, *driveRequest
 		},
 	})
 	agent.SetToolProviders([]tools.ToolProvider{
-		tools.NewMessageProvider(nil, goldenMessagingSender{}, goldenMessagingReactor{}, goldenChannelResolver{}, nil),
+		tools.NewMessageProvider(nil, agenttest.MessageSender{}, agenttest.MessageReactor{}, agenttest.ChannelParser{}, nil),
 		tools.NewAskUserProvider(nil),
 	})
 	fixture.service.agent = agent
 	useDecisions(fixture.service, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	// The run offers tools only to a model that can call them.
 	queries := fixture.service.queries.(*directLifecycleQueries)
-	for key, model := range queries.models {
+	for key, model := range queries.Models {
 		model.Config = []byte(`{"context_window":128000,"compatibilities":["tool-call"]}`)
-		queries.models[key] = model
+		queries.Models[key] = model
 	}
 	return fixture, recorder
 }

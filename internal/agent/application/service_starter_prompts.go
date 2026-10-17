@@ -151,7 +151,7 @@ func (s *Service) generateStarterPrompts(ctx context.Context, botID, ownerUserID
 		logger.DebugContext(ctx, "starter prompts: no title model configured")
 		return nil
 	}
-	model, provider, err := s.fetchChatModel(ctx, modelID)
+	model, provider, err := s.runconfig.FetchChatModel(ctx, modelID)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: resolve title model failed", slog.Any("error", err))
 		return nil

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -99,10 +101,15 @@ func IsCompactionModelUnavailable(err error) bool {
 		errors.Is(err, ErrCompactionOutputLimitUnsupported)
 }
 
+// SessionModelReader is the query LatestSessionModelID needs.
+type SessionModelReader interface {
+	GetLatestSessionModelID(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error)
+}
+
 // LatestSessionModelID returns the models.id UUID of the most recent history
 // message in the session that recorded one, or "" when the session has no
 // model-bearing history yet.
-func LatestSessionModelID(ctx context.Context, queries dbstore.Queries, sessionID string) string {
+func LatestSessionModelID(ctx context.Context, queries SessionModelReader, sessionID string) string {
 	if queries == nil {
 		return ""
 	}

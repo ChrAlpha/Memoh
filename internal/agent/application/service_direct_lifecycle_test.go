@@ -22,6 +22,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -39,7 +40,7 @@ const (
 )
 
 type directLifecycleQueries struct {
-	modelSelectionFakeQueries
+	agenttest.ModelQueries
 	modelID pgtype.UUID
 }
 
@@ -81,7 +82,9 @@ func (*directLifecycleQueries) ListCompactionArtifactLineageBySession(
 }
 
 type directLifecycleFixture struct {
-	service    *Service
+	service *Service
+	// httpClient is what the service's model requests go through.
+	httpClient *http.Client
 	lifecycles *synchronizedLifecycleStore
 	messages   *agenttest.RecordingMessages
 	runtime    *agenttest.LifecycleAdmitter
@@ -317,7 +320,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		server.Close()
 	})
 
-	provider := modelSelectionProviderRow(
+	provider := agenttest.ProviderRow(
 		t,
 		directLifecycleProviderID,
 		string(models.ClientTypeOpenAICompletions),
@@ -327,7 +330,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		"api_key":  "test-key",
 		"base_url": server.URL,
 	})
-	model := modelSelectionModelRow(
+	model := agenttest.ModelRow(
 		t,
 		directLifecycleModelID,
 		"direct-lifecycle-model",
@@ -337,9 +340,9 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 	)
 	model.Config = []byte(`{"context_window":128000}`)
 	queries := &directLifecycleQueries{
-		modelSelectionFakeQueries: modelSelectionFakeQueries{
-			models:   map[string]sqlc.Model{model.ModelID: model},
-			provider: provider,
+		ModelQueries: agenttest.ModelQueries{
+			Models:   map[string]sqlc.Model{model.ModelID: model},
+			Provider: provider,
 		},
 		modelID: model.ID,
 	}
@@ -352,18 +355,20 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 	messages := &agenttest.RecordingMessages{}
 	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	service := wireComponents(&Service{
-		agent:            native.New(native.Deps{Logger: logger}),
-		modelsService:    models.NewService(logger, queries),
-		queries:          queries,
-		lifecycle:        lifecycle.New(lifecycle.Deps{Store: lifecycles}),
-		messageService:   messages,
-		settingsService:  settings.NewService(logger, queries, nil, nil),
-		sessionRuntime:   runtime,
-		streamHTTPClient: &http.Client{Transport: streamTransport},
-		logger:           logger,
+		agent:           native.New(native.Deps{Logger: logger}),
+		modelsService:   models.NewService(logger, queries),
+		queries:         queries,
+		lifecycle:       lifecycle.New(lifecycle.Deps{Store: lifecycles}),
+		messageService:  messages,
+		settingsService: settings.NewService(logger, queries, nil, nil),
+		sessionRuntime:  runtime,
+		logger:          logger,
 	})
+	httpClient := &http.Client{Transport: streamTransport}
+	useRunconfig(service, func(d *runconfig.Deps) { d.HTTPClient = httpClient })
 	return directLifecycleFixture{
 		service:     service,
+		httpClient:  httpClient,
 		lifecycles:  lifecycles,
 		messages:    messages,
 		runtime:     runtime,

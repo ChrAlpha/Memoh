@@ -233,3 +233,51 @@ func TestFinishRunWritesTheLifecycleRowAfterTheWriteWhenThereIsNoFence(t *testin
 		})
 	}
 }
+
+// finishRefusing refuses the terminal write the way a superseded owner's is.
+type finishRefusing struct{ err error }
+
+func (r finishRefusing) FinishRunWithFailure(context.Context, sessionruntime.RunHandle, string, string, map[string]string) (sessionruntime.TerminalRun, error) {
+	return sessionruntime.TerminalRun{}, r.err
+}
+
+// A write refused for lost ownership leaves no candidate behind: the new owner
+// writes under its own fence, so nothing would ever claim this one. Another
+// failure keeps it for a repair pass under the same fence. The candidate shows
+// in the repair: with it the row says failed_budget, without it the generic
+// failure.
+func TestFinishRunDiscardsTheCandidateOnlyWhenOwnershipIsLost(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"ownership lost", sessionruntime.ErrRunOwnershipLost, lifecycle.StatusFailedProvider},
+		{"other write failure", errors.New("database unavailable"), lifecycle.StatusFailedBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &agenttest.RecordingLifecycleStore{}
+			recorder := lifecycle.New(lifecycle.Deps{Store: store, Logger: slog.New(slog.DiscardHandler)})
+			d := New(Deps{Logger: slog.New(slog.DiscardHandler), Runtime: finishRefusing{tc.err}, Lifecycle: recorder})
+			handle := sessionruntime.RunHandle{BotID: fencedBotID, SessionID: fencedSessionID, RunID: fencedRunID, FencingToken: 3}
+			ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: fencedBotID, SessionID: fencedSessionID, Token: 3})
+			budget := apperror.New(apperror.CodeContextBudgetUnsatisfied, nil)
+
+			d.FinishRun(ctx, AdmittedRun{Handle: handle, Mode: "chat"}, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: budget}))
+
+			recorder.ReconcileTerminal(context.Background(), sessionruntime.TerminalRun{
+				RunID: fencedRunID, BotID: fencedBotID, SessionID: fencedSessionID,
+				FencingToken: 3, State: "failed", Applied: true,
+			})
+			if len(store.TerminalUpserts) != 1 {
+				t.Fatalf("repair wrote %d rows, want 1", len(store.TerminalUpserts))
+			}
+			if got := store.TerminalUpserts[0].Status; got != tc.want {
+				t.Fatalf("status repaired under the finishing fence = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

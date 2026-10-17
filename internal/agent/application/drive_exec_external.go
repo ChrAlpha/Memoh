@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -92,9 +93,9 @@ func (s *Service) prepareExternal(ctx context.Context, req runreq.ChatRequest, d
 	contextReq := req
 	contextReq.Attachments = prepared.Context
 	contextReq.ReplyAttachments = nil
-	sections, memoryTrace := s.buildRuntimeContextSections(ctx, contextReq, runtimeContextAgentID(plan.runtimeType, plan.runtimeMeta), plan.projectPath)
+	sections, memoryTrace := s.runconfig.BuildRuntimeContextSections(ctx, contextReq, runconfig.RuntimeContextAgentID(plan.runtimeType, plan.runtimeMeta), plan.projectPath)
 	plan.memoryTrace = memoryTrace
-	plan.contextMarkdown, plan.contextURI, plan.contextManifest = runtimeContextViaContextView(ctx, s.logger, sections, req.Query)
+	plan.contextMarkdown, plan.contextURI, plan.contextManifest = runconfig.RuntimeContextViaContextView(ctx, s.logger, sections, req.Query)
 
 	// The user's message is written before the runtime is prompted, and the
 	// round it belongs to is written at the end. A subscriber sees what was
@@ -405,7 +406,7 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		Prompt:                   e.prompt,
 		ContextMarkdown:          e.plan.contextMarkdown,
 		ContextURI:               e.plan.contextURI,
-		ContextBudgetMaxTokens:   e.service.runtimeContextBudgetDefault(ctx, e.req.BotID),
+		ContextBudgetMaxTokens:   e.service.runconfig.RuntimeContextBudgetDefault(ctx, e.req.BotID),
 		Images:                   e.plan.prepared.Images,
 		AttachmentReferences:     e.plan.prepared.References,
 		CanFallbackImagesToFiles: e.plan.prepared.CanFallbackImagesToFiles,

@@ -11,6 +11,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -109,7 +110,7 @@ func (s *Service) storeUserInputResultAndContinue(
 ) (drive.RunPlan, error) {
 	request = decide.WithLocalWebUserInputReplyTarget(request)
 	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
-	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, request.WorkspaceTargetID)
+	target, err := s.runconfig.ResolveWorkspaceTargetSnapshot(ctx, input.BotID, request.WorkspaceTargetID)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -133,7 +134,7 @@ func (s *Service) continueUserInputSession(
 ) (drive.RunPlan, error) {
 	request = decide.WithLocalWebUserInputReplyTarget(request)
 	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
-	resolved, err := s.ResolveRunConfig(ctx,
+	resolved, err := s.runconfig.ForSession(ctx,
 		input.BotID,
 		request.SessionID,
 		runreq.FirstNonEmpty(request.ChannelIdentityID, input.ActorChannelIdentityID),
@@ -158,6 +159,6 @@ func (s *Service) continueUserInputSession(
 		return drive.RunPlan{}, err
 	}
 	req.RunID = cfg.RunID
-	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)
+	req.WorkspaceTarget = runconfig.WorkspaceTargetFromRunConfig(resolved.RunConfig)
 	return s.nativeContinuationPlan(ctx, req, cfg, resolved.ModelID)
 }

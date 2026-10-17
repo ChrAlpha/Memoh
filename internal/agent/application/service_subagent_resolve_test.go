@@ -29,7 +29,7 @@ func TestResolveReturnsTheEffectiveSubagentRequest(t *testing.T) {
 	// Resolution fails at model selection (no settings service), which is the
 	// point: even the failure path must not hand back a request that has lost
 	// the subagent defaults.
-	_, effective, err := s.resolve(context.Background(), runreq.ChatRequest{
+	_, effective, err := s.runconfig.Resolve(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1", ChatID: "chat-1", ThreadID: "sub-1", Query: "hello",
 	})
 	if err == nil {

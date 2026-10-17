@@ -12,6 +12,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -111,7 +112,7 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed decide
 func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Request, input decide.ToolApprovalResponseInput, runID string) (sdk.ToolResultPart, map[string]any, error) {
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	req = decide.WithLocalWebReplyTarget(req)
-	resolved, err := s.ResolveRunConfig(ctx,
+	resolved, err := s.runconfig.ForSession(ctx,
 		input.BotID,
 		req.SessionID,
 		runreq.FirstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
@@ -160,7 +161,7 @@ func (s *Service) storeToolResultAndContinue(
 ) (drive.RunPlan, error) {
 	approval = decide.WithLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
-	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
+	target, err := s.runconfig.ResolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -190,7 +191,7 @@ func (s *Service) continueToolApprovalSession(
 ) (drive.RunPlan, error) {
 	approval = decide.WithLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
-	resolved, err := s.ResolveRunConfig(ctx,
+	resolved, err := s.runconfig.ForSession(ctx,
 		input.BotID,
 		approval.SessionID,
 		runreq.FirstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
@@ -215,7 +216,7 @@ func (s *Service) continueToolApprovalSession(
 		return drive.RunPlan{}, err
 	}
 	req.RunID = cfg.RunID
-	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)
+	req.WorkspaceTarget = runconfig.WorkspaceTargetFromRunConfig(resolved.RunConfig)
 	return s.nativeContinuationPlan(ctx, req, cfg, resolved.ModelID)
 }
 

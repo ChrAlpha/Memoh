@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -29,7 +30,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
 		return drive.RunPlan{}, err
 	}
-	if err := s.rejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
+	if err := s.runconfig.RejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
 		return drive.RunPlan{}, err
 	}
 
@@ -39,7 +40,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	}
 
 	if dispatch.kind == dispatchExternal {
-		if err := rejectExternalAgentWorkspaceTarget(req); err != nil {
+		if err := runconfig.RejectExternalAgentWorkspaceTarget(req); err != nil {
 			return drive.RunPlan{}, err
 		}
 		// Runtimes that own their conversation context have no rewind primitive,
@@ -54,7 +55,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		return s.externalRunPlan(ctx, req, spec, dispatch.driver)
 	}
 
-	ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
+	ctx, req, err = s.runconfig.BindRequestWorkspace(ctx, req, runconfig.UserPrincipal(req), false)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -84,10 +85,11 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		}
 	}
 
-	rc, req, err := s.resolve(ctx, req)
+	rc, req, err := s.runconfig.Resolve(ctx, req)
 	if err != nil {
 		return drive.RunPlan{}, fmt.Errorf("resolve: %w", err)
 	}
+	s.settleResolved(ctx, req, &rc)
 	req.Query = rc.Query
 	req.RunID = rc.RunConfig.RunID
 
@@ -109,7 +111,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 			stepCommitter.BindContinuation(&cfg)
 		}
 	}
-	cfg = s.prepareRunConfig(ctx, cfg)
+	cfg = s.runconfig.Prepare(ctx, cfg)
 	s.compact.BindStep(&cfg, req, stepCommitter)
 
 	if req.OnModelPreferenceSettled != nil {

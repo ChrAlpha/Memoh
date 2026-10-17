@@ -18,7 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
-	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -327,18 +326,4 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 
 	s.logger.InfoContext(runCtx, "interrupted session resumed", slog.String("previous_run_id", row.RunID.String()), slog.String("run_id", admission.RunID), slog.String("session_id", req.ThreadID))
 	return done, nil
-}
-
-// RecordSubagentResume is called after admission and before the first child tool.
-func (s *Service) RecordSubagentResume(ctx context.Context, session tools.SessionContext, sessionID, query, model string) error {
-	handle, ok := SubagentRunHandleFromContext(ctx)
-	if !ok {
-		return nil
-	}
-	return s.admit.RecordResume(ctx, runreq.ChatRequest{
-		BotID: session.BotID, ThreadID: sessionID, RunID: handle.RunID,
-		ChatID: session.ChatID, UserID: session.UserID, SourceChannelIdentityID: session.ChannelIdentityID,
-		ChatToken: session.SessionToken, CurrentChannel: session.CurrentPlatform, ReplyTarget: session.ReplyTarget,
-		ConversationType: session.ConversationType, WorkspaceTargetID: session.WorkspaceTargetID, Query: query, Model: model, SessionType: "subagent",
-	})
 }

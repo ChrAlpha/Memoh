@@ -90,9 +90,9 @@ func stage4DriveSession(t *testing.T) (*agenttest.CompactionSession, directLifec
 	// Everything the fixture does not fake, the compaction frontier included,
 	// is answered by the database.
 	queries.Queries = s.Queries
-	for key, model := range queries.models {
+	for key, model := range queries.Models {
 		model.Config = []byte(`{"context_window":60000,"compatibilities":["tool-call"]}`)
-		queries.models[key] = model
+		queries.Models[key] = model
 	}
 	fixture.service.messageService = &pgContextMessages{db: s.Messages, sessionID: s.SessionID}
 	rewireComponents(fixture.service)

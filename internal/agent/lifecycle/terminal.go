@@ -572,6 +572,17 @@ func (r *Recorder) clearContextLifecycleCandidates(runID string) {
 	r.candidatesMu.Unlock()
 }
 
+// DiscardCandidate drops the candidate staged for one run under one fencing
+// token. A run whose terminal write was refused because another owner took it
+// over is named by that owner under its own token, so no repair pass will ever
+// look this one up; candidates of the same run under other tokens stay.
+func (r *Recorder) DiscardCandidate(runID string, fencingToken int64) {
+	key := lifecycleCandidateKey{runID: strings.TrimSpace(runID), fencingToken: fencingToken}
+	r.candidatesMu.Lock()
+	delete(r.candidates, key)
+	r.candidatesMu.Unlock()
+}
+
 func contextLifecycleStatusForTerminalRun(state string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(state)) {
 	case "completed":

@@ -6,6 +6,7 @@
 package arch
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -170,6 +171,8 @@ var applicationLayerDirs = []string{
 	"internal/agent/compact",
 	"internal/agent/decide",
 	"internal/agent/admit",
+	"internal/agent/runconfig",
+	"internal/agent/subagent",
 	"internal/agent/agenttest",
 }
 
@@ -541,4 +544,60 @@ func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRunTerminalStateHasOneWriter keeps the write of a run's terminal state
+// on the session runtime in drive/finish.go. drive.Driver.FinishRun composes it
+// with the lifecycle row and the outcome record, so a second write site would
+// end a run without them. The session runtime package owns the methods; the
+// agenttest doubles implement them for tests.
+//
+// FinishRun is also the name of the driver's entry, which every ending run goes
+// through: calls on the driver (a field named driver, or d inside package drive)
+// are that entry, a call on anything else is the runtime's write.
+func TestRunTerminalStateHasOneWriter(t *testing.T) {
+	root := repoRoot(t)
+	for _, file := range goFiles(t, root, "internal/agent") {
+		if file == "internal/agent/drive/finish.go" ||
+			strings.HasPrefix(file, "internal/agent/runtime/session/") ||
+			strings.HasPrefix(file, "internal/agent/agenttest/") {
+			continue
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		inDrive := strings.HasPrefix(file, "internal/agent/drive/")
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "FinishRunWithErrorCode", "FinishRunWithFailure":
+			case "FinishRun":
+				if isDriverReceiver(sel.X, inDrive) {
+					return true
+				}
+			default:
+				return true
+			}
+			t.Errorf("%s calls %s: a run's terminal state is written in internal/agent/drive/finish.go only; end a run through drive.Driver.FinishRun", file, sel.Sel.Name)
+			return true
+		})
+	}
+}
+
+func isDriverReceiver(x ast.Expr, inDrive bool) bool {
+	switch recv := x.(type) {
+	case *ast.SelectorExpr:
+		return recv.Sel.Name == "driver"
+	case *ast.Ident:
+		return inDrive && recv.Name == "d"
+	}
+	return false
 }

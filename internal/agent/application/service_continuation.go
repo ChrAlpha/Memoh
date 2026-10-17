@@ -50,5 +50,5 @@ func (s *Service) prepareContinuationRunConfig(
 	// answered, so asking one is only offered to a run someone follows live.
 	base.LiveToolStream = live
 	base.CanRequestUserInput = live && s.decider.CanDeliverUserInputStream()
-	return s.prepareRunConfig(ctx, base), nil
+	return s.runconfig.Prepare(ctx, base), nil
 }

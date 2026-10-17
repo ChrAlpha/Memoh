@@ -116,9 +116,9 @@ func setDirectLifecycleContextWindow(t *testing.T, fixture directLifecycleFixtur
 	if !ok {
 		t.Fatalf("direct lifecycle queries = %T, want *directLifecycleQueries", fixture.service.queries)
 	}
-	for key, model := range queries.models {
+	for key, model := range queries.Models {
 		model.Config = []byte(`{"context_window":` + strconv.Itoa(window) + `}`)
-		queries.models[key] = model
+		queries.Models[key] = model
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -1023,7 +1024,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			return apperror.FieldRequired("expected_model_preference_revision")
 		}
 		if prefErr := h.modelPrefs.PatchSessionModelPreference(c.Request().Context(), botID, sessionID, req.PreferredChatModelID, req.PreferredReasoningEffort, *req.ExpectedModelPreferenceRevision); prefErr != nil {
-			if errors.Is(prefErr, application.ErrModelPreferenceConflict) {
+			if errors.Is(prefErr, runconfig.ErrModelPreferenceConflict) {
 				return apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
 			}
 			if session.IsDirectRuntime(result) {
@@ -1322,11 +1323,11 @@ func descriptorFieldError(err error) error {
 // choosing again is a field error, store and settings failures are internal.
 func modelPreferenceError(err error, op string) error {
 	switch {
-	case errors.Is(err, application.ErrModelPreferenceInvalid):
+	case errors.Is(err, runconfig.ErrModelPreferenceInvalid):
 		return apperror.FieldInvalid("preferred_chat_model_id", err)
-	case errors.Is(err, application.ErrModelPreferenceRevisionInvalid):
+	case errors.Is(err, runconfig.ErrModelPreferenceRevisionInvalid):
 		return apperror.FieldInvalid("expected_model_preference_revision", err)
-	case errors.Is(err, application.ErrACPPreferenceUnsupported):
+	case errors.Is(err, runconfig.ErrACPPreferenceUnsupported):
 		return apperror.Wrap(apperror.CodeACPModelSelectionUnsupported, err, nil)
 	default:
 		return errs.Wrap(err, op)

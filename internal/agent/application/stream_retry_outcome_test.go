@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -97,8 +98,9 @@ func (l *proposalRecordingLedger) snapshot() [][2]string {
 func newScriptedFailureFixture(t *testing.T, statuses ...int) (directLifecycleFixture, *scriptedFailureTransport) {
 	t.Helper()
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
-	transport := &scriptedFailureTransport{base: fixture.service.streamHTTPClient.Transport, statuses: statuses}
-	fixture.service.streamHTTPClient = &http.Client{Transport: transport}
+	transport := &scriptedFailureTransport{base: fixture.httpClient.Transport, statuses: statuses}
+	client := &http.Client{Transport: transport}
+	useRunconfig(fixture.service, func(d *runconfig.Deps) { d.HTTPClient = client })
 	return fixture, transport
 }
 

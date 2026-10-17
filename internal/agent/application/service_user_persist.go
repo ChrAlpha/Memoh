@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -14,7 +15,7 @@ import (
 func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error) {
 	if req.WorkspaceTarget == nil {
 		var err error
-		ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
+		ctx, req, err = s.runconfig.BindRequestWorkspace(ctx, req, runconfig.UserPrincipal(req), false)
 		if err != nil {
 			return req, messagepkg.Message{}, err
 		}

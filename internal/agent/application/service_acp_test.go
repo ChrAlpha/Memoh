@@ -307,7 +307,7 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 		ReasoningEffort: "high",
 		Attachments: []runreq.ChatAttachment{{
 			Type:   "image",
-			Base64: dataURL("image/png", rasterPNG(t)),
+			Base64: agenttest.DataURL("image/png", agenttest.RasterPNG(t)),
 			Mime:   "image/png",
 			Name:   "screenshot.png",
 		}},
@@ -337,7 +337,7 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 		t.Fatalf("ContextBudgetMaxTokens = %d, want 0 when models/settings services are not configured", pool.input.ContextBudgetMaxTokens)
 	}
 	if len(pool.input.Images) != 1 ||
-		pool.input.Images[0].Data != base64.StdEncoding.EncodeToString(rasterPNG(t)) ||
+		pool.input.Images[0].Data != base64.StdEncoding.EncodeToString(agenttest.RasterPNG(t)) ||
 		pool.input.Images[0].MimeType != "image/png" {
 		t.Fatalf("ACP prompt images = %#v, want inline PNG", pool.input.Images)
 	}
@@ -1072,13 +1072,13 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 
 	const modelID = "00000000-0000-0000-0000-000000000301"
 	const providerID = "00000000-0000-0000-0000-000000000302"
-	provider := modelSelectionProviderRow(t, providerID, "openai-completions", true)
-	model := modelSelectionModelRow(t, modelID, "gpt-context-window", provider.ID, models.ModelTypeChat, true)
+	provider := agenttest.ProviderRow(t, providerID, "openai-completions", true)
+	model := agenttest.ModelRow(t, modelID, "gpt-context-window", provider.ID, models.ModelTypeChat, true)
 	model.Config = []byte(`{"context_window": 128000}`)
 	queries := &acpContextBudgetQueries{
-		modelSelectionFakeQueries: &modelSelectionFakeQueries{
-			models:   map[string]sqlc.Model{model.ModelID: model},
-			provider: provider,
+		ModelQueries: &agenttest.ModelQueries{
+			Models:   map[string]sqlc.Model{model.ModelID: model},
+			Provider: provider,
 		},
 	}
 
@@ -1134,7 +1134,7 @@ type acpContextBudgetSettingsQueries struct {
 }
 
 type acpContextBudgetQueries struct {
-	*modelSelectionFakeQueries
+	*agenttest.ModelQueries
 }
 
 func (*acpContextBudgetQueries) GetBotByID(context.Context, pgtype.UUID) (sqlc.GetBotByIDRow, error) {
@@ -1755,7 +1755,7 @@ func TestStreamACPAgentWSImageCapabilityErrorCarriesItsCode(t *testing.T) {
 				Type:   "image",
 				Name:   "screen.png",
 				Mime:   "image/png",
-				Base64: dataURL("image/png", rasterPNG(t)),
+				Base64: agenttest.DataURL("image/png", agenttest.RasterPNG(t)),
 			}},
 		},
 		make(chan runreq.WSStreamEvent, 8),

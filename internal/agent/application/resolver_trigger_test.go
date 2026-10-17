@@ -102,7 +102,7 @@ func runTriggerPromptPipeline(t *testing.T, cfg agentpkg.RunConfig, provider *tr
 	t.Helper()
 	ctx := context.Background()
 	service := wireComponents(&Service{logger: slog.Default()})
-	cfg = service.prepareRunConfig(ctx, cfg)
+	cfg = service.runconfig.Prepare(ctx, cfg)
 
 	recorder := &triggerViewRecorder{}
 	agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: recorder.apply})

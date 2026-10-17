@@ -21,6 +21,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -34,10 +35,6 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
-
-// These tests cross the seam a split deployment runs on: the channel process
-// holds a turn RPC client, and the server process serves the real application
-// service behind the turn RPC server. Only the model and the stores are fake.
 
 // serveTurnOverRPC exposes service through the turn RPC server and returns the
 // client the channel process would use.
@@ -131,14 +128,14 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 	server := httptest.NewServer(model)
 	t.Cleanup(server.Close)
 
-	provider := modelSelectionProviderRow(t, directLifecycleProviderID, string(models.ClientTypeOpenAICompletions), true)
+	provider := agenttest.ProviderRow(t, directLifecycleProviderID, string(models.ClientTypeOpenAICompletions), true)
 	provider.Config, _ = json.Marshal(map[string]any{"api_key": "test-key", "base_url": server.URL})
-	chatModel := modelSelectionModelRow(t, directLifecycleModelID, "rpc-roundtrip-model", provider.ID, models.ModelTypeChat, true)
+	chatModel := agenttest.ModelRow(t, directLifecycleModelID, "rpc-roundtrip-model", provider.ID, models.ModelTypeChat, true)
 	chatModel.Config = []byte(`{"context_window":128000}`)
 	queries := &rpcChatQueries{directLifecycleQueries{
-		modelSelectionFakeQueries: modelSelectionFakeQueries{
-			models:   map[string]sqlc.Model{chatModel.ModelID: chatModel},
-			provider: provider,
+		ModelQueries: agenttest.ModelQueries{
+			Models:   map[string]sqlc.Model{chatModel.ModelID: chatModel},
+			Provider: provider,
 		},
 		modelID: chatModel.ID,
 	}}
@@ -158,9 +155,9 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 				}, nil
 			},
 		},
-		streamHTTPClient: server.Client(),
-		logger:           logger,
+		logger: logger,
 	})
+	useRunconfig(service, func(d *runconfig.Deps) { d.HTTPClient = server.Client() })
 	bindRuntime(service, newRPCRuntime(t, "owner-rpc-chat"))
 	return service, model
 }

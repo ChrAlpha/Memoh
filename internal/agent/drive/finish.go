@@ -127,7 +127,9 @@ func (d *Driver) FinishRun(ctx context.Context, run AdmittedRun, t Termination) 
 		return terminal
 	case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
 		// Expected when this process was superseded mid-run: another owner
-		// names the outcome and the reaper repairs the projection.
+		// names the outcome and the reaper repairs the projection. The
+		// candidate staged under this fence can never be matched again.
+		d.lifecycle.DiscardCandidate(handle.RunID, handle.FencingToken)
 		d.logger.WarnContext(ctx, "terminal write refused after ownership loss",
 			slog.String("run_id", handle.RunID))
 	default:

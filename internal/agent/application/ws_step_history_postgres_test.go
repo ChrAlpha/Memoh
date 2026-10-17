@@ -22,6 +22,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -249,7 +250,8 @@ func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbst
 	messages := messagepkg.NewService(service.logger, queries)
 	service.messageService = messages
 	rewireComponents(service)
-	service.streamHTTPClient = &http.Client{Transport: &wsStepHistoryTransport{base: service.streamHTTPClient.Transport, mode: mode}}
+	client := &http.Client{Transport: &wsStepHistoryTransport{base: fixture.httpClient.Transport, mode: mode}}
+	useRunconfig(service, func(d *runconfig.Deps) { d.HTTPClient = client })
 	bindRuntime(service, manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	service.queries = noDecisionQueries{service.queries.(*directLifecycleQueries)}

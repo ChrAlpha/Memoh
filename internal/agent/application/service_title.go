@@ -128,7 +128,7 @@ func (s *Service) generateSessionTitle(ctx context.Context, req runreq.ChatReque
 	}
 	job.Annotate(ctx, slog.String("title_model_id", titleModelID))
 
-	titleModel, provider, err := s.fetchChatModel(ctx, titleModelID)
+	titleModel, provider, err := s.runconfig.FetchChatModel(ctx, titleModelID)
 	if err != nil {
 		return errs.Wrap(err, "resolve title model")
 	}

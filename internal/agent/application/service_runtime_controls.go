@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -306,7 +307,7 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 // command. It carries no principal: the command continues a session whose
 // target was authorized when it was chosen.
 func (s *Service) runtimeControlContext(ctx context.Context, request RuntimeControlRequest) (context.Context, error) {
-	ctx, _, err := s.resolveWorkspace(ctx, workspaceInput{
+	ctx, _, err := s.runconfig.ResolveWorkspace(ctx, runconfig.WorkspaceInput{
 		BotID:      request.BotID,
 		SessionID:  request.ThreadID,
 		BestEffort: true,

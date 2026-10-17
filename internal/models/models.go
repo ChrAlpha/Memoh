@@ -626,8 +626,13 @@ func SelectMemoryModelForBot(ctx context.Context, modelsService *Service, querie
 	return SelectMemoryModel(ctx, modelsService, queries)
 }
 
+// ProviderReader is the query FetchProviderByID needs.
+type ProviderReader interface {
+	GetProviderByID(ctx context.Context, id pgtype.UUID) (sqlc.Provider, error)
+}
+
 // FetchProviderByID fetches a provider by ID.
-func FetchProviderByID(ctx context.Context, queries dbstore.Queries, providerID string) (sqlc.Provider, error) {
+func FetchProviderByID(ctx context.Context, queries ProviderReader, providerID string) (sqlc.Provider, error) {
 	if strings.TrimSpace(providerID) == "" {
 		return sqlc.Provider{}, errors.New("provider id missing")
 	}
