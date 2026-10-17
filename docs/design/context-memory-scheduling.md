@@ -250,6 +250,14 @@ request:
   reduce, a context that still does not fit, a stale snapshot, or a failed commit all
   end the run with `context.budget_unsatisfied` (CM-ADM-002). A failed summary never
   replaces context or advances coverage.
+- Inside a chat tool loop, web or IM, the same rule applies at a step boundary: when
+  the next model call does not fit, the run folds its own committed steps before the
+  latest one into one summary, merging an earlier summary of the same run. The
+  request prefix, including the run's input, and the latest step stay verbatim. A
+  step gets one fold; a fold that fails, does not reduce, or still does not fit ends
+  the run with `context.budget_unsatisfied`, keeping committed steps and replaying
+  nothing. The next turn reads the same summary back. Discuss, retried and edited
+  turns, external runtimes, and subagents do not fold within the run.
 
 ### CM-CMP-002: Oversized sessions recover on their next request
 
@@ -510,7 +518,12 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
 - [x] Compaction logs outcome, passes, and duration — CM-CMP-003, CM-OBS-001
 - [x] Rows inside the time window stay candidates when a byte-bounded view
       slides past them — CM-ADM-002
-- [ ] In-run compaction for long tool loops under the same rule — CM-CMP-001
+- [x] In-run compaction for chat tool loops under the same rule; bounded history
+      loads no longer spend their byte budget on rows a usable summary replaced,
+      and load the first of each such group to place the summary — CM-CMP-001,
+      CM-ADM-001
+- [ ] In-run compaction for Discuss, whose steps are stored only when the run
+      ends — CM-CMP-001
 - [ ] Candidate view beyond the 24-hour pipeline window — CM-ADM-002
 
 ### PR 3 (P1) — Bounded replay + pipeline cache eviction
@@ -606,7 +619,7 @@ They complement but never replace black-box acceptance.
 | summary density | histories of different densities | Summary length follows the content; a valid summary within the stated bound continues without another compaction | CM-CMP-001 |
 | compaction failure | summarizer error / no reduction / still too large / unreadable item | `context.budget_unsatisfied`; no provider call; input unconsumed; a committed summary stays, nothing else changes | CM-CMP-001, CM-ADM-002 |
 | compaction latency | request over budget | Outcome, passes, and duration recorded per compaction | CM-CMP-003 |
-| long tool loop | in-run growth past budget | Same rule inside the run | CM-CMP-001 |
+| long tool loop | in-run growth past budget | The run folds its earlier steps once per step and continues; each effect runs once; the next turn reads the summary back | CM-CMP-001 |
 | ACP long thread | Discuss ACP, oversized history | Prompt built within budget; no unbounded `Query` | CM-ADM-001 |
 | replay at scale | cold start with 5k events | Paginated loads; frontier skips covered payloads; bounded replay memory | CM-RPL-001/002 |
 | cache pressure | many concurrent sessions | Evictions occur; evicted sessions recover via replay; resident bytes bounded | CM-CCH-001 |
