@@ -180,23 +180,7 @@ func TestDoCompactionBackfillsLegacyParentCoverageFromItsRows(t *testing.T) {
 
 	stub := &stubModel{summary: "one replacement summary"}
 	cfg := machineryConfig(stub, 200)
-	parents := fusionParentLogs(t, cfg, "legacy summary")
-	parents[0].Coverage = []byte("[]")
-	legacyRows := []sqlc.ListUncompactedMessagesBySessionRow{
-		mkRow(t, "user", `"legacy question"`, 10),
-		mkRow(t, "assistant", `"legacy answer"`, 10),
-	}
-	setFusionRowScopeAndTimes(t, cfg, legacyRows)
-	absorbed := make([]sqlc.ListMessagesByCompactIDRow, 0, len(legacyRows))
-	for _, row := range legacyRows {
-		row.CompactID = parents[0].ID
-		absorbed = append(absorbed, sqlc.ListMessagesByCompactIDRow(row))
-	}
-	q := &fakeQueries{
-		uncompacted:  fusionQualityRows(t, cfg),
-		priorLogs:    parents,
-		absorbedRows: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{parents[0].ID: absorbed},
-	}
+	q, parents, legacyRows := legacyParentQueries(t, cfg)
 
 	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
 	if err != nil || res.Status != StatusOK || len(q.rollupCalls) != 1 {
@@ -226,6 +210,41 @@ func TestDoCompactionBackfillsLegacyParentCoverageFromItsRows(t *testing.T) {
 	if err != nil || len(persisted) != len(legacyItems) || q.backfills[0].AnchorStartMs != persisted[0].CreatedAtMs {
 		t.Fatalf("persisted coverage = %v anchor=%d err=%v, want the legacy rows", persisted, q.backfills[0].AnchorStartMs, err)
 	}
+}
+
+func TestDoCompactionKeepsLegacyParentUntouchedWhenTheSummaryFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := machineryConfig(&stubModel{}, 200)
+	q, _, _ := legacyParentQueries(t, cfg)
+
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err == nil {
+		t.Fatal("empty summary succeeded")
+	}
+	if len(q.backfills) != 0 || len(q.rollupCalls) != 0 {
+		t.Fatalf("failed compaction wrote backfills=%d rollups=%d, want the legacy parent unchanged", len(q.backfills), len(q.rollupCalls))
+	}
+}
+
+func legacyParentQueries(t *testing.T, cfg TriggerConfig) (*fakeQueries, []sqlc.BotHistoryMessageCompact, []sqlc.ListUncompactedMessagesBySessionRow) {
+	t.Helper()
+	parents := fusionParentLogs(t, cfg, "legacy summary")
+	parents[0].Coverage = []byte("[]")
+	legacyRows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"legacy question"`, 10),
+		mkRow(t, "assistant", `"legacy answer"`, 10),
+	}
+	setFusionRowScopeAndTimes(t, cfg, legacyRows)
+	absorbed := make([]sqlc.ListMessagesByCompactIDRow, 0, len(legacyRows))
+	for _, row := range legacyRows {
+		row.CompactID = parents[0].ID
+		absorbed = append(absorbed, sqlc.ListMessagesByCompactIDRow(row))
+	}
+	return &fakeQueries{
+		uncompacted:  fusionQualityRows(t, cfg),
+		priorLogs:    parents,
+		absorbedRows: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{parents[0].ID: absorbed},
+	}, parents, legacyRows
 }
 
 func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *testing.T) {

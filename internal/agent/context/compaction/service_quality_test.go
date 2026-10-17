@@ -62,6 +62,17 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	if wide.maxTokens != models.DefaultOutputReserveTokens {
 		t.Fatalf("summary max tokens = %d, want the model's output allowance %d", wide.maxTokens, models.DefaultOutputReserveTokens)
 	}
+
+	declared := &stubModel{summary: "SUMMARY"}
+	cfgDeclared := machineryConfig(declared, 200)
+	cfgDeclared.SummaryWindowTokens = 200000
+	cfgDeclared.MaxOutputTokens = 64000
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgDeclared); err != nil {
+		t.Fatalf("RunCompactionSync declared: %v", err)
+	}
+	if declared.maxTokens != 64000 {
+		t.Fatalf("summary max tokens = %d, want the model's declared output cap 64000", declared.maxTokens)
+	}
 }
 
 func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
