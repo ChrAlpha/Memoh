@@ -71,13 +71,7 @@ func runBridge(log *slog.Logger) int {
 	serverOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(16 * 1024 * 1024),
 		grpc.MaxSendMsgSize(16 * 1024 * 1024),
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionIdle:     5 * time.Minute,
-			MaxConnectionAge:      30 * time.Minute,
-			MaxConnectionAgeGrace: 10 * time.Second,
-			Time:                  60 * time.Second,
-			Timeout:               15 * time.Second,
-		}),
+		grpc.KeepaliveParams(bridgeKeepaliveParameters()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             10 * time.Second,
 			PermitWithoutStream: true,
@@ -125,6 +119,18 @@ func runBridge(log *slog.Logger) int {
 		return 1
 	}
 	return 0
+}
+
+func bridgeKeepaliveParameters() keepalive.ServerParameters {
+	return keepalive.ServerParameters{
+		// Active desktop, terminal and TCP streams own their connection's
+		// lifetime. Reclaim it after the last RPC ends and the idle period
+		// elapses; fixed-age rotation would strand long-lived streams on
+		// draining transports. Keepalive still detects unresponsive peers.
+		MaxConnectionIdle: 5 * time.Minute,
+		Time:              60 * time.Second,
+		Timeout:           15 * time.Second,
+	}
 }
 
 func stopBridgeGRPCServer(ctx context.Context, log *slog.Logger, srv *grpc.Server) {
