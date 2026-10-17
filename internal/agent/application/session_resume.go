@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/decision"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -399,18 +400,18 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		req.Query += "\n\n" + decisionContext
 	}
 
-	spec := runSpec{
-		Run: admittedRun{
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{
 			Handle:       admission.Handle,
 			TurnID:       admission.TurnID,
 			TurnPosition: &admission.TurnPosition,
 			Mode:         data.SessionType,
 		},
 		Req:      req,
-		Delivery: noDelivery{},
+		Delivery: drive.NoDelivery{},
 		Input:    outcome.InputSynthetic,
 	}
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 
@@ -418,7 +419,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 	go func() {
 		defer close(done)
 		defer cancel()
-		s.drive(runCtx, spec)
+		s.driver.Drive(runCtx, spec)
 	}()
 
 	s.logger.InfoContext(runCtx, "interrupted session resumed", slog.String("previous_run_id", row.RunID.String()), slog.String("run_id", admission.RunID), slog.String("session_id", req.ThreadID))

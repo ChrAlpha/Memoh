@@ -20,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -248,7 +250,7 @@ func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbst
 	service.messageService = messages
 	rewireComponents(service)
 	service.streamHTTPClient = &http.Client{Transport: &wsStepHistoryTransport{base: service.streamHTTPClient.Transport, mode: mode}}
-	service.bindSessionRuntime(manager)
+	bindRuntime(service, manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	service.queries = noDecisionQueries{service.queries.(*directLifecycleQueries)}
 	rewireComponents(service)
@@ -267,6 +269,7 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 	baseCtx := context.Background()
 	if h.unfenced {
 		h.service.sessionRuntime = unfencedSessionRuntime{h.manager}
+		rewireRun(h.service)
 	}
 	admission, err := h.service.AdmitWebRun(baseCtx, WebAdmitInput{
 		BotID:        h.botID,
@@ -320,7 +323,7 @@ type wsStepHistoryDelivery struct {
 	done          chan struct{}
 }
 
-func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev RunEvent) bool {
+func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
 	event := ev.Event
 	d.events = append(d.events, string(event.Type))
 	if event.Type == native.EventTextDelta {
@@ -337,7 +340,7 @@ func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev RunEvent) bool {
 
 func (*wsStepHistoryDelivery) Settle() {}
 
-func (d *wsStepHistoryDelivery) Ended(context.Context, RunEnded) { close(d.done) }
+func (d *wsStepHistoryDelivery) Ended(context.Context, drive.RunEnded) { close(d.done) }
 
 func (h wsStepHistoryHarness) read(t *testing.T, runID string) wsStepHistoryRun {
 	t.Helper()
@@ -629,8 +632,10 @@ func TestPostgresWSStepHistoryFailureAfterCommittedStep(t *testing.T) {
 // call and no second one is written.
 func TestPostgresWSStepHistoryIdleTimeout(t *testing.T) {
 	h := newWSStepHistoryHarness(t, wsStepHistoryBlock)
-	h.service.streamIdleTimeout = 300 * time.Millisecond
-	h.service.streamIdleTimeoutMax = 300 * time.Millisecond
+	rebuildDriver(h.service, "idle", func(d *drive.Deps) {
+		d.StreamIdleTimeout = 300 * time.Millisecond
+		d.StreamIdleTimeoutMax = 300 * time.Millisecond
+	})
 	got := h.run(t, nil)
 	assertWSStepHistory(t, got,
 		[3]string{"failed", "agent.response_timeout", ""},
@@ -650,14 +655,14 @@ func TestPostgresWSStepHistoryIdleTimeout(t *testing.T) {
 // hands the text to that step's commit.
 func TestUncommittedStepTextStartsOverAtRetryAndStepEnd(t *testing.T) {
 	for _, boundary := range []native.StreamEventType{native.EventRetry, native.EventStepEnd} {
-		var text uncommittedStepText
+		var text persist.UncommittedStepText
 		for _, event := range []native.StreamEvent{
 			{Type: native.EventTextDelta, Delta: "before"},
 			{Type: boundary},
 			{Type: native.EventTextDelta, Delta: "part"},
 			{Type: native.EventTextDelta, Delta: "ial"},
 		} {
-			text.observe(event)
+			text.Observe(event)
 		}
 		if got := text.String(); got != "partial" {
 			t.Fatalf("uncommitted text after %s = %q, want %q", boundary, got, "partial")

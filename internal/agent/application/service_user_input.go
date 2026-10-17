@@ -11,6 +11,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/decision"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -222,12 +224,12 @@ func (s *Service) userInputContinuation(ctx context.Context, committed Committed
 		Req: req,
 		// The resumed run is the driver's request, which carries the per-run
 		// asset collector. Everything else in it is what this entry built.
-		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
 			if reqErr != nil {
-				return runPlan{}, reqErr
+				return drive.RunPlan{}, reqErr
 			}
 			if strings.TrimSpace(resolved.ID) == "" {
-				return runPlan{}, errors.New("committed user input response is missing its request")
+				return drive.RunPlan{}, errors.New("committed user input response is missing its request")
 			}
 			toolResult := sdk.ToolResultPart{
 				ToolCallID: resolved.ToolCallID,
@@ -381,18 +383,18 @@ func (s *Service) storeUserInputResultAndContinue(
 	result sdk.ToolResultPart,
 	req runreq.ChatRequest,
 	live bool,
-) (runPlan, error) {
+) (drive.RunPlan, error) {
 	request = withLocalWebUserInputReplyTarget(request)
 	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, request.WorkspaceTargetID)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	modelMessages := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeReq := req
 	storeReq.WorkspaceTarget = target
-	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
-		return runPlan{}, err
+	if err := s.persist.StoreRound(ctx, storeReq, modelMessages, "", persist.RoundOptions{AllowPendingToolCalls: true}); err != nil {
+		return drive.RunPlan{}, err
 	}
 	return s.continueUserInputSession(ctx, request, input, req, live)
 }
@@ -405,7 +407,7 @@ func (s *Service) continueUserInputSession(
 	input UserInputResponseInput,
 	req runreq.ChatRequest,
 	live bool,
-) (runPlan, error) {
+) (drive.RunPlan, error) {
 	request = withLocalWebUserInputReplyTarget(request)
 	ctx = workspace.WithWorkspaceTarget(ctx, request.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,
@@ -418,7 +420,7 @@ func (s *Service) continueUserInputSession(
 		input.ChatToken,
 	)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	resolved.RunConfig.RunID = req.RunID
 
@@ -430,7 +432,7 @@ func (s *Service) continueUserInputSession(
 		live,
 	)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	req.RunID = cfg.RunID
 	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)

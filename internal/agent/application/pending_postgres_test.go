@@ -67,6 +67,7 @@ func newQueueProcess(t *testing.T, env queueEnv, steps ...*discussStep) *discuss
 	proc.svc.sessionService = chatSessionService(env.botID)
 	rewireComponents(proc.svc)
 	proc.svc.queue = env.store
+	rewireRun(proc.svc)
 	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	return proc
 }
@@ -569,6 +570,7 @@ func TestAnInputQueuedAfterTheRunEndedIsStartedByTheEnqueue(t *testing.T) {
 	stale := sessionruntime.NewManager(backend, sessionruntime.Options{})
 	t.Cleanup(func() { _ = stale.Close() })
 	proc.svc.sessionManager = stale
+	rewireRun(proc.svc)
 
 	_, err = proc.svc.EnqueueFollowUp(context.Background(), env.input("late", "queued behind a run that ended"))
 	require.NoError(t, err)
@@ -626,6 +628,7 @@ func TestBatchWhoseDrainerDiedAfterAdmissionIsSettledAndNotRunTwice(t *testing.T
 	var dead sync.Mutex
 	crashed := true
 	proc.svc.queue = &settleFailing{queuedInputStore: short, fail: func() bool { dead.Lock(); defer dead.Unlock(); return crashed }}
+	rewireRun(proc.svc)
 	env.park(t, "m1", "alice", "answered once")
 
 	_, err := proc.svc.admitPending(context.Background(), env.botID, env.sessionID)
@@ -652,6 +655,7 @@ func TestBatchWhoseDrainerDiedBeforeAdmissionIsStartedByTheNextClaim(t *testing.
 	short := sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool, sessionruntime.WithQueueClaimLease(300*time.Millisecond))
 	proc := newQueueProcess(t, env, &discussStep{text: "answered"})
 	proc.svc.queue = short
+	rewireRun(proc.svc)
 	env.park(t, "m1", "alice", "claimed by a process that died")
 	_, ok, err := short.ClaimBatch(context.Background(), env.key(), sessionruntime.QueueOriginFollowUp)
 	require.NoError(t, err)
@@ -756,6 +760,7 @@ func useLiveBackend(t *testing.T, proc *discussProcess, backend sessionruntime.B
 	manager := sessionruntime.NewManager(backend, sessionruntime.Options{})
 	t.Cleanup(func() { _ = manager.Close() })
 	proc.svc.sessionManager = manager
+	rewireRun(proc.svc)
 	return manager
 }
 
@@ -857,6 +862,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		manager := useLiveBackend(t, proc, backend)
 		item := env.parked(t, "b")
 		proc.svc.queue = completeFails{env.store}
+		rewireRun(proc.svc)
 		result, err := proc.svc.PromoteFollowUpToSteer(context.Background(), env.botID, env.sessionID, item)
 		require.NoError(t, err, "the steer exists, so the input was promoted")
 		require.NotEmpty(t, result.Steer.ID)
@@ -866,6 +872,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		require.Len(t, steers, 1)
 
 		proc.svc.queue = env.store
+		rewireRun(proc.svc)
 		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
 		require.Equal(t, "promoted", env.stateOf(t, "b"))
 		steers, err = manager.PendingSteers(context.Background(), steerKey(env), 0)
@@ -942,6 +949,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
 		require.Equal(t, "queued", env.stateOf(t, "f"))
 		proc.svc.sessionManager = proc.manager
+		rewireRun(proc.svc)
 		started, err := proc.svc.drainFollowUps(context.Background(), env.key())
 		require.NoError(t, err)
 		require.True(t, started)
@@ -957,6 +965,7 @@ func TestPromotedFollowUpThatTheRunNeverTookIsStartedAfterIt(t *testing.T) {
 	proc := newQueueProcess(t, env, held, &discussStep{text: "answered after the stop"})
 	// A stopped run's context lifecycle record is not what this case is about.
 	proc.svc.lifecycle = lifecycle.New(lifecycle.Deps{})
+	rewireRun(proc.svc)
 	startHeldRun(t, proc, env, held)
 	item := env.promotable(t, proc, "g")
 	_, err := proc.svc.PromoteFollowUpToSteer(context.Background(), env.botID, env.sessionID, sessionruntime.FollowUpPendingRef{ItemID: item.ID})
@@ -980,6 +989,7 @@ func TestQueueAndDiscussAreAdmittedInTurnsQueueFirst(t *testing.T) {
 	alice := env.participant(t, false)
 	proc := newDiscussProcess(t, env, &discussStep{text: "answer to the queued input"}, &discussStep{send: "answer to the group"})
 	proc.svc.queue = sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool)
+	rewireRun(proc.svc)
 	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	hw := env.write(t, passiveInput{from: alice, externalID: "g1", text: "someone in the group said this"})
 	queued := queueEnv{discussEnv: env, store: proc.svc.queue.(*sessionruntime.QueuedInputs)}
@@ -1093,6 +1103,7 @@ func TestPendingAdmissionOfOneSessionTakesOneCallerAtATime(t *testing.T) {
 	proc := newQueueProcess(t, env)
 	probe := &claimProbe{queuedInputStore: env.store}
 	proc.svc.queue = probe
+	rewireRun(proc.svc)
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})

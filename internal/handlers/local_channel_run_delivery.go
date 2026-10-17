@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -26,7 +26,7 @@ type wsRunDelivery struct {
 	release func()
 }
 
-var _ application.RunDelivery = (*wsRunDelivery)(nil)
+var _ drive.RunDelivery = (*wsRunDelivery)(nil)
 
 func newWSRunDelivery(writer *wsWriter, ref wsTurnRef, release func()) *wsRunDelivery {
 	return &wsRunDelivery{writer: writer, ref: ref, release: release}
@@ -34,7 +34,7 @@ func newWSRunDelivery(writer *wsWriter, ref wsTurnRef, release func()) *wsRunDel
 
 // Deliver implements application.RunDelivery. It reports false once the
 // socket is closed: nothing written after that reaches the client.
-func (d *wsRunDelivery) Deliver(ctx context.Context, ev application.RunEvent) bool {
+func (d *wsRunDelivery) Deliver(ctx context.Context, ev drive.RunEvent) bool {
 	select {
 	case <-d.writer.stop:
 		return false
@@ -58,7 +58,7 @@ func (d *wsRunDelivery) Deliver(ctx context.Context, ev application.RunEvent) bo
 func (*wsRunDelivery) Settle() {}
 
 // Ended implements application.RunDelivery.
-func (d *wsRunDelivery) Ended(context.Context, application.RunEnded) {
+func (d *wsRunDelivery) Ended(context.Context, drive.RunEnded) {
 	if d.release != nil {
 		d.release()
 	}

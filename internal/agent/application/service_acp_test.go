@@ -2323,22 +2323,6 @@ func toolCallMetadataStatus(call sdk.ToolCallPart, key string) string {
 	return status
 }
 
-func recordedMessages(inputs []messagepkg.PersistInput) []messagepkg.Message {
-	messages := make([]messagepkg.Message, 0, len(inputs))
-	for _, input := range inputs {
-		messages = append(messages, messagepkg.Message{
-			BotID:          input.BotID,
-			SessionID:      input.SessionID,
-			Role:           input.Role,
-			Content:        input.Content,
-			DisplayContent: input.DisplayText,
-			Metadata:       input.Metadata,
-			TurnID:         runreq.FirstNonEmpty(input.TurnID, "test-turn"),
-		})
-	}
-	return messages
-}
-
 // transcriptModelMessages builds model messages from streamed ACP events.
 func transcriptModelMessages(result acpclient.PromptResult) []runreq.ModelMessage {
 	output := runreq.SDKMessagesToModelMessages(acpclient.TranscriptFromEvents(result.Events, result.Text))
@@ -2454,6 +2438,7 @@ func (s *Service) streamExternalWebSend(ctx context.Context, driver external.Dri
 	rewireComponents(s)
 	if s.sessionRuntime == nil {
 		s.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: webTestAdmission(req)}
+		rewireRun(s)
 	}
 	admission, err := s.AdmitWebRun(ctx, WebAdmitInput{
 		BotID:        req.BotID,

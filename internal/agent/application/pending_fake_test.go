@@ -81,9 +81,3 @@ func (m *memoryQueuedInputs) ConsumePromoted(_ context.Context, id string) error
 	m.consumed = append(m.consumed, id)
 	return nil
 }
-
-func (m *memoryQueuedInputs) consumedIDs() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]string(nil), m.consumed...)
-}

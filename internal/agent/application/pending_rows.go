@@ -8,6 +8,7 @@ import (
 	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -134,8 +135,8 @@ func (s *Service) precedingUserRow(ctx context.Context, cmd turn.StartTurnComman
 	if visible := strings.TrimSpace(earlier.UserVisibleText); visible != "" {
 		displayText = visible
 	}
-	senderChannelIdentityID, senderUserID := s.resolvePersistSenderIDs(ctx, req)
-	sessionMode, runtimeType := s.persistSessionRuntimeSnapshot(ctx, req)
+	senderChannelIdentityID, senderUserID := s.persist.SenderIDs(ctx, req)
+	sessionMode, runtimeType := s.persist.SessionRuntimeSnapshot(ctx, req)
 	return messagepkg.UserRow{
 		ID: id,
 		Input: messagepkg.PersistInput{
@@ -147,7 +148,7 @@ func (s *Service) precedingUserRow(ctx context.Context, cmd turn.StartTurnComman
 			SourceReplyToMessageID:  req.SourceReplyToMessageID,
 			Role:                    "user",
 			Content:                 content,
-			Metadata:                mergeMetadata(buildRouteMetadata(req), buildInteractionMetadata(req)),
+			Metadata:                persist.MergeMetadata(persist.RouteMetadata(req), persist.InteractionMetadata(req)),
 			Assets:                  runreq.ChatAttachmentsToAssetRefs(req.Attachments),
 			DisplayText:             displayText,
 			SessionMode:             sessionMode,

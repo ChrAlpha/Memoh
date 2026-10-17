@@ -2,17 +2,16 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
-	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -60,7 +59,7 @@ type EditLatestMessageInput struct {
 // retryRunSpec is the run of a Web retry. The turn it replaces is resolved in
 // the run's setup: a target that is no longer the latest turn is the run's own
 // failure, reported to the caller like any other.
-func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessageInput, delivery RunDelivery) runSpec {
+func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessageInput, delivery drive.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	replace := &webReplacement{service: s, reason: "retry", oldTurnID: targetTurnID}
@@ -84,28 +83,28 @@ func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessage
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
 	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		turn, cutoffMessageID, err := s.prepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 		if err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		requestMessageID := strings.TrimSpace(turn.RequestMessageID)
 		requestMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, requestMessageID)
 		if err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		if !strings.EqualFold(requestMessage.Role, "user") {
-			return runPlan{}, errors.New("retry target request is not a user message")
+			return drive.RunPlan{}, errors.New("retry target request is not a user message")
 		}
 		assistantMessage, err := s.messageService.GetByIDBySession(ctx, sessionID, strings.TrimSpace(turn.AssistantMessageID))
 		if err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		// A turn the user-message hook refused never reached the model, so its
 		// retry runs the hook again instead of reusing the refused message.
 		retryUserMessageHook := isPreflightUserMessageHookFailure(assistantMessage)
-		req.Query = visibleMessageText(requestMessage)
-		req.RawQuery = visibleMessageText(requestMessage)
+		req.Query = persist.VisibleMessageText(requestMessage)
+		req.RawQuery = persist.VisibleMessageText(requestMessage)
 		req.ReusePersistedUserMessage = !retryUserMessageHook
 		if !retryUserMessageHook {
 			req.PersistedUserMessageID = requestMessage.ID
@@ -124,7 +123,7 @@ func isPreflightUserMessageHookFailure(message messagepkg.Message) bool {
 
 // editRunSpec is the run of a Web edit: the latest turn's request replaced by
 // new text, and the turn answered again.
-func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageInput, delivery RunDelivery) runSpec {
+func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageInput, delivery drive.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)
@@ -152,13 +151,13 @@ func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageIn
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
 	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		if text == "" && len(input.Attachments) == 0 {
-			return runPlan{}, errors.New("message text or attachments required")
+			return drive.RunPlan{}, errors.New("message text or attachments required")
 		}
 		turn, err := s.prepareEditLatestTurnOperation(ctx, sessionID, targetTurnID)
 		if err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		req.HistoryCutoffBeforeMessageID = strings.TrimSpace(turn.RequestMessageID)
 		return s.chatSetup(ctx, replace.target(ctx, req, ""), spec)
@@ -179,13 +178,13 @@ type webReplacement struct {
 	requestMessageID string
 }
 
-func (r *webReplacement) hooks() *turnReplacement {
-	return &turnReplacement{
+func (r *webReplacement) hooks() *drive.TurnReplacement {
+	return &drive.TurnReplacement{
 		Preflight: func(ctx context.Context) error {
 			return r.service.ensureLatestVisibleTurn(ctx, r.req.ThreadID, r.oldTurnID)
 		},
 		PostPersist: func(ctx context.Context, persisted []messagepkg.Message) error {
-			return r.service.replacePersistedTurn(ctx, r.req, r.oldTurnID, r.requestMessageID, r.reason, persisted)
+			return r.service.persist.ReplaceTurn(ctx, r.req, r.oldTurnID, r.requestMessageID, r.reason, persisted)
 		},
 	}
 }
@@ -200,8 +199,8 @@ func (r *webReplacement) target(ctx context.Context, req runreq.ChatRequest, req
 		RequestMessageID:        strings.TrimSpace(requestMessageID),
 		Reason:                  r.reason,
 	}
-	if update := r.service.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID); update != nil {
-		replacement.SessionMetadata = update.metadata
+	if update := r.service.persist.PrepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID); update != nil {
+		replacement.SessionMetadata = update.Metadata
 	}
 	req.TurnReplacement = replacement
 	r.req = req
@@ -337,262 +336,4 @@ func (s *Service) resolveLatestVisibleTurn(ctx context.Context, sessionID, turnI
 func (s *Service) ensureLatestVisibleTurn(ctx context.Context, sessionID, turnID string) error {
 	_, err := s.resolveLatestVisibleTurn(ctx, sessionID, strings.TrimSpace(turnID), "turn is not latest")
 	return err
-}
-
-func (s *Service) replacePersistedTurn(
-	ctx context.Context,
-	req runreq.ChatRequest,
-	oldTurnID string,
-	requestMessageID string,
-	reason string,
-	persisted []messagepkg.Message,
-) error {
-	replacementID := firstAssistantID(persisted)
-	if replacementID == "" {
-		replacementID = latestPersistedID(persisted)
-	}
-	if replacementID == "" {
-		return errors.New("replacement message was not persisted")
-	}
-	if strings.TrimSpace(requestMessageID) == "" {
-		requestMessageID = firstUserID(persisted)
-	}
-	forkAnchorUpdate := s.prepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID)
-	if _, err := s.messageService.ReplaceTurn(
-		context.WithoutCancel(ctx),
-		req.ThreadID,
-		oldTurnID,
-		req.TurnID,
-		req.TurnPosition,
-		requestMessageID,
-		replacementID,
-		reason,
-	); err != nil {
-		s.logger.ErrorContext(ctx, "replace history turn failed", slog.String("reason", reason), slog.Any("error", err))
-		s.cleanupReplacementMessages(ctx, persisted)
-		return fmt.Errorf("replace history turn: %w", err)
-	}
-	s.applyForkAnchorUpdate(context.WithoutCancel(ctx), req.ThreadID, forkAnchorUpdate)
-	s.publishReplacementMessageCreated(req.BotID, persisted)
-	return nil
-}
-
-func (s *Service) publishReplacementMessageCreated(botID string, persisted []messagepkg.Message) {
-	if s == nil || s.eventPublisher == nil || len(persisted) == 0 {
-		return
-	}
-	var latest messagepkg.Message
-	for i := len(persisted) - 1; i >= 0; i-- {
-		if strings.TrimSpace(persisted[i].ID) == "" {
-			continue
-		}
-		latest = persisted[i]
-		break
-	}
-	if strings.TrimSpace(latest.ID) == "" {
-		return
-	}
-	eventBotID := strings.TrimSpace(botID)
-	if eventBotID == "" {
-		eventBotID = strings.TrimSpace(latest.BotID)
-	}
-	data, err := json.Marshal(latest)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.Warn("marshal replacement message event failed", slog.Any("error", err))
-		}
-		return
-	}
-	s.eventPublisher.Publish(messageevent.Event{
-		Type:  messageevent.EventTypeMessageCreated,
-		BotID: eventBotID,
-		Data:  data,
-	})
-}
-
-type forkAnchorUpdate struct {
-	metadata map[string]any
-}
-
-func (s *Service) prepareForkAnchorUpdate(ctx context.Context, sessionID string, replacedTailStartMessageID string) *forkAnchorUpdate {
-	sessionID = strings.TrimSpace(sessionID)
-	replacedTailStartMessageID = strings.TrimSpace(replacedTailStartMessageID)
-	if s == nil || s.sessionService == nil || s.messageService == nil || sessionID == "" || replacedTailStartMessageID == "" {
-		return nil
-	}
-
-	sess, err := s.sessionService.Get(ctx, sessionID)
-	if err != nil {
-		s.logForkAnchorUpdateWarning("load session for fork anchor update failed", sessionID, err)
-		return nil
-	}
-	fork, ok := forkedFromMetadata(sess.Metadata)
-	if !ok {
-		return nil
-	}
-	currentAnchor := forkMetadataString(fork, "fork_message_id")
-	if currentAnchor == "" {
-		return nil
-	}
-
-	replacedTail, err := s.messageService.ListVisibleFromBySession(ctx, sessionID, replacedTailStartMessageID)
-	if err != nil {
-		s.logForkAnchorUpdateWarning("load replaced tail for fork anchor update failed", sessionID, err)
-		return nil
-	}
-	if !messagesContainAnchor(replacedTail, currentAnchor) {
-		return nil
-	}
-
-	nextAnchor := s.latestInheritedAssistantBefore(ctx, sessionID, replacedTailStartMessageID)
-	if nextAnchor == currentAnchor {
-		return nil
-	}
-
-	nextFork := runreq.CloneMetadataMap(fork)
-	if nextAnchor != "" {
-		nextFork["fork_message_id"] = nextAnchor
-	} else {
-		delete(nextFork, "fork_message_id")
-	}
-
-	nextMetadata := runreq.CloneMetadataMap(sess.Metadata)
-	nextMetadata["forked_from"] = nextFork
-	return &forkAnchorUpdate{metadata: nextMetadata}
-}
-
-func (s *Service) applyForkAnchorUpdate(ctx context.Context, sessionID string, update *forkAnchorUpdate) {
-	sessionID = strings.TrimSpace(sessionID)
-	if s == nil || s.sessionService == nil || update == nil || sessionID == "" {
-		return
-	}
-	if _, err := s.sessionService.UpdateMetadata(ctx, sessionID, update.metadata); err != nil {
-		s.logForkAnchorUpdateWarning("persist fork anchor update failed", sessionID, err)
-	}
-}
-
-func (s *Service) latestInheritedAssistantBefore(ctx context.Context, sessionID string, beforeMessageID string) string {
-	messages, err := s.messageService.ListBeforeMessageBySession(ctx, sessionID, beforeMessageID, 10000)
-	if err != nil {
-		s.logForkAnchorUpdateWarning("load previous messages for fork anchor update failed", sessionID, err)
-		return ""
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
-			continue
-		}
-		return strings.TrimSpace(msg.ID)
-	}
-	return ""
-}
-
-func messagesContainAnchor(messages []messagepkg.Message, anchor string) bool {
-	anchor = strings.TrimSpace(anchor)
-	if anchor == "" {
-		return false
-	}
-	for _, msg := range messages {
-		if strings.TrimSpace(msg.ID) == anchor || strings.TrimSpace(msg.ExternalMessageID) == anchor {
-			return true
-		}
-	}
-	return false
-}
-
-func forkedFromMetadata(metadata map[string]any) (map[string]any, bool) {
-	raw, ok := metadata["forked_from"]
-	if !ok || raw == nil {
-		return nil, false
-	}
-	switch value := raw.(type) {
-	case map[string]any:
-		return value, true
-	case map[string]string:
-		out := make(map[string]any, len(value))
-		for key, item := range value {
-			out[key] = item
-		}
-		return out, true
-	default:
-		return nil, false
-	}
-}
-
-func forkMetadataString(metadata map[string]any, key string) string {
-	if metadata == nil {
-		return ""
-	}
-	value, ok := metadata[key]
-	if !ok || value == nil {
-		return ""
-	}
-	if text, ok := value.(string); ok {
-		return strings.TrimSpace(text)
-	}
-	return strings.TrimSpace(fmt.Sprint(value))
-}
-
-func (s *Service) logForkAnchorUpdateWarning(message string, sessionID string, err error) {
-	if s != nil && s.logger != nil {
-		s.logger.Warn("fork anchor update skipped", slog.String("reason", message), slog.String("session_id", sessionID), slog.Any("error", err))
-	}
-}
-
-func (s *Service) cleanupReplacementMessages(ctx context.Context, persisted []messagepkg.Message) {
-	if s == nil || s.messageService == nil || len(persisted) == 0 {
-		return
-	}
-	ids := make([]string, 0, len(persisted))
-	for _, msg := range persisted {
-		if id := strings.TrimSpace(msg.ID); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return
-	}
-	if err := s.messageService.DeleteByIDs(context.WithoutCancel(ctx), ids); err != nil {
-		s.logger.ErrorContext(ctx, "cleanup replacement messages failed", slog.Any("error", err), slog.Int("message_count", len(ids)))
-	}
-}
-
-func visibleMessageText(msg messagepkg.Message) string {
-	if text := strings.TrimSpace(msg.DisplayContent); text != "" {
-		return text
-	}
-	var modelMessage runreq.ModelMessage
-	if err := json.Unmarshal(msg.Content, &modelMessage); err == nil {
-		if text := strings.TrimSpace(modelMessage.TextContent()); text != "" {
-			return text
-		}
-	}
-	return strings.TrimSpace(string(msg.Content))
-}
-
-func firstAssistantID(messages []messagepkg.Message) string {
-	for _, msg := range messages {
-		if strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
-			return strings.TrimSpace(msg.ID)
-		}
-	}
-	return ""
-}
-
-func firstUserID(messages []messagepkg.Message) string {
-	for _, msg := range messages {
-		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
-			return strings.TrimSpace(msg.ID)
-		}
-	}
-	return ""
-}
-
-func latestPersistedID(messages []messagepkg.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if id := strings.TrimSpace(messages[i].ID); id != "" {
-			return id
-		}
-	}
-	return ""
 }

@@ -2,73 +2,18 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
-	"sync"
 	"testing"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/schedule"
 )
-
-// recordingTurnEventPublisher stands in for the session-runtime projection
-// sink: it records every published event and can be armed to refuse the Nth
-// publish, which is how fence rejections surface to the consumer.
-type recordingTurnEventPublisher struct {
-	mu        sync.Mutex
-	events    []native.StreamEvent
-	calls     int
-	errAt     int // 1-based call index to fail; 0 means never fail
-	err       error
-	onPublish func(native.StreamEvent)
-}
-
-func (p *recordingTurnEventPublisher) publish(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.calls++
-	if p.errAt > 0 && p.calls == p.errAt {
-		return p.err
-	}
-	if p.onPublish != nil {
-		p.onPublish(event)
-	}
-	p.events = append(p.events, event)
-	return nil
-}
-
-func (p *recordingTurnEventPublisher) published() []native.StreamEvent {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]native.StreamEvent(nil), p.events...)
-}
-
-func scheduleTerminalEvent(t *testing.T, assistantText string) native.StreamEvent {
-	t.Helper()
-	messagesJSON, err := json.Marshal([]sdk.Message{sdk.AssistantMessage(assistantText)})
-	if err != nil {
-		t.Fatalf("marshal terminal messages: %v", err)
-	}
-	usageJSON, err := json.Marshal(sdk.Usage{InputTokens: 12, OutputTokens: 3})
-	if err != nil {
-		t.Fatalf("marshal usage: %v", err)
-	}
-	return native.StreamEvent{Type: native.EventAgentEnd, Messages: messagesJSON, Usage: usageJSON}
-}
-
-func triggerStreamRequest() runreq.ChatRequest {
-	return runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "run scheduled task"}
-}
 
 // fakeTriggeredAdmitter captures the Admit input so tests can drive the
 // admission hook exactly the way the runtime manager would at activation.

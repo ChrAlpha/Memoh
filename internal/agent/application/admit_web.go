@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -214,27 +215,27 @@ func (s *Service) enqueueWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmi
 // RunWebSend executes an admitted Web send. The draft is still the
 // submitter's until execution starts: a failure before then writes nothing, so
 // the composer can hand it back without duplicating a turn.
-func (s *Service) RunWebSend(admission *WebAdmission, req runreq.ChatRequest, delivery RunDelivery) {
+func (s *Service) RunWebSend(admission *WebAdmission, req runreq.ChatRequest, delivery drive.RunDelivery) {
 	spec := s.webRunSpec(admission, req, delivery, outcome.InputHeld)
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 	s.startWebRun(admission, spec)
 }
 
 // RunWebRetry executes an admitted retry of the session's latest turn.
-func (s *Service) RunWebRetry(admission *WebAdmission, input RetryLatestMessageInput, delivery RunDelivery) {
+func (s *Service) RunWebRetry(admission *WebAdmission, input RetryLatestMessageInput, delivery drive.RunDelivery) {
 	s.startWebRun(admission, s.retryRunSpec(admission, input, delivery))
 }
 
 // RunWebEdit executes an admitted edit of the session's latest turn.
-func (s *Service) RunWebEdit(admission *WebAdmission, input EditLatestMessageInput, delivery RunDelivery) {
+func (s *Service) RunWebEdit(admission *WebAdmission, input EditLatestMessageInput, delivery drive.RunDelivery) {
 	s.startWebRun(admission, s.editRunSpec(admission, input, delivery))
 }
 
 // webRunSpec is the part of a Web run every Web entry shares: the run
 // admission named, and the request wired to it.
-func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, delivery RunDelivery, input outcome.InputOwnership) runSpec {
+func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, delivery drive.RunDelivery, input outcome.InputOwnership) drive.RunSpec {
 	position := admission.TurnPosition
 	req.RunID = admission.RunID
 	req.RunHandle = admission.handle
@@ -242,8 +243,8 @@ func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, deli
 	req.TurnPosition = &position
 	req.InjectCh = admission.injectCh
 	req.QueueSteerEnabled = admission.injectCh != nil
-	return runSpec{
-		Run: admittedRun{
+	return drive.RunSpec{
+		Run: drive.AdmittedRun{
 			Handle:       admission.handle,
 			TurnID:       admission.TurnID,
 			TurnPosition: &position,
@@ -258,13 +259,13 @@ func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, deli
 // startWebRun drives an admitted Web run on its own goroutine. Compaction of
 // the session waits for the run: compacting history a run is still appending
 // to would summarize a turn that is not finished.
-func (s *Service) startWebRun(admission *WebAdmission, spec runSpec) {
+func (s *Service) startWebRun(admission *WebAdmission, spec drive.RunSpec) {
 	releaseCompaction := s.DeferSessionCompaction(spec.Req.BotID, spec.Req.ThreadID, admission.RunID)
 	go func() {
 		defer admission.endActive()
 		defer admission.stop(outcome.ErrRunStopped)
 		defer close(admission.injectCh)
 		defer releaseCompaction()
-		s.drive(admission.ctx, spec)
+		s.driver.Drive(admission.ctx, spec)
 	}()
 }

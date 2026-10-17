@@ -27,7 +27,9 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -240,10 +242,10 @@ func TestCharacterizeHistoryFailureMarker(t *testing.T) {
 	for _, code := range []apperror.Code{apperror.CodeAgentProviderOverloaded, apperror.CodeAgentResponseInterrupted} {
 		messages := &agenttest.RecordingMessages{}
 		service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
-		if _, err := service.persistTurnFailure(context.Background(),
+		if _, err := service.persist.TerminalSnapshotResult(context.Background(),
 			runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
-			runreq.ResolvedContext{}, code); err != nil {
-			t.Fatalf("persistTurnFailure: %v", err)
+			runreq.ResolvedContext{}, persist.TerminalSnapshot{FailureCode: code}); err != nil {
+			t.Fatalf("persistTerminalSnapshotResult: %v", err)
 		}
 		if len(messages.Persisted) != 2 || messages.Persisted[0].Role != "user" || messages.Persisted[1].Role != "assistant" {
 			t.Fatalf("persisted = %#v, want user + assistant", messages.Persisted)
@@ -267,12 +269,12 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 	t.Parallel()
 	messages := &agenttest.RecordingMessages{}
 	service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
-	partial := terminalSnapshot{
-		sdkMessages:   []sdk.Message{sdk.AssistantMessage("partial answer")},
-		visibleOutput: true,
-		failureCode:   apperror.CodeAgentProviderOverloaded,
+	partial := persist.TerminalSnapshot{
+		SDKMessages:   []sdk.Message{sdk.AssistantMessage("partial answer")},
+		VisibleOutput: true,
+		FailureCode:   apperror.CodeAgentProviderOverloaded,
 	}
-	if _, err := service.persistTerminalSnapshotResult(context.Background(),
+	if _, err := service.persist.TerminalSnapshotResult(context.Background(),
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, runreq.ResolvedContext{}, partial); err != nil {
 		t.Fatalf("persistTerminalSnapshotResult: %v", err)
 	}
@@ -288,8 +290,8 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 	// Without visible output the same partial snapshot becomes the failure marker.
 	hidden := &agenttest.RecordingMessages{}
 	service = wireComponents(&Service{messageService: hidden, logger: slog.New(slog.DiscardHandler)})
-	partial.visibleOutput = false
-	if _, err := service.persistTerminalSnapshotResult(context.Background(),
+	partial.VisibleOutput = false
+	if _, err := service.persist.TerminalSnapshotResult(context.Background(),
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, runreq.ResolvedContext{}, partial); err != nil {
 		t.Fatalf("persistTerminalSnapshotResult: %v", err)
 	}
@@ -334,7 +336,7 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 			})
 			t.Cleanup(func() { _ = manager.Close() })
 			service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
-			service.bindSessionRuntime(manager)
+			bindRuntime(service, manager)
 			admission, err := manager.Admit(context.Background(), sessionruntime.AdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: "invocation-finisher", Payload: []byte(`{}`),
 				Execution: sessionruntime.Execution{
@@ -412,8 +414,8 @@ func TestCharacterizeDecisionContinuationFailureColumns(t *testing.T) {
 			}
 			service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
 				Req: runreq.ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
-				Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) {
-					return runPlan{}, tc.cause
+				Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+					return drive.RunPlan{}, tc.cause
 				},
 			})
 			run, err := runs.Get(context.Background(), admission.RunID)

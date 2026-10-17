@@ -89,7 +89,7 @@ func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 			service := fixture.fixture.service
 			// The run is admitted against the real manager, so its ledger is
 			// what the run_terminal is read against.
-			service.bindSessionRuntime(manager)
+			bindRuntime(service, manager)
 			cmd := turn.StartTurnCommand{
 				TeamID: "team-1", Mode: turn.ModeChat, BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				ChatID: agenttest.LifecycleBotID, Query: directLifecyclePrompt, IdempotencyKey: "msg-1",

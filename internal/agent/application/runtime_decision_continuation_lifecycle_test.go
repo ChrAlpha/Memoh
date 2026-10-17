@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -68,11 +69,11 @@ func (c *continuationRunConfigCapture) snapshot() (calls, budget int, runID stri
 // answer resumes, each called the way its continuation's setup calls it.
 var continuationSessions = []struct {
 	name    string
-	resolve func(context.Context, *Service, runreq.ChatRequest) (runPlan, error)
+	resolve func(context.Context, *Service, runreq.ChatRequest) (drive.RunPlan, error)
 }{
 	{
 		name: "user input",
-		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
+		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
 			return service.continueUserInputSession(ctx,
 				userinput.Request{
 					ID: "user-input", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
@@ -85,7 +86,7 @@ var continuationSessions = []struct {
 	},
 	{
 		name: "tool approval",
-		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
+		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
 			return service.continueToolApprovalSession(ctx,
 				toolapproval.Request{
 					ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
@@ -119,7 +120,7 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 			if err != nil {
 				t.Fatalf("continuation setup error = %v", err)
 			}
-			plan.Exec.execute(context.Background(), func(native.StreamEvent) {})
+			plan.Exec.Execute(context.Background(), func(native.StreamEvent) {})
 			calls, budget, runID := capture.snapshot()
 			if calls == 0 {
 				t.Fatal("ContextView applier was not reached through agent.Stream")
@@ -151,7 +152,7 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 
 			err := fixture.service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 				Req: req,
-				Setup: func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
+				Setup: func(ctx context.Context, _ runreq.ChatRequest) (drive.RunPlan, error) {
 					return tt.resolve(ctx, fixture.service, req)
 				},
 			}, nil)

@@ -11,8 +11,10 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -121,7 +123,7 @@ type externalExecutor struct {
 	input outcome.InputOwnership
 
 	lifecycle *contextfrag.LifecycleHolder
-	timing    *reasoningTimingTracker
+	timing    *persist.ReasoningTimingTracker
 	notices   runtimeNotices
 	// hub carries this turn's live output to whatever the session exposes as
 	// its active prompt.
@@ -152,7 +154,7 @@ type externalExecutor struct {
 // the driver sinks goes to emit; the terminal event is synthesized here,
 // because an External Agent runtime reports a finished turn rather than a
 // stream that ends.
-func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+func (e *externalExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	e.hub = e.service.activePrompts.Register(e.req.BotID, e.req.ThreadID)
 	defer e.service.activePrompts.Unregister(e.req.BotID, e.req.ThreadID, e.hub)
 	if e.service.sessionRuntime != nil {
@@ -236,10 +238,10 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 
 // ending builds what the driver receives: the terminal event, which the driver
 // publishes after this ending's history write, and the write itself.
-func (e *externalExecutor) ending(emit func(native.StreamEvent), eventType native.StreamEventType, reason event.EndReason) execEnding {
+func (e *externalExecutor) ending(emit func(native.StreamEvent), eventType native.StreamEventType, reason event.EndReason) drive.ExecEnding {
 	emit(native.StreamEvent{Type: native.EventTextEnd})
 	t := e.terminalFor(eventType, reason)
-	return execEnding{
+	return drive.ExecEnding{
 		Terminal:      &t,
 		Failure:       e.failure,
 		Commit:        e.commit,
@@ -272,7 +274,7 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 	if !e.notices.observe(ev) {
 		return
 	}
-	e.timing.observe(ev)
+	e.timing.Observe(ev)
 	if isRuntimeDecisionProjectionEvent(ev) && e.projections.record(ev.ToolCallID) {
 		e.projections.complete(ev.ToolCallID, e.service.persistRuntimeDecisionProjection(context.WithoutCancel(deliveryCtx), e.req, ev))
 	}
@@ -285,14 +287,14 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 // commit writes the run's one round. An External Agent runtime reports a whole
 // turn at once, so this is the run's only history write: the completed round,
 // or the failure row of a turn that wrote none.
-func (e *externalExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
+func (e *externalExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
 	return e.writeRound(ctx, e.req, f, row)
 }
 
 // commitStopped writes the partial transcript of a turn the user stopped. The
 // round carries no failure, and no memory is extracted from it: a stop is not a
 // completed turn, even when the runtime finished in the same instant.
-func (e *externalExecutor) commitStopped(ctx context.Context) (commitSummary, error) {
+func (e *externalExecutor) commitStopped(ctx context.Context) (drive.CommitSummary, error) {
 	req := e.req
 	req.SkipMemoryExtraction = true
 	return e.writeRound(ctx, req, nil, false)
@@ -300,8 +302,8 @@ func (e *externalExecutor) commitStopped(ctx context.Context) (commitSummary, er
 
 // writeRound is the one history write of an External Agent run, for req as the
 // ending wants it written.
-func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatRequest, f *outcome.RunFailure, row bool) (commitSummary, error) {
-	summary := commitSummary{ModelID: strings.TrimSpace(e.req.Model)}
+func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatRequest, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
+	summary := drive.CommitSummary{ModelID: strings.TrimSpace(e.req.Model)}
 	ctx = context.WithoutCancel(ctx)
 	if e.roundUnwritable {
 		// Nothing ran, so there is no transcript to write. An input the
@@ -309,7 +311,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 		// left their hands keeps a failure row, because nowhere else records
 		// that the turn did not happen.
 		if row && f != nil {
-			persisted, err := e.service.persistFailureRow(ctx, e.req, e.rc, *f, "")
+			persisted, err := e.service.persist.FailureRow(ctx, e.req, e.rc, *f, "")
 			if err != nil {
 				return summary, outcome.RuntimeHistoryError(err)
 			}
@@ -326,7 +328,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 		f,
 		e.result.TurnCompleted,
 		e.lifecycle,
-		takeTerminalReasoningTiming(e.timing, terminalEventTypeOf(e.completed)),
+		persist.TakeTerminalReasoningTiming(e.timing, terminalEventTypeOf(e.completed)),
 	)
 	if err != nil {
 		switch e.service.resolveRuntimeRoundPersistFailure(ctx, e.req, err, e.cleanupProjectionsIn) {
@@ -369,7 +371,7 @@ func (e *externalExecutor) cleanup(ctx context.Context) {
 	e.service.cancelPendingRuntimeApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
 	if e.roundUnwritable && e.input != outcome.InputAccepted && e.plan.leadingUser != nil {
-		e.service.cleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
+		e.service.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
 	}
 }
 
@@ -383,7 +385,7 @@ func (e *externalExecutor) cleanupProjections(ctx context.Context) {
 	// are temporary either way, so the second pass is a no-op rather than a
 	// second delete of the same row.
 	e.projectionsCleanup.Do(func() {
-		e.service.cleanupReplacementMessages(ctx, e.projections.snapshot())
+		e.service.persist.CleanupReplacementMessages(ctx, e.projections.snapshot())
 		e.service.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
 	})
 }

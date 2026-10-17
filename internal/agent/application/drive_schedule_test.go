@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -30,6 +31,7 @@ func scheduleLifecycleService(
 	registerACPPool(service, pool)
 	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	service.sessionRuntime = runtime
+	rewireRun(service)
 	return service, runtime
 }
 
@@ -47,6 +49,7 @@ func runScheduledExternal(ctx context.Context, t *testing.T, service *Service, d
 		// The entry writes the run's terminal state, which needs an admitted
 		// run: a schedule fire never runs without one.
 		service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+		rewireRun(service)
 	}
 	return service.TriggerSchedule(ctx, agenttest.LifecycleBotID, payload, "")
 }
@@ -93,8 +96,8 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 	service, _ := scheduleLifecycleService(t, pool, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	driver := &incompleteScheduleDriver{}
 	position := int64(7)
-	spec := runSpec{
-		Run: admittedRun{Handle: sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{Handle: sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
 		Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID},
 	}
 	setup := service.scheduleSetup(spec, schedule.TriggerPayload{

@@ -25,7 +25,9 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -101,6 +103,8 @@ type Service struct {
 	botenv               *botenv.Env
 	transcript           *transcript.Reader
 	lifecycle            *lifecycle.Recorder
+	persist              *persist.Writer
+	driver               *drive.Driver
 	resumeSecret         string
 	teamScopes           runreq.TeamScopes
 	resumeReady          func(context.Context, string, string) error
@@ -126,8 +130,6 @@ type Service struct {
 	workdirs             sessionWorkdirResolver
 	streamHTTPClient     *http.Client
 	compactionHTTPClient *http.Client
-	streamIdleTimeout    time.Duration
-	streamIdleTimeoutMax time.Duration
 	bgManager            *background.Manager
 	toolApproval         *toolapproval.Service
 	userInput            userInputService
@@ -136,7 +138,7 @@ type Service struct {
 	starterPromptFlights singleflight.Group
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error)
+	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error)
 	sessionCompactionMu sync.Mutex
 	sessionCompactions  map[string]*sessionCompactionGate
 	memorySearchTimeout time.Duration
@@ -145,13 +147,7 @@ type Service struct {
 	sessionRuntime      runreq.TurnAdmitter
 	decisionRuntime     *sessionruntime.Manager
 	abortRuntime        runtimeAbortController
-	publishTurnEvent    func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
 	sessionManager      *sessionruntime.Manager
-	// outputMedia and outputSpeech prepare a run's events on their way to the
-	// subscribers: attachments are stored, speech is synthesized into voice
-	// attachments. Both are optional.
-	outputMedia  outputMediaStore
-	outputSpeech outputSpeech
 	// queue is the durable queue of input that met a busy session. It is nil
 	// where the deployment has no database, and then nothing queues.
 	queue queuedInputStore
@@ -222,9 +218,9 @@ type Deps struct {
 	Events messageevent.Publisher
 	// OutputMedia stores attachments that runs emit; without it an attachment
 	// keeps the path it arrived with.
-	OutputMedia outputMediaStore
+	OutputMedia drive.OutputMediaStore
 	// OutputSpeech synthesizes spoken replies; without it a speech event is dropped.
-	OutputSpeech outputSpeech
+	OutputSpeech drive.OutputSpeech
 	// QueuedInputs is the durable queue for input that meets a busy session;
 	// without it such input is refused as busy.
 	QueuedInputs *sessionruntime.QueuedInputs
@@ -339,8 +335,6 @@ func New(d Deps) (*Service, error) {
 		workdirs:             d.Workdirs,
 		bgManager:            d.Background,
 		eventPublisher:       d.Events,
-		outputMedia:          d.OutputMedia,
-		outputSpeech:         d.OutputSpeech,
 		externalDrivers:      externalDriverMap(d.ExternalRuntimes...),
 		resumeReady:          d.ResumeReadiness,
 		teamScopes:           teamScopes,
@@ -380,6 +374,25 @@ func New(d Deps) (*Service, error) {
 	if d.QueuedInputs != nil {
 		service.queue = d.QueuedInputs
 	}
+	service.persist = persist.New(persist.Deps{
+		Logger:   d.Logger.With(slog.String("service", "agent/persist")),
+		Messages: d.Messages,
+		Sessions: d.Sessions,
+		Bot:      service.botenv,
+		Runtime:  d.SessionRuntime,
+		Events:   d.Events,
+		Observer: persistObserver{service},
+		Promoted: service.queue,
+	})
+	service.driver = drive.New(drive.Deps{
+		Logger:       d.Logger.With(slog.String("service", "agent/drive")),
+		Runtime:      d.SessionRuntime,
+		Events:       d.SessionRuntime,
+		Lifecycle:    service.lifecycle,
+		Persist:      service.persist,
+		OutputMedia:  d.OutputMedia,
+		OutputSpeech: d.OutputSpeech,
+	})
 	service.bindSessionRuntime(d.SessionRuntime)
 	return service, nil
 }

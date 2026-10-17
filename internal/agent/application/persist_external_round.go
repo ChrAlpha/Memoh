@@ -9,6 +9,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -42,7 +43,7 @@ func (s *Service) persistExternalRound(
 		// The failure is recorded by its code and catalog args, which the
 		// history view renders. The cause's text stays out of history.
 		meta["agent_turn_outcome"] = "failed"
-		meta = failureRowMetadata(*f, "", meta)
+		meta = persist.FailureRowMetadata(*f, "", meta)
 	}
 	output := runreq.SDKMessagesToModelMessages(result.Output)
 	if len(output) == 0 {
@@ -131,7 +132,7 @@ func (s *Service) persistExternalRound(
 		publication = &messagepkg.AgentPublication{RunID: req.RunID}
 	}
 	skipMemory := f != nil || req.UserMessagePersisted || req.ReusePersistedUserMessage || req.SkipMemoryExtraction
-	persisted, err := s.storeRoundWithOptionsResult(ctx, req, round, "", storeRoundOptions{
+	persisted, err := s.persist.StoreRoundResult(ctx, req, round, "", persist.RoundOptions{
 		AllowPendingToolCalls:             true,
 		SkipMemory:                        skipMemory,
 		AllowEmptyAssistantText:           true,

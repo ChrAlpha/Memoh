@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/botenv"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -219,7 +220,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
-	}, runSpec{}); err != nil {
+	}, drive.RunSpec{}); err != nil {
 		t.Fatalf("chatSetup() error = %v", err)
 	}
 	if workspace.callCount() != 1 {
@@ -242,7 +243,7 @@ func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 		RawQuery:                  directLifecyclePrompt,
 		UserVisibleText:           directLifecyclePrompt,
 		ReusePersistedUserMessage: true,
-	}, runSpec{}); err != nil {
+	}, drive.RunSpec{}); err != nil {
 		t.Fatalf("chatSetup() error = %v", err)
 	}
 	if workspace.callCount() != 0 {
@@ -275,11 +276,11 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 	service, recorder := newDrivePromptFixture(t)
 	registerExternalDrivers(service, recorder)
 
-	spec := runSpec{
-		Run: admittedRun{Handle: sessionruntime.RunHandle{
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{Handle: sessionruntime.RunHandle{
 			BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 1,
 		}},
-		Replacement: &turnReplacement{},
+		Replacement: &drive.TurnReplacement{},
 	}
 	_, err := service.chatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           agenttest.LifecycleBotID,
@@ -312,7 +313,7 @@ func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
-	}, runSpec{Replacement: &turnReplacement{}})
+	}, drive.RunSpec{Replacement: &drive.TurnReplacement{}})
 	if err != nil {
 		t.Fatalf("chatSetup() error = %v", err)
 	}

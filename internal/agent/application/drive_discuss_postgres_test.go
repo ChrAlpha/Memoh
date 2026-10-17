@@ -451,7 +451,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		Fence:         runtimefence.NewActivator(pg),
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	svc.bindSessionRuntime(manager)
+	bindRuntime(svc, manager)
 	svc.messageService = messagepkg.NewService(svc.logger, pg)
 	rewireComponents(svc)
 	svc.queries = discussStore{Queries: base, pg: pg}
@@ -1107,6 +1107,7 @@ func TestDiscussStaleBatchEndsWithoutAnswering(t *testing.T) {
 		waitDiscussRun(t, done)
 		env.waitRunState(t, env.invocation(second), "completed")
 	}}
+	rewireRun(slow.svc)
 
 	if outcome, done := slow.admit(t, env); outcome != DiscussNothingPending || done != nil {
 		t.Fatalf("stale batch outcome = %v, want nothing pending", outcome)

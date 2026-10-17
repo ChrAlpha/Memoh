@@ -14,6 +14,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -47,7 +49,7 @@ func decisionCommand(handle sessionruntime.RunHandle, id string) sessionruntime.
 // continueDecision drives one routed continuation the way the command handler
 // does: on the context and handle the parked run's control hands out, with
 // setup standing in for storing the answer and resolving the model run.
-func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Manager, command sessionruntime.Command, setup func(context.Context, runreq.ChatRequest) (runPlan, error)) {
+func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Manager, command sessionruntime.Command, setup func(context.Context, runreq.ChatRequest) (drive.RunPlan, error)) {
 	t.Helper()
 	live := command
 	live.Generation = strings.TrimSuffix(command.Generation, "-stale")
@@ -65,18 +67,20 @@ func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Ma
 // scriptedRun is a setup whose run produces events in order. A terminal event
 // among them ends the run, and parks it when it carries a pending decision;
 // cause, when set, is the failure the run reports besides its events.
-func scriptedRun(events []native.StreamEvent, cause error) func(context.Context, runreq.ChatRequest) (runPlan, error) {
-	exec := &scriptedExecutor{cause: cause}
+func scriptedRun(events []native.StreamEvent, cause error) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+	exec := &drivetest.ScriptedExecutor{Cause: cause}
 	for _, ev := range events {
 		if ev.IsTerminal() {
 			terminal := ev
-			exec.terminal = &terminal
-			exec.deferred = ev.ApprovalID != "" || ev.UserInputID != ""
+			exec.Terminal = &terminal
+			exec.Deferred = ev.ApprovalID != "" || ev.UserInputID != ""
 			continue
 		}
-		exec.events = append(exec.events, ev)
+		exec.Events = append(exec.Events, ev)
 	}
-	return func(context.Context, runreq.ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil }
+	return func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+		return drive.RunPlan{Exec: exec}, nil
+	}
 }
 
 func runStatus(t *testing.T, manager *sessionruntime.Manager) *sessionruntime.CurrentRunView {
@@ -223,19 +227,19 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 	manager, handle := newWaitingDecisionRuntime(t, backend)
 	service := continuationService(manager)
 	continuationCause := make(chan error, 1)
-	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 		backend.failNext.Store(true)
 		emit(native.StreamEvent{Type: native.EventTextDelta, Delta: "late"})
 		<-ctx.Done()
 		continuationCause <- context.Cause(ctx)
-		return execEnding{Cause: context.Cause(ctx), Phase: outcome.PhaseExecution}
+		return drive.ExecEnding{Cause: context.Cause(ctx), Phase: outcome.PhaseExecution}
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		continueDecision(t, service, manager, decisionCommand(handle, "publish-failure"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
-			return runPlan{Exec: exec}, nil
+		continueDecision(t, service, manager, decisionCommand(handle, "publish-failure"), func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+			return drive.RunPlan{Exec: exec}, nil
 		})
 	}()
 	select {
@@ -245,7 +249,7 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 	}
 
 	cause := <-continuationCause
-	var refused publishRefused
+	var refused drive.PublishRefused
 	if !errors.As(cause, &refused) {
 		t.Fatalf("continuation cause = %v, want the publication refusal", cause)
 	}
@@ -259,12 +263,14 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 }
 
 // runFuncExecutor is an executor written inline by the test that needs one.
-type runFuncExecutor func(ctx context.Context, emit func(native.StreamEvent)) execEnding
+type runFuncExecutor func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding
 
-func (f runFuncExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+func (f runFuncExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	ending := f(ctx, emit)
 	if ending.Commit == nil {
-		ending.Commit = func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) { return commitSummary{}, nil }
+		ending.Commit = func(context.Context, *outcome.RunFailure, bool) (drive.CommitSummary, error) {
+			return drive.CommitSummary{}, nil
+		}
 	}
 	return ending
 }
@@ -290,9 +296,9 @@ func lifecycleRows(store *agenttest.RecordingLifecycleStore) []lifecycleRow {
 
 // lifecycleRun is a scripted run whose plan carries the context lifecycle a
 // resolved native run would, so the run's ending is what writes it.
-func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Context, runreq.ChatRequest) (runPlan, error) {
+func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 	run := scriptedRun(events, nil)
-	return func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	return func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		plan, err := run(ctx, req)
 		plan.Lifecycle = service.lifecycle.Terminal(ctx, agenttest.LifecycleRunConfig())
 		return plan, err
@@ -400,20 +406,20 @@ func TestContinueRuntimeDecisionDefersSecondPendingDecisionLifecycle(t *testing.
 func TestContinueRuntimeDecisionStopEndsAborted(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
 	service := continuationService(manager)
-	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+	exec := runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 		emit(native.StreamEvent{Type: native.EventAgentStart})
 		<-ctx.Done()
 		// The interrupted model call reports the cancellation as its failure,
 		// wrapped the way a provider client wraps it.
 		emit(native.StreamEvent{Type: native.EventError, Cause: errors.Join(errors.New("stream read"), context.Cause(ctx))})
-		return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentAbort}}
+		return drive.ExecEnding{Terminal: &native.StreamEvent{Type: native.EventAgentAbort}}
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		continueDecision(t, service, manager, decisionCommand(handle, "stop"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
-			return runPlan{Exec: exec}, nil
+		continueDecision(t, service, manager, decisionCommand(handle, "stop"), func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+			return drive.RunPlan{Exec: exec}, nil
 		})
 	}()
 	waitRunStatus(t, manager, sessionruntime.RunStatusRunning)
@@ -455,9 +461,9 @@ func TestContinueRuntimeDecisionOwnershipLossDoesNotPersistLifecycle(t *testing.
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 
-	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (runPlan, error) {
+	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 		t.Fatal("stale continuation unexpectedly ran")
-		return runPlan{}, nil
+		return drive.RunPlan{}, nil
 	})
 
 	if rows := lifecycleRows(lifecycles); len(rows) != 0 {
@@ -533,8 +539,8 @@ func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	service.messageService = messages
 	rewireComponents(service)
 
-	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
-		return runPlan{}, errors.New("SECRET tool result store unavailable")
+	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+		return drive.RunPlan{}, errors.New("SECRET tool result store unavailable")
 	})
 
 	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "assistant" {
@@ -553,13 +559,13 @@ func TestParkedRunDoesNotEndItsLifecycle(t *testing.T) {
 	svc := newDriveService(nil, &agenttest.ScriptedAdmitter{Started: true})
 	useLifecycleStore(svc, lifecycles)
 	terminal := native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "next", Status: "pending"}
-	exec := &scriptedExecutor{terminal: &terminal, deferred: true}
-	spec := scheduledSpec(exec, noDelivery{})
-	spec.Setup = func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
-		return runPlan{Exec: exec, Lifecycle: svc.lifecycle.Terminal(ctx, agenttest.LifecycleRunConfig())}, nil
+	exec := &drivetest.ScriptedExecutor{Terminal: &terminal, Deferred: true}
+	spec := drivetest.ScheduledSpec(exec, drive.NoDelivery{})
+	spec.Setup = func(ctx context.Context, _ runreq.ChatRequest) (drive.RunPlan, error) {
+		return drive.RunPlan{Exec: exec, Lifecycle: svc.lifecycle.Terminal(ctx, agenttest.LifecycleRunConfig())}, nil
 	}
 
-	result := svc.drive(context.Background(), spec)
+	result := svc.driver.Drive(context.Background(), spec)
 
 	if result.End != outcome.EndParked {
 		t.Fatalf("end = %s, want parked", result.End)

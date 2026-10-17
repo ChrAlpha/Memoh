@@ -12,6 +12,8 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -235,7 +237,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	var continued *sdk.ToolResultPart
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error) {
 			if req.ID != "input-1" {
 				t.Errorf("continued request = %#v", req)
 			}
@@ -308,16 +310,16 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	var continuationStartedOnce sync.Once
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			continuationStartedOnce.Do(func() { close(continuationStarted) })
-			return runPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+			return drive.RunPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 				select {
 				case <-releaseContinuation:
 				case <-ctx.Done():
-					return execEnding{Cause: ctx.Err(), Phase: outcome.PhaseExecution}
+					return drive.ExecEnding{Cause: ctx.Err(), Phase: outcome.PhaseExecution}
 				}
 				emit(native.StreamEvent{Type: native.EventAgentStart})
-				return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
+				return drive.ExecEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
 			})}, nil
 		},
 	})
@@ -331,7 +333,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	resolver.bindSessionRuntime(manager)
+	bindRuntime(resolver, manager)
 	if _, err := sessiontest.Start(context.Background(), manager,
 		botID,
 		sessionID,
@@ -454,7 +456,7 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 	resolver := wireComponents(&Service{
 		agent:     native.New(native.Deps{Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}}),
 		userInput: fake,
-		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error) {
 			continued = &result
 			return completedContinuation(), nil
 		},
@@ -508,7 +510,7 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
 			return completedContinuation(), nil
 		},
@@ -549,7 +551,7 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("already-decided ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
@@ -591,7 +593,7 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("ACP request must not continue the session in this response handler")
 			return completedContinuation(), nil
 		},
@@ -640,7 +642,7 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("ACP request must resume through the active ACP prompt")
 			return completedContinuation(), nil
 		},
@@ -726,7 +728,7 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
@@ -775,7 +777,7 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	}
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			t.Error("orphaned ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
@@ -816,7 +818,7 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	continueCalls := 0
 	resolver := wireComponents(&Service{
 		userInput: fake,
-		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
+		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
 			continueCalls++
 			return completedContinuation(), nil
 		},
@@ -843,6 +845,6 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 }
 
 // completedContinuation is a resumed run that ends cleanly at once.
-func completedContinuation() runPlan {
-	return runPlan{Exec: &scriptedExecutor{terminal: &native.StreamEvent{Type: native.EventAgentEnd}}}
+func completedContinuation() drive.RunPlan {
+	return drive.RunPlan{Exec: &drivetest.ScriptedExecutor{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}}
 }

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -81,15 +83,15 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 		return schedule.TriggerResult{}, errs.Recorded(err)
 	}
 
-	spec := runSpec{
-		Run: admittedRun{
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{
 			Handle:       admission.Handle,
 			TurnID:       admission.TurnID,
 			TurnPosition: &admission.TurnPosition,
 			Mode:         sessionmode.Schedule,
 		},
 		Req:        runreq.ChatRequest{BotID: botID, ThreadID: payload.SessionID, RunID: admission.RunID},
-		Delivery:   noDelivery{},
+		Delivery:   drive.NoDelivery{},
 		Input:      outcome.InputSynthetic,
 		Unattended: true,
 	}
@@ -103,8 +105,8 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 // failure under the code the run ended with. A fire that lost its run reports
 // the ownership loss, which the schedule service treats as a run it must not
 // report on.
-func (s *Service) runScheduleSpec(runCtx context.Context, spec runSpec) (schedule.TriggerResult, error) {
-	result := s.drive(runCtx, spec)
+func (s *Service) runScheduleSpec(runCtx context.Context, spec drive.RunSpec) (schedule.TriggerResult, error) {
+	result := s.driver.Drive(runCtx, spec)
 	switch result.End {
 	case outcome.EndCompleted:
 		return schedule.TriggerResult{
@@ -138,8 +140,8 @@ func attachCurrentTurnPrompt(cfg native.RunConfig, prompt string) native.RunConf
 // scheduleSetup resolves one fire's executor: the built-in agent, or the
 // External Agent runtime the session runs on. It resolves around the request
 // the driver handed it, which already carries the per-run wiring.
-func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, runreq.ChatRequest) (runPlan, error) {
-	return func(setupCtx context.Context, req runreq.ChatRequest) (runPlan, error) {
+func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+	return func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		req.RunHandle = spec.Run.Handle
 		// The admitted turn's identity travels with the request: the step
 		// committer refuses to arm without it, and a scheduled run without one
@@ -159,7 +161,7 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 		// identity, matching the native path (nativeSchedulePlan's cfg.Identity).
 		req.SourceChannelIdentityID = payload.OwnerUserID
 		if err := s.recordRunResumeContext(setupCtx, req); err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		if dispatch.kind == dispatchExternal {
 			return s.externalSchedulePlan(setupCtx, req, spec, payload, dispatch.driver)
@@ -169,17 +171,17 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 }
 
 // nativeSchedulePlan resolves a scheduled run the built-in agent executes.
-func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest, payload schedule.TriggerPayload) (runPlan, error) {
+func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest, payload schedule.TriggerPayload) (drive.RunPlan, error) {
 	// The run acts for the bot's owner, who holds every permission, so there
 	// is no principal to check; binding the workspace here puts the target on
 	// the history rows the run writes.
 	ctx, req, err := s.bindRequestWorkspace(ctx, req, nil, true)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	rc, req, err := s.resolve(ctx, req)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	req.RunID = rc.RunConfig.RunID
 
@@ -200,14 +202,14 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 	cfg.CanRequestUserInput = false
 	cfg = s.prepareRunConfig(ctx, cfg)
 
-	timing := newReasoningTimingTracker(nil)
-	committer := s.newAgentStepCommitter(ctx, req, rc)
-	configureNativeReasoningTiming(&cfg, timing, committer)
+	timing := persist.NewReasoningTimingTracker(nil)
+	committer := s.persist.NewStepCommitter(ctx, req, rc)
+	persist.ConfigureNativeReasoningTiming(&cfg, timing, committer)
 	if committer != nil {
-		committer.bindContinuation(&cfg)
+		committer.BindContinuation(&cfg)
 	}
 	s.bindStepCompaction(&cfg, req, committer)
-	return runPlan{
+	return drive.RunPlan{
 		Exec: &nativeExecutor{
 			agent:     s.agent,
 			cfg:       cfg,
@@ -218,7 +220,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 			service:   s,
 		},
 		Req:        req,
-		IdleEffort: reasoningEffortForIdle(cfg),
+		IdleEffort: drive.ReasoningEffortForIdle(cfg),
 		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }
@@ -226,7 +228,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 // externalSchedulePlan resolves a scheduled run an External Agent runtime
 // executes. It prompts with the generated schedule prompt rather than the raw
 // command, and nobody is there to answer a decision.
-func (s *Service) externalSchedulePlan(ctx context.Context, req runreq.ChatRequest, spec runSpec, payload schedule.TriggerPayload, driver external.Driver) (runPlan, error) {
+func (s *Service) externalSchedulePlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, payload schedule.TriggerPayload, driver external.Driver) (drive.RunPlan, error) {
 	prompt := native.GenerateSchedulePrompt(native.Schedule{
 		ID:          payload.ID,
 		Name:        payload.Name,

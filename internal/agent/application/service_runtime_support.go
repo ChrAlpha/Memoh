@@ -13,6 +13,7 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
@@ -291,7 +292,7 @@ func (s *Service) cleanupUncertainRuntimeLeadingUser(ctx context.Context, req ru
 		cancel()
 		if err == nil {
 			if messageID != "" {
-				s.cleanupReplacementMessages(ctx, []messagepkg.Message{{ID: messageID}})
+				s.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{{ID: messageID}})
 			}
 			return
 		}
@@ -482,8 +483,8 @@ func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runr
 		s.logger.WarnContext(ctx, "persist External Agent leading user message: marshal failed", slog.Any("error", err))
 		return req, nil, nil
 	}
-	senderChannelIdentityID, senderUserID := s.resolvePersistSenderIDs(ctx, req)
-	sessionMode, runtimeType := s.persistSessionRuntimeSnapshot(ctx, req)
+	senderChannelIdentityID, senderUserID := s.persist.SenderIDs(ctx, req)
+	sessionMode, runtimeType := s.persist.SessionRuntimeSnapshot(ctx, req)
 	persisted, err := s.messageService.Persist(ctx, messagepkg.PersistInput{
 		BotID:                   req.BotID,
 		SessionID:               req.ThreadID,
@@ -493,7 +494,7 @@ func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runr
 		SourceReplyToMessageID:  req.SourceReplyToMessageID,
 		Role:                    "user",
 		Content:                 content,
-		Metadata:                mergeMetadata(buildRouteMetadata(req), buildInteractionMetadata(req)),
+		Metadata:                persist.MergeMetadata(persist.RouteMetadata(req), persist.InteractionMetadata(req)),
 		Assets:                  runreq.ChatAttachmentsToAssetRefs(req.Attachments),
 		EventID:                 req.EventID,
 		DisplayText:             displayText,
@@ -539,7 +540,7 @@ func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runr
 		return nil
 	}
 	output := runreq.SDKMessagesToModelMessages(external.TranscriptFromEvents([]event.StreamEvent{ev}, ""))
-	sessionMode, runtimeType := s.persistSessionRuntimeSnapshot(ctx, req)
+	sessionMode, runtimeType := s.persist.SessionRuntimeSnapshot(ctx, req)
 	for _, msg := range output {
 		if msg.Role != "assistant" {
 			continue
@@ -551,7 +552,7 @@ func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runr
 				slog.Any("error", err))
 			return nil
 		}
-		metadata := runreq.CloneMetadataMap(buildRouteMetadata(req))
+		metadata := runreq.CloneMetadataMap(persist.RouteMetadata(req))
 		metadata["agent_decision_projection"] = true
 		metadata["agent_decision_tool_call_id"] = strings.TrimSpace(ev.ToolCallID)
 		persisted, err := s.messageService.Persist(ctx, messagepkg.PersistInput{

@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -217,10 +218,10 @@ func TestBindStepCompactionNeedsCommittedSteps(t *testing.T) {
 	t.Parallel()
 
 	service, _, _, req := newSyncCompactionFixture(t, compaction.StatusOK)
-	committer := &agentStepCommitter{}
+	committer := &persist.StepCommitter{}
 	cases := []struct {
 		name      string
-		committer *agentStepCommitter
+		committer *persist.StepCommitter
 		mutate    func(*runreq.ChatRequest)
 		want      bool
 	}{

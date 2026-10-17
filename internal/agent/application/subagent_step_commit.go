@@ -15,6 +15,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -119,7 +120,7 @@ func (c *subagentStepCommitter) persist(ctx context.Context, stepIndex int, reco
 	if c == nil || record == nil {
 		return errors.New("agent step is missing")
 	}
-	persistCtx, ownershipErr := stepPersistenceContext(ctx, c.ownerContext)
+	persistCtx, ownershipErr := persist.StepContext(ctx, c.ownerContext)
 	if ownershipErr != nil {
 		return ownershipErr
 	}

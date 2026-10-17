@@ -14,10 +14,12 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	textprune "github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/settings"
 )
@@ -47,25 +49,30 @@ func TestToProviderMessagesKeepsPersistedContentAndSourceAligned(t *testing.T) {
 func TestToProviderMessagesUsesPrunedPersistedContent(t *testing.T) {
 	t.Parallel()
 
+	messages := &agenttest.RecordingMessages{}
 	service := wireComponents(&Service{
+		messageService:  messages,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
 	})
 	unit := "large tool result "
-	huge := strings.Repeat(unit, gatewayToolPayloadMaxBytes/len(unit)+2)
-	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
+	huge := strings.Repeat(unit, textprune.DefaultMaxBytes/len(unit)+2)
+	err := service.persist.StoreRound(context.Background(), runreq.ChatRequest{
 		BotID: storeRoundBotID, ThreadID: "session-1",
-	}, []runreq.ModelMessage{{Role: "tool", Content: runreq.NewTextContent(huge)}}, "", storeRoundOptions{})
+	}, []runreq.ModelMessage{{Role: "tool", Content: runreq.NewTextContent(huge)}}, "", persist.RoundOptions{SkipMemory: true, AllowPendingToolCalls: true})
 	if err != nil {
-		t.Fatalf("buildPersistInputs() error = %v", err)
+		t.Fatalf("StoreRound() error = %v", err)
+	}
+	if len(messages.Persisted) != 1 {
+		t.Fatalf("persisted %d rows, want the one tool message", len(messages.Persisted))
 	}
 	got := toProviderMessages([]messagepkg.Message{{
-		ID: "msg-tool", SessionID: "session-1", Role: "tool", Content: inputs[0].Content,
+		ID: "msg-tool", SessionID: "session-1", Role: "tool", Content: messages.Persisted[0].Content,
 	}})
 	if len(got) != 1 {
 		t.Fatalf("provider messages = %v, want one persisted tool message", got)
 	}
-	if got[0].Content == huge || !strings.Contains(got[0].Content, gatewayToolPayloadPrunedMarker) {
+	if got[0].Content == huge || !strings.Contains(got[0].Content, textprune.DefaultMarker) {
 		t.Fatalf("provider message did not use pruned persisted content: %.120q", got[0].Content)
 	}
 }
@@ -111,14 +118,14 @@ func TestStoreRoundPassesSourceRefsToMemory(t *testing.T) {
 		logger:          slog.New(slog.DiscardHandler),
 	})
 
-	if err := resolver.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
+	if err := resolver.persist.StoreRound(context.Background(), runreq.ChatRequest{
 		BotID:    storeRoundBotID,
 		ThreadID: "session-1",
 		Query:    "hello",
 	}, []runreq.ModelMessage{
 		{Role: "user", Content: runreq.NewTextContent("hello")},
 		{Role: "assistant", Content: runreq.NewTextContent("hi there")},
-	}, "model-1", storeRoundOptions{}); err != nil {
+	}, "model-1", persist.RoundOptions{}); err != nil {
 		t.Fatalf("storeRoundWithOptions error: %v", err)
 	}
 
@@ -237,12 +244,12 @@ func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 		logger:          slog.New(slog.DiscardHandler),
 	})
 
-	if err := resolver.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
+	if err := resolver.persist.StoreRound(context.Background(), runreq.ChatRequest{
 		BotID: storeRoundBotID, ThreadID: "session-1", Query: "hello",
 	}, []runreq.ModelMessage{
 		{Role: "user", Content: runreq.NewTextContent("hello")},
 		{Role: "assistant", Content: runreq.NewTextContent("hi there")},
-	}, "model-1", storeRoundOptions{}); err != nil {
+	}, "model-1", persist.RoundOptions{}); err != nil {
 		t.Fatalf("storeRoundWithOptions error: %v", err)
 	}
 
@@ -260,21 +267,4 @@ func storedMemoryTestMessage(t *testing.T, id, sessionID, role, text string) mes
 		t.Fatalf("marshal stored message: %v", err)
 	}
 	return messagepkg.Message{ID: id, SessionID: sessionID, Role: role, Content: content}
-}
-
-func TestRepeatedSteerTextDoesNotReuseOriginalTurnIdentity(t *testing.T) {
-	service := wireComponents(&Service{settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil), logger: slog.New(slog.DiscardHandler)})
-	req := runreq.ChatRequest{BotID: storeRoundBotID, ThreadID: "session-1", TurnID: "original-turn", Query: "same", ExternalMessageID: "original-external"}
-	inputs, err := service.buildPersistInputs(t.Context(), req, []runreq.ModelMessage{
-		{Role: "user", Content: runreq.NewTextContent("same")},
-		{Role: "assistant", Content: runreq.NewTextContent("before")},
-		{Role: "user", Content: runreq.NewTextContent("same")},
-		{Role: "assistant", Content: runreq.NewTextContent("after")},
-	}, "", storeRoundOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inputs[0].TurnID != "original-turn" || inputs[2].TurnID != "" || inputs[2].ExternalMessageID != "" {
-		t.Fatalf("steer reused original identity: %+v", inputs)
-	}
 }

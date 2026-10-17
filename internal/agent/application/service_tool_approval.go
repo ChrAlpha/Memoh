@@ -13,6 +13,8 @@ import (
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -255,12 +257,12 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed Commit
 		Req: req,
 		// The resumed run is the driver's request, which carries the per-run
 		// asset collector. Everything else in it is what this entry built.
-		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
 			if reqErr != nil {
-				return runPlan{}, reqErr
+				return drive.RunPlan{}, reqErr
 			}
 			if strings.TrimSpace(approval.ID) == "" {
-				return runPlan{}, errors.New("committed tool approval response is missing its request")
+				return drive.RunPlan{}, errors.New("committed tool approval response is missing its request")
 			}
 			var toolResult sdk.ToolResultPart
 			var toolUIMetadata map[string]any
@@ -268,7 +270,7 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed Commit
 			case toolapproval.StatusApproved:
 				result, uiMetadata, err := s.executeApprovedTool(ctx, approval, input, runReq.RunID)
 				if err != nil {
-					return runPlan{}, err
+					return drive.RunPlan{}, err
 				}
 				toolResult = result
 				toolUIMetadata = uiMetadata
@@ -280,7 +282,7 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed Commit
 					IsError:    true,
 				}
 			default:
-				return runPlan{}, fmt.Errorf("committed tool approval has unexpected status %q", approval.Status)
+				return drive.RunPlan{}, fmt.Errorf("committed tool approval has unexpected status %q", approval.Status)
 			}
 			return s.storeToolResultAndContinue(ctx, approval, input, toolResult, toolUIMetadata, runReq, live)
 		},
@@ -538,15 +540,15 @@ func (s *Service) storeToolResultAndContinue(
 	uiMetadata map[string]any,
 	req runreq.ChatRequest,
 	live bool,
-) (runPlan, error) {
+) (drive.RunPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	target, err := s.resolveWorkspaceTargetSnapshot(ctx, input.BotID, approval.WorkspaceTargetID)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	modelMessages := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
-	storeOpts := storeRoundOptions{AllowPendingToolCalls: true}
+	storeOpts := persist.RoundOptions{AllowPendingToolCalls: true}
 	// UI-only payloads stripped from the tool output (e.g. the edit diff) ride
 	// the tool row's metadata — the model history reads only the content.
 	if len(uiMetadata) > 0 {
@@ -554,8 +556,8 @@ func (s *Service) storeToolResultAndContinue(
 	}
 	storeReq := req
 	storeReq.WorkspaceTarget = target
-	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeOpts); err != nil {
-		return runPlan{}, err
+	if err := s.persist.StoreRound(ctx, storeReq, modelMessages, "", storeOpts); err != nil {
+		return drive.RunPlan{}, err
 	}
 	return s.continueToolApprovalSession(ctx, approval, input, req, live)
 }
@@ -568,7 +570,7 @@ func (s *Service) continueToolApprovalSession(
 	input ToolApprovalResponseInput,
 	req runreq.ChatRequest,
 	live bool,
-) (runPlan, error) {
+) (drive.RunPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
 	ctx = workspace.WithWorkspaceTarget(ctx, approval.WorkspaceTargetID)
 	resolved, err := s.ResolveRunConfig(ctx,
@@ -581,7 +583,7 @@ func (s *Service) continueToolApprovalSession(
 		input.ChatToken,
 	)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	resolved.RunConfig.RunID = req.RunID
 
@@ -593,7 +595,7 @@ func (s *Service) continueToolApprovalSession(
 		live,
 	)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	req.RunID = cfg.RunID
 	req.WorkspaceTarget = workspaceTargetFromRunConfig(resolved.RunConfig)

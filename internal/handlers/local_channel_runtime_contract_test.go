@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
@@ -130,7 +130,7 @@ func collectRuntimeContractWSEvents(t *testing.T, script []runreq.WSStreamEvent,
 				handlerDone <- err
 				return
 			}
-			delivery.Deliver(r.Context(), application.RunEvent{Event: event, Payload: payload})
+			delivery.Deliver(r.Context(), drive.RunEvent{Event: event, Payload: payload})
 		}
 
 		<-closeWriter

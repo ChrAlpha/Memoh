@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -93,9 +94,9 @@ func TestStaleDecisionContinuationDoesNotRecoverLifecycleFromAssistantMetadata(t
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 
-	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (runPlan, error) {
+	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 		t.Fatal("stale continuation unexpectedly ran")
-		return runPlan{}, nil
+		return drive.RunPlan{}, nil
 	})
 
 	if rows := lifecycleRows(lifecycles); len(rows) != 0 {

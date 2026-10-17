@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/channel"
@@ -48,7 +48,7 @@ func (r failureCharRun) deliver(t *testing.T, events ...native.StreamEvent) {
 		if err != nil {
 			t.Fatalf("marshal event: %v", err)
 		}
-		if !r.delivery.Deliver(context.Background(), application.RunEvent{Event: event, Payload: payload}) {
+		if !r.delivery.Deliver(context.Background(), drive.RunEvent{Event: event, Payload: payload}) {
 			t.Fatal("the delivery end reported the socket gone")
 		}
 	}
@@ -160,7 +160,7 @@ func TestCharacterizeWSUncodedStreamError_CurrentBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !r.delivery.Deliver(context.Background(), application.RunEvent{Event: raw, Payload: public}) {
+	if !r.delivery.Deliver(context.Background(), drive.RunEvent{Event: raw, Payload: public}) {
 		t.Fatal("the delivery end reported the socket gone")
 	}
 	assertFrames(t, r.frames(t), []map[string]any{{

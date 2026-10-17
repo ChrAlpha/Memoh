@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -67,8 +68,8 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	req.InjectCh = injectCh
 	req.QueueSteerEnabled = injectCh != nil
 
-	spec := runSpec{
-		Run: admittedRun{
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{
 			Handle:       admission.Handle,
 			TurnID:       admission.TurnID,
 			TurnPosition: &admission.TurnPosition,
@@ -82,13 +83,13 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	// that went away, a transport that closed, or the channel's own /stop. The
 	// driver names the ending from the run context's own cause, so this one
 	// carries no separate stop channel.
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 
 	go func() {
 		defer cancel()
-		s.drive(runCtx, spec)
+		s.driver.Drive(runCtx, spec)
 	}()
 
 	return handle, nil

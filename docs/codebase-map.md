@@ -29,9 +29,11 @@ Memoh/
 │   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
 │   │   ├── context/            #     Context fragments, history projection, compaction, and output limits
 │   │   ├── decision/           #     User input, tool approval, and stable user-facing feedback
+│   │   ├── drive/              #     Run driver: consumes, publishes and delivers a run's events, writes its terminal state
 │   │   ├── event/              #     Agent events and transport payload vocabulary
 │   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
 │   │   ├── notify/             #     Background task notifications into the originating conversation
+│   │   ├── persist/            #     History writes: turn and step rows, failure rows, terminal snapshots, replaced turns
 │   │   ├── runtime/            #     Runtime implementations
 │   │   │   ├── acp/            #       ACP pool, client process manager, and the generic custom-agent profile
 │   │   │   ├── claudecode/     #       Claude Code direct runtime (external.Driver)

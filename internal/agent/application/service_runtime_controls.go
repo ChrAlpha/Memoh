@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/agent/decision/approval"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -285,7 +286,7 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 			status = sessionruntime.RunStatusAborted
 		}
 		ended := outcome.RunOutcome{Status: status, Cause: resultErr}
-		finishCtx, finishCancel := context.WithTimeout(outcome.WithRunOutcome(context.WithoutCancel(runCtx), handle.RunID, ended), terminalWriteTimeout)
+		finishCtx, finishCancel := context.WithTimeout(outcome.WithRunOutcome(context.WithoutCancel(runCtx), handle.RunID, ended), drive.TerminalWriteTimeout)
 		defer finishCancel()
 		if _, err := s.sessionRuntime.FinishRunWithErrorCode(finishCtx, handle, status, string(apperror.CodeOf(publicRuntimeControlError(resultErr)))); err != nil {
 			resultErr = errors.Join(resultErr, err)

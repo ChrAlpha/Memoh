@@ -43,7 +43,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
-	service.bindSessionRuntime(manager)
+	bindRuntime(service, manager)
 
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		context.Background(),

@@ -19,6 +19,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -145,7 +146,7 @@ func withDriveRequestRuntime(t *testing.T, fixture directLifecycleFixture) *sess
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	fixture.service.bindSessionRuntime(manager)
+	bindRuntime(fixture.service, manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
 	rewireComponents(fixture.service)
@@ -346,7 +347,7 @@ func driveDecisionHistory(t *testing.T, toolName string, result sdk.ToolOutput) 
 }
 
 // runWebReplacement admits a Web retry or edit and runs it to its end.
-func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*WebAdmission, RunDelivery)) {
+func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*WebAdmission, drive.RunDelivery)) {
 	t.Helper()
 	withDriveRequestRuntime(t, fixture)
 	admission, err := fixture.service.AdmitWebRun(context.Background(), WebAdmitInput{
@@ -371,7 +372,7 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
 	rewireComponents(fixture.service)
-	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
+	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery drive.RunDelivery) {
 		fixture.service.RunWebRetry(admission, RetryLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
@@ -387,7 +388,7 @@ func driveWebEdit(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
 	rewireComponents(fixture.service)
-	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
+	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery drive.RunDelivery) {
 		fixture.service.RunWebEdit(admission, EditLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
@@ -421,6 +422,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 
 	queue := &memoryQueuedInputs{}
 	fixture.service.queue = queue
+	rewireRun(fixture.service)
 
 	ctx := context.Background()
 	payload, err := turnwire.NewQueuedInput(turn.StartTurnCommand{
@@ -573,7 +575,7 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	cont := fixture.service.toolApprovalContinuation(context.Background(), CommittedToolApprovalResponse{
 		request: approval, input: input, runID: agenttest.LifecycleRunID,
 	}, true)
-	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
+	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
 		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
 	}
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
@@ -676,6 +678,7 @@ func newDrivePromptFixture(t *testing.T) (*Service, *drivePromptRecorder) {
 	t.Helper()
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	rewireRun(service)
 	service.userInput = &agenttest.UserInput{}
 	recorder := &drivePromptRecorder{}
 	registerExternalDrivers(service, recorder)

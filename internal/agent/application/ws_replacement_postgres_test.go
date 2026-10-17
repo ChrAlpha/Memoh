@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/persist"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -71,7 +73,7 @@ func (h wsReplacementHarness) latestTurnID(t *testing.T) string {
 }
 
 // replace admits one replacement run and runs it to its terminal write.
-func (h wsReplacementHarness) replace(t *testing.T, start func(*WebAdmission, RunDelivery)) wsStepHistoryRun {
+func (h wsReplacementHarness) replace(t *testing.T, start func(*WebAdmission, drive.RunDelivery)) wsStepHistoryRun {
 	t.Helper()
 	admission, err := h.service.AdmitWebRun(context.Background(), WebAdmitInput{
 		BotID:        h.botID,
@@ -100,7 +102,7 @@ func (h wsReplacementHarness) replace(t *testing.T, start func(*WebAdmission, Ru
 func (h wsReplacementHarness) retry(t *testing.T) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
-	return h.replace(t, func(admission *WebAdmission, delivery RunDelivery) {
+	return h.replace(t, func(admission *WebAdmission, delivery drive.RunDelivery) {
 		h.service.RunWebRetry(admission, RetryLatestMessageInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target,
 		}, delivery)
@@ -110,7 +112,7 @@ func (h wsReplacementHarness) retry(t *testing.T) wsStepHistoryRun {
 func (h wsReplacementHarness) edit(t *testing.T, text string) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
-	return h.replace(t, func(admission *WebAdmission, delivery RunDelivery) {
+	return h.replace(t, func(admission *WebAdmission, delivery drive.RunDelivery) {
 		h.service.RunWebEdit(admission, EditLatestMessageInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target, Text: text,
 		}, delivery)
@@ -141,7 +143,7 @@ func (h wsReplacementHarness) rowVisibility(t *testing.T) []string {
 		}
 		text := historyRowText(row)
 		if row.Role == "user" {
-			text = visibleMessageText(row)
+			text = persist.VisibleMessageText(row)
 		}
 		line := row.Role + " " + strconv.Quote(text)
 		if !visible {

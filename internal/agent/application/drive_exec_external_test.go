@@ -141,6 +141,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil)
 			rewireComponents(service)
 			service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+			rewireRun(service)
 			registerExternalDrivers(service, &drivePromptRecorder{})
 
 			entry.run(t, service)

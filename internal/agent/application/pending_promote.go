@@ -74,20 +74,6 @@ func (s *Service) PromoteFollowUpToSteer(ctx context.Context, botID, sessionID s
 	return sessionruntime.PromoteFollowUpResult{}, err
 }
 
-// consumePromotedInput records, once a run has applied a steer, that the input
-// it was promoted from is taken. A steer that was not promoted from a queued
-// input matches nothing. A failure leaves the record to the sweep, which reads
-// the steer.
-func (s *Service) consumePromotedInput(ctx context.Context, steerID string) {
-	if s == nil || s.queue == nil {
-		return
-	}
-	if err := s.queue.ConsumePromoted(context.WithoutCancel(ctx), steerID); err != nil && s.logger != nil {
-		s.logger.WarnContext(ctx, "record applied promoted input failed",
-			slog.String("item_id", steerID), slog.Any("error", err))
-	}
-}
-
 // reconcileSessionPromotions settles the promotions of a session whose run has
 // just ended. Its steers are closed by then, so each promoted input is either
 // applied or goes back to the queue.

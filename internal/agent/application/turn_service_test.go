@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -26,11 +27,12 @@ func newTurnTestService() *Service {
 
 func newAdmittedTurnTestService() (*Service, *agenttest.ScriptedAdmitter) {
 	admitter := agenttest.NewScriptedAdmitter()
-	return wireComponents(&Service{
-		logger:           slog.New(slog.DiscardHandler),
-		sessionRuntime:   admitter,
-		publishTurnEvent: admitter.PublishAgentEvent,
-	}), admitter
+	service := wireComponents(&Service{
+		logger:         slog.New(slog.DiscardHandler),
+		sessionRuntime: admitter,
+	})
+	rebuildDriver(service, "events", func(d *drive.Deps) { d.Events = agenttest.EventFunc(admitter.PublishAgentEvent) })
+	return service, admitter
 }
 
 // chatTurnFixture is the chat entries' test service: a real application service
@@ -48,9 +50,9 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 	fixture := newDirectLifecycleFixture(t, mode)
 	admitter := agenttest.NewScriptedAdmitter()
 	fixture.service.sessionRuntime = admitter
-	fixture.service.publishTurnEvent = admitter.PublishAgentEvent
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
 	rewireComponents(fixture.service)
+	rebuildDriver(fixture.service, "events", func(d *drive.Deps) { d.Events = agenttest.EventFunc(admitter.PublishAgentEvent) })
 	// The chat path reads the session for the facts a run executes under, the
 	// same way a hosted service does.
 	fixture.service.sessionService = &agenttest.Sessions{

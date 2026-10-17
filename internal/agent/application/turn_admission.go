@@ -5,18 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
@@ -34,10 +31,6 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 	s.sessionManager = manager
 	s.decisionRuntime = manager
 	s.abortRuntime = manager
-	s.publishTurnEvent = func(ctx context.Context, handle sessionruntime.RunHandle, event native.StreamEvent) error {
-		_, err := manager.HandleAgentEvent(ctx, handle, event)
-		return err
-	}
 	manager.SetDecisionStore(s)
 	manager.SetLostRunDecisionCanceller(s.cancelLostRunDecisions)
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
@@ -152,11 +145,6 @@ func (s *Service) admitTurnRun(
 	return admission, nil
 }
 
-// terminalWriteTimeout bounds the terminal write. It runs after the run's own
-// context is already canceled, so it cannot inherit that deadline, and it must
-// not be able to hold a pump goroutine open indefinitely either.
-const terminalWriteTimeout = 10 * time.Second
-
 // turnRunFinisher returns the terminal write for an admitted run. Without it the
 // durable row stays active and the thread's only slot is held until the reaper
 // times the lease out, which turns one finished turn into minutes of session_busy.
@@ -170,63 +158,17 @@ const terminalWriteTimeout = 10 * time.Second
 //
 // mode is the session mode the run was admitted in; it tells the run's result
 // record whether a user is waiting for the outcome.
+//
+// The write itself is the driver's: this entry only names the admitted run the
+// ending belongs to. It goes away when admission moves out of this package and
+// its callers finish the run through the driver directly.
 func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.Admission, mode string) func(outcome.RunOutcome) sessionruntime.TerminalRun {
 	if s.sessionRuntime == nil || admission.Handle.FencingToken <= 0 {
 		return nil
 	}
-	handle := admission.Handle
-	runCtx := ctx
-	// The run's context is already canceled by the time the terminal write runs,
-	// so this detaches from its cancellation while keeping its values: the write
-	// still needs whatever scoping the caller's context carries.
-	writeCtx := context.WithoutCancel(ctx)
+	run := drive.AdmittedRun{Handle: admission.Handle, Mode: mode}
 	return func(ended outcome.RunOutcome) sessionruntime.TerminalRun {
-		lifecycleCause := ended.Cause
-		switch {
-		case lifecycleCause == nil && ended.Status == sessionruntime.RunStatusAborted:
-			lifecycleCause = context.Canceled
-		case lifecycleCause == nil && ended.Status == sessionruntime.RunStatusErrored:
-			lifecycleCause = errors.New("run finished with an unspecified error")
-		}
-		minimal := lifecycle.MinimalSnapshot()
-		staged := s.lifecycle.StageCandidate(
-			runCtx,
-			handle.RunID,
-			handle.BotID,
-			handle.SessionID,
-			&minimal,
-			lifecycleCause,
-			lifecycle.CandidateMinimal,
-		)
-		ctx, cancel := context.WithTimeout(outcome.WithRunOutcomeInMode(writeCtx, handle.RunID, ended, mode), terminalWriteTimeout)
-		defer cancel()
-		terminal, err := s.sessionRuntime.FinishRunWithErrorCode(ctx, handle, ended.Status, ended.ErrorCode())
-		switch {
-		case err == nil:
-			if !staged && (ended.Status != "" || ended.Cause != nil) {
-				s.lifecycle.EnsureTerminal(
-					runCtx,
-					handle.RunID,
-					handle.BotID,
-					handle.SessionID,
-					lifecycleCause,
-				)
-			}
-			return terminal
-		case s.logger == nil:
-			return sessionruntime.TerminalRun{}
-		case errors.Is(err, sessionruntime.ErrRunOwnershipLost):
-			// Expected, not a failure: this process was superseded mid-run, so the
-			// terminal write was refused and the reaper names the outcome instead.
-			s.logger.WarnContext(ctx, "skip finishing turn run after ownership loss",
-				slog.String("run_id", handle.RunID))
-		default:
-			s.logger.ErrorContext(ctx, "finish turn run failed",
-				slog.Any("error", err),
-				slog.String("run_id", handle.RunID),
-				slog.String("status", ended.Status))
-		}
-		return sessionruntime.TerminalRun{}
+		return s.driver.FinishRun(ctx, run, drive.FromOutcome(ended))
 	}
 }
 

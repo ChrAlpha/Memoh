@@ -17,7 +17,9 @@ import (
 	"github.com/felinics/memoh/internal/agent/botenv"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -143,6 +145,9 @@ func newTestService(t *testing.T, d Deps) *Service {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	// New bound the driver's events to the runtime it was given; a rewire keeps
+	// them there.
+	rebuildDriver(service, "events", func(dd *drive.Deps) { dd.Events = d.SessionRuntime })
 	return service
 }
 
@@ -200,7 +205,7 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	if service.memoryRegistry != nil || service.skillLoader != nil ||
 		service.assetLoader != nil || service.platformIdentities != nil || service.workdirs != nil ||
 		service.compactionService != nil || service.bgManager != nil || service.eventPublisher != nil ||
-		service.outputMedia != nil || service.outputSpeech != nil || service.queue != nil ||
+		service.queue != nil ||
 		service.resumeReady != nil {
 		t.Fatal("optional dependencies must stay nil when absent")
 	}
@@ -356,6 +361,7 @@ func setAllowedTeam(s *Service, teamID string) {
 // store. The run ledger stays whatever the service reads from.
 func useLifecycleStore(s *Service, store lifecycle.Store) {
 	s.lifecycle = lifecycle.New(lifecycle.Deps{Store: store, Runs: s.queries, Decisions: s, Logger: s.logger})
+	rewireRun(s)
 }
 
 // wireComponents gives a Service built piecewise the components New would have
@@ -374,6 +380,12 @@ func wireComponents(s *Service) *Service {
 		// A Service built from a literal records no lifecycle rows, as before.
 		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s, Logger: s.logger})
 	}
+	if s.persist == nil {
+		s.persist = persistOf(s)
+	}
+	if s.driver == nil {
+		s.driver = drive.New(driveDepsOf(s))
+	}
 	return s
 }
 
@@ -382,6 +394,80 @@ func wireComponents(s *Service) *Service {
 func rewireComponents(s *Service) {
 	s.botenv = botenvOf(s)
 	s.transcript = transcriptOf(s)
+	rewireRun(s)
+}
+
+// rewireRun rebuilds the history writer and the driver, which copy the message
+// store, the session store and the session runtime a test replaces after New.
+func rewireRun(s *Service) {
+	s.persist = persistOf(s)
+	s.driver = drive.New(driveDepsOf(s))
+}
+
+// driverAdjustments are the dependency overrides a test named for a service's
+// driver, by what they override. They outlive a rewire, which would otherwise
+// rebuild the driver from the service's fields alone, and a new session runtime
+// drops the ones that belonged to the old one.
+var driverAdjustments sync.Map // *Service -> map[string]func(*drive.Deps)
+
+// rebuildDriver replaces the service's driver with one whose dependencies
+// mutate has adjusted: the session runtime's event intake ("events"), the
+// runtime that writes terminal states ("runtime"), the output stores
+// ("output"), the idle windows ("idle").
+func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
+	previous, _ := driverAdjustments.Load(s)
+	adjustments := map[string]func(*drive.Deps){}
+	if had, ok := previous.(map[string]func(*drive.Deps)); ok {
+		for k, v := range had {
+			adjustments[k] = v
+		}
+	}
+	adjustments[kind] = mutate
+	driverAdjustments.Store(s, adjustments)
+	s.driver = drive.New(driveDepsOf(s))
+}
+
+// bindRuntime is bindSessionRuntime for a Service built from a literal: the
+// history writer and the driver follow the new runtime.
+func bindRuntime(s *Service, manager *sessionruntime.Manager) {
+	s.bindSessionRuntime(manager)
+	if previous, ok := driverAdjustments.Load(s); ok {
+		adjustments := map[string]func(*drive.Deps){}
+		for k, v := range previous.(map[string]func(*drive.Deps)) {
+			if k != "events" && k != "runtime" {
+				adjustments[k] = v
+			}
+		}
+		driverAdjustments.Store(s, adjustments)
+	}
+	rebuildDriver(s, "events", func(d *drive.Deps) { d.Events = manager })
+}
+
+func persistOf(s *Service) *persist.Writer {
+	var runtime persist.SteerRuntime
+	if s.sessionManager != nil {
+		runtime = s.sessionManager
+	}
+	return persist.New(persist.Deps{
+		Logger: s.logger, Messages: s.messageService, Sessions: s.sessionService, Bot: s.botenv,
+		Runtime: runtime, Events: s.eventPublisher, Observer: persistObserver{s}, Promoted: s.queue,
+	})
+}
+
+// driveDepsOf is what the driver of a Service built from a literal is given:
+// the session runtime ends runs, and the events go nowhere until the service is
+// bound to a manager (bindRuntime) or a test names an intake.
+func driveDepsOf(s *Service) drive.Deps {
+	deps := drive.Deps{Logger: s.logger, Lifecycle: s.lifecycle, Persist: s.persist}
+	if s.sessionRuntime != nil {
+		deps.Runtime = s.sessionRuntime
+	}
+	if adjustments, ok := driverAdjustments.Load(s); ok {
+		for _, adjust := range adjustments.(map[string]func(*drive.Deps)) {
+			adjust(&deps)
+		}
+	}
+	return deps
 }
 
 func botenvOf(s *Service) *botenv.Env {

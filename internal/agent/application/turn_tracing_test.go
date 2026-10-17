@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -80,10 +82,10 @@ func TestTurnSpanCoversTheTurnNotItsSetup(t *testing.T) {
 	release := make(chan struct{})
 	admission := admitTracingWebRun(t, service)
 	spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, nil, outcome.InputHeld)
-	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 		close(inTurn)
 		<-release
-		return runPlan{}, errors.New("setup ends the turn")
+		return drive.RunPlan{}, errors.New("setup ends the turn")
 	}
 	service.startWebRun(admission, spec)
 
@@ -138,8 +140,8 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 		admission := admitTracingWebRun(t, service)
 		exec := &blockingExecutor{started: make(chan struct{})}
 		spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), outcome.InputHeld)
-		spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
-			return runPlan{Exec: exec, Req: req}, nil
+		spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
+			return drive.RunPlan{Exec: exec, Req: req}, nil
 		}
 		service.startWebRun(admission, spec)
 		awaitStarted(t, exec.started)
@@ -182,6 +184,7 @@ func admitTracingWebRun(t *testing.T, service *Service) *WebAdmission {
 	t.Helper()
 	if service.sessionRuntime == nil {
 		service.sessionRuntime = agenttest.NewScriptedAdmitter()
+		rewireRun(service)
 	}
 	admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
 		BotID: "b", SessionID: "s", InvocationID: "trace-1", Payload: []byte(`{"kind":"message"}`),
@@ -209,17 +212,17 @@ func TestTurnSpanOutcomeSurvivesTheSessionRuntimeCancellingTheRun(t *testing.T) 
 		name    string
 		outcome string
 		status  codes.Code
-		exec    func() (runExecutor, <-chan struct{})
+		exec    func() (drive.RunExecutor, <-chan struct{})
 	}{
-		{name: "completed", outcome: "completed", status: codes.Unset, exec: func() (runExecutor, <-chan struct{}) {
+		{name: "completed", outcome: "completed", status: codes.Unset, exec: func() (drive.RunExecutor, <-chan struct{}) {
 			terminal := native.StreamEvent{Type: native.EventAgentEnd}
-			return &scriptedExecutor{terminal: &terminal}, nil
+			return &drivetest.ScriptedExecutor{Terminal: &terminal}, nil
 		}},
-		{name: "failed", outcome: "errored", status: codes.Error, exec: func() (runExecutor, <-chan struct{}) {
+		{name: "failed", outcome: "errored", status: codes.Error, exec: func() (drive.RunExecutor, <-chan struct{}) {
 			terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndFailed}
-			return &scriptedExecutor{terminal: &terminal}, nil
+			return &drivetest.ScriptedExecutor{Terminal: &terminal}, nil
 		}},
-		{name: "stopped", outcome: "aborted", status: codes.Unset, exec: func() (runExecutor, <-chan struct{}) {
+		{name: "stopped", outcome: "aborted", status: codes.Unset, exec: func() (drive.RunExecutor, <-chan struct{}) {
 			exec := &blockingExecutor{started: make(chan struct{})}
 			return exec, exec.started
 		}},
@@ -364,8 +367,8 @@ func spanTestEntries() []spanTestEntry {
 				defer close(done)
 				_ = service.driveUnroutedContinuation(ctx, decisionContinuation{
 					Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, Query: directLifecyclePrompt},
-					Setup: func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
-						return service.externalRunPlan(ctx, req, runSpec{Input: outcome.InputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
+					Setup: func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
+						return service.externalRunPlan(ctx, req, drive.RunSpec{Input: outcome.InputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
 					},
 				}, nil)
 			}()
@@ -395,6 +398,7 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 				driver := &spanTestDriver{outcome: ending, started: make(chan struct{})}
 				service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 				service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+				rewireRun(service)
 				registerExternalDrivers(service, driver)
 
 				stop, wait := entry.start(t, service)

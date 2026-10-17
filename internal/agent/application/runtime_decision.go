@@ -13,7 +13,9 @@ import (
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -372,7 +374,7 @@ type decisionContinuation struct {
 	// runSpec.Setup: the entry built this continuation before the driver ran,
 	// so the request it closed over has no asset collector, and a resumed run
 	// that used it would write its outbound assets unlinked.
-	Setup func(ctx context.Context, req runreq.ChatRequest) (runPlan, error)
+	Setup func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error)
 }
 
 // driveRoutedContinuation drives the run an answer the session runtime routed
@@ -382,20 +384,20 @@ type decisionContinuation struct {
 func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessionruntime.Command, handle sessionruntime.RunHandle, cont decisionContinuation) {
 	ctx, release := continuationContext(workspace.WithWorkspaceTarget(runCtx, cont.Req.WorkspaceTargetID))
 	defer release()
-	s.drive(ctx, runSpec{
-		Run: admittedRun{Handle: handle, TurnID: handle.TurnID, Mode: sessionmode.Chat},
+	s.driver.Drive(ctx, drive.RunSpec{
+		Run: drive.AdmittedRun{Handle: handle, TurnID: handle.TurnID, Mode: sessionmode.Chat},
 		Req: cont.Req,
-		Setup: func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 			// The answer may arrive before the run that parked has finished
 			// writing the call it answers; its result must not land first.
 			if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
-				return runPlan{}, err
+				return drive.RunPlan{}, err
 			}
 			return cont.Setup(ctx, req)
 		},
-		Delivery:  noDelivery{},
+		Delivery:  drive.NoDelivery{},
 		Input:     outcome.InputAccepted,
-		Publisher: &decisionOutputPublisher{sink: s.decisionRuntime, handle: handle, command: command},
+		Publisher: drive.NewDecisionOutputPublisher(s.decisionRuntime, handle, command),
 	})
 }
 
@@ -408,11 +410,11 @@ func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessio
 func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionContinuation, eventCh chan<- runreq.WSStreamEvent) error {
 	ctx, release := continuationContext(workspace.WithWorkspaceTarget(ctx, cont.Req.WorkspaceTargetID))
 	defer release()
-	var delivery RunDelivery = noDelivery{}
+	var delivery drive.RunDelivery = drive.NoDelivery{}
 	if eventCh != nil {
-		delivery = channelDelivery{ch: eventCh}
+		delivery = drive.NewChannelDelivery(eventCh)
 	}
-	result := s.drive(ctx, runSpec{
+	result := s.driver.Drive(ctx, drive.RunSpec{
 		Req:      cont.Req,
 		Setup:    cont.Setup,
 		Delivery: delivery,
@@ -421,7 +423,7 @@ func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionCo
 	if eventCh != nil {
 		return nil
 	}
-	return publicRunFailure(result.Failure)
+	return drive.PublicRunFailure(result.Failure)
 }
 
 // continuationContext is the context a decision continuation runs in. Its
@@ -455,17 +457,17 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 // nativeContinuationPlan resolves the built-in agent run that resumes after an
 // answered decision. Its steps commit through the live queue the run was
 // admitted with, so the resumed steps continue the parked run's numbering.
-func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatRequest, cfg native.RunConfig, modelID string) (runPlan, error) {
+func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatRequest, cfg native.RunConfig, modelID string) (drive.RunPlan, error) {
 	rc := runreq.ResolvedContext{RunConfig: cfg, Model: models.GetResponse{ID: modelID}}
 	committer, err := s.bindQueueContinuation(ctx, &req, &cfg, rc)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
-	timing := newReasoningTimingTracker(nil)
-	configureNativeReasoningTiming(&cfg, timing, committer)
+	timing := persist.NewReasoningTimingTracker(nil)
+	persist.ConfigureNativeReasoningTiming(&cfg, timing, committer)
 	s.bindStepCompaction(&cfg, req, committer)
 	rc.RunConfig = cfg
-	return runPlan{
+	return drive.RunPlan{
 		Exec: &nativeExecutor{
 			agent:     s.agent,
 			cfg:       cfg,
@@ -476,7 +478,7 @@ func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatReq
 			service:   s,
 		},
 		Req:        req,
-		IdleEffort: reasoningEffortForIdle(cfg),
+		IdleEffort: drive.ReasoningEffortForIdle(cfg),
 		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }

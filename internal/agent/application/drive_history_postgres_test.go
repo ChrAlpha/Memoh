@@ -67,7 +67,7 @@ func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTu
 
 	fixture := newChatTurnFixture(t, mode)
 	service := fixture.fixture.service
-	service.bindSessionRuntime(manager)
+	bindRuntime(service, manager)
 	service.messageService = messagepkg.NewService(service.logger, queries)
 	rewireComponents(service)
 	// The real store, with the two decision reads a finishing run makes

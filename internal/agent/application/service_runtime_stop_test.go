@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -39,7 +40,7 @@ func ignoreOutcome(_ outcome.RunOutcome, err error) error {
 func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
-	service.streamIdleTimeout = 20 * time.Millisecond
+	rebuildDriver(service, "idle", func(d *drive.Deps) { d.StreamIdleTimeout = 20 * time.Millisecond })
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	events := make(chan runreq.WSStreamEvent, 16)
 	err := ignoreOutcome(service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
@@ -69,7 +70,7 @@ func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
-	service.streamIdleTimeout = 20 * time.Millisecond
+	rebuildDriver(service, "idle", func(d *drive.Deps) { d.StreamIdleTimeout = 20 * time.Millisecond })
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",

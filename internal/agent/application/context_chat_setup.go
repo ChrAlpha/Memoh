@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -17,34 +19,34 @@ import (
 // IM, follow-up, and resume. It handles skill checks, runtime dispatch,
 // workspace preparation, replacement preflight, user-message hook, resolve,
 // title generation, and executor construction.
-func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec runSpec) (runPlan, error) {
+func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec) (drive.RunPlan, error) {
 	// The intent is recorded before anything else: it is what lets a later
 	// process resume this run after a crash, and it has to name the run's
 	// input as it arrived rather than as setup rewrote it.
 	if err := s.recordRunResumeContext(ctx, req); err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	if err := s.rejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 
 	dispatch, err := s.resolveRuntimeDispatch(ctx, req)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 
 	if dispatch.kind == dispatchExternal {
 		if err := rejectExternalAgentWorkspaceTarget(req); err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 		// Runtimes that own their conversation context have no rewind primitive,
 		// so running a replacement turn would leave that context inconsistent
 		// with the visible history.
 		if spec.Replacement != nil {
-			return runPlan{}, apperror.New(apperror.CodeExternalAgentTurnReplacementUnsupported, nil)
+			return drive.RunPlan{}, apperror.New(apperror.CodeExternalAgentTurnReplacementUnsupported, nil)
 		}
 		// A runtime that owns its conversation context is prompted with what
 		// the entry resolved rather than with a query: discuss hands it the
@@ -54,12 +56,12 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 
 	ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 
 	if spec.Replacement != nil && spec.Replacement.Preflight != nil {
 		if err := spec.Replacement.Preflight(ctx); err != nil {
-			return runPlan{}, err
+			return drive.RunPlan{}, err
 		}
 	}
 
@@ -76,15 +78,15 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 		req, err = s.botenv.ApplyUserMessageHook(ctx, req)
 		if err != nil {
 			if ctx.Err() != nil {
-				return runPlan{}, err
+				return drive.RunPlan{}, err
 			}
-			return runPlan{}, outcome.ClassifyUserMessageHookError(err)
+			return drive.RunPlan{}, outcome.ClassifyUserMessageHookError(err)
 		}
 	}
 
 	rc, req, err := s.resolve(ctx, req)
 	if err != nil {
-		return runPlan{}, fmt.Errorf("resolve: %w", err)
+		return drive.RunPlan{}, fmt.Errorf("resolve: %w", err)
 	}
 	req.Query = rc.Query
 	req.RunID = rc.RunConfig.RunID
@@ -98,13 +100,13 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 	// keeps asking the same way the inbound message that started it did.
 	cfg.CanRequestUserInput = s.canDeliverUserInputStream()
 
-	reasoningTiming := newReasoningTimingTracker(nil)
-	var stepCommitter *agentStepCommitter
+	reasoningTiming := persist.NewReasoningTimingTracker(nil)
+	var stepCommitter *persist.StepCommitter
 	if !spec.Unattended {
-		stepCommitter = s.newAgentStepCommitter(ctx, req, rc)
-		configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
+		stepCommitter = s.persist.NewStepCommitter(ctx, req, rc)
+		persist.ConfigureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 		if stepCommitter != nil {
-			stepCommitter.bindContinuation(&cfg)
+			stepCommitter.BindContinuation(&cfg)
 		}
 	}
 	cfg = s.prepareRunConfig(ctx, cfg)
@@ -125,10 +127,10 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 		service:   s,
 	}
 
-	return runPlan{
+	return drive.RunPlan{
 		Exec:       exec,
 		Req:        req,
-		IdleEffort: reasoningEffortForIdle(cfg),
+		IdleEffort: drive.ReasoningEffortForIdle(cfg),
 		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }
@@ -142,10 +144,10 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 // something else cannot forget to pass it. The plan carries the context
 // lifecycle the run's context sections build, so the lifecycle row of a
 // runtime's turn records what the runtime was given, whoever started it.
-func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec runSpec, driver external.Driver) (runPlan, error) {
+func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, driver external.Driver) (drive.RunPlan, error) {
 	plan, req, err := s.prepareExternal(ctx, req, driver)
 	if err != nil {
-		return runPlan{}, err
+		return drive.RunPlan{}, err
 	}
 	lifecycle := contextfrag.NewLifecycleHolder()
 	if plan.contextManifest != nil {
@@ -159,7 +161,7 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 		Identity:         native.SessionContext{BotID: req.BotID, SessionID: req.ThreadID},
 		ContextLifecycle: lifecycle,
 	}
-	return runPlan{
+	return drive.RunPlan{
 		Exec: &externalExecutor{
 			service:    s,
 			plan:       plan,
@@ -168,7 +170,7 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 			unattended: spec.Unattended,
 			input:      spec.Input,
 			lifecycle:  lifecycle,
-			timing:     newReasoningTimingTracker(nil),
+			timing:     persist.NewReasoningTimingTracker(nil),
 			rc:         runreq.ResolvedContext{RunConfig: cfg},
 		},
 		Req:        req,

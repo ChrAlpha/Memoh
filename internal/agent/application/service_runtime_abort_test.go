@@ -25,7 +25,7 @@ func TestSetSessionRuntimeConfiguresAbortRuntime(t *testing.T) {
 	manager := &sessionruntime.Manager{}
 	service := wireComponents(&Service{})
 
-	service.bindSessionRuntime(manager)
+	bindRuntime(service, manager)
 
 	if service.abortRuntime != manager {
 		t.Fatalf("abort runtime = %T, want injected session manager", service.abortRuntime)

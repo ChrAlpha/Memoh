@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -197,15 +198,15 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	req.RunHandle = admission.Handle
 	req.TurnID = admission.TurnID
 	req.TurnPosition = &admission.TurnPosition
-	spec := runSpec{
-		Run: admittedRun{
+	spec := drive.RunSpec{
+		Run: drive.AdmittedRun{
 			Handle:       admission.Handle,
 			TurnID:       admission.TurnID,
 			TurnPosition: &admission.TurnPosition,
 			Mode:         sessionmode.Discuss,
 		},
 		Req:      req,
-		Delivery: noDelivery{},
+		Delivery: drive.NoDelivery{},
 		// The external input is already in history: a failure writes its row
 		// against it rather than handing anything back.
 		Input: outcome.InputAccepted,
@@ -219,11 +220,11 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	// batch twice. The assembly runs inside the run, after admission, so a wake
 	// that answers nothing pays for nothing, and the rendered text is what the
 	// run stores for a crash resume.
-	spec.Setup = func(setupCtx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		if externalRuntime {
 			prompt, err := s.discussExternalPrompt(setupCtx, req)
 			if err != nil {
-				return runPlan{}, err
+				return drive.RunPlan{}, err
 			}
 			req.ModelQuery = prompt
 			req.ForceFreshRuntime = true
@@ -238,7 +239,7 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		// The driver writes the run's terminal state; release only ends the
 		// admission.
 		defer release()
-		s.drive(runCtx, spec)
+		s.driver.Drive(runCtx, spec)
 	}()
 	return DiscussAdmitted, done, nil
 }

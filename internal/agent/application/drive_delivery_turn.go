@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -70,7 +71,7 @@ func newTurnRun(
 // Deliver implements RunDelivery. It reports false once the caller is gone,
 // which the run's own context ending is the only signal of: a caller that is
 // merely slow keeps its events.
-func (t *turnRun) Deliver(_ context.Context, ev RunEvent) bool {
+func (t *turnRun) Deliver(_ context.Context, ev drive.RunEvent) bool {
 	if t.ctx.Err() != nil {
 		return false
 	}
@@ -102,7 +103,7 @@ func (t *turnRun) Settle() {
 
 // Ended implements RunDelivery. It reports the run's failure to the caller,
 // hands over the terminal record, and closes the event channels.
-func (t *turnRun) Ended(ctx context.Context, end RunEnded) {
+func (t *turnRun) Ended(ctx context.Context, end drive.RunEnded) {
 	defer t.closeInject()
 
 	if end.Failure != nil {
@@ -200,8 +201,8 @@ func (t *turnRun) AddOutboundAssets(refs []turn.OutboundAssetRef) {
 	t.assets = append(t.assets, refs...)
 }
 
-// reportedAssets are the references the delivery end reported.
-func (t *turnRun) reportedAssets() []turn.OutboundAssetRef {
+// ReportedAssets are the references the delivery end reported.
+func (t *turnRun) ReportedAssets() []turn.OutboundAssetRef {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]turn.OutboundAssetRef(nil), t.assets...)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
@@ -17,7 +18,7 @@ func (s *Service) bindQueueContinuation(
 	req *runreq.ChatRequest,
 	cfg *native.RunConfig,
 	rc runreq.ResolvedContext,
-) (*agentStepCommitter, error) {
+) (*persist.StepCommitter, error) {
 	if s == nil || req == nil || cfg == nil || s.sessionManager == nil ||
 		req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {
 		return nil, nil
@@ -31,10 +32,10 @@ func (s *Service) bindQueueContinuation(
 	cfg.StepIndexOffset = stepIndex
 
 	req.QueueSteerEnabled = true
-	committer := s.newAgentStepCommitter(ctx, *req, rc)
+	committer := s.persist.NewStepCommitter(ctx, *req, rc)
 	if committer == nil {
 		return nil, errors.New("live queue step committer is unavailable for decision continuation")
 	}
-	committer.bindContinuation(cfg)
+	committer.BindContinuation(cfg)
 	return committer, nil
 }

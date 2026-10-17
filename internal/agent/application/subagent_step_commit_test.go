@@ -32,7 +32,7 @@ func subagentRunContext(botID, sessionID string, token int64) context.Context {
 
 func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := wireComponents(&Service{messageService: store})
 
 	if commit, interrupt := service.SubagentStepCommit(context.Background(), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
@@ -69,7 +69,7 @@ func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 
 func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := wireComponents(&Service{messageService: store})
 	ctx := subagentRunContext(botID, sessionID, 9)
 	holder := contextfrag.NewLifecycleHolder()
@@ -96,10 +96,10 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 		t.Fatal("out-of-order step index was accepted")
 	}
 
-	if len(store.steps) != 2 {
-		t.Fatalf("persisted %d steps, want 2", len(store.steps))
+	if len(store.Steps) != 2 {
+		t.Fatalf("persisted %d steps, want 2", len(store.Steps))
 	}
-	first := store.steps[0]
+	first := store.Steps[0]
 	if len(first.Messages) != 1 {
 		t.Fatalf("step 0 persisted %d messages, want the assistant one only", len(first.Messages))
 	}
@@ -123,13 +123,13 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	if persistedSteps != 2 {
 		t.Fatalf("onPersisted fired %d times, want 2", persistedSteps)
 	}
-	firstLifecycle, ok := store.steps[0].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
+	firstLifecycle, ok := store.Steps[0].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
 	if !ok || firstLifecycle.Counts.Fragments != 3 || firstLifecycle.AssistantMessageID != "" {
-		t.Fatalf("first step lifecycle metadata = %#v, want pre-persist snapshot", store.steps[0].Messages[0].Metadata)
+		t.Fatalf("first step lifecycle metadata = %#v, want pre-persist snapshot", store.Steps[0].Messages[0].Metadata)
 	}
-	secondLifecycle, ok := store.steps[1].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
+	secondLifecycle, ok := store.Steps[1].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
 	if !ok || secondLifecycle.AssistantMessageID != "committed" {
-		t.Fatalf("second step lifecycle metadata = %#v, want prior assistant association", store.steps[1].Messages[0].Metadata)
+		t.Fatalf("second step lifecycle metadata = %#v, want prior assistant association", store.Steps[1].Messages[0].Metadata)
 	}
 	associated, ok := holder.Snapshot()
 	if !ok || associated.AssistantMessageID != "committed" {
@@ -143,14 +143,14 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	if err := interrupt(ctx, 2, &step.Record{Messages: []sdk.Message{interrupted}}); err != nil {
 		t.Fatalf("persist interrupted step: %v", err)
 	}
-	if len(store.steps) != 3 || !store.steps[2].Interrupted {
-		t.Fatalf("interrupted step = %#v, want durable interrupted checkpoint", store.steps)
+	if len(store.Steps) != 3 || !store.Steps[2].Interrupted {
+		t.Fatalf("interrupted step = %#v, want durable interrupted checkpoint", store.Steps)
 	}
-	if got := store.steps[2].Messages[0].Metadata[messagepkg.AgentStepInterruptedMetadataKey]; got != true {
-		t.Fatalf("interrupted metadata = %#v, want marker", store.steps[2].Messages[0].Metadata)
+	if got := store.Steps[2].Messages[0].Metadata[messagepkg.AgentStepInterruptedMetadataKey]; got != true {
+		t.Fatalf("interrupted metadata = %#v, want marker", store.Steps[2].Messages[0].Metadata)
 	}
-	if _, ok := store.steps[2].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot); !ok {
-		t.Fatalf("interrupted lifecycle metadata = %#v, want snapshot", store.steps[2].Messages[0].Metadata)
+	if _, ok := store.Steps[2].Messages[0].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot); !ok {
+		t.Fatalf("interrupted lifecycle metadata = %#v, want snapshot", store.Steps[2].Messages[0].Metadata)
 	}
 	if persistedSteps != 3 {
 		t.Fatalf("interrupted checkpoint did not report durable output: %d", persistedSteps)
@@ -159,7 +159,7 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 
 func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := wireComponents(&Service{messageService: store})
 	ctx := subagentRunContext(botID, sessionID, 3)
 	persistedSteps := 0
@@ -170,15 +170,15 @@ func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("commit user-only step: %v", err)
 	}
-	if len(store.steps) != 0 || persistedSteps != 0 {
-		t.Fatalf("user-only step persisted: steps=%d fired=%d", len(store.steps), persistedSteps)
+	if len(store.Steps) != 0 || persistedSteps != 0 {
+		t.Fatalf("user-only step persisted: steps=%d fired=%d", len(store.Steps), persistedSteps)
 	}
 	// The empty step still advanced the cursor: the next step index is 1.
 	if err := commit(ctx, 1, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("real output")}}); err != nil {
 		t.Fatalf("commit step 1 after empty step: %v", err)
 	}
-	if len(store.steps) != 1 || persistedSteps != 1 {
-		t.Fatalf("follow-up step not persisted: steps=%d fired=%d", len(store.steps), persistedSteps)
+	if len(store.Steps) != 1 || persistedSteps != 1 {
+		t.Fatalf("follow-up step not persisted: steps=%d fired=%d", len(store.Steps), persistedSteps)
 	}
 }
 

@@ -297,6 +297,7 @@ func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	rewireRun(service)
 	setAllowedTeam(service, driveTeamID)
 	registerExternalDrivers(service, noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
@@ -356,6 +357,7 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 				admitter := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 				service.sessionRuntime = admitter
+				rewireRun(service)
 				setAllowedTeam(service, driveTeamID)
 				started := make(chan struct{})
 				driver := noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(ctx context.Context, _ external.PromptInput) (external.PromptResult, error) {

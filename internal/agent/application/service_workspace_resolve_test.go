@@ -170,10 +170,6 @@ func TestBindRequestWorkspaceWithoutPrincipalRecordsTargetMetadata(t *testing.T)
 	if req.WorkspaceTarget == nil || req.WorkspaceTarget.TargetID != "computer-b" || req.WorkspaceTargetID != "computer-b" {
 		t.Fatalf("request target = %#v / %q", req.WorkspaceTarget, req.WorkspaceTargetID)
 	}
-	meta := workspaceTargetMetadata(req.WorkspaceTarget)
-	if len(meta) == 0 {
-		t.Fatal("history metadata carries no workspace target")
-	}
 	if workspace.WorkspaceTargetFromContext(ctx) != "computer-b" {
 		t.Fatalf("context target = %q", workspace.WorkspaceTargetFromContext(ctx))
 	}

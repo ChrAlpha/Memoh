@@ -20,6 +20,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -495,12 +496,14 @@ func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T
 
 	var publishedMu sync.Mutex
 	var published []native.StreamEvent
-	fixture.service.publishTurnEvent = func(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
-		publishedMu.Lock()
-		defer publishedMu.Unlock()
-		published = append(published, event)
-		return nil
-	}
+	rebuildDriver(fixture.service, "events", func(d *drive.Deps) {
+		d.Events = agenttest.EventFunc(func(_ context.Context, _ sessionruntime.RunHandle, event native.StreamEvent) error {
+			publishedMu.Lock()
+			defer publishedMu.Unlock()
+			published = append(published, event)
+			return nil
+		})
+	})
 
 	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
 		SchemaVersion:        1,

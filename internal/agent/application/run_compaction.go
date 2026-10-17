@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -25,7 +26,7 @@ import (
 // are discarded if it fails, so no summary may cover them: it would describe
 // output nobody ever saw. Such a run compacts only the visible history before
 // its cutoff and carries its own messages over from the loop's memory.
-func (s *Service) bindStepCompaction(cfg *native.RunConfig, req runreq.ChatRequest, committer *agentStepCommitter) {
+func (s *Service) bindStepCompaction(cfg *native.RunConfig, req runreq.ChatRequest, committer *persist.StepCommitter) {
 	if s == nil || committer == nil || s.compactionService == nil || s.settingsService == nil {
 		return
 	}
@@ -36,7 +37,7 @@ func (s *Service) bindStepCompaction(cfg *native.RunConfig, req runreq.ChatReque
 	run := &stepCompaction{
 		service:          s,
 		req:              req,
-		requestMessageID: committer.requestMessageID,
+		requestMessageID: committer.RequestMessageID,
 		budget:           cfg.ContextBudgetMaxTokens,
 		modelID:          cfg.CurrentModelUUID,
 		replacement:      replacement,
@@ -44,7 +45,7 @@ func (s *Service) bindStepCompaction(cfg *native.RunConfig, req runreq.ChatReque
 		extras:           ephemeralRunMessages(*cfg),
 		request:          unstoredRequestMessage(*cfg, req),
 		inlineParts:      inlineRunParts(*cfg),
-		pressure:         committer.rc.Pressure,
+		pressure:         committer.Pressure(),
 	}
 	cfg.StepContextCompactor = run.compact
 }

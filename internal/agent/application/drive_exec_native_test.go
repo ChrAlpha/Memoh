@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -39,12 +40,12 @@ func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 			{Type: native.EventAgentEnd, Messages: snapshot, EndReason: event.EndCompleted},
 		},
 		req:     req,
-		timing:  newReasoningTimingTracker(nil),
+		timing:  persist.NewReasoningTimingTracker(nil),
 		replace: replace.hooks(),
 		service: service,
 	}
 
-	ending := exec.execute(context.Background(), func(native.StreamEvent) {})
+	ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
 	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
@@ -68,11 +69,11 @@ func TestNativeExecutorLeavesTheStoppedWriteToTheRuntime(t *testing.T) {
 			{Type: native.EventTextDelta, Delta: "partial"},
 			{Type: native.EventAgentAbort, EndReason: event.EndCanceled},
 		},
-		timing:  newReasoningTimingTracker(nil),
+		timing:  persist.NewReasoningTimingTracker(nil),
 		service: wireComponents(&Service{logger: slog.New(slog.DiscardHandler)}),
 	}
 
-	ending := exec.execute(context.Background(), func(native.StreamEvent) {})
+	ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
 	if ending.CommitStopped != nil {
 		t.Fatal("the native ending offers a stopped write, want the runtime's own step checkpoint to be the only one")
 	}

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -29,8 +31,8 @@ const (
 // every event the run delivered and says when the run has ended.
 type webTestDelivery struct {
 	mu     sync.Mutex
-	events []RunEvent
-	ended  RunEnded
+	events []drive.RunEvent
+	ended  drive.RunEnded
 	done   chan struct{}
 }
 
@@ -38,7 +40,7 @@ func newWebTestDelivery() *webTestDelivery {
 	return &webTestDelivery{done: make(chan struct{})}
 }
 
-func (d *webTestDelivery) Deliver(_ context.Context, ev RunEvent) bool {
+func (d *webTestDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.events = append(d.events, ev)
@@ -47,7 +49,7 @@ func (d *webTestDelivery) Deliver(_ context.Context, ev RunEvent) bool {
 
 func (*webTestDelivery) Settle() {}
 
-func (d *webTestDelivery) Ended(_ context.Context, end RunEnded) {
+func (d *webTestDelivery) Ended(_ context.Context, end drive.RunEnded) {
 	d.mu.Lock()
 	d.ended = end
 	d.mu.Unlock()
@@ -55,7 +57,7 @@ func (d *webTestDelivery) Ended(_ context.Context, end RunEnded) {
 }
 
 // wait returns once the run has ended, with what it delivered.
-func (d *webTestDelivery) wait(t *testing.T) ([]RunEvent, RunEnded) {
+func (d *webTestDelivery) wait(t *testing.T) ([]drive.RunEvent, drive.RunEnded) {
 	t.Helper()
 	select {
 	case <-d.done:
@@ -64,7 +66,7 @@ func (d *webTestDelivery) wait(t *testing.T) ([]RunEvent, RunEnded) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return append([]RunEvent(nil), d.events...), d.ended
+	return append([]drive.RunEvent(nil), d.events...), d.ended
 }
 
 // payloads is what the run delivered as the stream of WSStreamEvent the
@@ -88,6 +90,7 @@ func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req runreq.C
 	t.Helper()
 	if svc.sessionRuntime == nil {
 		svc.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: webTestAdmission(req)}
+		rewireRun(svc)
 	}
 	admission, err := svc.AdmitWebRun(ctx, WebAdmitInput{
 		BotID:        req.BotID,
@@ -137,10 +140,8 @@ func newWebTestRuntime(t *testing.T, svc *Service) (*sessionruntime.Manager, *se
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	svc.sessionRuntime = manager
-	svc.publishTurnEvent = func(ctx context.Context, handle sessionruntime.RunHandle, ev native.StreamEvent) error {
-		_, err := manager.HandleAgentEvent(ctx, handle, ev)
-		return err
-	}
+	rebuildDriver(svc, "runtime", func(d *drive.Deps) { d.Runtime = manager })
+	rebuildDriver(svc, "events", func(d *drive.Deps) { d.Events = manager })
 	return manager, runs
 }
 
@@ -163,10 +164,10 @@ func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *WebAdmiss
 }
 
 // webTestSpec is a Web send whose setup hands the driver exec.
-func webTestSpec(svc *Service, admission *WebAdmission, delivery RunDelivery, exec runExecutor) runSpec {
+func webTestSpec(svc *Service, admission *WebAdmission, delivery drive.RunDelivery, exec drive.RunExecutor) drive.RunSpec {
 	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
-	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
-		return runPlan{Exec: exec, Req: req}, nil
+	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
+		return drive.RunPlan{Exec: exec, Req: req}, nil
 	}
 	return spec
 }
@@ -178,18 +179,18 @@ type blockingExecutor struct {
 	events  []native.StreamEvent
 }
 
-func (e *blockingExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+func (e *blockingExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	for _, ev := range e.events {
 		emit(ev)
 	}
 	close(e.started)
 	<-ctx.Done()
 	terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}
-	return execEnding{
+	return drive.ExecEnding{
 		Terminal: &terminal,
 		Phase:    outcome.PhaseExecution,
-		Commit: func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) {
-			return commitSummary{}, nil
+		Commit: func(context.Context, *outcome.RunFailure, bool) (drive.CommitSummary, error) {
+			return drive.CommitSummary{}, nil
 		},
 	}
 }
@@ -244,11 +245,11 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	// Nothing has run yet: the run executes only once the entry starts it, so
 	// the acceptance the client is sent cannot trail the run's own output.
 	executed := make(chan struct{})
-	exec := &scriptedExecutor{terminal: ptrTo(scheduleTerminalEvent(t, "done"))}
+	exec := &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}
 	delivery := newWebTestDelivery()
 	spec := webTestSpec(svc, admission, delivery, exec)
 	setup := spec.Setup
-	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		close(executed)
 		return setup(ctx, req)
 	}
@@ -284,7 +285,7 @@ func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
 		t.Fatalf("run initiator = %q, want account-1", got)
 	}
 	delivery := newWebTestDelivery()
-	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, &scriptedExecutor{terminal: ptrTo(scheduleTerminalEvent(t, "done"))}))
+	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 }
 
@@ -296,7 +297,7 @@ func TestAdmitWebRunRedeliveryIsADuplicate(t *testing.T) {
 	newWebTestRuntime(t, svc)
 	first := admitWebTestRun(t, svc, "invocation-1")
 	delivery := newWebTestDelivery()
-	svc.startWebRun(first, webTestSpec(svc, first, delivery, &scriptedExecutor{terminal: ptrTo(scheduleTerminalEvent(t, "done"))}))
+	svc.startWebRun(first, webTestSpec(svc, first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 
 	again := admitWebTestRun(t, svc, "invocation-1")
@@ -343,7 +344,7 @@ func TestWebRunEndReleasesTheSession(t *testing.T) {
 	_, runs := newWebTestRuntime(t, svc)
 	first := admitWebTestRun(t, svc, "invocation-1")
 	delivery := newWebTestDelivery()
-	svc.startWebRun(first, webTestSpec(svc, first, delivery, &scriptedExecutor{terminal: ptrTo(scheduleTerminalEvent(t, "done"))}))
+	svc.startWebRun(first, webTestSpec(svc, first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 	if got := ledgerRun(t, runs, first.RunID).State; got != ledger.StateCompleted {
 		t.Fatalf("first run state = %q, want completed", got)
@@ -381,10 +382,10 @@ func TestWebHistoryWriteFailureEndsTheRunFailedWithoutFinishing(t *testing.T) {
 		statuses <- seen
 	}()
 
-	exec := &scriptedExecutor{
-		events:    []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "an answer"}},
-		terminal:  ptrTo(scheduleTerminalEvent(t, "an answer")),
-		commitErr: errors.New("history unavailable"),
+	exec := &drivetest.ScriptedExecutor{
+		Events:    []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "an answer"}},
+		Terminal:  ptrTo(agenttest.TerminalEvent(t, "an answer")),
+		CommitErr: errors.New("history unavailable"),
 	}
 	delivery := newWebTestDelivery()
 	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
@@ -442,15 +443,17 @@ func TestWebPublicationRefusalEndsTheRun(t *testing.T) {
 	t.Parallel()
 
 	svc := newWebTestService()
-	_, runs := newWebTestRuntime(t, svc)
+	manager, runs := newWebTestRuntime(t, svc)
 	admission := admitWebTestRun(t, svc, "invocation-1")
-	refusing := svc.publishTurnEvent
-	svc.publishTurnEvent = func(ctx context.Context, handle sessionruntime.RunHandle, ev native.StreamEvent) error {
-		if ev.Type == native.EventTextDelta {
-			return errors.New("projection unavailable")
-		}
-		return refusing(ctx, handle, ev)
-	}
+	rebuildDriver(svc, "events", func(d *drive.Deps) {
+		d.Events = agenttest.EventFunc(func(ctx context.Context, handle sessionruntime.RunHandle, ev native.StreamEvent) error {
+			if ev.Type == native.EventTextDelta {
+				return errors.New("projection unavailable")
+			}
+			_, err := manager.HandleAgentEvent(ctx, handle, ev)
+			return err
+		})
+	})
 
 	exec := &blockingExecutor{
 		started: make(chan struct{}),
@@ -548,13 +551,13 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 
 	svc := newWebTestService()
 	newWebTestRuntime(t, svc)
-	svc.outputMedia, svc.outputSpeech = &fakeOutputMedia{}, nil
+	rebuildDriver(svc, "output", func(d *drive.Deps) { d.OutputMedia = &agenttest.OutputMedia{} })
 	admission := admitWebTestRun(t, svc, "invocation-1")
 
 	var linked []turn.OutboundAssetRef
 	delivery := newWebTestDelivery()
 	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
-	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
+	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		exec := &collectingExecutor{
 			events: []native.StreamEvent{{
 				Type:        native.EventAttachment,
@@ -566,7 +569,7 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 				}
 			},
 		}
-		return runPlan{Exec: exec, Req: req}, nil
+		return drive.RunPlan{Exec: exec, Req: req}, nil
 	}
 	svc.startWebRun(admission, spec)
 	delivery.wait(t)
@@ -583,17 +586,17 @@ type collectingExecutor struct {
 	commit func()
 }
 
-func (e *collectingExecutor) execute(_ context.Context, emit func(native.StreamEvent)) execEnding {
+func (e *collectingExecutor) Execute(_ context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	for _, ev := range e.events {
 		emit(ev)
 	}
 	terminal := native.StreamEvent{Type: native.EventAgentEnd}
-	return execEnding{
+	return drive.ExecEnding{
 		Terminal: &terminal,
 		Phase:    outcome.PhaseExecution,
-		Commit: func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) {
+		Commit: func(context.Context, *outcome.RunFailure, bool) (drive.CommitSummary, error) {
 			e.commit()
-			return commitSummary{}, nil
+			return drive.CommitSummary{}, nil
 		},
 	}
 }

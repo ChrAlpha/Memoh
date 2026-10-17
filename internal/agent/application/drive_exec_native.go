@@ -7,7 +7,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -26,17 +28,17 @@ type nativeExecutor struct {
 	cfg       native.RunConfig
 	rc        runreq.ResolvedContext
 	req       runreq.ChatRequest
-	committer *agentStepCommitter // nil when steps are not committed as they complete
-	timing    *reasoningTimingTracker
-	replace   *turnReplacement
+	committer *persist.StepCommitter // nil when steps are not committed as they complete
+	timing    *persist.ReasoningTimingTracker
+	replace   *drive.TurnReplacement
 	service   *Service
 
 	// Written by execute, read by commit after execute returned.
 	terminal    *native.StreamEvent
-	snapshot    *terminalSnapshot
+	snapshot    *persist.TerminalSnapshot
 	visible     bool
 	toolCalls   int
-	uncommitted uncommittedStepText
+	uncommitted persist.UncommittedStepText
 	// interrupted is the failure the step committer reported while the stream
 	// was still running.
 	stepErr error
@@ -45,7 +47,7 @@ type nativeExecutor struct {
 // execute streams the turn and hands every event to emit except the terminal
 // event, which it keeps: the driver publishes that after the ending's history
 // write has succeeded.
-func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
+func (e *nativeExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	for ev := range e.agent.Stream(ctx, e.cfg) {
 		if ev.Type == native.EventToolCallStart {
 			e.toolCalls++
@@ -53,7 +55,7 @@ func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEve
 		if outcome.HasVisibleAgentStreamOutput(ev) {
 			e.visible = true
 		}
-		e.uncommitted.observe(ev)
+		e.uncommitted.Observe(ev)
 		if ev.IsTerminal() {
 			terminal := ev
 			e.terminal = &terminal
@@ -62,7 +64,7 @@ func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEve
 		}
 		emit(ev)
 	}
-	ending := execEnding{
+	ending := drive.ExecEnding{
 		Terminal: e.terminal,
 		Commit:   e.commit,
 	}
@@ -84,24 +86,24 @@ func (e *nativeExecutor) observeTerminal(ev native.StreamEvent) {
 	if len(ev.Messages) == 0 {
 		return
 	}
-	data := marshalRunEvent(ev)
+	data := drive.MarshalRunEvent(ev)
 	if len(data) == 0 {
 		return
 	}
-	snap, ok := extractTerminalSnapshot(data)
+	snap, ok := persist.ExtractTerminalSnapshot(data)
 	if !ok {
 		return
 	}
 	if e.committer == nil {
-		snap.reasoningTiming = takeTerminalReasoningTiming(e.timing, ev.Type)
+		snap.ReasoningTiming = persist.TakeTerminalReasoningTiming(e.timing, ev.Type)
 	}
-	snap.visibleOutput = e.visible
+	snap.VisibleOutput = e.visible
 	e.snapshot = &snap
 }
 
 // deferred reports whether the terminal event parked the run on a decision.
 func (e *nativeExecutor) deferred() bool {
-	if e.snapshot != nil && e.snapshot.deferredToolID != "" {
+	if e.snapshot != nil && e.snapshot.DeferredToolID != "" {
 		return true
 	}
 	return e.terminal != nil && e.terminal.ApprovalID != ""
@@ -109,8 +111,8 @@ func (e *nativeExecutor) deferred() bool {
 
 // commit writes the ending's history: the failure row or the interrupted step
 // when the run failed, and the run's final messages in every case.
-func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
-	summary := commitSummary{ModelID: e.modelID()}
+func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
+	summary := drive.CommitSummary{ModelID: e.modelID()}
 	if row && f != nil {
 		persisted, err := e.recordFailure(ctx, *f, summary)
 		if err != nil {
@@ -120,10 +122,10 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 	}
 	if e.committer != nil {
 		tokens := e.inputTokens()
-		if err := e.committer.finish(ctx, tokens); err != nil {
+		if err := e.committer.Finish(ctx, tokens); err != nil {
 			return summary, outcome.RuntimeHistoryError(err)
 		}
-		summary.Persisted = append(summary.Persisted, e.committer.persistedMessages()...)
+		summary.Persisted = append(summary.Persisted, e.committer.PersistedMessages()...)
 		summary.UsageTokens = tokens
 		// A replacement turn that commits its steps is finalized by its queue
 		// coordinator in the final step's transaction; rewriting it here
@@ -140,47 +142,47 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		return summary, e.postPersist(ctx, summary)
 	}
 	snap := *e.snapshot
-	snap.failureCode = failureRowCode(f)
-	if !row || !snap.visibleOutput {
+	snap.FailureCode = persist.FailureRowCode(f)
+	if !row || !snap.VisibleOutput {
 		// Without visible output the failure row is already written by
 		// recordFailure; the snapshot carrying the code too would write it a
 		// second time.
-		snap.failureCode = ""
+		snap.FailureCode = ""
 	}
-	persisted, err := e.service.persistTerminalSnapshotResult(ctx, e.req, e.rc, snap)
+	persisted, err := e.service.persist.TerminalSnapshotResult(ctx, e.req, e.rc, snap)
 	if err != nil {
 		return summary, outcome.RuntimeHistoryError(err)
 	}
 	summary.Persisted = persisted
 	summary.Text = terminalText(snap)
-	summary.Usage = snap.usage
-	summary.UsageTokens = extractInputTokensFromUsage(snap.usage)
+	summary.Usage = snap.Usage
+	summary.UsageTokens = persist.ExtractInputTokensFromUsage(snap.Usage)
 	return summary, e.postPersist(ctx, summary)
 }
 
 // recordFailure writes the failure into the run's history: the text the failed
 // step showed, or the turn-level failure row when nothing was committed.
-func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure, _ commitSummary) ([]messagepkg.Message, error) {
+func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure, _ drive.CommitSummary) ([]messagepkg.Message, error) {
 	if e.committer != nil {
-		persisted, err := e.committer.recordFailure(ctx, e.uncommitted.String(), f)
+		persisted, err := e.committer.RecordFailure(ctx, e.uncommitted.String(), f)
 		if err != nil {
 			return nil, outcome.RuntimeHistoryError(err)
 		}
 		return persisted, nil
 	}
-	if e.snapshot != nil && e.snapshot.visibleOutput {
+	if e.snapshot != nil && e.snapshot.VisibleOutput {
 		// A committed-ish snapshot carries the failure as its own row; the
 		// snapshot path writes it.
 		return nil, nil
 	}
-	return e.service.persistFailureRow(ctx, e.req, e.rc, f, "")
+	return e.service.persist.FailureRow(ctx, e.req, e.rc, f, "")
 }
 
 // postPersist rewrites the replaced turn once its own history is written, for
 // a run without step commits. A replacement turn that cannot be rewritten
 // failed, and the failure belongs to the ending rather than to the turn it
 // replaced.
-func (e *nativeExecutor) postPersist(ctx context.Context, summary commitSummary) error {
+func (e *nativeExecutor) postPersist(ctx context.Context, summary drive.CommitSummary) error {
 	if e.replace == nil || e.replace.PostPersist == nil {
 		return nil
 	}
@@ -195,7 +197,7 @@ func (e *nativeExecutor) postPersist(ctx context.Context, summary commitSummary)
 // run ended without one.
 func (e *nativeExecutor) inputTokens() int {
 	if e.snapshot != nil {
-		if tokens := extractInputTokensFromUsage(e.snapshot.usage); tokens > 0 {
+		if tokens := persist.ExtractInputTokensFromUsage(e.snapshot.Usage); tokens > 0 {
 			return tokens
 		}
 	}
@@ -209,9 +211,9 @@ func (e *nativeExecutor) modelID() string {
 // terminalText is the assistant text the run's final snapshot carries. A
 // schedule fire reports it as the run's result; every other entry reads its
 // text from the projection.
-func terminalText(snap terminalSnapshot) string {
+func terminalText(snap persist.TerminalSnapshot) string {
 	var builder strings.Builder
-	for _, msg := range snap.sdkMessages {
+	for _, msg := range snap.SDKMessages {
 		if msg.Role != sdk.MessageRoleAssistant {
 			continue
 		}
