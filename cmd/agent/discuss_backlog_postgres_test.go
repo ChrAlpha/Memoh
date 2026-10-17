@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,9 @@ import (
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/settings"
 )
+
+// summaryLimitPattern reads the summary bound the compaction prompt states.
+var summaryLimitPattern = regexp.MustCompile(`must stay under (\d+) tokens`)
 
 type recordingFailureBroadcaster struct {
 	failures chan string
@@ -71,6 +75,7 @@ type backlogFixture struct {
 	images      *backlogImageLoader
 	summaries   atomic.Int32
 	failSummary atomic.Bool
+	longSummary atomic.Bool
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
 }
@@ -112,8 +117,14 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			http.Error(w, "summarizer down", http.StatusBadRequest)
 			return
 		}
+		summary := "Earlier backlog summarized."
+		if stated := summaryLimitPattern.FindSubmatch(body); stated != nil && f.longSummary.Load() {
+			limit, _ := strconv.Atoi(string(stated[1]))
+			summary += strings.Repeat(" kept", limit*4/5-len(summary)/5)
+		}
+		content, _ := json.Marshal(summary)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"Earlier backlog summarized."},"finish_reason":"stop"}]}`)
+		_, _ = fmt.Fprintf(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}]}`, content)
 	}))
 	t.Cleanup(server.Close)
 	f.providerURL = server.URL
