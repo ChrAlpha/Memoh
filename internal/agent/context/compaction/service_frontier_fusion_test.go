@@ -494,3 +494,28 @@ func assertFusionParentsActive(t *testing.T, q *fakeQueries, parents []sqlc.BotH
 		}
 	}
 }
+
+func TestRunScopedCompactionFoldsTheRunsStepsPastItsInput(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "steps so far"}
+	cfg := machineryConfig(stub, 100000)
+	parents := fusionParentLogs(t, cfg, "summary from before the run")
+	rows := qualityRows(t)
+	cfg.RunID = uuid.NewString()
+	cfg.ProtectedSources = historySources(rows[0])
+	cfg.CandidatesFrom = time.UnixMilli(parents[0].AnchorEndMs + 1000)
+	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
+
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil || res.Status != StatusOK {
+		t.Fatalf("result=%+v err=%v", res, err)
+	}
+	marked := idSet(q.markedIDs)
+	if len(q.markedIDs) != 3 || marked[rows[0].ID] {
+		t.Fatalf("marked=%v, want every step row after the run's input and not the input", q.markedIDs)
+	}
+	if len(q.rollupCalls) != 0 || q.parentSuccessors[parents[0].ID].Valid {
+		t.Fatalf("rollups=%d, want the summary from before the run left active", len(q.rollupCalls))
+	}
+}

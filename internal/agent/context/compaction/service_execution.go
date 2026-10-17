@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -40,12 +41,22 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		s.logger.WarnContext(ctx, "compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
 	}
 	parents := frontier.Artifacts
+	var runUUID pgtype.UUID
+	if cfg.RunID != "" {
+		if runUUID, err = db.ParseUUID(cfg.RunID); err != nil {
+			return Result{}, err
+		}
+		parents = slices.DeleteFunc(parents, func(parent Artifact) bool {
+			return parent.AnchorStartMs < cfg.CandidatesFrom.UnixMilli()
+		})
+	}
 	createdFrom := pgtype.Timestamptz{Time: cfg.CandidatesFrom, Valid: !cfg.CandidatesFrom.IsZero()}
 	createdBefore := pgtype.Timestamptz{Time: cfg.CandidatesBefore, Valid: !cfg.CandidatesBefore.IsZero()}
 	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
 		SessionID:     sessionUUID,
 		CreatedFrom:   createdFrom,
 		CreatedBefore: createdBefore,
+		RunID:         runUUID,
 	})
 	if err != nil {
 		return Result{}, err
@@ -58,6 +69,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		SessionID:     sessionUUID,
 		CreatedFrom:   createdFrom,
 		CreatedBefore: createdBefore,
+		RunID:         runUUID,
 		MaxBytes:      readMaxBytes,
 	})
 	if err != nil {
@@ -82,7 +94,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 
 	messages, barrierCount := candidatesFromRows(rows)
-	protectCurrentSources(messages, cfg.ProtectedSources)
+	if cfg.RunID != "" {
+		messages = slices.DeleteFunc(messages, func(message CompactionCandidate) bool {
+			return isProtectedSource(message, cfg.ProtectedSources)
+		})
+	} else {
+		protectCurrentSources(messages, cfg.ProtectedSources)
+	}
 	if barrierCount > 0 {
 		s.logger.WarnContext(ctx, "compaction: kept unparseable history rows as span barriers",
 			slog.Int("barrier_count", barrierCount),

@@ -74,6 +74,10 @@ type TriggerConfig struct {
 	// CurrentRequest is the caller's current input, shown to the summarizer
 	// when no protected source is a history row yet.
 	CurrentRequest string
+	// RunID limits compaction to rows that run stored and the summaries
+	// inside the candidate window. Its protected rows stay raw without
+	// holding back the rows after them.
+	RunID string
 	// HistoryBudgetTokens is the room the caller's request has for the
 	// summary and the history it keeps raw.
 	HistoryBudgetTokens int
