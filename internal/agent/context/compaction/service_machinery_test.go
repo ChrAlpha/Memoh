@@ -407,7 +407,7 @@ func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.SummaryWindowTokens = 1200
+	cfg.SummaryWindowTokens = 1000
 
 	_, err := svc.RunCompactionSync(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
