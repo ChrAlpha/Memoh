@@ -630,6 +630,7 @@ func (s *Service) pumpDiscussAgent(ctx context.Context, cmd turn.StartTurnComman
 		discussCurrentSources:    cmd.DiscussCurrentSources,
 		discussOmittedSources:    cmd.DiscussOmittedSources,
 		discussContextTokens:     discussContextPressure(cmd),
+		historyViewFrom:          discussViewFrom(cmd),
 		discussRecoveryExhausted: cmd.DiscussRecoveryExhausted,
 	})
 	for chunks != nil || errs != nil {

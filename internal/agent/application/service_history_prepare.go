@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"strings"
+	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -15,6 +16,7 @@ type preparedHistoryContext struct {
 	estimatedTokens   int
 	compactableTokens int
 	pressureTokens    int
+	viewFrom          time.Time
 }
 
 func (s *Service) prepareHistoryContext(
@@ -37,6 +39,7 @@ func (s *Service) prepareHistoryContext(
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
+	viewFrom := historyRecordsViewFrom(loaded)
 	loaded, err = s.replaceCompactedMessages(
 		ctx,
 		req.ThreadID,
@@ -56,7 +59,18 @@ func (s *Service) prepareHistoryContext(
 		estimatedTokens:   estimatedTokens,
 		compactableTokens: compactableTokens,
 		pressureTokens:    estimateMessagesTokens(loaded),
+		viewFrom:          viewFrom,
 	}, nil
+}
+
+func historyRecordsViewFrom(records []historyfrag.HistoryRecord) time.Time {
+	var from time.Time
+	for _, record := range records {
+		if record.DBMessageID != "" && !record.CreatedAt.IsZero() && (from.IsZero() || record.CreatedAt.Before(from)) {
+			from = record.CreatedAt
+		}
+	}
+	return from
 }
 
 func historyErrorCode(meta map[string]any) string {
