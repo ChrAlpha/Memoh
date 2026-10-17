@@ -58,6 +58,7 @@ ALTER TABLE bot_channel_routes ADD COLUMN team_id UUID NOT NULL DEFAULT public.m
 ALTER TABLE channel_identities ADD COLUMN team_id UUID NOT NULL DEFAULT public.memoh_current_team_id();
 ALTER TABLE bot_history_message_compacts ADD COLUMN team_id UUID NOT NULL DEFAULT public.memoh_current_team_id();
 ALTER TABLE bot_history_messages ADD COLUMN team_id UUID NOT NULL DEFAULT public.memoh_current_team_id();
+ALTER TABLE bot_history_messages ADD COLUMN run_id UUID;
 ALTER TABLE bot_session_events ADD COLUMN team_id UUID NOT NULL DEFAULT public.memoh_current_team_id();
 
 DROP VIEW bot_visible_history_messages;
