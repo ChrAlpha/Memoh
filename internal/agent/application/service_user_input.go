@@ -415,19 +415,8 @@ func (s *Service) continueUserInputSession(
 		return err
 	}
 
-	cfg, err := s.prepareContinuationRunConfig(
-		ctx,
-		resolved.RunConfig,
-		historyScopeFallbackFromUserInputRequest(req),
-		compactionSummaryScope(firstNonEmpty(req.BotID, input.BotID), "", req.SessionID, req.ConversationType, "", req.ReplyTarget),
-		eventCh,
-	)
-	if err != nil {
-		return err
-	}
-
 	chatReq := ChatRequest{
-		RunID:                   cfg.RunID,
+		RunID:                   resolved.RunConfig.RunID,
 		RunHandle:               runHandle,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
@@ -444,6 +433,17 @@ func (s *Service) continueUserInputSession(
 		SkipMemoryExtraction: true,
 		WorkspaceTargetID:    req.WorkspaceTargetID,
 		WorkspaceTarget:      workspaceTargetFromRunConfig(resolved.RunConfig),
+	}
+	cfg, err := s.prepareContinuationRunConfig(
+		ctx,
+		resolved.RunConfig,
+		historyScopeFallbackFromUserInputRequest(req),
+		compactionSummaryScope(firstNonEmpty(req.BotID, input.BotID), "", req.SessionID, req.ConversationType, "", req.ReplyTarget),
+		eventCh,
+		chatReq,
+	)
+	if err != nil {
+		return err
 	}
 
 	return s.runNativeDecisionContinuation(ctx, chatReq, cfg, resolved.ModelID, runtimeLifecycle, eventCh)

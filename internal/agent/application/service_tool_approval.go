@@ -506,19 +506,8 @@ func (s *Service) continueToolApprovalSession(
 		return err
 	}
 
-	cfg, err := s.prepareContinuationRunConfig(
-		ctx,
-		resolved.RunConfig,
-		historyScopeFallbackFromToolApprovalRequest(approval),
-		compactionSummaryScope(firstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
-		eventCh,
-	)
-	if err != nil {
-		return err
-	}
-
 	req := ChatRequest{
-		RunID:                   cfg.RunID,
+		RunID:                   resolved.RunConfig.RunID,
 		RunHandle:               runHandle,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
@@ -531,6 +520,17 @@ func (s *Service) continueToolApprovalSession(
 		PersistedUserMessageID:  requestMessageID,
 		WorkspaceTargetID:       approval.WorkspaceTargetID,
 		WorkspaceTarget:         workspaceTargetFromRunConfig(resolved.RunConfig),
+	}
+	cfg, err := s.prepareContinuationRunConfig(
+		ctx,
+		resolved.RunConfig,
+		historyScopeFallbackFromToolApprovalRequest(approval),
+		compactionSummaryScope(firstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
+		eventCh,
+		req,
+	)
+	if err != nil {
+		return err
 	}
 
 	return s.runNativeDecisionContinuation(ctx, req, cfg, resolved.ModelID, runtimeLifecycle, eventCh)

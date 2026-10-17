@@ -48,7 +48,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
 		if result := s.runBudgetCompactionSync(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-			return cfg, false, nil
+			return cfg, false, fmt.Errorf("%w: compaction status %s", contextfrag.ErrBudgetUnsatisfied, result.Status)
 		}
 		var messages []ModelMessage
 		var records []historyfrag.HistoryRecord
@@ -57,7 +57,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		} else {
 			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
 			if err != nil {
-				return cfg, false, err
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
 			}
 			messages, records = prepared.messages, prepared.records
 		}
@@ -66,7 +66,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 			return cfg, false, err
 		}
 		if reflect.DeepEqual(recovered.Messages, cfg.Messages) {
-			return cfg, false, nil
+			return cfg, false, fmt.Errorf("%w: compaction left the history unchanged", contextfrag.ErrBudgetUnsatisfied)
 		}
 		layout.historyCount = recovered.ContextTrimmableMessages
 		layout.pressureTokens = 0
@@ -293,7 +293,10 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	recovery.historyViewFrom = discussViewFrom(cmd)
 	result := s.runBudgetCompactionSync(ctx, recovery, pressure, historyBudget, modelID)
 	if result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-		return cfg, shed, nil
+		if shed {
+			return cfg, true, nil
+		}
+		return cfg, false, fmt.Errorf("%w: compaction status %s", contextfrag.ErrBudgetUnsatisfied, result.Status)
 	}
 	return cfg, false, native.ErrContextRecompose
 }
