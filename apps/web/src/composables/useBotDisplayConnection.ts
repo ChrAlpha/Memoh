@@ -6,6 +6,7 @@ import {
 } from '@memohai/sdk'
 import i18n from '@/i18n'
 import { resolveApiErrorMessage } from '@/utils/api-error'
+import { decodeClipboardMessage, encodeClipboardPaste } from './display-clipboard'
 import {
   postBotsByBotIdContainerDisplayPrepareStream,
   type DisplayPrepareStreamEvent,
@@ -66,6 +67,9 @@ export class BotDisplayConnection {
   peer = shallowRef<RTCPeerConnection | null>(null)
   inputChannel = shallowRef<RTCDataChannel | null>(null)
   stream = shallowRef<MediaStream | null>(null)
+  clipboardText = ref('')
+  clipboardRevision = ref(0)
+  clipboardError = shallowRef<unknown>(null)
 
   private ensureReadyPromise: Promise<boolean> | null = null
   private acquirePromise: Promise<boolean> | null = null
@@ -163,6 +167,16 @@ export class BotDisplayConnection {
     }
     inputChannel.addEventListener('close', disconnect)
     inputChannel.addEventListener('error', disconnect)
+    inputChannel.addEventListener('message', (event: MessageEvent) => {
+      if (this.inputChannel.value !== inputChannel) return
+      const message = decodeClipboardMessage(event.data)
+      if (message?.type === 'clipboard') {
+        this.clipboardText.value = message.text as string
+        this.clipboardRevision.value++
+      } else if (message?.type === 'clipboard_error') {
+        this.clipboardError.value = message
+      }
+    })
     peer.addTransceiver('video', { direction: 'recvonly' })
 
     peer.addEventListener('connectionstatechange', () => {
@@ -200,6 +214,9 @@ export class BotDisplayConnection {
   private cleanupPeer() {
     this.cancelReconnect()
     this.stream.value = null
+    this.clipboardText.value = ''
+    this.clipboardRevision.value = 0
+    this.clipboardError.value = null
     const channel = this.inputChannel.value
     const peer = this.peer.value
     this.inputChannel.value = null
@@ -338,6 +355,21 @@ export class BotDisplayConnection {
     const channel = this.inputChannel.value
     if (channel?.readyState !== 'open') return
     channel.send(JSON.stringify(payload))
+  }
+
+  pasteText(text: string, shift = false): boolean {
+    return this.sendClipboard(encodeClipboardPaste(text, shift))
+  }
+
+  private sendClipboard(message: string | null): boolean {
+    const channel = this.inputChannel.value
+    if (!message || channel?.readyState !== 'open') return false
+    try {
+      channel.send(message)
+      return true
+    } catch {
+      return false
+    }
   }
 
   inputReady(): boolean {

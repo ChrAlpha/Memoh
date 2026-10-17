@@ -520,6 +520,7 @@
     },
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
+      "display_clipboard_failed": "Clipboard synchronization failed. Reconnect the desktop and try again.",
       "display_prepare_failed": "Display preparation failed.",
       "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
       "image_registry_unavailable": "The image registry could not be reached. Please try again later.",
@@ -1727,6 +1728,13 @@
       }
     },
     "display": {
+      "keyboardInput": "Remote desktop keyboard input",
+      "clipboard": {
+        "copyDenied": "The browser blocked copying to your clipboard. Focus the desktop and copy again.",
+        "copyTimedOut": "No new clipboard text arrived from the desktop. Select text and copy again.",
+        "syncFailed": "Could not sync the clipboard. Try again or use the paste shortcut.",
+        "pasteFailed": "Could not paste this text. Try a smaller selection (up to 48 KB)."
+      },
       "title": "Desktop",
       "reconnect": "Reconnect",
       "closeSession": "Close desktop session",

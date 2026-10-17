@@ -99,6 +99,7 @@ func superviseXvnc(ctx context.Context, log *slog.Logger) {
 			"-geometry", geometry,
 			"-depth", "24",
 			"-SecurityTypes", "None",
+			"-SendPrimary=0",
 			"-localhost",
 			"-rfbport", displayRFBTCPPort(rfbTCPAddr),
 		)

@@ -287,7 +287,7 @@ if ! display_socket_ready; then
   if ! display_socket_ready; then
     stop_xvnc
     cleanup_stale_display
-    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
+    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -SendPrimary=0 -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
     wait_i=0
     while [ "$wait_i" -lt 25 ]; do
       display_socket_ready && break
@@ -306,6 +306,11 @@ run_quick() {
     "$@" >/dev/null 2>&1 &
   fi
 }
+# Transfer explicit CLIPBOARD copies, not X11 PRIMARY changes from selecting
+# text. Apply to an existing display as well, without restarting applications.
+if has_cmd vncconfig; then
+  run_quick vncconfig -display "$DISPLAY" -set SendPrimary=0
+fi
 if command -v fc-cache >/dev/null 2>&1; then
   nohup fc-cache -f >/tmp/memoh-fc-cache.log 2>&1 &
 fi

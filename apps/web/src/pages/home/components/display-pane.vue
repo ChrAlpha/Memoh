@@ -24,8 +24,21 @@
       @mouseup.prevent="onPointerUp"
       @mouseleave="onPointerLeave"
       @wheel.prevent="onWheel"
-      @keydown.prevent="onKeyDown"
+      @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
+      @paste.prevent="onPaste"
+    />
+    <textarea
+      ref="keyboardRef"
+      class="sr-only"
+      tabindex="-1"
+      :aria-label="t('chat.display.keyboardInput')"
+      autocomplete="off"
+      autocapitalize="off"
+      :spellcheck="false"
+      @keydown="onKeyDown"
+      @keyup.prevent="onKeyUp"
+      @paste.prevent="onPaste"
     />
     <div
       v-if="prepareProgress"
@@ -213,11 +226,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button, Spinner, SurfaceCard } from '@felinic/ui'
+import { Button, Spinner, SurfaceCard, toast } from '@felinic/ui'
 import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-vue-next'
 import { useDocumentVisibility, useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'
 import { captureDisplaySnapshot } from '@/utils/display-snapshot'
+import { createDisplayInput } from '@/composables/display-input'
+import { useDisplayClipboard } from '@/composables/useDisplayClipboard'
+import { remoteCopyKeys } from '@/composables/display-clipboard'
+import { resolveApiErrorMessage } from '@/utils/api-error'
+import { detectPlatform } from '@/lib/keyboard-bindings'
 
 const screenEl = useTemplateRef('rootRef')
 const fullScreenIcon = useTemplateRef('fullScreenIcon')
@@ -270,9 +288,36 @@ const emit = defineEmits<{
 const documentVisibility = useDocumentVisibility()
 const viewing = computed(() => !!props.active && documentVisibility.value === 'visible')
 const connection = useBotDisplayConnection(props.botId, viewing)
+const clipboard = useDisplayClipboard(connection, () => viewing.value)
+const orderedInput = createDisplayInput(payload => {
+  if (viewing.value) connection.sendInput(payload)
+})
+watch([viewing, connection.inputChannel], () => orderedInput.cancel(), { flush: 'sync' })
+const keyboardRef = useTemplateRef('keyboardRef')
+const macKeyboard = detectPlatform() === 'mac'
+let pasteWithShift = false
 watch(viewing, (active) => {
-  if (!active) cleanupLocalUI()
+  if (!active) {
+    cleanupLocalUI()
+  }
 }, { flush: 'sync' })
+
+watch(connection.clipboardError, (error) => {
+  if (error && viewing.value) toast.error(resolveApiErrorMessage(error, t('errors.workspace.display_clipboard_failed')))
+})
+
+// Send local content only from an explicit browser paste. Reading on focus or
+// pointer input could disclose clipboard content unrelated to this workspace.
+function onPaste(event: ClipboardEvent) {
+  if (!event.clipboardData?.types.includes('text/plain')) return
+  const text = event.clipboardData?.getData('text/plain')
+  const shift = pasteWithShift
+  pasteWithShift = false
+  if (text !== undefined) {
+    orderedInput.cancel()
+    clipboard.pasteText(text, shift)
+  }
+}
 
 interface PrepareStage {
   key: string
@@ -454,6 +499,7 @@ function emptyDisplayStats(): DisplayStats {
 }
 
 function cleanupLocalUI() {
+  orderedInput.cancel()
   stopSnapshotCapture()
   stopStatsPolling()
   closeStatsMenu()
@@ -526,6 +572,8 @@ function captureSnapshot() {
 }
 
 function openStatsMenu(event: MouseEvent) {
+  // Ordinary right clicks belong to the remote application's context menu.
+  if (!event.shiftKey) return
   const root = rootRef.value
   const rect = root?.getBoundingClientRect()
   const rawX = rect ? event.clientX - rect.left : event.clientX
@@ -638,7 +686,7 @@ function sendInput(payload: Record<string, unknown>) {
   // bot, so a background/inactive pane forwarding pointer + key events would
   // race the focused pane's input on the desktop.
   if (!viewing.value) return
-  connection.sendInput(payload)
+  orderedInput.input(payload)
 }
 
 function inputReady() {
@@ -690,7 +738,11 @@ function sendPointer(event: MouseEvent | WheelEvent, mask = pointerMask) {
 }
 
 function onPointerDown(event: MouseEvent) {
-  videoRef.value?.focus()
+  if (!inputReady() || !resolveVideoPoint(event)) return
+  keyboardRef.value?.focus({ preventScroll: true })
+  // Start the promised clipboard write during the local click, before the
+  // remote menu can handle it and return its Copy/Cut result.
+  if (event.button === 0) clipboard.preparePointerCopy()
   pointerMask |= buttonBit(event.button)
   sendPointer(event)
 }
@@ -763,11 +815,24 @@ function sendKey(event: KeyboardEvent, down: boolean) {
 }
 
 function onKeyDown(event: KeyboardEvent) {
+  const nativePasteModifier = macKeyboard ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+  if (nativePasteModifier && !event.altKey && event.key.toLowerCase() === 'v') {
+    pasteWithShift = event.shiftKey
+    return
+  }
+  event.preventDefault()
   if (event.repeat) return
+  const copyKeys = remoteCopyKeys(event, macKeyboard)
+  if (copyKeys) {
+    if (!macKeyboard || event.metaKey || event.shiftKey) clipboard.prepareRemoteCopy()
+    copyKeys.forEach(sendInput)
+    return
+  }
   sendKey(event, true)
 }
 
 function onKeyUp(event: KeyboardEvent) {
+  if (event.key.toLowerCase() === 'v') pasteWithShift = false
   sendKey(event, false)
 }
 

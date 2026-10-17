@@ -44,6 +44,7 @@ const (
 	CodeContextProtectedOverflow                 Code = "context.protected_overflow"
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
+	CodeWorkspaceDisplayClipboardFailed          Code = "workspace.display_clipboard_failed"
 	CodeWorkspaceDisplayPrepareFailed            Code = "workspace.display_prepare_failed"
 	CodeWorkspaceImageNotFound                   Code = "workspace.image_not_found"
 	CodeWorkspaceImageRegistryUnavailable        Code = "workspace.image_registry_unavailable"
@@ -592,6 +593,10 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceDisplayPrepareFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
+	},
+	CodeWorkspaceDisplayClipboardFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "Clipboard synchronization failed. Reconnect the desktop and try again.",
 	},
 	// The image name is a setting the user can change; the registry is the
 	// dependency whose outage the user can only wait out.
