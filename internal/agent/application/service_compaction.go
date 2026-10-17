@@ -63,19 +63,17 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 }
 
 // buildCompactionConfig resolves the summarizer through the shared model
-// policy — explicit override first, then the turn's actually-resolved model,
-// then the bot chat default, then the session's latest model — and attaches
-// credentials.
+// policy — the turn's actually-resolved model, then the bot chat default, then
+// the session's latest model — and attaches credentials.
 func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, botSettings settings.Settings, inputTokens int, turnModelID string) (compaction.TriggerConfig, error) {
 	sessionModelID := ""
-	if strings.TrimSpace(botSettings.CompactionModelID) == "" && strings.TrimSpace(turnModelID) == "" && strings.TrimSpace(botSettings.ChatModelID) == "" {
+	if strings.TrimSpace(turnModelID) == "" && strings.TrimSpace(botSettings.ChatModelID) == "" {
 		sessionModelID = models.LatestSessionModelID(ctx, s.queries, req.ThreadID)
 	}
 	resolution, err := models.ResolveCompactionModel(
 		ctx,
 		s.modelsService,
 		s.queries,
-		botSettings.CompactionModelID,
 		turnModelID,
 		botSettings.ChatModelID,
 		sessionModelID,
