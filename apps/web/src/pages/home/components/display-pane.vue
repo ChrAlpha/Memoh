@@ -17,6 +17,7 @@
       playsinline
       muted
       tabindex="0"
+      @focus="focusKeyboard"
       @playing="videoReady = true"
       @contextmenu.prevent="openStatsMenu"
       @mousedown.prevent="onPointerDown"
@@ -29,9 +30,12 @@
       @paste.prevent="onPaste"
       @blur="releaseKeyboard"
     />
+    <!-- A real editable element is needed for the local IME and candidate UI;
+         the video cannot receive composed text. Only committed text is sent. -->
     <textarea
       ref="keyboardRef"
       class="sr-only"
+      :style="keyboardPosition"
       tabindex="-1"
       :aria-label="t('chat.display.keyboardInput')"
       autocomplete="off"
@@ -39,6 +43,9 @@
       :spellcheck="false"
       @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
+      @compositionstart="textInput.start()"
+      @compositionend="onCompositionEnd"
+      @input="onTextInput"
       @paste.prevent="onPaste"
       @blur="releaseKeyboard"
     />
@@ -236,6 +243,7 @@ import { captureDisplaySnapshot } from '@/utils/display-snapshot'
 import { createDisplayInput } from '@/composables/display-input'
 import { useDisplayClipboard } from '@/composables/useDisplayClipboard'
 import { createDisplayKeyboard } from '@/composables/display-keyboard'
+import { createDisplayTextInput } from '@/composables/display-text-input'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { detectPlatform } from '@/lib/keyboard-bindings'
 
@@ -296,6 +304,7 @@ const orderedInput = createDisplayInput(payload => {
 })
 watch([viewing, connection.inputChannel], () => orderedInput.cancel(), { flush: 'sync' })
 const keyboardRef = useTemplateRef('keyboardRef')
+const keyboardPosition = ref({ left: '0px', top: '0px' })
 const macKeyboard = detectPlatform() === 'mac'
 let pasteWithShift = false
 const keyboard = createDisplayKeyboard({
@@ -305,7 +314,17 @@ const keyboard = createDisplayKeyboard({
   copy: clipboard.prepareRemoteCopy,
   pasteShortcut: shift => { pasteWithShift = shift },
 })
-watch(connection.inputChannel, () => keyboard.reset(), { flush: 'sync' })
+const textInput = createDisplayTextInput({
+  active: () => viewing.value && connection.inputReady() && document.hasFocus()
+    && document.activeElement === keyboardRef.value,
+  release: () => keyboard.release(),
+  text: value => keyboard.text(value),
+})
+watch(connection.inputChannel, () => {
+  // Do not carry unfinished local composition into a replacement connection.
+  cancelTextInput()
+  keyboard.reset()
+}, { flush: 'sync' })
 watch(viewing, (active) => {
   if (!active) {
     releaseKeyboard()
@@ -316,7 +335,17 @@ watch(viewing, (active) => {
   }
 }, { flush: 'sync' })
 
+function cancelTextInput() {
+  textInput.cancel()
+  if (keyboardRef.value) keyboardRef.value.value = ''
+}
+
+function focusKeyboard() {
+  keyboardRef.value?.focus({ preventScroll: true })
+}
+
 function releaseKeyboard() {
+  cancelTextInput()
   clipboard.cancelPointerCopy()
   orderedInput.cancel()
   keyboard.release()
@@ -764,7 +793,11 @@ function sendPointer(event: MouseEvent | WheelEvent, mask = pointerMask) {
 
 function onPointerDown(event: MouseEvent) {
   if (!inputReady() || !resolveVideoPoint(event)) return
-  keyboardRef.value?.focus({ preventScroll: true })
+  // The browser cannot see the remote caret. Anchor its IME candidate popup
+  // near the last clicked position by moving the focused textarea there.
+  const bounds = rootRef.value?.getBoundingClientRect()
+  if (bounds) keyboardPosition.value = { left: `${event.clientX - bounds.left}px`, top: `${event.clientY - bounds.top}px` }
+  focusKeyboard()
   // Start the promised clipboard write during the local click, before the
   // remote menu can handle it and return its Copy/Cut result.
   if (event.button === 0) clipboard.preparePointerCopy()
@@ -800,12 +833,29 @@ function onWheel(event: WheelEvent) {
 }
 
 function onKeyDown(event: KeyboardEvent) {
+  // Composition keys select local candidates; ordinary keys and shortcuts
+  // continue through the remote keyboard controller.
+  if (textInput.keydown(event)) return
   keyboard.keydown(event)
 }
 
 function onKeyUp(event: KeyboardEvent) {
+  if (textInput.keyup(event)) return
   if (event.key.toLowerCase() === 'v') pasteWithShift = false
   keyboard.keyup(event)
+}
+
+function onCompositionEnd(event: CompositionEvent) {
+  textInput.end(event.data)
+  if (keyboardRef.value) keyboardRef.value.value = ''
+}
+
+function onTextInput(event: Event) {
+  const input = event as InputEvent
+  const target = event.target as HTMLTextAreaElement
+  // Keep the textarea value during preedit; clear it once consumed so the
+  // next composition starts empty. The helper deduplicates the final input.
+  if (textInput.input(input.data ?? target.value, input.isComposing)) target.value = ''
 }
 
 function clamp(value: number, min: number, max: number) {

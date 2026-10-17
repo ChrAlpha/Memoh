@@ -259,6 +259,9 @@ has_desktop || { echo "Workspace image contract violation: desktop session runti
 progress 18 checking "Display runtime is available"
 
 export DISPLAY=:99
+# Desktop processes inherit this locale. Default to UTF-8 so applications can
+# decode committed Unicode text; preserve a locale already set by the user.
+export LANG="${LANG:-C.UTF-8}"
 mkdir -p /run/memoh /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 

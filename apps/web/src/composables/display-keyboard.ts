@@ -1,6 +1,13 @@
 type KeyEvent = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'repeat' | 'preventDefault'>
 type KeyInput = { type: 'key'; keysym: number; down: boolean }
 
+// RFB KeyEvent uses X11 keysyms (X11/keysymdef.h), not raw Unicode code points.
+// Latin-1 characters keep their code point; other characters use the Unicode
+// keysym prefix, e.g. U+4F60 (你) becomes 0x01004f60.
+const LATIN1_MAX_CODE_POINT = 0xff
+const UNICODE_KEYSYM_PREFIX = 0x01000000
+
+// X11 modifier and special-key values, also defined by X11/keysymdef.h.
 const SHIFT = 0xffe1
 const CONTROL = 0xffe3
 const ALT = 0xffe9
@@ -15,7 +22,13 @@ const keysyms: Record<string, number> = {
 const repeatingEdits = new Set(['Backspace', 'Delete', 'Home', 'End', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
 
 function keysymForKey(key: string): number | undefined {
-  if (key.length === 1) return key.codePointAt(0)
+  // Count code points rather than UTF-16 units, so an astral character such
+  // as an emoji is treated as one character instead of an unknown key name.
+  const characters = [...key]
+  if (characters.length === 1) {
+    const code = key.codePointAt(0)!
+    return code <= LATIN1_MAX_CODE_POINT ? code : UNICODE_KEYSYM_PREFIX | code
+  }
   if (/^F([1-9]|1[0-2])$/.test(key)) return 0xffbe + Number(key.slice(1)) - 1
   return keysyms[key]
 }
@@ -103,7 +116,10 @@ export function createDisplayKeyboard(options: {
   }
 
   function keydown(event: KeyEvent) {
-    if (!options.active()) return
+    // Caps Lock may change case or switch the local input source. Return
+    // before preventDefault() so the browser can handle it locally. Forward
+    // the resulting characters, without toggling the remote Caps Lock state.
+    if (!options.active() || event.key === 'CapsLock') return
     syncModifiers(event)
     const key = event.key.toLowerCase()
     const pasteModifier = options.mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
@@ -140,7 +156,8 @@ export function createDisplayKeyboard(options: {
   }
 
   function keyup(event: KeyEvent) {
-    if (!options.active()) return
+    // Match keydown's local-only Caps Lock handling; no remote key was pressed.
+    if (!options.active() || event.key === 'CapsLock') return
     syncModifiers(event)
     if (options.mac && event.key === 'Meta') releaseCharacters()
     const keysym = event.code ? heldCodes.get(event.code) ?? keysymForKey(event.key) : keysymForKey(event.key)
@@ -169,5 +186,22 @@ export function createDisplayKeyboard(options: {
     needsReset = true
   }
 
-  return { keydown, keyup, restoreModifiers, release, reset }
+  function text(value: string) {
+    if (!options.active()) return
+    // Send only the text committed by the local input method, through RFB
+    // key presses. The remote application does not need its own Chinese IME.
+    // Release held keys first so Ctrl/Alt/Shift cannot turn it into a shortcut
+    // or change its case; tap each character so none remains held remotely.
+    release()
+    for (const character of value) {
+      const code = character.codePointAt(0)!
+      // Newline and tab need X11 special keys. Skip the other ASCII controls
+      // (below SPACE, 0x20, and DELETE, 0x7f) rather than typing them as text.
+      const keysym = character === '\n' ? keysyms.Enter : character === '\t' ? keysyms.Tab
+        : code >= 0x20 && code !== 0x7f ? keysymForKey(character) : undefined
+      if (keysym !== undefined) tap(keysym)
+    }
+  }
+
+  return { keydown, keyup, restoreModifiers, release, reset, text }
 }
