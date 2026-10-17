@@ -414,9 +414,11 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		recordContextBudgetFailure(ledger, budgetErr)
 		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
 	}
-	if err == nil && cfg.RecoverContextBudget != nil && slices.ContainsFunc(view.Selected, func(frag contextfrag.ContextFrag) bool {
+	if err == nil && cfg.RecoverContextBudget != nil && (slices.ContainsFunc(view.Selected, func(frag contextfrag.ContextFrag) bool {
 		return frag.ID == historyTrimNoticeID
-	}) {
+	}) || slices.ContainsFunc(view.Manifest.SelectionDecisions, func(decision contextfrag.SelectionDecision) bool {
+		return decision.Reason == summaryBudgetEditReason
+	})) {
 		err = contextfrag.ErrBudgetUnsatisfied
 	}
 	if err != nil {

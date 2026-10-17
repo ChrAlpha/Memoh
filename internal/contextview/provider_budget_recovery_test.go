@@ -80,11 +80,13 @@ func TestProviderBudgetRecoveryCannotBypassAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		recovered bool
+		summary   string
 		err       error
 		want      error
 	}{
 		{name: "declined", want: contextfrag.ErrProtectedContextOverflow},
 		{name: "still oversized", recovered: true, want: contextfrag.ErrBudgetUnsatisfied},
+		{name: "summary longer than the history budget", recovered: true, summary: strings.Repeat("s", 6000), want: contextfrag.ErrBudgetUnsatisfied},
 		{name: "compaction failed", err: fmt.Errorf("%w: summarizer down", contextfrag.ErrBudgetUnsatisfied), want: contextfrag.ErrBudgetUnsatisfied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +94,13 @@ func TestProviderBudgetRecoveryCannotBypassAdmission(t *testing.T) {
 			calls := 0
 			cfg.RecoverContextBudget = func(_ context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 				calls++
+				if tc.summary != "" {
+					cfg.ContextSourceFrags = append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
+					cfg.ContextSourceFrags[1] = contextfrag.TextFrag(contextfrag.TextFragInput{
+						ID: "summary", Kind: contextfrag.KindConversationSummary, Role: sdk.MessageRoleUser,
+						Slot: contextfrag.SlotHistory, Text: tc.summary, Trust: contextfrag.TrustExternal,
+					})
+				}
 				return cfg, tc.recovered, tc.err
 			}
 			got, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
