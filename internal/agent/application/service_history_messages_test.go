@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -149,10 +150,11 @@ const (
 type fakeArtifactLineageQueries struct {
 	dbstore.Queries
 	rows []sqlc.BotHistoryMessageCompact
+	err  error
 }
 
 func (f fakeArtifactLineageQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	return f.rows, nil
+	return f.rows, f.err
 }
 
 func (fakeArtifactLineageQueries) GetCompactionLogByID(context.Context, pgtype.UUID) (sqlc.BotHistoryMessageCompact, error) {
@@ -228,10 +230,13 @@ func TestBuildMessagesFromPipelineInsertsArtifactSummary(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, pressure, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	want := 0
 	for _, message := range messages {
@@ -281,10 +286,13 @@ func TestBuildMessagesFromPipelineKeepsHistoryOverBudget(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, pressure, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if pressure < 1000 {
 		t.Fatalf("pressure lost history over budget: %d", pressure)
@@ -304,9 +312,29 @@ func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.
 	echo.IsSelfSent = true
 	pipeline.PushEvent(pipelineTestSessionID, echo)
 	svc := &Service{pipeline: pipeline, logger: slog.New(slog.DiscardHandler)}
-	messages, _, _ := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
+	messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
 	index := latestModelUserMessageIndex(messages)
 	if index == nil || !strings.Contains(messages[*index].TextContent(), "required input") {
 		t.Fatalf("wrong current source: index=%v messages=%s", index, messagesDebug(messages))
+	}
+}
+
+func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
+	t.Parallel()
+
+	for name, svc := range map[string]*Service{
+		"frontier": {queries: fakeArtifactLineageQueries{err: errors.New("frontier unavailable")}},
+		"history":  {messageService: &turnResponseSourceMessageService{err: errors.New("history unavailable")}},
+	} {
+		pipeline := timeline.NewPipeline(timeline.RenderParams{})
+		pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))
+		svc.pipeline, svc.logger = pipeline, slog.New(slog.DiscardHandler)
+		messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
+		if err == nil || messages != nil {
+			t.Fatalf("%s: messages=%s err=%v, want the request failed instead of composed without the source", name, messagesDebug(messages), err)
+		}
 	}
 }

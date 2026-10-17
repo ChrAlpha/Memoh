@@ -2,11 +2,15 @@ package discuss
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
@@ -140,5 +144,37 @@ func TestDiscussSkippedAgentTurnConsumesOverflowingInput(t *testing.T) {
 	driver.handleReplyWithTurn(t.Context(), sess, rc, driver.logger, svc)
 	if svc.calls != 1 || !svc.lastCmd.DiscussContextOverflow || sess.lastProcessed.SourceCursor != 200 {
 		t.Fatalf("calls=%d overflow=%v cursor=%+v; an unaddressed agent turn must consume what it skips", svc.calls, svc.lastCmd.DiscussContextOverflow, sess.lastProcessed)
+	}
+}
+
+type failingArtifactProvider struct{}
+
+func (failingArtifactProvider) ActiveCompactionArtifacts(context.Context, string, string) ([]timeline.CompactionArtifact, error) {
+	return nil, errors.New("frontier unavailable")
+}
+
+type failingHistoryReader struct{ lightweightHistoryStub }
+
+func (failingHistoryReader) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
+	return nil, errors.New("history unavailable")
+}
+
+func TestDiscussMissingSourceFailsWithoutRunningOrConsuming(t *testing.T) {
+	for name, deps := range map[string]DiscussDriverDeps{
+		"artifacts": {Artifacts: failingArtifactProvider{}},
+		"history":   {MessageService: &failingHistoryReader{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			broadcaster := &recordingBroadcaster{}
+			deps.Broadcaster = broadcaster
+			svc := &fakeTurnService{}
+			driver := NewDiscussDriver(deps)
+			sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
+			driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
+			failures := broadcaster.errors()
+			if svc.calls != 0 || sess.lastProcessed.SourceCursor != 0 || len(failures) != 1 || failures[0].ErrorCode != string(apperror.CodeInternal) {
+				t.Fatalf("calls=%d cursor=%+v failures=%+v, want one internal failure and nothing run or consumed", svc.calls, sess.lastProcessed, failures)
+			}
+		})
 	}
 }

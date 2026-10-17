@@ -3,7 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"fmt"
 	"strings"
 	"time"
 
@@ -17,23 +17,30 @@ import (
 // bot_history_messages. This gives chat mode the same event-driven context
 // that discuss mode uses, replacing the legacy loadMessages path. The second
 // return value is the token pressure of raw history and active summaries;
-// the third is the creation time of the oldest loaded row.
-func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, time.Time) {
+// the third is the creation time of the oldest loaded row. A history or
+// frontier load failure fails the request (CM-ADM-003).
+func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, time.Time, error) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
-		return nil, 0, time.Time{}
+		return nil, 0, time.Time{}, nil
 	}
 	rc := s.pipeline.GetRC(sessionID)
 	if len(rc) == 0 {
-		return nil, 0, time.Time{}
+		return nil, 0, time.Time{}, nil
 	}
 
-	trs := s.loadTurnResponses(ctx, sessionID, contextTokenBudget)
-	artifacts := s.loadTimelineArtifacts(ctx, req.BotID, sessionID)
+	trs, err := s.loadTurnResponses(ctx, sessionID, contextTokenBudget)
+	if err != nil {
+		return nil, 0, time.Time{}, fmt.Errorf("load turn history: %w", err)
+	}
+	artifacts, err := s.loadTimelineArtifacts(ctx, req.BotID, sessionID)
+	if err != nil {
+		return nil, 0, time.Time{}, fmt.Errorf("load compaction frontier: %w", err)
+	}
 
 	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
-		return nil, 0, time.Time{}
+		return nil, 0, time.Time{}, nil
 	}
 
 	messages := make([]ModelMessage, 0, len(composed.Messages))
@@ -58,27 +65,16 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 		pressure += estimateMessageTokens(messages[len(messages)-1])
 	}
 
-	return messages, pressure, time.UnixMilli(timeline.ViewFromMs(rc, trs)).UTC()
+	return messages, pressure, time.UnixMilli(timeline.ViewFromMs(rc, trs)).UTC(), nil
 }
 
 // loadTimelineArtifacts projects the session's active compaction frontier for
-// timeline composition. A load failure degrades into the bounded admission
-// window — the pipeline trim below still caps the recomposed raw history —
-// and is surfaced with a stable key instead of passing silently (CM-ADM-003).
-func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID string) []timeline.CompactionArtifact {
+// timeline composition.
+func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID string) ([]timeline.CompactionArtifact, error) {
 	if s.queries == nil {
-		return nil
+		return nil, nil
 	}
-	artifacts, err := compaction.NewTimelineArtifactSource(s.queries).ActiveCompactionArtifacts(ctx, botID, sessionID)
-	if err != nil {
-		s.logger.WarnContext(ctx, "context_admission_degraded",
-			slog.String("path", "pipeline_chat"),
-			slog.String("reason", "artifact_load_failed"),
-			slog.String("session_id", sessionID),
-			slog.Any("error", err))
-		return nil
-	}
-	return artifacts
+	return compaction.NewTimelineArtifactSource(s.queries).ActiveCompactionArtifacts(ctx, botID, sessionID)
 }
 
 // loadTurnResponses loads recent assistant/tool messages from bot_history_messages
@@ -87,17 +83,16 @@ func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID st
 // newest-first within the context budget and projected to content, so a
 // dense 24-hour window, or legacy lifecycle metadata on its rows, can never
 // materialize more than the budget's worth of payload.
-func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, contextTokenBudget int) []timeline.TurnResponseEntry {
+func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, contextTokenBudget int) ([]timeline.TurnResponseEntry, error) {
 	if s.messageService == nil {
-		return nil
+		return nil, nil
 	}
 	since := time.Now().UTC().Add(-24 * time.Hour)
 	msgs, err := s.messageService.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, sessionID, since, s.historyLoadMaxBytes(contextTokenBudget))
 	if err != nil {
-		s.logger.WarnContext(ctx, "load TRs failed", slog.String("session_id", sessionID), slog.Any("error", err))
-		return nil
+		return nil, err
 	}
-	return timeline.DecodeTurnResponseEntries(msgs)
+	return timeline.DecodeTurnResponseEntries(msgs), nil
 }
 
 // historyLoadMaxBytes converts a token budget into the byte budget used for
