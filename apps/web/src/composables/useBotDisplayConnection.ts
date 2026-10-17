@@ -41,7 +41,12 @@ interface DisplayOfferResponse {
 
 const PREPARE_MAX_WAIT_ATTEMPTS = 12
 const PREPARE_WAIT_INTERVAL_MS = 500
-const connections = new Map<string, { connection: BotDisplayConnection; consumers: number }>()
+const HIDDEN_RELEASE_DELAY_MS = 60_000
+const connections = new Map<string, {
+  connection: BotDisplayConnection
+  consumers: number
+  retentionTimer: number | null
+}>()
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -74,6 +79,7 @@ export class BotDisplayConnection {
   private ensureReadyPromise: Promise<boolean> | null = null
   private acquirePromise: Promise<boolean> | null = null
   private refs = 0
+  private hiddenReleaseTimer: number | null = null
   private reconnectTimer: number | null = null
   private recovering = false
   private reconnectAttempts = 0
@@ -84,13 +90,19 @@ export class BotDisplayConnection {
   }
 
   addRef() {
+    this.cancelHiddenRelease()
     this.refs++
   }
 
   removeRef() {
     if (this.refs === 0) return
     this.refs--
-    if (this.refs === 0) {
+    if (this.refs !== 0) return
+
+    this.cancelReconnect()
+    this.hiddenReleaseTimer = window.setTimeout(() => {
+      this.hiddenReleaseTimer = null
+      if (this.refs !== 0) return
       this.recovering = false
       this.reconnectAttempts = 0
       this.acquireAbort?.abort()
@@ -102,7 +114,13 @@ export class BotDisplayConnection {
       this.prepareProgress.value = null
       this.unavailableReason.value = ''
       this.status.value = 'idle'
-    }
+    }, HIDDEN_RELEASE_DELAY_MS)
+  }
+
+  private cancelHiddenRelease() {
+    if (this.hiddenReleaseTimer === null) return
+    window.clearTimeout(this.hiddenReleaseTimer)
+    this.hiddenReleaseTimer = null
   }
 
   /** Visible viewers share one acquisition and one live peer per bot. */
@@ -352,6 +370,7 @@ export class BotDisplayConnection {
   }
 
   sendInput(payload: Record<string, unknown>) {
+    if (this.refs === 0) return
     const channel = this.inputChannel.value
     if (channel?.readyState !== 'open') return
     channel.send(JSON.stringify(payload))
@@ -362,6 +381,7 @@ export class BotDisplayConnection {
   }
 
   private sendClipboard(message: string | null): boolean {
+    if (this.refs === 0) return false
     const channel = this.inputChannel.value
     if (!message || channel?.readyState !== 'open') return false
     try {
@@ -520,10 +540,14 @@ export class BotDisplayConnection {
 export function useBotDisplayConnection(botId: string, visible: MaybeRefOrGetter<boolean> = true) {
   let entry = connections.get(botId)
   if (!entry) {
-    entry = { connection: new BotDisplayConnection(botId), consumers: 0 }
+    entry = { connection: new BotDisplayConnection(botId), consumers: 0, retentionTimer: null }
     connections.set(botId, entry)
   }
   const current = entry
+  if (current.retentionTimer !== null) {
+    window.clearTimeout(current.retentionTimer)
+    current.retentionTimer = null
+  }
   const conn = current.connection
   current.consumers++
   let viewing = false
@@ -541,7 +565,12 @@ export function useBotDisplayConnection(botId: string, visible: MaybeRefOrGetter
     stop()
     if (viewing) conn.removeRef()
     current.consumers--
-    if (current.consumers === 0 && connections.get(botId) === current) connections.delete(botId)
+    if (current.consumers === 0) {
+      current.retentionTimer = window.setTimeout(() => {
+        current.retentionTimer = null
+        if (current.consumers === 0 && connections.get(botId) === current) connections.delete(botId)
+      }, HIDDEN_RELEASE_DELAY_MS)
+    }
   })
   return conn
 }

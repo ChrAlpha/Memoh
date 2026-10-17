@@ -309,7 +309,10 @@ watch(connection.inputChannel, () => keyboard.reset(), { flush: 'sync' })
 watch(viewing, (active) => {
   if (!active) {
     releaseKeyboard()
-    cleanupLocalUI()
+    // Keep the video element bound while the shared connection is retained.
+    // Replaying the same stream on return would otherwise show a transient
+    // Connecting state even though no WebRTC reconnect is needed.
+    cleanupLocalUI({ preserveVideo: true })
   }
 }, { flush: 'sync' })
 
@@ -517,16 +520,19 @@ function emptyDisplayStats(): DisplayStats {
   }
 }
 
-function cleanupLocalUI() {
+function cleanupLocalUI(options: { preserveVideo?: boolean } = {}) {
+  const { preserveVideo = false } = options
   orderedInput.cancel()
   stopSnapshotCapture()
   stopStatsPolling()
   closeStatsMenu()
-  videoReady.value = false
   pointerMask = 0
   lastPointerPoint = null
-  if (videoRef.value) {
-    videoRef.value.srcObject = null
+  if (!preserveVideo) {
+    videoReady.value = false
+    if (videoRef.value) {
+      videoRef.value.srcObject = null
+    }
   }
 }
 

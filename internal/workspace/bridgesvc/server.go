@@ -425,6 +425,10 @@ func (*Server) Tunnel(stream pb.ContainerService_TunnelServer) error {
 		return status.Errorf(codes.Unavailable, "dial tunnel target: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
+	// A target that stops reading can block Write before we reach Recv again.
+	// Closing the socket on cancellation releases both target I/O directions.
+	stopClose := context.AfterFunc(stream.Context(), func() { _ = conn.Close() })
+	defer stopClose()
 
 	var sendMu sync.Mutex
 	sendFrame := func(frame *pb.TunnelFrame) error {

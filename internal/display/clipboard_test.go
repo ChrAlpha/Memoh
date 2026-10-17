@@ -236,6 +236,29 @@ func TestRejectedClipboardDoesNotCloseInput(t *testing.T) {
 	}
 }
 
+func TestClipboardTransportFailureDisconnectsInsteadOfReportingCopyError(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	go func() {
+		var encodings [8]byte
+		_, _ = io.ReadFull(server, encodings[:])
+		_ = server.Close()
+	}()
+	c := &rfbInputClient{conn: client}
+	disconnected := make(chan error, 1)
+	if err := c.startClipboard(func(string) { t.Error("unexpected clipboard text") }, func(error) { t.Error("transport closure reported as clipboard content error") }, func(err error) { disconnected <- err }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("transport closure did not disconnect the viewer")
+	}
+	if err := c.Key('a', true); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("dead input connection remained usable: %v", err)
+	}
+}
+
 func TestLegacyClipboardAndPublicError(t *testing.T) {
 	conn := &clipboardTestConn{}
 	c := &rfbInputClient{conn: conn, clipboard: &rfbClipboard{}}
@@ -255,5 +278,49 @@ func TestLegacyClipboardAndPublicError(t *testing.T) {
 	}
 	if event["type"] != "clipboard_error" || event["code"] != "workspace.display_clipboard_failed" {
 		t.Fatalf("invalid public error: %v", event)
+	}
+}
+
+type blockedInputTestConn struct {
+	net.Conn
+	started chan struct{}
+}
+
+func (c *blockedInputTestConn) Write(data []byte) (int, error) {
+	close(c.started)
+	return c.Conn.Write(data)
+}
+
+func TestSessionStopUnblocksInputWrite(t *testing.T) {
+	client, target := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = target.Close() }()
+	conn := &blockedInputTestConn{Conn: client, started: make(chan struct{})}
+	sess := newSession(NewService(nil, nil), "bot", "gst", CodecVP8)
+	sess.input = &rfbInputClient{conn: conn}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- sess.input.Key('a', true) }()
+	// The unread pipe keeps Key inside Write while it holds the input mutex.
+	<-conn.started
+	stopDone := make(chan struct{})
+	go func() { sess.stop(); close(stopDone) }()
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("session stop waited for blocked input instead of closing it")
+	}
+	select {
+	case err := <-writeDone:
+		if err == nil {
+			t.Fatal("blocked input write succeeded after session stop")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session stop left an input write blocked")
+	}
+	if err := sess.input.Key('a', true); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("input accepted a key after stop: %v", err)
+	}
+	if err := sess.input.Close(); err != nil {
+		t.Fatalf("repeated input close: %v", err)
 	}
 }

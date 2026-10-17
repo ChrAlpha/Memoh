@@ -36,7 +36,7 @@ type rfbClipboard struct {
 	hasText  bool
 }
 
-func (c *rfbInputClient) startClipboard(onText func(string), onError func(error)) error {
+func (c *rfbInputClient) startClipboard(onText func(string), onError func(error), onDisconnect func(error)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.clipboard = &rfbClipboard{}
@@ -48,9 +48,9 @@ func (c *rfbInputClient) startClipboard(onText func(string), onError func(error)
 	conn := c.conn
 	go func() {
 		if err := c.readClipboard(conn, onText, onError); err != nil {
-			onError(err)
-			_ = conn.Close()
+			// Close interrupts any concurrent input write before taking its lock.
 			_ = c.Close()
+			onDisconnect(err)
 		}
 	}()
 	return nil
@@ -132,7 +132,7 @@ func (c *rfbInputClient) handleExtendedClipboard(data []byte) (string, bool, err
 	flags := binary.BigEndian.Uint32(data)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn == nil {
+	if c.closed || c.conn == nil {
 		return "", false, io.ErrClosedPipe
 	}
 	if flags&clipboardCaps != 0 {
@@ -244,7 +244,7 @@ func (c *rfbInputClient) SetClipboardText(text string) error {
 }
 
 func (c *rfbInputClient) setClipboardLocked(text string) error {
-	if c.conn == nil || c.clipboard == nil {
+	if c.closed || c.conn == nil || c.clipboard == nil {
 		return errors.New("clipboard unavailable")
 	}
 	if c.clipboard.extended {
