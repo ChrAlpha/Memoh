@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -22,7 +23,7 @@ func scheduleLifecycleService(
 	t *testing.T,
 	pool acpPrompter,
 	messages messagepkg.Service,
-	lifecycles contextLifecycleStore,
+	lifecycles lifecycle.Store,
 ) (*Service, *agenttest.LifecycleAdmitter) {
 	t.Helper()
 	service := newACPLifecycleService(t, pool, messages, lifecycles)
@@ -47,12 +48,12 @@ func runScheduledExternal(ctx context.Context, t *testing.T, service *Service, d
 		// run: a schedule fire never runs without one.
 		service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	}
-	return service.TriggerSchedule(ctx, lifecycleTestBotID, payload, "")
+	return service.TriggerSchedule(ctx, agenttest.LifecycleBotID, payload, "")
 }
 
 // runScheduledACP drives one ACP schedule fire through the entry.
 func runScheduledACP(ctx context.Context, service *Service, payload schedule.TriggerPayload) (schedule.TriggerResult, error) {
-	return service.TriggerSchedule(ctx, lifecycleTestBotID, payload, "")
+	return service.TriggerSchedule(ctx, agenttest.LifecycleBotID, payload, "")
 }
 
 // historyRows is what survives in history: the rows written, less the ones
@@ -93,12 +94,12 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 	driver := &incompleteScheduleDriver{}
 	position := int64(7)
 	spec := runSpec{
-		Run: admittedRun{Handle: sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
-		Req: runreq.ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID},
+		Run: admittedRun{Handle: sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
+		Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID},
 	}
 	setup := service.scheduleSetup(spec, schedule.TriggerPayload{
-		FireID: "fire-1", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
-	}, lifecycleTestBotID, "", runtimeDispatch{kind: dispatchExternal, driver: driver})
+		FireID: "fire-1", ID: "schedule-1", SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
+	}, agenttest.LifecycleBotID, "", runtimeDispatch{kind: dispatchExternal, driver: driver})
 
 	plan, err := setup(context.Background(), spec.Req)
 	if err != nil {
@@ -131,7 +132,7 @@ func TestScheduledExternalWritesTheLeadingUserMessageBeforePrompting(t *testing.
 
 	result, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",
-		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+		SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 	if err != nil {
 		t.Fatalf("scheduled fire: %v", err)
@@ -157,7 +158,7 @@ func TestScheduledExternalKeepsTheLeadingUserMessageWhenTheRoundFailsToWrite(t *
 
 	_, _ = runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",
-		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+		SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 
 	for _, deleted := range messages.Deleted {

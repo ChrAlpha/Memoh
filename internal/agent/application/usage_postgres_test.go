@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
@@ -160,8 +161,8 @@ func (p providerUsageTurn) run(t *testing.T, ctx context.Context, messages *mess
 
 func newProviderUsageFixture(t *testing.T, ctx context.Context) (*dbsqlc.Queries, *messagepkg.DBService, string, string) {
 	t.Helper()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	queries := dbsqlc.New(pool)
 	return queries, messagepkg.NewService(nil, postgresstore.NewQueriesWithPool(pool, queries)), botID, sessionID
 }

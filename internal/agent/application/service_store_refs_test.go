@@ -47,10 +47,10 @@ func TestToProviderMessagesKeepsPersistedContentAndSourceAligned(t *testing.T) {
 func TestToProviderMessagesUsesPrunedPersistedContent(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
+	service := wireComponents(&Service{
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 	unit := "large tool result "
 	huge := strings.Repeat(unit, gatewayToolPayloadMaxBytes/len(unit)+2)
 	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
@@ -104,12 +104,12 @@ func TestStoreRoundPassesSourceRefsToMemory(t *testing.T) {
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if err := resolver.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 		BotID:    storeRoundBotID,
@@ -154,12 +154,12 @@ func TestPersistRuntimeRoundSkipsMemoryFormation(t *testing.T) {
 				if eagerUser {
 					messages.Persisted = []messagepkg.PersistInput{{SessionID: user.SessionID, Role: user.Role, Content: user.Content}}
 				}
-				service := &Service{
+				service := wireComponents(&Service{
 					messageService:  messages,
 					memoryRegistry:  registry,
 					settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 					logger:          slog.New(slog.DiscardHandler),
-				}
+				})
 				req := runreq.ChatRequest{
 					BotID: storeRoundBotID, ThreadID: user.SessionID, Query: "remember this",
 					UserMessagePersisted: eagerUser, PersistedUserMessageID: user.ID,
@@ -196,12 +196,12 @@ func TestStoreMemoryUsesPersistedUserContent(t *testing.T) {
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
-	service := &Service{
+	service := wireComponents(&Service{
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 
 	service.storeMemory(context.Background(), runreq.ChatRequest{
 		BotID: storeRoundBotID, ThreadID: "session-1",
@@ -230,12 +230,12 @@ func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService:  messages,
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if err := resolver.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 		BotID: storeRoundBotID, ThreadID: "session-1", Query: "hello",
@@ -263,7 +263,7 @@ func storedMemoryTestMessage(t *testing.T, id, sessionID, role, text string) mes
 }
 
 func TestRepeatedSteerTextDoesNotReuseOriginalTurnIdentity(t *testing.T) {
-	service := &Service{settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil), logger: slog.New(slog.DiscardHandler)}
+	service := wireComponents(&Service{settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil), logger: slog.New(slog.DiscardHandler)})
 	req := runreq.ChatRequest{BotID: storeRoundBotID, ThreadID: "session-1", TurnID: "original-turn", Query: "same", ExternalMessageID: "original-external"}
 	inputs, err := service.buildPersistInputs(t.Context(), req, []runreq.ModelMessage{
 		{Role: "user", Content: runreq.NewTextContent("same")},

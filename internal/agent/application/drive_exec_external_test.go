@@ -9,6 +9,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -25,7 +26,7 @@ func TestExternalPromptInputCarriesWhetherTheRunCanAskTheUser(t *testing.T) {
 	t.Parallel()
 
 	newExecutor := func(unattended bool, hasInputPort bool) *externalExecutor {
-		svc := &Service{}
+		svc := wireComponents(&Service{})
 		if hasInputPort {
 			svc.userInput = &agenttest.UserInput{}
 		}
@@ -62,7 +63,7 @@ func TestExternalProjectionCleanupRunsOnceAcrossGoroutines(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	exec := &externalExecutor{service: &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}}
+	exec := &externalExecutor{service: wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})}
 	exec.projections.record("call-1")
 	exec.projections.complete("call-1", &messagepkg.Message{ID: "projection-1"})
 
@@ -94,7 +95,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 		{name: "web_send", run: func(t *testing.T, service *Service) {
 			t.Helper()
 			if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{
-				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt, RawQuery: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 				CurrentChannel: "local",
 			}); err != nil {
@@ -105,7 +106,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 			t.Helper()
 			handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 				SchemaVersion: 1, TeamID: driveTeamID, Mode: turn.ModeChat,
-				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 				ExternalMessageID: "im-message-1", SourceChannelIdentityID: "im-sender-1", UserID: "user-1",
 				DisplayName: "IM Sender", CurrentChannel: "telegram", Channels: []string{"telegram"},
@@ -118,7 +119,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 		}},
 		{name: "schedule", run: func(t *testing.T, service *Service) {
 			t.Helper()
-			if result, err := service.TriggerSchedule(context.Background(), lifecycleTestBotID, driveSchedulePayload("user-1"), ""); err != nil || result.Status != "ok" {
+			if result, err := service.TriggerSchedule(context.Background(), agenttest.LifecycleBotID, driveSchedulePayload("user-1"), ""); err != nil || result.Status != "ok" {
 				t.Fatalf("TriggerSchedule() = %q, %v, want ok", result.Status, err)
 			}
 		}},
@@ -138,12 +139,13 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, lifecycles)
 			service.memoryRegistry = registry
 			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil)
+			rewireComponents(service)
 			service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 			registerExternalDrivers(service, &drivePromptRecorder{})
 
 			entry.run(t, service)
 
-			_, snapshot := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
+			_, snapshot := requireACPLifecycle(t, lifecycles, agenttest.LifecycleRunID, lifecycle.StatusCompleted)
 			if snapshot.View != contextfrag.ViewExternalAgentPrompt || snapshot.Counts.Fragments == 0 || len(snapshot.SelectionDecisions) == 0 {
 				t.Fatalf("lifecycle snapshot = %#v, want the runtime's populated context manifest", snapshot)
 			}

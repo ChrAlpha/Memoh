@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -33,14 +34,15 @@ func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 	setAllowedTeam(fixture.service, driveTeamID)
 	history := &resumeTurnMessages{
 		driveHistoryMessages: driveHistoryMessages{history: []messagepkg.Message{
-			admissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
-			admissionHistoryMessage(t, driveReplacedAssistantID, sdk.AssistantMessage("partial work"), nil),
+			agenttest.AdmissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
+			agenttest.AdmissionHistoryMessage(t, driveReplacedAssistantID, sdk.AssistantMessage("partial work"), nil),
 		}},
 		requestMessageID: driveRequestMessageID,
 	}
 	fixture.service.messageService = history
+	rewireComponents(fixture.service)
 	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
-		Version: 1, Query: directLifecyclePrompt, ChatID: lifecycleTestBotID, UserID: "im-user-1",
+		Version: 1, Query: directLifecyclePrompt, ChatID: agenttest.LifecycleBotID, UserID: "im-user-1",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +50,8 @@ func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 	row := sqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty(driveTeamID),
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
-		BotID:     db.ParseUUIDOrEmpty(lifecycleTestBotID),
-		SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID),
+		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
+		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 		InputJson: raw,
 	}
 	if turnID != "" {

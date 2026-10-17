@@ -219,7 +219,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest
 		},
 		Req:        req,
 		IdleEffort: reasoningEffortForIdle(cfg),
-		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }
 

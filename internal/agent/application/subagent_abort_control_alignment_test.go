@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -41,13 +42,13 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
-	service := &Service{contextLifecycles: lifecycles}
+	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
 	service.bindSessionRuntime(manager)
 
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
 		"subagent:clean-end-abort-control",
 		[]byte(`{"task":"abort a clean end"}`),
 	)
@@ -61,8 +62,8 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 			if event.Type == native.EventAgentEnd {
 				applied, abortErr := manager.AbortControl(
 					context.WithoutCancel(ctx),
-					lifecycleTestBotID,
-					lifecycleTestSessionID,
+					agenttest.LifecycleBotID,
+					agenttest.LifecycleSessionID,
 					admission.RunID,
 					"abort-clean-end",
 				)
@@ -89,8 +90,8 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		},
 		Query: "abort as the run completes",
 		Identity: tools.SpawnIdentity{
-			BotID:      lifecycleTestBotID,
-			SessionID:  lifecycleTestSessionID,
+			BotID:      agenttest.LifecycleBotID,
+			SessionID:  agenttest.LifecycleSessionID,
 			IsSubagent: true,
 		},
 		ResolveCompletion: func() tools.SpawnAttemptDisposition {
@@ -109,7 +110,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	if terminalOutcome != tools.SpawnAttemptAbort {
 		t.Fatalf("reconciled terminal = %v, want abort", terminalOutcome)
 	}
-	if _, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID); !errors.Is(err, errInjectedTerminalLoad) {
+	if _, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID); !errors.Is(err, errInjectedTerminalLoad) {
 		t.Fatalf("post-terminal Snapshot error = %v, want injected failure left unread by observer", err)
 	}
 	finish(tools.SubagentTerminal{
@@ -118,7 +119,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		Outcome:          terminalOutcome,
 	})
 
-	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	snapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatalf("runtime snapshot: %v", err)
 	}
@@ -132,7 +133,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	if durable.State != ledger.StateAborted || durable.ErrorCode != "" {
 		t.Fatalf("durable run = %#v, want aborted terminal", durable)
 	}
-	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusAborted {
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != lifecycle.StatusAborted {
 		t.Fatalf("lifecycle terminal = %#v, want aborted", lifecycles.TerminalUpserts)
 	}
 }

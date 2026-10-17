@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -112,7 +113,7 @@ func createApprovalAuthorityFixture(t *testing.T, ctx context.Context, pool *pgx
 // decision are answered by CanDecideToolApproval against real grant rows.
 func TestPostgresToolApprovalAuthority(t *testing.T) {
 	ctx := t.Context()
-	pool := openTurnAdmissionPostgres(t, ctx)
+	pool := agenttest.OpenPostgres(t, ctx)
 	fx := createApprovalAuthorityFixture(t, ctx, pool)
 	q := sqlc.New(pool)
 	store := postgresstore.NewQueriesWithPool(pool, q)
@@ -120,11 +121,11 @@ func TestPostgresToolApprovalAuthority(t *testing.T) {
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{Ledger: runs, Fence: runtimefence.NewActivator(store)})
 	t.Cleanup(func() { _ = manager.CloseContext(context.Background()) })
 	approvals := toolapproval.NewService(nil, store, nil)
-	svc := &Service{
+	svc := wireComponents(&Service{
 		queries:        store,
 		toolApproval:   approvals,
 		botPermissions: grantPermissionChecker{bots: bots.NewService(slog.Default(), store)},
-	}
+	})
 
 	// park admits a run in sessionID under initiatorID and parks it on n
 	// pending exec approvals, returning the owner's context and the approvals.

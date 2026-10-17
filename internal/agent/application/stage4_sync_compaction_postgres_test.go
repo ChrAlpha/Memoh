@@ -12,8 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -27,7 +29,7 @@ func stage4FixedSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	userID := uuid.New()
 	name := "stage4-sync-" + uuid.NewString()
 	cleanup := context.WithoutCancel(ctx)
-	_, _ = pool.Exec(cleanup, "DELETE FROM bots WHERE id = $1", lifecycleTestBotID)
+	_, _ = pool.Exec(cleanup, "DELETE FROM bots WHERE id = $1", agenttest.LifecycleBotID)
 	if _, err := pool.Exec(ctx, `
 		WITH created_user AS (
 			INSERT INTO users (id, username, is_active) VALUES ($1, $2, true) RETURNING id
@@ -36,14 +38,14 @@ func stage4FixedSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	`, userID, name); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO bots (id, owner_user_id, name) VALUES ($1, $2, $3)`, lifecycleTestBotID, userID, name); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO bots (id, owner_user_id, name) VALUES ($1, $2, $3)`, agenttest.LifecycleBotID, userID, name); err != nil {
 		t.Fatalf("create bot: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO bot_sessions (id, bot_id, channel_type, runtime_type) VALUES ($1, $2, 'telegram', 'model')`, lifecycleTestSessionID, lifecycleTestBotID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO bot_sessions (id, bot_id, channel_type, runtime_type) VALUES ($1, $2, 'telegram', 'model')`, agenttest.LifecycleSessionID, agenttest.LifecycleBotID); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(cleanup, "DELETE FROM bots WHERE id = $1", lifecycleTestBotID)
+		_, _ = pool.Exec(cleanup, "DELETE FROM bots WHERE id = $1", agenttest.LifecycleBotID)
 		_, _ = pool.Exec(cleanup, "DELETE FROM users WHERE id = $1", userID)
 	})
 }
@@ -74,27 +76,30 @@ func (q stage4Queries) ListMessageRefsByCompactID(ctx context.Context, id pgtype
 // stage4DriveSession is a drive-request fixture whose history is real
 // PostgreSQL rows, whose compaction is the real compaction service, and whose
 // model window is small enough that ten rows pass the blocking share of it.
-func stage4DriveSession(t *testing.T) (*stage4Session, directLifecycleFixture, *driveRequestRecorder) {
+func stage4DriveSession(t *testing.T) (*agenttest.CompactionSession, directLifecycleFixture, *driveRequestRecorder) {
 	t.Helper()
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
+	pool := agenttest.OpenPostgres(t, ctx)
 	stage4FixedSession(t, ctx, pool)
-	s := newStage4SessionFor(t, ctx, pool, lifecycleTestBotID, lifecycleTestSessionID)
+	s := agenttest.NewCompactionSessionFor(t, ctx, pool, agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 
 	fixture, recorder := newDriveRequestFixture(t)
 	withDriveRequestRuntime(t, fixture)
 	queries := fixture.service.queries.(noDecisionQueries).directLifecycleQueries
 	// Everything the fixture does not fake, the compaction frontier included,
 	// is answered by the database.
-	queries.Queries = s.service.queries
+	queries.Queries = s.Queries
 	for key, model := range queries.models {
 		model.Config = []byte(`{"context_window":60000,"compatibilities":["tool-call"]}`)
 		queries.models[key] = model
 	}
-	fixture.service.messageService = &pgContextMessages{db: s.messages, sessionID: s.sessionID}
-	fixture.service.queries = stage4Queries{noDecisionQueries: fixture.service.queries.(noDecisionQueries), real: s.service.queries}
-	fixture.service.compactionService = withoutModelRecord{s.compaction}
-	fixture.service.compactionHTTPClient = &http.Client{Transport: s.summarizer}
+	fixture.service.messageService = &pgContextMessages{db: s.Messages, sessionID: s.SessionID}
+	rewireComponents(fixture.service)
+	fixture.service.queries = stage4Queries{noDecisionQueries: fixture.service.queries.(noDecisionQueries), real: s.Queries}
+	rewireComponents(fixture.service)
+	rewireComponents(fixture.service)
+	fixture.service.compactionService = withoutModelRecord{s.Compaction}
+	fixture.service.compactionHTTPClient = &http.Client{Transport: s.Summarizer}
 	return s, fixture, recorder
 }
 
@@ -112,7 +117,7 @@ func startStage4Turn(t *testing.T, fixture directLifecycleFixture, query string)
 	t.Helper()
 	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
 		SchemaVersion: 1, TeamID: "drive-request-team", Mode: turn.ModeChat,
-		BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 		Query: query, UserVisibleText: query,
 	})
 	if err != nil {
@@ -128,15 +133,15 @@ func startStage4Turn(t *testing.T, fixture directLifecycleFixture, query string)
 // summarizer is a stand-in.
 func TestStage4PreTurnCompactionReplacesCoveredRowsInTheProviderRequest(t *testing.T) {
 	s, fixture, recorder := stage4DriveSession(t)
-	s.padding = 3000
-	s.persistConversation("a", 8)
+	s.Padding = 3000
+	s.PersistConversation("a", 8)
 
 	startStage4Turn(t, fixture, "what now?")
 
-	if got := s.summarizer.callCount(); got != 1 {
+	if got := s.Summarizer.CallCount(); got != 1 {
 		t.Fatalf("summarizer calls = %d, want exactly one synchronous compaction", got)
 	}
-	covered, raw := requireStage4Split(t, s)
+	covered, raw := agenttest.RequireCompactionSplit(t, s)
 	requests := requireDriveRequests(t, recorder)
 	body := string(marshalDriveRequests(t, requests[:1]))
 	for _, label := range covered {
@@ -169,13 +174,13 @@ func TestStage4PreTurnCompactionReplacesCoveredRowsInTheProviderRequest(t *testi
 // goes to the provider as it is): every row reaches the request, in order.
 func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 	s, fixture, recorder := stage4DriveSession(t)
-	s.padding = 3000
-	ids := s.persistConversation("a", 8)
-	s.summarizer.refuseWith(http.StatusBadRequest)
+	s.Padding = 3000
+	ids := s.PersistConversation("a", 8)
+	s.Summarizer.RefuseWith(http.StatusBadRequest)
 
 	startStage4Turn(t, fixture, "what now?")
 
-	if s.summarizer.callCount() == 0 {
+	if s.Summarizer.CallCount() == 0 {
 		t.Fatal("the compaction never reached the summarizer; the test would pass without one")
 	}
 	body := string(marshalDriveRequests(t, requireDriveRequests(t, recorder)[:1]))
@@ -200,18 +205,21 @@ func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 	if strings.Contains(body, "trimmed to fit") {
 		t.Fatal("the request carries a trim notice")
 	}
-	if covered, raw := s.compactedLabels(); len(covered) != 0 || len(raw) != len(ids) {
+	if covered, raw := s.CompactedLabels(); len(covered) != 0 || len(raw) != len(ids) {
 		t.Fatalf("a failed compaction left covered=%v raw=%v", covered, raw)
 	}
 
-	req := runreq.ChatRequest{BotID: s.botID, ChatID: s.botID, ThreadID: s.sessionID, RunID: "stage4-run"}
-	assembled := s.assemble(runreq.ChatRequest{})
-	before := stage4Labels(assembled.Messages)
-	after, err := fixture.service.compactBeforeTurn(s.ctx, req, "", 60000, assembled, &turnRequestEstimate{service: fixture.service, ctx: s.ctx, sessionID: req.ThreadID})
+	req := runreq.ChatRequest{BotID: s.BotID, ChatID: s.BotID, ThreadID: s.SessionID, RunID: "stage4-run"}
+	assembled, err := fixture.service.transcript.Assemble(s.Ctx, transcript.ForChat(transcript.PurposeRun, runreq.ChatRequest{BotID: s.BotID, ChatID: s.BotID, ThreadID: s.SessionID}, 100000))
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	before := agenttest.CompactionLabels(assembled.Messages)
+	after, err := fixture.service.compactBeforeTurn(s.Ctx, req, "", 60000, assembled, &turnRequestEstimate{service: fixture.service, ctx: s.Ctx, sessionID: req.ThreadID})
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}
-	if got := stage4Labels(after.Messages); !slices.Equal(got, before) || len(before) != len(ids) {
+	if got := agenttest.CompactionLabels(after.Messages); !slices.Equal(got, before) || len(before) != len(ids) {
 		t.Fatalf("context after the failed backstop = %v, want the %d rows as they were (%v)", got, len(ids), before)
 	}
 }

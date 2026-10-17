@@ -24,7 +24,7 @@ func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, re
 	if req.RawQuery == "" {
 		req.RawQuery = strings.TrimSpace(req.Query)
 	}
-	nextReq, err := s.applyUserMessageHook(ctx, req)
+	nextReq, err := s.botenv.ApplyUserMessageHook(ctx, req)
 	if err != nil {
 		return req, messagepkg.Message{}, err
 	}

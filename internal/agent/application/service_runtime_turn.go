@@ -117,7 +117,7 @@ func (s *Service) AbortSessionRuns(ctx context.Context, botID, sessionID string)
 		// active-prompt registration lives exactly as long as the driver
 		// call, so wait for both.
 		if (current == nil || current.RunID != runID || !activeRuntimeRunStatus(current.Status)) &&
-			!s.hasExternalAgentActivePrompt(botID, sessionID) {
+			!s.activePrompts.Has(botID, sessionID) {
 			return nil
 		}
 		if time.Now().After(deadline) {

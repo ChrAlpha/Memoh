@@ -20,6 +20,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -343,17 +344,17 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 	lifecycles := &synchronizedLifecycleStore{}
 	messages := &agenttest.RecordingMessages{}
 	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
-	service := &Service{
-		agent:             native.New(native.Deps{Logger: logger}),
-		modelsService:     models.NewService(logger, queries),
-		queries:           queries,
-		contextLifecycles: lifecycles,
-		messageService:    messages,
-		settingsService:   settings.NewService(logger, queries, nil, nil),
-		sessionRuntime:    runtime,
-		streamHTTPClient:  &http.Client{Transport: streamTransport},
-		logger:            logger,
-	}
+	service := wireComponents(&Service{
+		agent:            native.New(native.Deps{Logger: logger}),
+		modelsService:    models.NewService(logger, queries),
+		queries:          queries,
+		lifecycle:        lifecycle.New(lifecycle.Deps{Store: lifecycles}),
+		messageService:   messages,
+		settingsService:  settings.NewService(logger, queries, nil, nil),
+		sessionRuntime:   runtime,
+		streamHTTPClient: &http.Client{Transport: streamTransport},
+		logger:           logger,
+	})
 	return directLifecycleFixture{
 		service:     service,
 		lifecycles:  lifecycles,
@@ -403,9 +404,9 @@ func startDirectLifecycleTurn(t *testing.T, fixture directLifecycleFixture) {
 		SchemaVersion:        1,
 		TeamID:               "direct-lifecycle-team",
 		Mode:                 turn.ModeChat,
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})
@@ -427,10 +428,10 @@ func TestAdmittedStreamPersistsCompletedLifecycleAfterAssistant(t *testing.T) {
 		t.Fatal("the run did not persist its assistant response")
 	}
 	runID := fixture.messages.Persisted[len(fixture.messages.Persisted)-1].RunID
-	if runID != lifecycleTestRunID {
-		t.Fatalf("persisted run ID = %q, want the admitted run %q", runID, lifecycleTestRunID)
+	if runID != agenttest.LifecycleRunID {
+		t.Fatalf("persisted run ID = %q, want the admitted run %q", runID, agenttest.LifecycleRunID)
 	}
-	assertDirectLifecycle(t, fixture.lifecycles, runID, contextLifecycleStatusCompleted, "message-id")
+	assertDirectLifecycle(t, fixture.lifecycles, runID, lifecycle.StatusCompleted, "message-id")
 }
 
 func TestAdmittedStreamProviderFailurePersistsFailedProviderLifecycle(t *testing.T) {
@@ -442,7 +443,7 @@ func TestAdmittedStreamProviderFailurePersistsFailedProviderLifecycle(t *testing
 	if len(creates) != 1 {
 		t.Fatalf("lifecycle creates = %d, want 1", len(creates))
 	}
-	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider, "message-id")
+	assertDirectLifecycle(t, fixture.lifecycles, agenttest.LifecycleRunID, lifecycle.StatusFailedProvider, "message-id")
 }
 
 func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {
@@ -452,9 +453,9 @@ func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {
 		SchemaVersion:        1,
 		TeamID:               "direct-lifecycle-team",
 		Mode:                 turn.ModeChat,
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})
@@ -481,7 +482,7 @@ func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {
 		t.Fatal("canceled admitted stream did not finish")
 	}
 
-	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted, "")
+	assertDirectLifecycle(t, fixture.lifecycles, agenttest.LifecycleRunID, lifecycle.StatusAborted, "")
 	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusAborted {
 		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.Finishes)
 	}
@@ -505,9 +506,9 @@ func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T
 		SchemaVersion:        1,
 		TeamID:               "direct-lifecycle-team",
 		Mode:                 turn.ModeChat,
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})
@@ -542,9 +543,9 @@ func TestAdmittedStreamCallerContextEndingIsAStop(t *testing.T) {
 		SchemaVersion:        1,
 		TeamID:               "direct-lifecycle-team",
 		Mode:                 turn.ModeChat,
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})
@@ -581,5 +582,5 @@ func TestAdmittedStreamCallerContextEndingIsAStop(t *testing.T) {
 	if fixture.runtime.Finishes[0].Message != "" {
 		t.Fatalf("finish message = %q, want none for a stop", fixture.runtime.Finishes[0].Message)
 	}
-	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted, "")
+	assertDirectLifecycle(t, fixture.lifecycles, agenttest.LifecycleRunID, lifecycle.StatusAborted, "")
 }

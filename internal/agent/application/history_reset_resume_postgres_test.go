@@ -54,6 +54,7 @@ func (h wsStepHistoryHarness) startProcess(t *testing.T) resumeProcess {
 	service.resumeSecret = "history-reset-resume"
 	service.teamScopes = runreq.SingleTeam(team.DefaultTeamID)
 	service.queries = resumeLedgerQueries{noDecisionQueries: service.queries.(noDecisionQueries), db: dbsqlc.New(h.pool)}
+	rewireComponents(service)
 	return resumeProcess{manager: manager, service: service}
 }
 

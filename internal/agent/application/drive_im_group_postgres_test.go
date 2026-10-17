@@ -74,8 +74,8 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 		t.Skip("PostgreSQL integration")
 	}
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	db := messagepkg.NewService(nil, postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool)))
 	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 
@@ -115,13 +115,14 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 	fixture, recorder := newDriveRequestFixture(t)
 	withDriveRequestRuntime(t, fixture)
 	fixture.service.messageService = &pgContextMessages{db: db, sessionID: sessionID}
+	rewireComponents(fixture.service)
 	handle, err := fixture.service.StartTurn(ctx, turn.StartTurnCommand{
 		SchemaVersion:           1,
 		TeamID:                  "drive-request-team",
 		Mode:                    turn.ModeChat,
-		BotID:                   lifecycleTestBotID,
-		ChatID:                  lifecycleTestBotID,
-		ThreadID:                lifecycleTestSessionID,
+		BotID:                   agenttest.LifecycleBotID,
+		ChatID:                  agenttest.LifecycleBotID,
+		ThreadID:                agenttest.LifecycleSessionID,
 		Query:                   "@memoh and who signs it off?",
 		UserVisibleText:         "@memoh and who signs it off?",
 		ExternalMessageID:       "m4",

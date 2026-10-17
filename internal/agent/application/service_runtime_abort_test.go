@@ -6,145 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
-
-type abortLifecycleQueries struct {
-	dbstore.Queries
-	mu            sync.Mutex
-	existing      *sqlc.GetContextLifecycleByRunIDRow
-	existingAfter int
-	getCalls      int
-	assistantID   pgtype.UUID
-	metadata      []byte
-	metadataErr   error
-	sessionRun    sqlc.SessionRun
-	sessionRunErr error
-	pending       bool
-	pendingReads  int
-	pendingUntil  int
-	upserts       []sqlc.UpsertAbortedContextLifecycleParams
-	upsertErr     error
-	upsertCh      chan struct{}
-}
-
-func (*abortLifecycleQueries) CreateContextLifecycle(
-	context.Context,
-	sqlc.CreateContextLifecycleParams,
-) (sqlc.CreateContextLifecycleRow, error) {
-	return sqlc.CreateContextLifecycleRow{}, errors.New("unexpected lifecycle create")
-}
-
-func (q *abortLifecycleQueries) GetContextLifecycleByRunID(
-	context.Context,
-	pgtype.UUID,
-) (sqlc.GetContextLifecycleByRunIDRow, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.getCalls++
-	if q.existing == nil || q.existingAfter > 0 && q.getCalls < q.existingAfter {
-		return sqlc.GetContextLifecycleByRunIDRow{}, pgx.ErrNoRows
-	}
-	return *q.existing, nil
-}
-
-func (q *abortLifecycleQueries) GetLatestAssistantContextLifecycleMetadataByRunID(
-	context.Context,
-	pgtype.UUID,
-) ([]byte, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.metadataErr != nil {
-		return nil, q.metadataErr
-	}
-	if q.metadata == nil {
-		return nil, pgx.ErrNoRows
-	}
-	return append([]byte(nil), q.metadata...), nil
-}
-
-func (q *abortLifecycleQueries) GetLatestAssistantContextLifecycleByRunID(
-	context.Context,
-	pgtype.UUID,
-) (sqlc.GetLatestAssistantContextLifecycleByRunIDRow, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.metadataErr != nil {
-		return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{}, q.metadataErr
-	}
-	if q.metadata == nil {
-		return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{}, pgx.ErrNoRows
-	}
-	return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{
-		ID:       q.assistantID,
-		Metadata: append([]byte(nil), q.metadata...),
-	}, nil
-}
-
-func (*abortLifecycleQueries) UpdateAbortedContextLifecycleSnapshot(
-	context.Context,
-	sqlc.UpdateAbortedContextLifecycleSnapshotParams,
-) (sqlc.UpdateAbortedContextLifecycleSnapshotRow, error) {
-	return sqlc.UpdateAbortedContextLifecycleSnapshotRow{}, errors.New("unexpected lifecycle update")
-}
-
-func (q *abortLifecycleQueries) UpsertAbortedContextLifecycle(
-	_ context.Context,
-	arg sqlc.UpsertAbortedContextLifecycleParams,
-) (sqlc.UpsertAbortedContextLifecycleRow, error) {
-	q.mu.Lock()
-	q.upserts = append(q.upserts, arg)
-	q.mu.Unlock()
-	if q.upsertCh != nil {
-		select {
-		case q.upsertCh <- struct{}{}:
-		default:
-		}
-	}
-	return sqlc.UpsertAbortedContextLifecycleRow{}, q.upsertErr
-}
-
-func (q *abortLifecycleQueries) GetSessionRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.sessionRun, q.sessionRunErr
-}
-
-func (q *abortLifecycleQueries) ListPendingToolApprovalsByRun(
-	context.Context,
-	pgtype.UUID,
-) ([]sqlc.ToolApprovalRequest, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.pendingReads++
-	if !q.pending || q.pendingUntil > 0 && q.pendingReads > q.pendingUntil {
-		return nil, nil
-	}
-	return []sqlc.ToolApprovalRequest{{}}, nil
-}
-
-func (*abortLifecycleQueries) ListPendingUserInputsByRun(
-	context.Context,
-	pgtype.UUID,
-) ([]sqlc.UserInputRequest, error) {
-	return nil, nil
-}
-
-func (q *abortLifecycleQueries) recordedUpserts() []sqlc.UpsertAbortedContextLifecycleParams {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return append([]sqlc.UpsertAbortedContextLifecycleParams(nil), q.upserts...)
-}
 
 type recordingAbortRuntime struct {
 	applied bool
@@ -153,7 +23,7 @@ type recordingAbortRuntime struct {
 
 func TestSetSessionRuntimeConfiguresAbortRuntime(t *testing.T) {
 	manager := &sessionruntime.Manager{}
-	service := &Service{}
+	service := wireComponents(&Service{})
 
 	service.bindSessionRuntime(manager)
 
@@ -173,7 +43,7 @@ func (r *recordingAbortRuntime) AbortControl(
 }
 
 func TestAbortRuntimeRunReconcilesAssistantLifecycleWithoutChangingAck(t *testing.T) {
-	snapshot := lifecycleTestRunConfig().ContextLifecycle
+	snapshot := agenttest.LifecycleRunConfig().ContextLifecycle
 	want, ok := snapshot.Snapshot()
 	if !ok {
 		t.Fatal("test lifecycle snapshot is unavailable")
@@ -199,28 +69,24 @@ func TestAbortRuntimeRunReconcilesAssistantLifecycleWithoutChangingAck(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			queries := newAbortedLifecycleQueries(t)
-			queries.assistantID = flowTestUUID(assistantMessageID)
-			queries.metadata = metadata
-			queries.upsertErr = tt.upsertErr
-			service := &Service{
-				queries:           queries,
-				contextLifecycles: queries,
-				abortRuntime:      &recordingAbortRuntime{applied: true},
-			}
+			queries := agenttest.NewAbortedLifecycleQueries(t)
+			queries.AssistantID = flowTestUUID(assistantMessageID)
+			queries.Metadata = metadata
+			queries.UpsertErr = tt.upsertErr
+			service := newAbortService(queries)
 
 			applied, err := service.AbortRuntimeRun(
 				context.Background(),
-				lifecycleTestBotID,
-				lifecycleTestSessionID,
-				lifecycleTestRunID,
+				agenttest.LifecycleBotID,
+				agenttest.LifecycleSessionID,
+				agenttest.LifecycleRunID,
 				"abort-control-1",
 			)
 			if err != nil || !applied {
 				t.Fatalf("AbortRuntimeRun() = (%t, %v), want (true, nil)", applied, err)
 			}
-			waitForAbortedLifecycleUpsert(t, queries)
-			upserts := queries.recordedUpserts()
+			queries.WaitForUpsert(t)
+			upserts := queries.RecordedUpserts()
 			if len(upserts) != 1 {
 				t.Fatalf("aborted upserts = %#v, want one recovered snapshot", upserts)
 			}
@@ -240,139 +106,104 @@ func TestAbortRuntimeRunReconcilesAssistantLifecycleWithoutChangingAck(t *testin
 }
 
 func TestAbortRuntimeRunMalformedAssistantLifecycleFallsBackToMinimal(t *testing.T) {
-	queries := newAbortedLifecycleQueries(t)
-	queries.assistantID = flowTestUUID("77777777-7777-4777-8777-777777777777")
-	queries.metadata = []byte(`{"context_lifecycle":"invalid"}`)
-	service := &Service{
-		queries:           queries,
-		contextLifecycles: queries,
-		abortRuntime:      &recordingAbortRuntime{applied: true},
-	}
+	queries := agenttest.NewAbortedLifecycleQueries(t)
+	queries.AssistantID = flowTestUUID("77777777-7777-4777-8777-777777777777")
+	queries.Metadata = []byte(`{"context_lifecycle":"invalid"}`)
+	service := newAbortService(queries)
 
 	applied, err := service.AbortRuntimeRun(
 		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-		lifecycleTestRunID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
+		agenttest.LifecycleRunID,
 		"abort-malformed-metadata",
 	)
 	if err != nil || !applied {
 		t.Fatalf("AbortRuntimeRun() = (%t, %v), want (true, nil)", applied, err)
 	}
-	waitForAbortedLifecycleUpsert(t, queries)
-	upserts := queries.recordedUpserts()
-	minimal, marshalErr := json.Marshal(minimalContextLifecycleSnapshot())
+	queries.WaitForUpsert(t)
+	upserts := queries.RecordedUpserts()
+	minimal, marshalErr := json.Marshal(lifecycle.MinimalSnapshot())
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
 	if len(upserts) != 1 || !bytes.Equal(upserts[0].Snapshot, minimal) {
 		t.Fatalf("aborted upserts = %#v, want minimal fallback %s", upserts, minimal)
 	}
-	if got := service.contextLifecyclePersistenceErrors.Load(); got != 0 {
+	if got := service.lifecycle.PersistenceErrors(); got != 0 {
 		t.Fatalf("persistence failure count = %d, want 0 for non-recoverable metadata", got)
 	}
 }
 
 func TestAbortRuntimeRunFallsBackToMinimalAfterPendingDecisionGrace(t *testing.T) {
-	queries := newAbortedLifecycleQueries(t)
-	queries.pending = true
-	queries.pendingUntil = 2
-	service := &Service{
-		queries:           queries,
-		contextLifecycles: queries,
-		abortRuntime:      &recordingAbortRuntime{applied: true},
-	}
+	queries := agenttest.NewAbortedLifecycleQueries(t)
+	queries.Pending = true
+	queries.PendingUntil = 2
+	service := newAbortService(queries)
 
 	applied, err := service.AbortRuntimeRun(
 		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-		lifecycleTestRunID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
+		agenttest.LifecycleRunID,
 		"abort-before-context",
 	)
 	if err != nil || !applied {
 		t.Fatalf("AbortRuntimeRun() = (%t, %v), want (true, nil)", applied, err)
 	}
-	waitForAbortedLifecycleUpsert(t, queries)
-	upserts := queries.recordedUpserts()
+	queries.WaitForUpsert(t)
+	upserts := queries.RecordedUpserts()
 	if len(upserts) != 1 {
 		t.Fatalf("aborted upserts = %d, want 1", len(upserts))
 	}
-	minimal, err := json.Marshal(minimalContextLifecycleSnapshot())
+	minimal, err := json.Marshal(lifecycle.MinimalSnapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(upserts[0].Snapshot, minimal) {
 		t.Fatalf("fallback snapshot = %s, want %s", upserts[0].Snapshot, minimal)
 	}
-	queries.mu.Lock()
-	pendingReads := queries.pendingReads
-	queries.mu.Unlock()
+	pendingReads := queries.PendingReads()
 	if pendingReads < 3 {
 		t.Fatalf("pending decision reads = %d, want recheck after pending cleared", pendingReads)
 	}
 }
 
 func TestAbortRuntimeRunPrefersExistingAuthoritativeSnapshot(t *testing.T) {
-	queries := newAbortedLifecycleQueries(t)
-	queries.existing = &sqlc.GetContextLifecycleByRunIDRow{Snapshot: []byte(`{"version":7}`)}
-	service := &Service{
-		queries:           queries,
-		contextLifecycles: queries,
-		abortRuntime:      &recordingAbortRuntime{applied: true},
-	}
+	queries := agenttest.NewAbortedLifecycleQueries(t)
+	queries.Existing = &sqlc.GetContextLifecycleByRunIDRow{Snapshot: []byte(`{"version":7}`)}
+	service := newAbortService(queries)
 
 	_, err := service.AbortRuntimeRun(
 		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-		lifecycleTestRunID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
+		agenttest.LifecycleRunID,
 		"abort-existing",
 	)
 	if err != nil {
 		t.Fatalf("AbortRuntimeRun() error = %v", err)
 	}
-	waitForAbortedLifecycleUpsert(t, queries)
-	upserts := queries.recordedUpserts()
+	queries.WaitForUpsert(t)
+	upserts := queries.RecordedUpserts()
 	if len(upserts) != 1 || string(upserts[0].Snapshot) != `{"version":7}` {
 		t.Fatalf("aborted upserts = %#v, want existing authoritative snapshot", upserts)
-	}
-}
-
-func newAbortedLifecycleQueries(t *testing.T) *abortLifecycleQueries {
-	t.Helper()
-	runID, botID, sessionID, err := parseContextLifecycleIDs(
-		lifecycleTestRunID,
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &abortLifecycleQueries{
-		sessionRun: sqlc.SessionRun{
-			RunID: runID, BotID: botID, SessionID: sessionID, State: "aborted",
-		},
-		upsertCh: make(chan struct{}, 1),
-	}
-}
-
-func waitForAbortedLifecycleUpsert(t *testing.T, queries *abortLifecycleQueries) {
-	t.Helper()
-	select {
-	case <-queries.upsertCh:
-	case <-time.After(2 * time.Second):
-		t.Fatal("aborted lifecycle reconciliation did not write")
 	}
 }
 
 func waitForLifecycleFailureCount(t *testing.T, service *Service, want uint64) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
-	for service.contextLifecyclePersistenceErrors.Load() != want && time.Now().Before(deadline) {
+	for service.lifecycle.PersistenceErrors() != want && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if got := service.contextLifecyclePersistenceErrors.Load(); got != want {
+	if got := service.lifecycle.PersistenceErrors(); got != want {
 		t.Fatalf("persistence failure count = %d, want %d", got, want)
 	}
+}
+
+func newAbortService(queries *agenttest.AbortedLifecycleQueries) *Service {
+	service := wireComponents(&Service{queries: queries, abortRuntime: &recordingAbortRuntime{applied: true}})
+	useLifecycleStore(service, queries)
+	return service
 }

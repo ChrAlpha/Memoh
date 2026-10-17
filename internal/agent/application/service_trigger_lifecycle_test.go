@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -166,9 +167,9 @@ func hasLifecycleMutation(snapshot contextfrag.LifecycleSnapshot, kind contextfr
 
 func triggerDirectSchedule(t *testing.T, service *Service) (schedule.TriggerResult, error) {
 	t.Helper()
-	return service.TriggerSchedule(context.Background(), lifecycleTestBotID, schedule.TriggerPayload{
+	return service.TriggerSchedule(context.Background(), agenttest.LifecycleBotID, schedule.TriggerPayload{
 		FireID:      "test-fire",
-		SessionID:   lifecycleTestSessionID,
+		SessionID:   agenttest.LifecycleSessionID,
 		Command:     directLifecyclePrompt,
 		OwnerUserID: "user-1",
 	}, "")
@@ -177,6 +178,7 @@ func triggerDirectSchedule(t *testing.T, service *Service) (schedule.TriggerResu
 func TestTriggerScheduleResolveFailurePersistsAdmittedMinimalLifecycle(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	fixture.service.settingsService = nil
+	rewireComponents(fixture.service)
 
 	_, err := triggerDirectSchedule(t, fixture.service)
 	if err == nil {
@@ -187,8 +189,8 @@ func TestTriggerScheduleResolveFailurePersistsAdmittedMinimalLifecycle(t *testin
 		t.Fatalf("lifecycle creates = %d, want 1", len(creates))
 	}
 	row := creates[0]
-	if runreq.PGUUIDString(row.RunID) != lifecycleTestRunID || row.Status != contextLifecycleStatusFailedProvider {
-		t.Fatalf("lifecycle terminal = (run %q, status %q), want admitted run %q failed_provider", runreq.PGUUIDString(row.RunID), row.Status, lifecycleTestRunID)
+	if runreq.PGUUIDString(row.RunID) != agenttest.LifecycleRunID || row.Status != lifecycle.StatusFailedProvider {
+		t.Fatalf("lifecycle terminal = (run %q, status %q), want admitted run %q failed_provider", runreq.PGUUIDString(row.RunID), row.Status, agenttest.LifecycleRunID)
 	}
 	var snapshot contextfrag.LifecycleSnapshot
 	if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
@@ -213,7 +215,7 @@ func TestTriggerScheduleProviderFailurePersistsFailedProviderLifecycle(t *testin
 	if err == nil {
 		t.Fatal("TriggerSchedule() error = nil, want provider failure")
 	}
-	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider, "")
+	assertDirectLifecycle(t, fixture.lifecycles, agenttest.LifecycleRunID, lifecycle.StatusFailedProvider, "")
 	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusErrored {
 		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.Finishes)
 	}
@@ -242,8 +244,8 @@ func TestTriggerScheduleSendsARequestLargerThanTheWindowAsIs(t *testing.T) {
 	if len(fixture.messages.Persisted) == 0 {
 		t.Fatal("no history written: the turn must be stored like any completed one")
 	}
-	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted, "message-id")
-	snapshot := assertDeferredLifecycleRow(t, fixture.lifecycles.creates(), lifecycleTestRunID, contextLifecycleStatusCompleted, "")
+	assertDirectLifecycle(t, fixture.lifecycles, agenttest.LifecycleRunID, lifecycle.StatusCompleted, "message-id")
+	snapshot := assertDeferredLifecycleRow(t, fixture.lifecycles.creates(), agenttest.LifecycleRunID, lifecycle.StatusCompleted, "")
 	if !contextview.PlanOverflows(snapshot.BudgetPlan) || snapshot.BudgetPlan.Window != 1 {
 		t.Fatalf("budget plan = %#v, want the window-1 plan recorded as overflowing", snapshot.BudgetPlan)
 	}
@@ -285,15 +287,15 @@ func TestTriggerScheduleContextViewFallbackPersistsFallbackAndReachesProvider(t 
 	assertDirectLifecycle(
 		t,
 		fixture.lifecycles,
-		lifecycleTestRunID,
-		contextLifecycleStatusFallback,
+		agenttest.LifecycleRunID,
+		lifecycle.StatusFallback,
 		"message-id",
 	)
 	snapshot := assertDeferredLifecycleRow(
 		t,
 		fixture.lifecycles.creates(),
-		lifecycleTestRunID,
-		contextLifecycleStatusFallback,
+		agenttest.LifecycleRunID,
+		lifecycle.StatusFallback,
 		"",
 	)
 	if !hasLifecycleMutation(snapshot, contextfrag.MutationContextViewFallback) {
@@ -314,7 +316,7 @@ func TestTriggerScheduleLifecycleStoreFailureDoesNotFailSuccessfulTrigger(t *tes
 	if result.Status != "ok" {
 		t.Fatalf("TriggerSchedule() status = %q, want ok", result.Status)
 	}
-	if got := fixture.service.contextLifecyclePersistenceErrors.Load(); got == 0 {
+	if got := fixture.service.lifecycle.PersistenceErrors(); got == 0 {
 		t.Fatal("lifecycle persistence error count = 0, want at least one recorded failure")
 	}
 	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusCompleted {
@@ -330,7 +332,7 @@ func TestTriggerScheduleACPPersistsCompletedLifecycle(t *testing.T) {
 
 	result, err := runScheduledACP(context.Background(), service, schedule.TriggerPayload{
 		FireID:          "test-fire",
-		SessionID:       lifecycleTestSessionID,
+		SessionID:       agenttest.LifecycleSessionID,
 		Command:         "run scheduled task",
 		OwnerUserID:     "user-1",
 		RuntimeModelID:  "test-model",
@@ -342,10 +344,10 @@ func TestTriggerScheduleACPPersistsCompletedLifecycle(t *testing.T) {
 	if result.Status != "ok" || result.Text != "done" {
 		t.Fatalf("scheduled ACP result = %#v, want completed output", result)
 	}
-	if pool.input.RunID != lifecycleTestRunID || pool.input.SessionID != lifecycleTestSessionID {
-		t.Fatalf("ACP prompt identity = (run %q, session %q), want (%q, %q)", pool.input.RunID, pool.input.SessionID, lifecycleTestRunID, lifecycleTestSessionID)
+	if pool.input.RunID != agenttest.LifecycleRunID || pool.input.SessionID != agenttest.LifecycleSessionID {
+		t.Fatalf("ACP prompt identity = (run %q, session %q), want (%q, %q)", pool.input.RunID, pool.input.SessionID, agenttest.LifecycleRunID, agenttest.LifecycleSessionID)
 	}
-	row, snapshot := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted)
+	row, snapshot := requireACPLifecycle(t, lifecycles, agenttest.LifecycleRunID, lifecycle.StatusCompleted)
 	if row.ErrorCode.Valid {
 		t.Fatalf("completed lifecycle error code = %#v, want none", row.ErrorCode)
 	}
@@ -377,14 +379,14 @@ func TestTriggerScheduleRuntimeRejectsIncompleteTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := runScheduledACP(ctx, service, schedule.TriggerPayload{FireID: "test-fire", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "run scheduled task", OwnerUserID: "user-1"})
+	_, err := runScheduledACP(ctx, service, schedule.TriggerPayload{FireID: "test-fire", ID: "schedule-1", SessionID: agenttest.LifecycleSessionID, Command: "run scheduled task", OwnerUserID: "user-1"})
 	if err == nil {
 		t.Fatal("scheduled run error = nil, want incomplete-turn failure")
 	}
 	if driver.input.CanRequestUserInput {
 		t.Fatal("scheduled external runtime was marked interactive")
 	}
-	_, snapshot := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted)
+	_, snapshot := requireACPLifecycle(t, lifecycles, agenttest.LifecycleRunID, lifecycle.StatusAborted)
 	if snapshot.AssistantMessageID != "message-id" {
 		t.Fatalf("aborted lifecycle assistant message ID = %q, want message-id", snapshot.AssistantMessageID)
 	}

@@ -43,12 +43,12 @@ func newDeferredSteerTestService(t *testing.T, backends ...sessionruntime.Backen
 	if err := manager.EnableSteer(context.Background(), handle); err != nil {
 		t.Fatal(err)
 	}
-	service := &Service{
+	service := wireComponents(&Service{
 		sessionManager: manager,
 		messageService: &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}},
 		queries:        nilQueries{},
 		queue:          &memoryQueuedInputs{},
-	}
+	})
 	return service, handle
 }
 

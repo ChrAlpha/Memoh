@@ -201,7 +201,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req runreq.ChatRequest
 	opts = opts.withReasoningTimingMetadata(messages)
 	// Check bot setting for full tool result persistence.
 	pruneToolResults := true
-	if botSettings, err := s.loadBotSettings(ctx, req.BotID); err == nil {
+	if botSettings, err := s.botenv.LoadSettings(ctx, req.BotID); err == nil {
 		pruneToolResults = !botSettings.PersistFullToolResults
 	}
 	meta := buildRouteMetadata(req)
@@ -605,12 +605,12 @@ func (s *Service) resolvePersistSenderIDs(ctx context.Context, req runreq.ChatRe
 	userID := strings.TrimSpace(req.UserID)
 
 	senderChannelIdentityID := ""
-	if s.isExistingChannelIdentityID(ctx, channelIdentityID) {
+	if s.botenv.IsExistingChannelIdentity(ctx, channelIdentityID) {
 		senderChannelIdentityID = channelIdentityID
 	}
 
 	senderUserID := ""
-	if s.isExistingUserID(ctx, userID) {
+	if s.botenv.IsExistingUser(ctx, userID) {
 		senderUserID = userID
 	}
 	return senderChannelIdentityID, senderUserID

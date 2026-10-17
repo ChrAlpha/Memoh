@@ -12,9 +12,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -80,7 +82,7 @@ func (r *scriptedCompactionRunner) callCount() int {
 // stagedHistory serves one set of rows until a compaction "finishes", then
 // another.
 type stagedHistory struct {
-	assembleMessageService
+	agenttest.AssembleMessages
 	mu        sync.Mutex
 	compacted bool
 	big       []messagepkg.Message
@@ -100,8 +102,8 @@ func (s *stagedHistory) ListActiveAfterCompactionBySessionWithinBytes(ctx contex
 		rows = s.small
 	}
 	s.mu.Unlock()
-	s.after = rows
-	return s.assembleMessageService.ListActiveAfterCompactionBySessionWithinBytes(ctx, sessionID, maxBytes)
+	s.After = rows
+	return s.AssembleMessages.ListActiveAfterCompactionBySessionWithinBytes(ctx, sessionID, maxBytes)
 }
 
 // noFrontierQueries is the controller store for a session with no compaction
@@ -144,13 +146,15 @@ func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedC
 	t.Helper()
 	service, _ := newControllerPolicyService(t, nil)
 	service.queries = noFrontierQueries{service.queries.(*controllerQueries)}
+	rewireComponents(service)
 	runner := &scriptedCompactionRunner{status: status}
 	history := &stagedHistory{
-		big:   []messagepkg.Message{assembleText(t, "big", "user", strings.Repeat("x", 4000), assembleBase)},
-		small: []messagepkg.Message{assembleText(t, "small", "user", "<summary>short</summary>", assembleBase)},
+		big:   []messagepkg.Message{agenttest.AssembleText(t, "big", "user", strings.Repeat("x", 4000), agenttest.AssembleBase)},
+		small: []messagepkg.Message{agenttest.AssembleText(t, "small", "user", "<summary>short</summary>", agenttest.AssembleBase)},
 	}
 	service.compactionService = runner
 	service.messageService = history
+	rewireComponents(service)
 	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000453",
 		ThreadID: "00000000-0000-0000-0000-000000000454",
@@ -159,16 +163,16 @@ func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedC
 	return service, runner, history, req
 }
 
-func assembleForSyncTest(t *testing.T, service *Service, req runreq.ChatRequest) assembledContext {
+func assembleForSyncTest(t *testing.T, service *Service, req runreq.ChatRequest) transcript.Assembled {
 	t.Helper()
-	assembled, err := service.assembleContext(context.Background(), chatContextRequest(contextPurposeRun, req, syncTestBudget))
+	assembled, err := service.transcript.Assemble(context.Background(), transcript.ForChat(transcript.PurposeRun, req, syncTestBudget))
 	if err != nil {
 		t.Fatalf("assembleContext: %v", err)
 	}
 	return assembled
 }
 
-func recordTokens(assembled assembledContext) int { return assembled.CompactableTokens }
+func recordTokens(assembled transcript.Assembled) int { return assembled.CompactableTokens }
 
 func TestCompactBeforeTurnCompactsOnceAtTheHardShareAndReassembles(t *testing.T) {
 	t.Parallel()
@@ -187,7 +191,7 @@ func TestCompactBeforeTurnCompactsOnceAtTheHardShareAndReassembles(t *testing.T)
 	if runner.callCount() != 1 {
 		t.Fatalf("compaction ran %d times, want once", runner.callCount())
 	}
-	assertTexts(t, after.Messages, "<summary>short</summary>")
+	agenttest.AssertTexts(t, after.Messages, "<summary>short</summary>")
 }
 
 func TestCompactBeforeTurnLeavesContextBelowTheHardShareAlone(t *testing.T) {
@@ -196,14 +200,14 @@ func TestCompactBeforeTurnLeavesContextBelowTheHardShareAlone(t *testing.T) {
 	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
 	history.big = history.small
 	before := assembleForSyncTest(t, service, req)
-	loads := history.afterCalls
+	loads := history.AfterCalls
 
 	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 	if err != nil {
 		t.Fatalf("compactBeforeTurn: %v", err)
 	}
-	if runner.callCount() != 0 || history.afterCalls != loads || len(after.Messages) != len(before.Messages) {
-		t.Fatalf("calls=%d loads=%d->%d: a context below the hard share must be left alone", runner.callCount(), loads, history.afterCalls)
+	if runner.callCount() != 0 || history.AfterCalls != loads || len(after.Messages) != len(before.Messages) {
+		t.Fatalf("calls=%d loads=%d->%d: a context below the hard share must be left alone", runner.callCount(), loads, history.AfterCalls)
 	}
 }
 
@@ -214,10 +218,11 @@ func TestCompactBeforeTurnCountsTheWholeRequest(t *testing.T) {
 	t.Parallel()
 
 	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
-	history.big = []messagepkg.Message{assembleText(t, "rows", "user", strings.Repeat("r", 600), assembleBase)}
+	history.big = []messagepkg.Message{agenttest.AssembleText(t, "rows", "user", strings.Repeat("r", 600), agenttest.AssembleBase)}
 	runner.onRun = history.markCompacted
 	reads := 0
 	service.queries = lastRunPlanQueries{noFrontierQueries: service.queries.(noFrontierQueries), system: 400, tools: 250, reads: &reads}
+	rewireComponents(service)
 	before := assembleForSyncTest(t, service, req)
 	if got := compactionNeed(recordTokens(before), syncTestBudget, 0); got == compactionSync {
 		t.Fatalf("fixture rows alone (%d) already reach the hard share", recordTokens(before))
@@ -232,7 +237,7 @@ func TestCompactBeforeTurnCountsTheWholeRequest(t *testing.T) {
 	if runner.callCount() != 1 {
 		t.Fatalf("compaction ran %d times, want once: rows %d plus the fixed part cross the hard share", runner.callCount(), recordTokens(before))
 	}
-	assertTexts(t, after.Messages, "<summary>short</summary>")
+	agenttest.AssertTexts(t, after.Messages, "<summary>short</summary>")
 }
 
 // Compaction can only take raw rows. A request over the hard share without
@@ -245,6 +250,7 @@ func TestCompactBeforeTurnWithoutRawRowsSendsTheRequestAsIs(t *testing.T) {
 	history.big = nil
 	reads := 0
 	service.queries = lastRunPlanQueries{noFrontierQueries: service.queries.(noFrontierQueries), system: 900, tools: 100, reads: &reads}
+	rewireComponents(service)
 	before := assembleForSyncTest(t, service, req)
 
 	if _, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req)); err != nil {
@@ -277,7 +283,7 @@ func TestCompactBeforeTurnSendsTheContextAsIsUnlessCompactionSucceeded(t *testin
 			// The rows would shrink if the turn reassembled after a failed pass.
 			runner.onRun = history.markCompacted
 			before := assembleForSyncTest(t, service, req)
-			loads := history.afterCalls
+			loads := history.AfterCalls
 
 			after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, syncTestEstimate(service, req))
 			if err != nil {
@@ -286,11 +292,11 @@ func TestCompactBeforeTurnSendsTheContextAsIsUnlessCompactionSucceeded(t *testin
 			if runner.callCount() != 1 {
 				t.Fatalf("compaction ran %d times, want once", runner.callCount())
 			}
-			if history.afterCalls != loads {
+			if history.AfterCalls != loads {
 				t.Fatalf("history was reassembled after a pass that produced no summary")
 			}
 			if len(after.Messages) != 1 || strings.Contains(after.Messages[0].TextContent(), "summary") {
-				t.Fatalf("messages = %q, want the context as assembled", messageTexts(after.Messages))
+				t.Fatalf("messages = %q, want the context as assembled", agenttest.MessageTexts(after.Messages))
 			}
 		})
 	}
@@ -302,7 +308,7 @@ func TestCompactBeforeTurnCompactsATruncatedLoad(t *testing.T) {
 	t.Parallel()
 
 	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
-	history.big = []messagepkg.Message{assembleText(t, "tail", "user", "short tail", assembleBase)}
+	history.big = []messagepkg.Message{agenttest.AssembleText(t, "tail", "user", "short tail", agenttest.AssembleBase)}
 	runner.onRun = history.markCompacted
 	before := assembleForSyncTest(t, service, req)
 	before.Truncated = true
@@ -314,7 +320,7 @@ func TestCompactBeforeTurnCompactsATruncatedLoad(t *testing.T) {
 	if runner.callCount() != 1 {
 		t.Fatalf("compaction ran %d times, want once for a truncated load", runner.callCount())
 	}
-	assertTexts(t, after.Messages, "<summary>short</summary>")
+	agenttest.AssertTexts(t, after.Messages, "<summary>short</summary>")
 }
 
 // A compaction already running is waited for. Its outcome is read from the
@@ -328,7 +334,7 @@ func TestCompactBeforeTurnWaitsForARunningCompactionAndJudgesAgain(t *testing.T)
 
 	running := service.enterSessionCompaction(req.BotID, req.ThreadID)
 	type outcome struct {
-		assembled assembledContext
+		assembled transcript.Assembled
 		err       error
 	}
 	done := make(chan outcome, 1)
@@ -350,7 +356,7 @@ func TestCompactBeforeTurnWaitsForARunningCompactionAndJudgesAgain(t *testing.T)
 		if got.err != nil {
 			t.Fatalf("compactBeforeTurn: %v", got.err)
 		}
-		assertTexts(t, got.assembled.Messages, "<summary>short</summary>")
+		agenttest.AssertTexts(t, got.assembled.Messages, "<summary>short</summary>")
 	case <-time.After(2 * time.Second):
 		t.Fatal("the turn did not resume after the compaction finished")
 	}
@@ -364,7 +370,7 @@ func TestCompactBeforeTurnWaitsForARunningCompactionAndJudgesAgain(t *testing.T)
 func TestAwaitSessionCompactionStepsAsideForTheRunsOwnReader(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{}
+	service := wireComponents(&Service{})
 	releaseRun := service.DeferSessionCompaction("bot-1", "session-1", "run-1")
 	defer releaseRun()
 	queued := make(chan struct{})
@@ -388,7 +394,7 @@ func TestAwaitSessionCompactionStepsAsideForTheRunsOwnReader(t *testing.T) {
 func TestAwaitSessionCompactionReportsWhetherItWaited(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{}
+	service := wireComponents(&Service{})
 	if service.awaitSessionCompaction("bot-1", "session-1", "run-1") {
 		t.Fatal("reported a wait on an idle session")
 	}

@@ -7,15 +7,15 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/textutil"
 )
 
 const (
-	defaultMemoryQueryRecentMessages = 4
-	defaultMemoryQueryMaxBytes       = 1600
-	defaultMemoryQueryMaxLines       = 40
-	defaultMemoryQueryMessageRunes   = 280
+	defaultMemoryQueryMaxBytes     = 1600
+	defaultMemoryQueryMaxLines     = 40
+	defaultMemoryQueryMessageRunes = 280
 )
 
 type memoryQuery struct {
@@ -34,7 +34,7 @@ type memoryQueryBuilder struct {
 
 func defaultMemoryQueryBuilder() memoryQueryBuilder {
 	return memoryQueryBuilder{
-		MaxRecentMessages: defaultMemoryQueryRecentMessages,
+		MaxRecentMessages: transcript.MemoryQueryRecentMessages,
 		MaxBytes:          defaultMemoryQueryMaxBytes,
 		MaxLines:          defaultMemoryQueryMaxLines,
 		MaxMessageRunes:   defaultMemoryQueryMessageRunes,
@@ -50,7 +50,7 @@ func (s *Service) buildMemoryQuery(ctx context.Context, req runreq.ChatRequest) 
 	if s == nil || s.messageService == nil {
 		return builder.Build(req, nil)
 	}
-	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeMemoryQuery, req, 0))
+	assembled, err := s.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeMemoryQuery, req, 0))
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WarnContext(ctx, "memory query history load failed",
@@ -148,7 +148,7 @@ func (b memoryQueryBuilder) prune(text string) prunedMemoryQuery {
 
 func (b memoryQueryBuilder) withDefaults() memoryQueryBuilder {
 	if b.MaxRecentMessages <= 0 {
-		b.MaxRecentMessages = defaultMemoryQueryRecentMessages
+		b.MaxRecentMessages = transcript.MemoryQueryRecentMessages
 	}
 	if b.MaxBytes <= 0 {
 		b.MaxBytes = defaultMemoryQueryMaxBytes

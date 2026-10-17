@@ -49,13 +49,13 @@ func TestPrepareExternalForkAnswersRuntimeFailures(t *testing.T) {
 		{"missing dependency", &external.DependencyMissingError{DependencyID: "codex"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &Service{
+			svc := wireComponents(&Service{
 				queries: forkAnchorQueries{},
 				sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 					return session.Thread{ID: forkTestSessionID, BotID: forkTestBotID, BotAgentID: "agent-1", RuntimeType: session.RuntimeCodex}, nil
 				}},
 				externalDrivers: map[string]external.Driver{session.RuntimeCodex: failingForkDriver{err: tc.err}},
-			}
+			})
 			_, err := svc.PrepareExternalFork(context.Background(), forkTestBotID, forkTestSessionID, forkTestTurnID)
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("code = %q, want %q: %v", got, tc.code, err)

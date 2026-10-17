@@ -73,7 +73,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 	// pass through the hook again.
 	shouldRunHook := !req.UserMessagePersisted && !req.ReusePersistedUserMessage && spec.Replacement == nil
 	if shouldRunHook {
-		req, err = s.applyUserMessageHook(ctx, req)
+		req, err = s.botenv.ApplyUserMessageHook(ctx, req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return runPlan{}, err
@@ -129,7 +129,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec ru
 		Exec:       exec,
 		Req:        req,
 		IdleEffort: reasoningEffortForIdle(cfg),
-		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }
 
@@ -173,6 +173,6 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 		},
 		Req:        req,
 		IdleEffort: req.ReasoningEffort,
-		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }

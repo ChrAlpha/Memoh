@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/botenv"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -67,7 +68,7 @@ func (s *Service) loadMemoryContext(ctx context.Context, req runreq.ChatRequest)
 	}
 	cacheKey := s.memoryContextCacheKey(ctx, req, providerID, p, builtQuery.Query)
 
-	before, err := s.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
+	before, err := s.botenv.RunChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
 			"query":                 builtQuery.Query,
@@ -78,7 +79,7 @@ func (s *Service) loadMemoryContext(ctx context.Context, req runreq.ChatRequest)
 		}
 	})
 	if err != nil {
-		s.logHookWarn(hooks.EventBeforeMemorySearch, req.BotID, req.ThreadID, err)
+		s.botenv.LogHookWarn(hooks.EventBeforeMemorySearch, req.BotID, req.ThreadID, err)
 		if before.Decision == hooks.DecisionDeny {
 			return memoryContextLoad{Trace: memoryRecallTrace(cacheKey, builtQuery, nil, "bypass", "hook_denied")}
 		}
@@ -147,7 +148,7 @@ func (s *Service) memoryContextFromResult(ctx context.Context, req runreq.ChatRe
 	}
 	trace := memoryRecallTrace(cacheKey, builtQuery, result, cacheState, fallbackReason)
 
-	after, err := s.runChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
+	after, err := s.botenv.RunChatHook(ctx, req, hooks.EventAfterMemorySearch, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":                 "before_chat",
 			"query":                 builtQuery.Query,
@@ -164,7 +165,7 @@ func (s *Service) memoryContextFromResult(ctx context.Context, req runreq.ChatRe
 		}
 	})
 	if err != nil {
-		s.logHookWarn(hooks.EventAfterMemorySearch, req.BotID, req.ThreadID, err)
+		s.botenv.LogHookWarn(hooks.EventAfterMemorySearch, req.BotID, req.ThreadID, err)
 	}
 
 	load := materializeMemoryContext(contextText, after.AppendContext)
@@ -174,7 +175,7 @@ func (s *Service) memoryContextFromResult(ctx context.Context, req runreq.ChatRe
 
 func materializeMemoryContext(memoryText, hookText string) memoryContextLoad {
 	memoryText = strings.TrimSpace(memoryText)
-	hookText = formatServiceHookContext(hooks.EventAfterMemorySearch, hookText)
+	hookText = botenv.FormatHookContext(hooks.EventAfterMemorySearch, hookText)
 	combined := memoryText
 	if hookText != "" {
 		if combined != "" {
@@ -297,44 +298,44 @@ func (s *Service) writeMemory(ctx context.Context, req runreq.ChatRequest, botID
 		job.Annotate(ctx, slog.String("skipped", "no_provider"))
 		return nil
 	}
-	before, err := s.runChatHook(ctx, req, hooks.EventBeforeMemoryWrite, func(hreq *hooks.Request) {
+	before, err := s.botenv.RunChatHook(ctx, req, hooks.EventBeforeMemoryWrite, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":         "after_chat",
 			"message_count": len(memMsgs),
 		}
 	})
 	if err != nil {
-		s.logHookWarn(hooks.EventBeforeMemoryWrite, botID, req.ThreadID, err)
+		s.botenv.LogHookWarn(hooks.EventBeforeMemoryWrite, botID, req.ThreadID, err)
 		if before.Decision == hooks.DecisionDeny {
 			job.Annotate(ctx, slog.String("skipped", "hook_denied"))
 			return nil
 		}
 	}
-	_, tzLoc := s.resolveTimezone(ctx, req.BotID, req.UserID)
+	_, tzLoc := s.botenv.ResolveTimezone(ctx, req.BotID, req.UserID)
 	if err := p.OnAfterChat(ctx, memprovider.AfterChatRequest{
 		BotID:             botID,
 		Messages:          memMsgs,
 		UserID:            strings.TrimSpace(req.UserID),
 		ChannelIdentityID: strings.TrimSpace(req.SourceChannelIdentityID),
-		DisplayName:       s.resolveDisplayName(ctx, req),
+		DisplayName:       s.botenv.ResolveDisplayName(ctx, req),
 		TimezoneLocation:  tzLoc,
 		SkipFormation:     runtimekind.IsExternal(req.RuntimeType),
 	}); err != nil {
 		return errs.Wrap(err, "memory provider after chat")
 	}
-	_, _ = s.runChatHook(ctx, req, hooks.EventMemoryExtracted, func(hreq *hooks.Request) {
+	_, _ = s.botenv.RunChatHook(ctx, req, hooks.EventMemoryExtracted, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":         "after_chat",
 			"message_count": len(memMsgs),
 		}
 	})
-	if _, err := s.runChatHook(ctx, req, hooks.EventAfterMemoryWrite, func(hreq *hooks.Request) {
+	if _, err := s.botenv.RunChatHook(ctx, req, hooks.EventAfterMemoryWrite, func(hreq *hooks.Request) {
 		hreq.Memory = map[string]any{
 			"scope":         "after_chat",
 			"message_count": len(memMsgs),
 		}
 	}); err != nil {
-		s.logHookWarn(hooks.EventAfterMemoryWrite, botID, req.ThreadID, err)
+		s.botenv.LogHookWarn(hooks.EventAfterMemoryWrite, botID, req.ThreadID, err)
 	}
 	return nil
 }

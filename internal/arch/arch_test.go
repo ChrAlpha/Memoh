@@ -158,6 +158,11 @@ var applicationLayerDirs = []string{
 	"internal/agent/application",
 	"internal/agent/runreq",
 	"internal/agent/outcome",
+	"internal/agent/activeprompt",
+	"internal/agent/botenv",
+	"internal/agent/transcript",
+	"internal/agent/lifecycle",
+	"internal/agent/notify",
 	"internal/agent/agenttest",
 }
 

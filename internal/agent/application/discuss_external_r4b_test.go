@@ -44,6 +44,7 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 		t.Fatalf("fixture store = %T", proc.svc.queries)
 	}
 	proc.svc.queries = r4bDiscussStore{discussStore: store}
+	rewireComponents(proc.svc)
 	if _, err := env.pool.Exec(context.Background(), `
 		UPDATE bot_sessions SET runtime_type = 'acp_agent', runtime_metadata = $2 WHERE id = $1
 	`, env.sessionID, `{"runtime_owner_account_id":"`+env.ownerID+`"}`); err != nil {
@@ -62,6 +63,7 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 			}, nil
 		},
 	}
+	rewireComponents(proc.svc)
 	proc.svc.botPermissions = allowWorkspaceExecForBot(env.botID, env.ownerID)
 	return proc, pool
 }

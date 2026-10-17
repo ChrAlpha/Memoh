@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -45,10 +46,14 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 			outcome.LogRunResult(ctx, s.logger, terminal)
 		},
-		s.reconcileTerminalContextLifecycle,
+		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
+			s.lifecycle.ReconcileTerminal(ctx, terminal)
+		},
 		s.afterSessionTerminal,
 	))
-	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)
+	manager.SetTerminalReconciler(func(ctx context.Context) error {
+		return s.lifecycle.ReconcileTerminals(ctx)
+	})
 }
 
 // terminalFanout runs the terminal observers in the order given. The order is
@@ -183,15 +188,15 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 		case lifecycleCause == nil && ended.Status == sessionruntime.RunStatusErrored:
 			lifecycleCause = errors.New("run finished with an unspecified error")
 		}
-		minimal := minimalContextLifecycleSnapshot()
-		staged := s.stageContextLifecycleCandidate(
+		minimal := lifecycle.MinimalSnapshot()
+		staged := s.lifecycle.StageCandidate(
 			runCtx,
 			handle.RunID,
 			handle.BotID,
 			handle.SessionID,
 			&minimal,
 			lifecycleCause,
-			contextLifecycleCandidateMinimal,
+			lifecycle.CandidateMinimal,
 		)
 		ctx, cancel := context.WithTimeout(outcome.WithRunOutcomeInMode(writeCtx, handle.RunID, ended, mode), terminalWriteTimeout)
 		defer cancel()
@@ -199,7 +204,7 @@ func (s *Service) turnRunFinisher(ctx context.Context, admission sessionruntime.
 		switch {
 		case err == nil:
 			if !staged && (ended.Status != "" || ended.Cause != nil) {
-				s.EnsureTerminalContextLifecycle(
+				s.lifecycle.EnsureTerminal(
 					runCtx,
 					handle.RunID,
 					handle.BotID,
@@ -405,7 +410,7 @@ func (s *Service) AdmitSubagentRun(
 					status = sessionruntime.RunStatusErrored
 				}
 			}
-			s.persistContextLifecycleSnapshot(
+			s.lifecycle.PersistSnapshot(
 				runCtx,
 				admission.RunID,
 				botID,

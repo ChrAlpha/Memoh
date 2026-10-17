@@ -190,13 +190,13 @@ func newControllerPolicyService(t *testing.T, targetPercent *int) (*Service, *re
 		},
 	}
 	runner := &recordingCompactionRunner{}
-	service := &Service{
+	service := wireComponents(&Service{
 		logger:            slog.New(slog.DiscardHandler),
 		modelsService:     models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:           queries,
 		settingsService:   settings.NewService(slog.New(slog.DiscardHandler), queries, nil, nil),
 		compactionService: runner,
-	}
+	})
 	return service, runner
 }
 
@@ -323,7 +323,7 @@ func TestSyncBackstopTargetCapsAtSoftShare(t *testing.T) {
 func TestSetCompactionServicePreservesNil(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{}
+	service := wireComponents(&Service{})
 	service.compactionService = nil
 	if service.compactionService != nil {
 		t.Fatal("SetCompactionService(nil) stored a non-nil runner")

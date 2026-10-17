@@ -47,7 +47,7 @@ func TestAdmitTurnRunProjectsRequestUserTurn(t *testing.T) {
 	t.Parallel()
 
 	admitter := &fakeTurnAdmitter{}
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
 
 	cmd := turn.StartTurnCommand{
 		TeamID:                  "team-1",
@@ -101,7 +101,7 @@ func TestAdmitTurnRunRecordsTheRequesterAsInitiator(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			admitter := &fakeTurnAdmitter{}
-			svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
+			svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
 			cmd := turn.StartTurnCommand{
 				TeamID: "team-1", Mode: turn.ModeChat, BotID: "bot-1", ThreadID: "thread-1", Query: "hello",
 				ExternalMessageID: "ext-1", UserID: tc.userID, SourceChannelIdentityID: tc.channelIdentityID,

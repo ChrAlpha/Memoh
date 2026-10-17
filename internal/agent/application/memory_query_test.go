@@ -108,27 +108,27 @@ func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing
 	sessionID := "00000000-0000-0000-0000-00000000e715"
 	compactID := "00000000-0000-0000-0000-00000000c715"
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	prior := persistedHistoryMessage(t, "prior-user", "user", "prior visible context")
+	prior := agenttest.PersistedHistoryMessage(t, "prior-user", "user", "prior visible context")
 	prior.BotID = botID
 	prior.SessionID = sessionID
 	prior.CreatedAt = base.Add(10 * time.Minute)
-	cutoff := persistedHistoryMessage(t, "cutoff-user", "user", "edited-away request")
+	cutoff := agenttest.PersistedHistoryMessage(t, "cutoff-user", "user", "edited-away request")
 	cutoff.BotID = botID
 	cutoff.SessionID = sessionID
 	cutoff.CreatedAt = base.Add(20 * time.Minute)
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: &memoryQueryMessageService{messages: []messagepkg.Message{prior, cutoff}},
 		queries: &agenttest.RecordingCompactionLog{Logs: []sqlc.BotHistoryMessageCompact{{
-			ID:            mustPGUUID(t, compactID),
-			BotID:         mustPGUUID(t, botID),
-			SessionID:     mustPGUUID(t, sessionID),
+			ID:            agenttest.UUID(compactID),
+			BotID:         agenttest.UUID(botID),
+			SessionID:     agenttest.UUID(sessionID),
 			Status:        "ok",
 			Summary:       "edited-away compacted context",
 			AnchorStartMs: base.Add(15 * time.Minute).UnixMilli(),
 			AnchorEndMs:   cutoff.CreatedAt.UnixMilli(),
 		}}},
-	}
+	})
 	query := resolver.buildMemoryQuery(context.Background(), runreq.ChatRequest{
 		BotID:                        botID,
 		ThreadID:                     sessionID,

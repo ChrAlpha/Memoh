@@ -12,6 +12,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -39,12 +40,12 @@ func newStepCompactionFixture(t *testing.T, status string) (stepCompaction, *scr
 	t.Helper()
 	service, runner, history, req := newSyncCompactionFixture(t, status)
 	history.big = []messagepkg.Message{
-		assembleText(t, "old-step", "assistant", strings.Repeat("x", 4000), assembleBase),
-		assembleText(t, "request", "user", "the request", assembleBase.Add(time.Second)),
+		agenttest.AssembleText(t, "old-step", "assistant", strings.Repeat("x", 4000), agenttest.AssembleBase),
+		agenttest.AssembleText(t, "request", "user", "the request", agenttest.AssembleBase.Add(time.Second)),
 	}
 	history.small = []messagepkg.Message{
-		assembleText(t, "summary", "assistant", "<summary>short</summary>", assembleBase),
-		assembleText(t, "request", "user", "the request", assembleBase.Add(time.Second)),
+		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
+		agenttest.AssembleText(t, "request", "user", "the request", agenttest.AssembleBase.Add(time.Second)),
 	}
 	return stepCompaction{
 		service:          service,
@@ -118,7 +119,7 @@ func TestStepCompactionKeepsTheConversationUnlessCompactionSucceeded(t *testing.
 			runner.err = tc.err
 			// The rows would shrink if the run rebuilt after a failed pass.
 			runner.onRun = history.markCompacted
-			loads := history.afterCalls
+			loads := history.AfterCalls
 
 			if got := run.compact(context.Background(), overHardShare); got != nil {
 				t.Fatalf("messages = %q, want the conversation kept", sdkTexts(got))
@@ -126,7 +127,7 @@ func TestStepCompactionKeepsTheConversationUnlessCompactionSucceeded(t *testing.
 			if runner.callCount() != 1 {
 				t.Fatalf("compaction ran %d times, want once", runner.callCount())
 			}
-			if history.afterCalls != loads {
+			if history.AfterCalls != loads {
 				t.Fatal("the rows were read again after a pass that produced no summary")
 			}
 		})
@@ -137,14 +138,14 @@ func TestStepCompactionLeavesAConversationBelowTheHardShareAlone(t *testing.T) {
 	t.Parallel()
 
 	run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
-	loads := history.afterCalls
+	loads := history.AfterCalls
 
 	below := native.StepContextInput{FixedTokens: 100, Messages: conversationOf(600)}
 	if got := run.compact(context.Background(), below); got != nil {
 		t.Fatalf("messages = %q, want the conversation kept", sdkTexts(got))
 	}
-	if runner.callCount() != 0 || history.afterCalls != loads {
-		t.Fatalf("calls=%d loads=%d->%d: below the hard share nothing runs", runner.callCount(), loads, history.afterCalls)
+	if runner.callCount() != 0 || history.AfterCalls != loads {
+		t.Fatalf("calls=%d loads=%d->%d: below the hard share nothing runs", runner.callCount(), loads, history.AfterCalls)
 	}
 }
 
@@ -398,12 +399,12 @@ func TestSubagentStepCompactorRebuildsThreadWithItsForkContext(t *testing.T) {
 	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
 	runner.onRun = history.markCompacted
 	history.big = []messagepkg.Message{
-		assembleText(t, "old-step", "assistant", strings.Repeat("x", 4000), assembleBase),
-		assembleText(t, "task", "user", "the task", assembleBase.Add(time.Second)),
+		agenttest.AssembleText(t, "old-step", "assistant", strings.Repeat("x", 4000), agenttest.AssembleBase),
+		agenttest.AssembleText(t, "task", "user", "the task", agenttest.AssembleBase.Add(time.Second)),
 	}
 	history.small = []messagepkg.Message{
-		assembleText(t, "summary", "assistant", "<summary>short</summary>", assembleBase),
-		assembleText(t, "task", "user", "the task", assembleBase.Add(time.Second)),
+		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
+		agenttest.AssembleText(t, "task", "user", "the task", agenttest.AssembleBase.Add(time.Second)),
 	}
 	forkMessage, err := json.Marshal(map[string]any{
 		"role":    "user",
@@ -412,9 +413,10 @@ func TestSubagentStepCompactorRebuildsThreadWithItsForkContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.sessionService = &fakeSubagentThreadService{
-		forkContext: []thread.SubagentForkContextMessage{{Role: "user", Message: forkMessage}},
+	service.sessionService = &agenttest.SubagentSessions{
+		ForkContext: []thread.SubagentForkContextMessage{{Role: "user", Message: forkMessage}},
 	}
+	rewireComponents(service)
 	ctx := withSubagentRunHandle(context.Background(), sessionruntime.RunHandle{RunID: "sub-run", FencingToken: 1})
 
 	compactor := service.SubagentStepCompactor(ctx, native.SpawnCompaction{
@@ -440,15 +442,15 @@ func newReplacementCompactionFixture(t *testing.T, status string) (*stepCompacti
 	t.Helper()
 	service, runner, history, req := newSyncCompactionFixture(t, status)
 	oldTurn := []messagepkg.Message{
-		assembleText(t, "old-request", "user", "the replaced request", assembleBase.Add(time.Second)),
-		assembleText(t, "old-answer", "assistant", "the replaced answer", assembleBase.Add(2*time.Second)),
+		agenttest.AssembleText(t, "old-request", "user", "the replaced request", agenttest.AssembleBase.Add(time.Second)),
+		agenttest.AssembleText(t, "old-answer", "assistant", "the replaced answer", agenttest.AssembleBase.Add(2*time.Second)),
 	}
 	history.big = append([]messagepkg.Message{
-		assembleText(t, "old-history-1", "assistant", replacementHistory[0], assembleBase),
-		assembleText(t, "old-history-2", "assistant", replacementHistory[1], assembleBase.Add(time.Millisecond)),
+		agenttest.AssembleText(t, "old-history-1", "assistant", replacementHistory[0], agenttest.AssembleBase),
+		agenttest.AssembleText(t, "old-history-2", "assistant", replacementHistory[1], agenttest.AssembleBase.Add(time.Millisecond)),
 	}, oldTurn...)
 	history.small = append([]messagepkg.Message{
-		assembleText(t, "summary", "assistant", "<summary>short</summary>", assembleBase),
+		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
 	}, oldTurn...)
 	req.HistoryCutoffBeforeMessageID = "old-request"
 	req.TurnReplacement = &messagepkg.TurnReplacement{}
@@ -532,14 +534,14 @@ func TestStepCompactionOfAReplacementRunKeepsTheConversationOnFailure(t *testing
 			run, runner, history := newReplacementCompactionFixture(t, tc.status)
 			runner.err = tc.err
 			runner.onRun = history.markCompacted
-			loads := history.afterCalls
+			loads := history.AfterCalls
 
 			got := run.compact(context.Background(), loopInput(replacementLoopMessages(sdk.ImagePart{Image: "data:image/png;base64,AAAA"})))
 			if got != nil {
 				t.Fatalf("messages = %q, want the conversation kept", sdkTexts(got))
 			}
-			if runner.callCount() != 1 || history.afterCalls != loads {
-				t.Fatalf("calls=%d loads=%d->%d, want one pass and no rebuild", runner.callCount(), loads, history.afterCalls)
+			if runner.callCount() != 1 || history.AfterCalls != loads {
+				t.Fatalf("calls=%d loads=%d->%d, want one pass and no rebuild", runner.callCount(), loads, history.AfterCalls)
 			}
 		})
 	}
@@ -569,14 +571,14 @@ func TestStepCompactionOfARetryKeepsItsRequestRowAndMedia(t *testing.T) {
 
 	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
 	visible := []messagepkg.Message{
-		assembleText(t, "old-history-1", "assistant", replacementHistory[0], assembleBase),
-		assembleText(t, "old-history-2", "assistant", replacementHistory[1], assembleBase.Add(time.Millisecond)),
+		agenttest.AssembleText(t, "old-history-1", "assistant", replacementHistory[0], agenttest.AssembleBase),
+		agenttest.AssembleText(t, "old-history-2", "assistant", replacementHistory[1], agenttest.AssembleBase.Add(time.Millisecond)),
 	}
-	request := assembleText(t, "request", "user", "the request", assembleBase.Add(time.Second))
-	oldAnswer := assembleText(t, "old-answer", "assistant", "the replaced answer", assembleBase.Add(2*time.Second))
+	request := agenttest.AssembleText(t, "request", "user", "the request", agenttest.AssembleBase.Add(time.Second))
+	oldAnswer := agenttest.AssembleText(t, "old-answer", "assistant", "the replaced answer", agenttest.AssembleBase.Add(2*time.Second))
 	history.big = append(append([]messagepkg.Message(nil), visible...), request, oldAnswer)
 	history.small = []messagepkg.Message{
-		assembleText(t, "summary", "assistant", "<summary>short</summary>", assembleBase),
+		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
 		request, oldAnswer,
 	}
 	runner.onRun = history.markCompacted

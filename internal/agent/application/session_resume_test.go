@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/db"
@@ -44,7 +45,7 @@ func TestResumeContextPreservesDeadlineAndScopesWithoutCredentials(t *testing.T)
 		t.Fatal(err)
 	}
 	q := &resumeSaveQueries{}
-	svc := &Service{queries: q, resumeSecret: secret}
+	svc := wireComponents(&Service{queries: q, resumeSecret: secret})
 	deadline := time.Now().Add(time.Minute)
 	ctx, cancel := context.WithDeadline(runtimefence.WithContext(t.Context(), runtimefence.Fence{BotID: "bot", SessionID: "session", Token: 7}), deadline)
 	defer cancel()
@@ -72,7 +73,7 @@ func TestResumeContextPreservesDeadlineAndScopesWithoutCredentials(t *testing.T)
 }
 
 func TestResumeRejectsInvalidCredentialAndForeignBotScope(t *testing.T) {
-	s := &Service{resumeSecret: "resume-secret"}
+	s := wireComponents(&Service{resumeSecret: "resume-secret"})
 	token, _, err := auth.GenerateToken("account", "other-secret", time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +110,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	service := fixture.fixture.service
 	setAllowedTeam(service, "00000000-0000-0000-0000-000000000001")
 	deadline := time.Now().Add(time.Minute)
-	data := resumeContext{Version: 1, ChatID: lifecycleTestBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
+	data := resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
 	raw, err := json.Marshal(map[string]any{"resume": data})
 	if err != nil {
 		t.Fatal(err)
@@ -117,8 +118,8 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	row := sqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"),
 		RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
-		BotID:     db.ParseUUIDOrEmpty(lifecycleTestBotID),
-		SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID),
+		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
+		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 		InputJson: raw,
 	}
 	done, err := service.resumeInterruptedSession(t.Context(), row)
@@ -228,14 +229,15 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 		}
 		return sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(teamID), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(botID), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
 	}
-	expired := row(uuid.NewString(), resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "late", DeadlineAt: &past})
-	unsupported := row(uuid.NewString(), resumeContext{Version: 2, ChatID: lifecycleTestBotID, Query: "future format"})
-	unready := row(unreadyBot, resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "wait", DeadlineAt: &future})
-	resumable := row(uuid.NewString(), resumeContext{Version: 1, ChatID: lifecycleTestBotID, Query: "go on", DeadlineAt: &future})
+	expired := row(uuid.NewString(), resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "late", DeadlineAt: &past})
+	unsupported := row(uuid.NewString(), resumeContext{Version: 2, ChatID: agenttest.LifecycleBotID, Query: "future format"})
+	unready := row(unreadyBot, resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "wait", DeadlineAt: &future})
+	resumable := row(uuid.NewString(), resumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "go on", DeadlineAt: &future})
 	// The resumable row runs the whole turn, so the store the fixture serves
 	// stays underneath the resume-specific reads this test added.
 	q := &retireResumeQueries{Queries: s.queries, rows: []sqlc.SessionRun{expired, unsupported, unready, resumable}}
 	s.queries = q
+	rewireComponents(s)
 
 	scan := sessionResumeScan{}
 	if err := s.scanInterruptedSessions(t.Context(), s.teamScopes, &scan, make(chan struct{}, 4)); err != nil {

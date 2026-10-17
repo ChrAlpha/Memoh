@@ -65,7 +65,7 @@ func (s *Service) finishDrivenRun(ctx context.Context, run admittedRun, end outc
 			// before the plan had one) still needs a row: the diagnostic table
 			// is how a finished run that wrote no context is told apart from
 			// one that wrote nothing at all.
-			s.EnsureTerminalContextLifecycle(ctx, run.Handle.RunID, run.Handle.BotID, run.Handle.SessionID, cause)
+			s.lifecycle.EnsureTerminal(ctx, run.Handle.RunID, run.Handle.BotID, run.Handle.SessionID, cause)
 		}
 		return terminal
 	case errors.Is(err, sessionruntime.ErrRunOwnershipLost):

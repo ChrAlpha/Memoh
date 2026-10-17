@@ -8,11 +8,13 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/decision"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/i18n"
@@ -74,7 +76,7 @@ type CommittedUserInputResponse struct {
 	input           UserInputResponseInput
 	runID           string
 	runHandle       sessionruntime.RunHandle
-	activePrompt    *externalAgentActivePromptSubscription
+	activePrompt    *activeprompt.Subscription
 	isExternalAgent bool
 	ackOnly         bool
 }
@@ -118,9 +120,9 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	if !isProcessLocalExternalAgent {
 		ctx = decision.WithNativeContinuation(ctx)
 	}
-	var activePrompt *externalAgentActivePromptSubscription
+	var activePrompt *activeprompt.Subscription
 	if isProcessLocalExternalAgent && !input.SuppressActivePromptAttach {
-		activePrompt, _ = s.subscribeExternalAgentActivePrompt(
+		activePrompt, _ = s.activePrompts.Subscribe(
 			runreq.FirstNonEmpty(target.BotID, input.BotID),
 			runreq.FirstNonEmpty(target.SessionID, input.ThreadID),
 		)
@@ -139,7 +141,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 			answers, err = userInputAnswersFromText(target.UIPayload.Localized(i18n.New(input.UILanguage)), input.TextAnswer)
 			if err != nil {
 				if activePrompt != nil {
-					activePrompt.release()
+					activePrompt.Release()
 				}
 				return CommittedUserInputResponse{}, err
 			}
@@ -152,7 +154,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	}
 	if err != nil {
 		if activePrompt != nil {
-			activePrompt.release()
+			activePrompt.Release()
 		}
 		if isProcessLocalExternalAgent && errors.Is(err, userinput.ErrAlreadyDecided) {
 			return CommittedUserInputResponse{request: target, input: input, isExternalAgent: true, ackOnly: true}, nil
@@ -197,7 +199,7 @@ func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, commit
 func (s *Service) userInputContinuation(ctx context.Context, committed CommittedUserInputResponse, live bool) decisionContinuation {
 	resolved := withLocalWebUserInputReplyTarget(committed.request)
 	input := committed.input
-	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, resolved.SessionID, committed.runHandle)
+	requestMessageID, reqErr := s.transcript.ContinuationRequestMessageID(ctx, resolved.SessionID, committed.runHandle)
 	req := runreq.ChatRequest{
 		RunID:                   runreq.RunID(committed.runID),
 		RunHandle:               committed.runHandle,
@@ -423,8 +425,8 @@ func (s *Service) continueUserInputSession(
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
 		resolved.RunConfig,
-		historyScopeFallbackFromUserInputRequest(request),
-		compactionSummaryScope(runreq.FirstNonEmpty(request.BotID, input.BotID), "", request.SessionID, request.ConversationType, "", request.ReplyTarget),
+		transcript.ScopeFallbackFromUserInputRequest(request),
+		transcript.SummaryScope(runreq.FirstNonEmpty(request.BotID, input.BotID), "", request.SessionID, request.ConversationType, "", request.ReplyTarget),
 		live,
 	)
 	if err != nil {

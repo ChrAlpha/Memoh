@@ -111,10 +111,10 @@ func TestResolveTitleModelUsesBotOwnerProfile(t *testing.T) {
 	accountService := accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{
 		ID: ownerID.String(), TitleModelID: modelID,
 	}})
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		queries:        titleModelQueries{bot: sqlc.GetBotByIDRow{ID: botID, OwnerUserID: ownerID}},
 		accountService: accountService,
-	}
+	})
 
 	gotModelID, gotOwnerID, err := resolver.resolveTitleModel(context.Background(), botID.String())
 	if err != nil {

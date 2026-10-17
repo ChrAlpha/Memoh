@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -51,8 +52,8 @@ func seedDirectLifecycleModel(t *testing.T, ctx context.Context, pool *pgxpool.P
 func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTurnFixture, *pgxpool.Pool, string, string) {
 	t.Helper()
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	seedDirectLifecycleModel(t, ctx, pool)
 	queries := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
@@ -68,9 +69,11 @@ func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTu
 	service := fixture.fixture.service
 	service.bindSessionRuntime(manager)
 	service.messageService = messagepkg.NewService(service.logger, queries)
+	rewireComponents(service)
 	// The real store, with the two decision reads a finishing run makes
 	// answered as "none": this fixture creates no decisions.
 	service.queries = postgresNoDecisionQueries{queries}
+	rewireComponents(service)
 	setAllowedTeam(service, "")
 	return fixture, pool, botID, sessionID
 }

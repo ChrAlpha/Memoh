@@ -30,7 +30,7 @@ func TestGenerateTitleRetriesServerError(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	svc := &Service{logger: slog.New(slog.DiscardHandler)}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 	provider := sqlc.Provider{ClientType: "openai-completions", Config: []byte(`{"base_url":"` + server.URL + `","api_key":"k"}`)}
 	title, err := svc.generateTitle(context.Background(), "user-1", models.GetResponse{ModelID: "m"}, provider, "help me plan a trip")
 	if err != nil {

@@ -30,7 +30,7 @@ func TestRuntimeRoundPublishesOnlyCompletedRequestedHead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			messages := &agenttest.RecordingMessages{}
-			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+			service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
 			err := service.persistExternalRound(
 				context.Background(),
 				runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", RunID: "run-1", Query: "inspect"},

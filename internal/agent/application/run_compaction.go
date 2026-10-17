@@ -12,6 +12,7 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
 
@@ -233,7 +234,7 @@ func (c *stepCompaction) rebuild(ctx context.Context, input native.StepContextIn
 		req.PersistedUserMessageID = ""
 		req.RequiredHistoryMessageID = ""
 	}
-	assembled, err := c.service.assembleContext(ctx, chatContextRequest(contextPurposeContinuation, req, c.budget))
+	assembled, err := c.service.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeContinuation, req, c.budget))
 	if err != nil {
 		c.service.logger.WarnContext(ctx, "step_compaction: assemble failed",
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.Any("error", err))
@@ -286,11 +287,11 @@ func (c *stepCompaction) rebuild(ctx context.Context, input native.StepContextIn
 // forkContext is the parent's context a forked subagent thread starts from.
 // It is stored apart from the thread's rows, so a rebuild has to put it back.
 func (c *stepCompaction) forkContext(ctx context.Context) []sdk.Message {
-	fork := c.service.subagentForkContextModelMessages(ctx, c.req)
+	fork := c.service.transcript.SubagentForkMessages(ctx, c.req)
 	if len(fork) == 0 {
 		return nil
 	}
-	return runreq.ModelMessagesToSDKMessages(normalizeContextMessages(fork))
+	return runreq.ModelMessagesToSDKMessages(transcript.NormalizeContextMessages(fork))
 }
 
 // recordIndex is where the row with id sits in the rows, and whether it is
@@ -353,5 +354,5 @@ func stepMessages(records []historyfrag.HistoryRecord) []sdk.Message {
 	for i := range records {
 		messages = append(messages, records[i].ModelMessage)
 	}
-	return runreq.ModelMessagesToSDKMessages(normalizeContextMessages(messages))
+	return runreq.ModelMessagesToSDKMessages(transcript.NormalizeContextMessages(messages))
 }

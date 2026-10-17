@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -27,11 +28,11 @@ import (
 // manager: the manager routes the answer, takes the run's publications, and
 // records the run's ending.
 func continuationService(manager *sessionruntime.Manager) *Service {
-	return &Service{
+	return wireComponents(&Service{
 		decisionRuntime: manager,
 		sessionRuntime:  manager,
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 }
 
 // decisionCommand is the routed command that answers the decision the parked
@@ -80,7 +81,7 @@ func scriptedRun(events []native.StreamEvent, cause error) func(context.Context,
 
 func runStatus(t *testing.T, manager *sessionruntime.Manager) *sessionruntime.CurrentRunView {
 	t.Helper()
-	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	snapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,9 +159,9 @@ func newWaitingDecisionRuntime(t *testing.T, backends ...sessionruntime.Backend)
 		t.Fatalf("start runtime manager: %v", err)
 	}
 	handle, err := sessiontest.Start(context.Background(), manager,
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
-		lifecycleTestRunID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
+		agenttest.LifecycleRunID,
 		make(chan struct{}, 1),
 		func() {},
 		make(chan turn.InjectMessage, 1),
@@ -293,7 +294,7 @@ func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Co
 	run := scriptedRun(events, nil)
 	return func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		plan, err := run(ctx, req)
-		plan.Lifecycle = service.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())
+		plan.Lifecycle = service.lifecycle.Terminal(ctx, agenttest.LifecycleRunConfig())
 		return plan, err
 	}
 }
@@ -308,7 +309,7 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 		{
 			name:              "completed",
 			events:            []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventAgentEnd}},
-			wantLifecycle:     contextLifecycleStatusCompleted,
+			wantLifecycle:     lifecycle.StatusCompleted,
 			wantRuntimeStatus: sessionruntime.RunStatusCompleted,
 		},
 		{
@@ -318,7 +319,7 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 				{Type: native.EventError, Error: "private provider detail"},
 				{Type: native.EventAgentAbort},
 			},
-			wantLifecycle:     contextLifecycleStatusFailedProvider,
+			wantLifecycle:     lifecycle.StatusFailedProvider,
 			wantRuntimeStatus: sessionruntime.RunStatusErrored,
 		},
 	}
@@ -327,8 +328,8 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 			manager, handle := newWaitingDecisionRuntime(t)
 			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
-			service.contextLifecycles = lifecycles
-			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
+			useLifecycleStore(service, lifecycles)
+			manager.SetTerminalObserver(service.lifecycle.ReconcileTerminal)
 
 			continueDecision(t, service, manager, decisionCommand(handle, "outcome"), lifecycleRun(service, tt.events))
 
@@ -371,8 +372,8 @@ func TestContinueRuntimeDecisionDefersSecondPendingDecisionLifecycle(t *testing.
 			manager, handle := newWaitingDecisionRuntime(t)
 			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
-			service.contextLifecycles = lifecycles
-			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
+			useLifecycleStore(service, lifecycles)
+			manager.SetTerminalObserver(service.lifecycle.ReconcileTerminal)
 
 			continueDecision(t, service, manager, decisionCommand(handle, "second"), lifecycleRun(service, []native.StreamEvent{
 				{Type: native.EventAgentStart}, tt.request, tt.terminal,
@@ -416,7 +417,7 @@ func TestContinueRuntimeDecisionStopEndsAborted(t *testing.T) {
 		})
 	}()
 	waitRunStatus(t, manager, sessionruntime.RunStatusRunning)
-	if applied, err := manager.AbortControl(context.Background(), lifecycleTestBotID, lifecycleTestSessionID, lifecycleTestRunID, "abort-continuation"); err != nil || !applied {
+	if applied, err := manager.AbortControl(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID, agenttest.LifecycleRunID, "abort-continuation"); err != nil || !applied {
 		t.Fatalf("AbortControl() = (%t, %v), want (true, nil)", applied, err)
 	}
 	select {
@@ -450,7 +451,7 @@ func TestContinueRuntimeDecisionOwnershipLossDoesNotPersistLifecycle(t *testing.
 	manager, handle := newWaitingDecisionRuntime(t)
 	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := continuationService(manager)
-	service.contextLifecycles = lifecycles
+	useLifecycleStore(service, lifecycles)
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 
@@ -469,8 +470,8 @@ func TestContinueRuntimeDecisionOwnershipLossDoesNotPersistLifecycle(t *testing.
 
 func TestStopTurnAbortsParkedDecision(t *testing.T) {
 	manager, _ := newWaitingDecisionRuntime(t)
-	service := &Service{decisionRuntime: manager, abortRuntime: manager, allowedTeam: "team-1"}
-	cmd := turn.StopCommand{TeamID: "other-team", BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}
+	service := wireComponents(&Service{decisionRuntime: manager, abortRuntime: manager, allowedTeam: "team-1"})
+	cmd := turn.StopCommand{TeamID: "other-team", BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	if _, err := service.StopTurn(context.Background(), cmd); !errors.Is(err, turn.ErrTeamNotServed) {
 		t.Fatalf("wrong team: %v", err)
 	}
@@ -495,19 +496,19 @@ func TestStopTurnAbortsParkedDecision(t *testing.T) {
 func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{messageService: &continuationTurnRequestResolverService{requestMessageID: "request-message-id"}}
-	handle := sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, TurnID: "turn-id"}
+	service := wireComponents(&Service{messageService: &continuationTurnRequestResolverService{requestMessageID: "request-message-id"}})
+	handle := sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-id"}
 	ctx := context.Background()
 	for name, cont := range map[string]decisionContinuation{
 		"tool approval": service.toolApprovalContinuation(ctx, CommittedToolApprovalResponse{
-			request:   toolapproval.Request{ID: "approval", SessionID: lifecycleTestSessionID},
-			input:     ToolApprovalResponseInput{BotID: lifecycleTestBotID},
+			request:   toolapproval.Request{ID: "approval", SessionID: agenttest.LifecycleSessionID},
+			input:     ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID},
 			runID:     handle.RunID,
 			runHandle: handle,
 		}, true),
 		"user input": service.userInputContinuation(ctx, CommittedUserInputResponse{
-			request:   userinput.Request{ID: "input", SessionID: lifecycleTestSessionID},
-			input:     UserInputResponseInput{BotID: lifecycleTestBotID},
+			request:   userinput.Request{ID: "input", SessionID: agenttest.LifecycleSessionID},
+			input:     UserInputResponseInput{BotID: agenttest.LifecycleBotID},
 			runID:     handle.RunID,
 			runHandle: handle,
 		}, true),
@@ -516,7 +517,7 @@ func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 		if !req.UserMessagePersisted || req.PersistedUserMessageID != "request-message-id" {
 			t.Fatalf("%s: request = persisted:%t message:%q, want the parked turn's request message", name, req.UserMessagePersisted, req.PersistedUserMessageID)
 		}
-		if req.RunHandle != handle || req.RunID != handle.RunID || req.ThreadID != lifecycleTestSessionID {
+		if req.RunHandle != handle || req.RunID != handle.RunID || req.ThreadID != agenttest.LifecycleSessionID {
 			t.Fatalf("%s: request run = %#v (%q), want the parked run", name, req.RunHandle, req.RunID)
 		}
 	}
@@ -530,6 +531,7 @@ func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := continuationService(manager)
 	service.messageService = messages
+	rewireComponents(service)
 
 	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("SECRET tool result store unavailable")
@@ -549,12 +551,12 @@ func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 func TestParkedRunDoesNotEndItsLifecycle(t *testing.T) {
 	lifecycles := &agenttest.RecordingLifecycleStore{}
 	svc := newDriveService(nil, &agenttest.ScriptedAdmitter{Started: true})
-	svc.contextLifecycles = lifecycles
+	useLifecycleStore(svc, lifecycles)
 	terminal := native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "next", Status: "pending"}
 	exec := &scriptedExecutor{terminal: &terminal, deferred: true}
 	spec := scheduledSpec(exec, noDelivery{})
 	spec.Setup = func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
-		return runPlan{Exec: exec, Lifecycle: svc.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())}, nil
+		return runPlan{Exec: exec, Lifecycle: svc.lifecycle.Terminal(ctx, agenttest.LifecycleRunConfig())}, nil
 	}
 
 	result := svc.drive(context.Background(), spec)

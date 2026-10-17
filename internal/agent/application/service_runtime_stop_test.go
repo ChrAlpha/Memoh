@@ -43,9 +43,9 @@ func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	events := make(chan runreq.WSStreamEvent, 16)
 	err := ignoreOutcome(service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-		BotID:    lifecycleTestBotID,
-		ThreadID: lifecycleTestSessionID,
-		RunID:    lifecycleTestRunID,
+		BotID:    agenttest.LifecycleBotID,
+		ThreadID: agenttest.LifecycleSessionID,
+		RunID:    agenttest.LifecycleRunID,
 		Query:    "inspect",
 	}, events, make(chan struct{})))
 	if apperror.CodeOf(err) == apperror.CodeAgentResponseTimeout {
@@ -73,7 +73,7 @@ func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",
-		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+		SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 	if apperror.CodeOf(err) != apperror.CodeAgentResponseTimeout {
 		t.Fatalf("schedule error = %v, want %s", err, apperror.CodeAgentResponseTimeout)
@@ -106,7 +106,7 @@ func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 			}}
 			_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 				FireID: "fire-1", ID: "schedule-1",
-				SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+				SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 			})
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("schedule error code = %q, want %q: %v", got, tc.code, err)
@@ -132,7 +132,7 @@ func TestScheduledExecutionTimeoutIsNotAConfigurationFailure(t *testing.T) {
 	}}
 	_, err := runScheduledExternal(ctx, t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",
-		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+		SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 	if got := apperror.CodeOf(err); got != apperror.CodeScheduleExecutionTimeout {
 		t.Fatalf("schedule error code = %q, want %q: %v", got, apperror.CodeScheduleExecutionTimeout, err)

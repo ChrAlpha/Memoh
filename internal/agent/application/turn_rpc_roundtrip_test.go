@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -142,24 +143,24 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 		modelID: chatModel.ID,
 	}}
 	logger := slog.New(slog.DiscardHandler)
-	service := &Service{
-		agent:             native.New(native.Deps{Logger: logger}),
-		modelsService:     models.NewService(logger, queries),
-		queries:           queries,
-		contextLifecycles: &synchronizedLifecycleStore{},
-		messageService:    &agenttest.RecordingMessages{},
-		settingsService:   settings.NewService(logger, queries, nil, nil),
+	service := wireComponents(&Service{
+		agent:           native.New(native.Deps{Logger: logger}),
+		modelsService:   models.NewService(logger, queries),
+		queries:         queries,
+		lifecycle:       lifecycle.New(lifecycle.Deps{Store: &synchronizedLifecycleStore{}}),
+		messageService:  &agenttest.RecordingMessages{},
+		settingsService: settings.NewService(logger, queries, nil, nil),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
 				return sessionpkg.Thread{
-					ID: sessionID, BotID: lifecycleTestBotID, Type: sessionpkg.TypeChat,
+					ID: sessionID, BotID: agenttest.LifecycleBotID, Type: sessionpkg.TypeChat,
 					SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
 				}, nil
 			},
 		},
 		streamHTTPClient: server.Client(),
 		logger:           logger,
-	}
+	})
 	service.bindSessionRuntime(newRPCRuntime(t, "owner-rpc-chat"))
 	return service, model
 }
@@ -228,9 +229,9 @@ func TestChatTurnOverRPCDeliversRequestedSkillsAndAttachments(t *testing.T) {
 		SchemaVersion:   1,
 		TeamID:          "team-1",
 		Mode:            turn.ModeChat,
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
 		IdempotencyKey:  "msg-rpc-1",
 		Query:           "summarize the report",
 		UserVisibleText: "summarize the report",
@@ -277,9 +278,9 @@ func TestChatTurnFailureOverRPCCarriesStateCodeAndArgs(t *testing.T) {
 		SchemaVersion:   1,
 		TeamID:          "team-1",
 		Mode:            turn.ModeChat,
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
 		IdempotencyKey:  "msg-rpc-failure",
 		Query:           "inspect the report",
 		UserVisibleText: "inspect the report",

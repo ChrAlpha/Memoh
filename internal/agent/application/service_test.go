@@ -37,7 +37,7 @@ func (f *fakeGatewayAssetLoader) OpenForGateway(ctx context.Context, botID, cont
 }
 
 func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(_ context.Context, _, contentHash string) (io.ReadCloser, string, error) {
@@ -47,7 +47,7 @@ func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
 				return io.NopCloser(bytes.NewReader(rasterPNG(t))), "image/png", nil
 			},
 		},
-	}
+	})
 	req := runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{
@@ -76,7 +76,7 @@ func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
 func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(_ context.Context, botID, contentHash string) (io.ReadCloser, string, error) {
@@ -86,7 +86,7 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 				return io.NopCloser(bytes.NewReader(rasterPNG(t))), "image/png", nil
 			},
 		},
-	}
+	})
 	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{{
@@ -108,7 +108,7 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 }
 
 func TestPrepareGatewayAttachments_DataURLFromURLFieldIsNativeInline(t *testing.T) {
-	resolver := &Service{logger: slog.Default()}
+	resolver := wireComponents(&Service{logger: slog.Default()})
 	req := runreq.ChatRequest{
 		Attachments: []runreq.ChatAttachment{
 			{
@@ -134,7 +134,7 @@ func TestPrepareGatewayAttachments_DataURLFromURLFieldIsNativeInline(t *testing.
 }
 
 func TestPrepareGatewayAttachments_PublicURLFromURLFieldIsNativePublic(t *testing.T) {
-	resolver := &Service{logger: slog.Default()}
+	resolver := wireComponents(&Service{logger: slog.Default()})
 	req := runreq.ChatRequest{
 		Attachments: []runreq.ChatAttachment{
 			{
@@ -160,7 +160,7 @@ func TestPrepareGatewayAttachments_PublicURLFromURLFieldIsNativePublic(t *testin
 }
 
 func TestRouteAndMergeAttachments_ImagePathOnlyFallsBackToFile(t *testing.T) {
-	resolver := &Service{logger: slog.Default()}
+	resolver := wireComponents(&Service{logger: slog.Default()})
 	model := models.GetResponse{
 		Model: models.Model{
 			Config: models.ModelConfig{
@@ -197,7 +197,7 @@ func TestRouteAndMergeAttachments_ImagePathOnlyFallsBackToFile(t *testing.T) {
 }
 
 func TestPrepareGatewayAttachments_IncludesReplyAttachments(t *testing.T) {
-	resolver := &Service{logger: slog.Default()}
+	resolver := wireComponents(&Service{logger: slog.Default()})
 	req := runreq.ChatRequest{
 		Attachments: []runreq.ChatAttachment{
 			{Type: "image", URL: "https://example.com/current.png"},
@@ -219,7 +219,7 @@ func TestPrepareGatewayAttachments_IncludesReplyAttachments(t *testing.T) {
 func TestPrepareGatewayAttachments_ResolvesStoredFileAccessPath(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			accessPathFn: func(_ context.Context, botID, contentHash string) (string, error) {
@@ -229,7 +229,7 @@ func TestPrepareGatewayAttachments_ResolvesStoredFileAccessPath(t *testing.T) {
 				return "/data/.memoh/media/aa/asset.pdf", nil
 			},
 		},
-	}
+	})
 	req := runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{{
@@ -256,7 +256,7 @@ func TestPrepareGatewayAttachments_ResolvesStoredFileAccessPath(t *testing.T) {
 func TestPrepareACPAttachments_UsesFileAndReplyReferences(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			accessPathFn: func(_ context.Context, _, contentHash string) (string, error) {
@@ -266,7 +266,7 @@ func TestPrepareACPAttachments_UsesFileAndReplyReferences(t *testing.T) {
 				return "/data/.memoh/media/aa/asset.pdf", nil
 			},
 		},
-	}
+	})
 	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{{
@@ -295,7 +295,7 @@ func TestPrepareACPAttachments_UsesFileAndReplyReferences(t *testing.T) {
 func TestPrepareACPAttachments_PreservesLongPasteFile(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			accessPathFn: func(_ context.Context, _, contentHash string) (string, error) {
@@ -305,7 +305,7 @@ func TestPrepareACPAttachments_PreservesLongPasteFile(t *testing.T) {
 				return "/data/.memoh/media/aa/pasted-text.txt", nil
 			},
 		},
-	}
+	})
 	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{{
@@ -326,7 +326,7 @@ func TestPrepareACPAttachments_PreservesLongPasteFile(t *testing.T) {
 func TestPrepareACPAttachments_FallsBackWhenStoredImageCannotInline(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(context.Context, string, string) (io.ReadCloser, string, error) {
@@ -336,7 +336,7 @@ func TestPrepareACPAttachments_FallsBackWhenStoredImageCannotInline(t *testing.T
 				return "/data/.memoh/media/aa/large.png", nil
 			},
 		},
-	}
+	})
 	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{{
@@ -364,7 +364,7 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 	}{
 		{
 			name:     "invalid image base64",
-			resolver: &Service{logger: slog.Default()},
+			resolver: wireComponents(&Service{logger: slog.Default()}),
 			input: runreq.ChatAttachment{
 				Type:   "image",
 				Name:   "broken.png",
@@ -374,14 +374,14 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 		},
 		{
 			name: "stored file without reachable path",
-			resolver: &Service{
+			resolver: wireComponents(&Service{
 				logger: slog.Default(),
 				assetLoader: &fakeGatewayAssetLoader{
 					accessPathFn: func(context.Context, string, string) (string, error) {
 						return "", errors.New("missing")
 					},
 				},
-			},
+			}),
 			input: runreq.ChatAttachment{
 				Type:        "file",
 				Name:        "missing.pdf",
@@ -410,14 +410,14 @@ func TestPrepareGatewayAttachments_DetectsImageMimeWhenOctetStream(t *testing.T)
 		0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
 		0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(_ context.Context, _, _ string) (io.ReadCloser, string, error) {
 				return io.NopCloser(bytes.NewReader(jpegBytes)), "application/octet-stream", nil
 			},
 		},
-	}
+	})
 	req := runreq.ChatRequest{
 		BotID: "bot-1",
 		Attachments: []runreq.ChatAttachment{
@@ -444,7 +444,7 @@ func TestPrepareGatewayAttachments_DetectsImageMimeWhenOctetStream(t *testing.T)
 }
 
 func TestRouteAndMergeAttachments_DropsUnsupportedInlineWithoutFallbackPath(t *testing.T) {
-	resolver := &Service{logger: slog.Default()}
+	resolver := wireComponents(&Service{logger: slog.Default()})
 	model := models.GetResponse{
 		Model: models.Model{
 			Config: models.ModelConfig{

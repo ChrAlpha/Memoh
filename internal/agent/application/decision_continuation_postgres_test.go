@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -23,8 +24,8 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 	for _, scenario := range []string{"approved", "rejected", "answer", "aborted", "inline"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
-			pool := openTurnAdmissionPostgres(t, ctx)
-			botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+			pool := agenttest.OpenPostgres(t, ctx)
+			botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 			q := sqlc.New(pool)
 			store := postgresstore.NewQueriesWithPool(pool, q)
 			runs := ledger.NewPostgres(q, pool)
@@ -118,7 +119,7 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 			if err := json.Unmarshal(row.InputJson, &saved); err != nil {
 				t.Fatal(err)
 			}
-			svc := &Service{queries: store}
+			svc := wireComponents(&Service{queries: store})
 			instruction, err := svc.interruptedDecisionContext(ctx, row, saved.Checkpoints)
 			if err != nil || instruction == "" || !strings.Contains(instruction, "Do not automatically replay") {
 				t.Fatalf("decision recovery context=%q err=%v", instruction, err)

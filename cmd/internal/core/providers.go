@@ -35,6 +35,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	agentpayload "github.com/felinics/memoh/internal/agent/event/payload"
+	"github.com/felinics/memoh/internal/agent/notify"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	claudecoderuntime "github.com/felinics/memoh/internal/agent/runtime/claudecode"
@@ -869,7 +870,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 func injectBackgroundTaskEvents(log *slog.Logger, bgManager *background.Manager, msgService *message.DBService, sessionService *sessionpkg.Service, routeService *route.DBService, channelRuntime channel.Runtime, channelRegistry *channel.Registry, eventHub *event.Hub) {
 	if bgManager != nil {
 		sender := channelmessagingadapter.New(channelRuntime, channelRegistry, nil)
-		notifications := application.NewBackgroundTaskNotifications(msgService, sessionService, func(ctx context.Context, sess sessionpkg.Thread, text string) error {
+		notifications := notify.New(msgService, sessionService, func(ctx context.Context, sess sessionpkg.Thread, text string) error {
 			if strings.TrimSpace(sess.RouteID) == "" || sess.ChannelType == "local" {
 				return nil
 			}

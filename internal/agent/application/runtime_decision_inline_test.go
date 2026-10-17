@@ -29,7 +29,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 				if err := manager.Start(ctx); err != nil {
 					t.Fatal(err)
 				}
-				handle, err := sessiontest.Start(ctx, manager, lifecycleTestBotID, lifecycleTestSessionID, lifecycleTestRunID,
+				handle, err := sessiontest.Start(ctx, manager, agenttest.LifecycleBotID, agenttest.LifecycleSessionID, agenttest.LifecycleRunID,
 					make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1))
 				if err != nil {
 					t.Fatal(err)
@@ -52,7 +52,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 				}
 				inputs := &agenttest.UserInput{Target: request, Resolved: resolved}
 				var logs bytes.Buffer
-				service := &Service{
+				service := wireComponents(&Service{
 					decisionRuntime: manager, userInput: inputs, logger: slog.New(slog.NewTextHandler(&logs, nil)),
 					botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{handle.BotID + ":" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true}},
 					sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
@@ -61,7 +61,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 							RuntimeMetadata: map[string]any{"runtime_owner_account_id": testACPUserInputOwnerID},
 						}, nil
 					}},
-				}
+				})
 				payload, err := json.Marshal(UserInputResponseInput{
 					ActorUserID: testACPUserInputOwnerID, Canceled: canceled,
 					Answers: []userinput.QuestionAnswer{{QuestionID: "q", Text: "answer"}},

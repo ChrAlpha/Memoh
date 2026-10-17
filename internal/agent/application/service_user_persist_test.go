@@ -14,10 +14,10 @@ func TestPersistUserTurnSkillActivationWithoutPromptDoesNotStoreModelMarker(t *t
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 	req := runreq.ChatRequest{
 		BotID:           "bot-1",
 		ThreadID:        "session-1",
@@ -51,10 +51,10 @@ func TestPersistUserTurnSkillActivationWithPromptStoresPromptOnly(t *testing.T) 
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 	req := runreq.ChatRequest{
 		BotID:           "bot-1",
 		ThreadID:        "session-1",

@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -24,8 +25,8 @@ func TestFirstAttemptOverHardShareCompactsBeforeTheProviderCall(t *testing.T) {
 	run.budget = 1000
 	run.requestMessageID = func() string { return "" }
 	run.request = []sdk.Message{sdk.UserMessage("the request")}
-	history.big = []messagepkg.Message{assembleText(t, "old-step", "assistant", "old step", assembleBase)}
-	history.small = []messagepkg.Message{assembleText(t, "summary", "assistant", "<summary>short</summary>", assembleBase)}
+	history.big = []messagepkg.Message{agenttest.AssembleText(t, "old-step", "assistant", "old step", agenttest.AssembleBase)}
+	history.small = []messagepkg.Message{agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase)}
 
 	request := sdk.UserMessage(strings.Repeat("the request ", 600))
 	model := &scriptedModel{}

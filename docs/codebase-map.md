@@ -22,12 +22,16 @@ Memoh/
 │   ├── acl/                    #   Access control list (source-aware chat trigger ACL)
 │   ├── arch/                   #   Architecture guard tests (channel-boundary import rules, spec §8)
 │   ├── agent/                  #   Agent bounded package; root is a namespace, not a Go package
+│   │   ├── activeprompt/       #     In-process output hub of the running external runtime prompt of a session
 │   │   ├── adapter/            #     Adapters from lower-level domain ports to runtime implementations
 │   │   ├── application/        #     Turn orchestration: context, persistence, memory, approvals, runtime dispatch
 │   │   ├── background/         #     Background task manager (spawned subagents, video tasks)
+│   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
 │   │   ├── context/            #     Context fragments, history projection, compaction, and output limits
 │   │   ├── decision/           #     User input, tool approval, and stable user-facing feedback
 │   │   ├── event/              #     Agent events and transport payload vocabulary
+│   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
+│   │   ├── notify/             #     Background task notifications into the originating conversation
 │   │   ├── runtime/            #     Runtime implementations
 │   │   │   ├── acp/            #       ACP pool, client process manager, and the generic custom-agent profile
 │   │   │   ├── claudecode/     #       Claude Code direct runtime (external.Driver)
@@ -40,6 +44,7 @@ Memoh/
 │   │   ├── sessionmode/        #     Session mode resolution
 │   │   ├── partmeta/           #     Memoh annotations (approval, user input, execution location) on sdk.ProviderMetadata, plus the stored-shape fold/unfold
 │   │   ├── step/               #     Runtime-neutral step record (model result, tool results, messages, deferred approval)
+│   │   ├── transcript/         #     Conversation read path: assemble stored rows for the model, compaction replacement, window, admission filters
 │   │   ├── tool/               #     Native tool providers (package name remains tools)
 │   │       ├── message.go      #       Send message tool
 │   │       ├── contacts.go     #       Contact list tool

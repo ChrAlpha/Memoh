@@ -16,9 +16,9 @@ import (
 )
 
 func TestLoadMemoryContextMessage_NoProvider(t *testing.T) {
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger: slog.Default(),
-	}
+	})
 	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query:  "hello",
 		BotID:  "bot-1",
@@ -34,11 +34,11 @@ func TestLoadMemoryContextMessageSkipsEmptyQuery(t *testing.T) {
 
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 1)})
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query:      "",
 		ModelQuery: "The user activated the following skill for this turn without an additional prompt: alpha.",
@@ -64,7 +64,7 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 	}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, provider)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		memoryRegistry:      registry,
 		settingsService:     settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:              slog.New(slog.DiscardHandler),
@@ -76,7 +76,7 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 				return now
 			},
 		}),
-	}
+	})
 	req := runreq.ChatRequest{
 		Query:  "tea",
 		BotID:  storeRoundBotID,
@@ -124,13 +124,13 @@ func TestLoadMemoryContextMessageClassifiesCacheFilledDuringProviderWait(t *test
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, provider)
 	cache := memprovider.NewMemoryContextCache(memprovider.MemoryContextCacheConfig{})
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		memoryRegistry:      registry,
 		settingsService:     settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:              slog.New(slog.DiscardHandler),
 		memorySearchTimeout: 100 * time.Millisecond,
 		memoryContextCache:  cache,
-	}
+	})
 	req := runreq.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
 	result := make(chan memoryContextLoad, 1)
 	go func() {
@@ -174,11 +174,11 @@ func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *tes
 	}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, provider)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 	req := runreq.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
 
 	first := resolver.loadMemoryContext(context.Background(), req)
@@ -204,11 +204,11 @@ func TestLoadMemoryContextTracesEmptyResult(t *testing.T) {
 	provider := &slowBeforeChatProvider{}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, provider)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 
 	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1",

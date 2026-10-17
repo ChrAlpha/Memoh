@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -35,8 +36,8 @@ func (askWritePolicyProvider) ToolApprovalPolicy(context.Context, string) (toola
 // deciding identity and was never pending.
 func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	identityID := uuid.New()
 	if _, err := pool.Exec(ctx, `INSERT INTO channel_identities (id, channel_type, channel_subject_id) VALUES ($1, 'telegram', $2)`,
@@ -48,10 +49,10 @@ func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 	})
 
 	store := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
-	svc := &Service{
+	svc := wireComponents(&Service{
 		logger:       slog.New(slog.DiscardHandler),
 		toolApproval: toolapproval.NewService(slog.New(slog.DiscardHandler), store, askWritePolicyProvider{}),
-	}
+	})
 
 	for _, mode := range []string{sessionmode.Discuss, sessionmode.Schedule, sessionmode.Subagent} {
 		handler := svc.buildToolApprovalHandler(baseRunConfigParams{
@@ -110,8 +111,8 @@ func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 // request close; a newer run's pending decisions stay untouched.
 func TestLostRunCancelsApprovalAndAskUser(t *testing.T) {
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-lost-run-test",
@@ -124,12 +125,12 @@ func TestLostRunCancelsApprovalAndAskUser(t *testing.T) {
 
 	store := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
 	log := slog.New(slog.DiscardHandler)
-	svc := &Service{
+	svc := wireComponents(&Service{
 		logger:         log,
 		sessionRuntime: manager,
 		toolApproval:   toolapproval.NewService(log, store, nil),
 		userInput:      userinput.NewService(log, store),
-	}
+	})
 	admission, err := svc.admitTurnRun(ctx, turn.StartTurnCommand{
 		TeamID: "team-1", Mode: turn.ModeChat, BotID: botID, ThreadID: sessionID, Query: "hi",
 		ExternalMessageID: "ext-lost", CurrentChannel: "telegram", DisplayName: "A", SourceChannelIdentityID: "ci-1",

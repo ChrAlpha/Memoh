@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/felinics/memoh/internal/agent/activeprompt"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -124,7 +125,7 @@ type externalExecutor struct {
 	notices   runtimeNotices
 	// hub carries this turn's live output to whatever the session exposes as
 	// its active prompt.
-	hub *externalAgentActivePromptHub
+	hub *activeprompt.Hub
 	// projections tracks the decision rows this turn projected, so they are
 	// cleaned up whichever way the turn ends.
 	projections projectionTracker
@@ -152,8 +153,8 @@ type externalExecutor struct {
 // because an External Agent runtime reports a finished turn rather than a
 // stream that ends.
 func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
-	e.hub = e.service.registerExternalAgentActivePrompt(e.req.BotID, e.req.ThreadID)
-	defer e.service.unregisterExternalAgentActivePrompt(e.req.BotID, e.req.ThreadID, e.hub)
+	e.hub = e.service.activePrompts.Register(e.req.BotID, e.req.ThreadID)
+	defer e.service.activePrompts.Unregister(e.req.BotID, e.req.ThreadID, e.hub)
 	if e.service.sessionRuntime != nil {
 		// External drivers block their turn inline on decisions; declare it
 		// before the first prompt so the manager resumes on terminal decision
@@ -276,7 +277,7 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 		e.projections.complete(ev.ToolCallID, e.service.persistRuntimeDecisionProjection(context.WithoutCancel(deliveryCtx), e.req, ev))
 	}
 	if e.hub != nil {
-		e.hub.emit(ev)
+		e.hub.Emit(ev)
 	}
 	emit(ev)
 }

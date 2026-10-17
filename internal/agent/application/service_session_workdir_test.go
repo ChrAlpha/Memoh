@@ -42,11 +42,11 @@ func (f fakeSessionWorkdirResolver) ResolveForSession(context.Context, string, s
 }
 
 func workdirBoundService(resolved workdir.Resolved) *Service {
-	return &Service{
+	return wireComponents(&Service{
 		sessionService:   sessionWorkdirSessionService{thread: sessionpkg.Thread{ID: "s1", BotID: "bot-1", WorkdirID: "p1"}},
 		workdirs:         fakeSessionWorkdirResolver{resolved: resolved},
 		workspaceTargets: workspaceRequestTargetService{},
-	}
+	})
 }
 
 func TestPrepareWorkspaceRequestRejectsWorkdirTargetConflict(t *testing.T) {

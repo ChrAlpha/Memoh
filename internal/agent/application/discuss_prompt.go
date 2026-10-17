@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/transcript"
 )
 
 // A discuss run reads the batch it answers from history, which is what a
@@ -24,7 +25,7 @@ const (
 // so the batch, its sender attribution and any summary covering it arrive as
 // one context rather than as a message of its own.
 func (s *Service) discussExternalPrompt(ctx context.Context, req runreq.ChatRequest) (string, error) {
-	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, 0))
+	assembled, err := s.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeRun, req, 0))
 	if err != nil {
 		return "", err
 	}

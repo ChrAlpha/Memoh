@@ -20,7 +20,7 @@ func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
+	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 	position := int64(2)
 	req := continuationRequest()
 	req.ReusePersistedUserMessage = true
@@ -69,7 +69,7 @@ func TestNativeExecutorLeavesTheStoppedWriteToTheRuntime(t *testing.T) {
 			{Type: native.EventAgentAbort, EndReason: event.EndCanceled},
 		},
 		timing:  newReasoningTimingTracker(nil),
-		service: &Service{logger: slog.New(slog.DiscardHandler)},
+		service: wireComponents(&Service{logger: slog.New(slog.DiscardHandler)}),
 	}
 
 	ending := exec.execute(context.Background(), func(native.StreamEvent) {})

@@ -15,7 +15,7 @@ import (
 func countingStickerService(t *testing.T, opens *int) *Service {
 	t.Helper()
 	data := movingStickerTGS(t)
-	return &Service{assetLoader: &fakeGatewayAssetLoader{
+	return wireComponents(&Service{assetLoader: &fakeGatewayAssetLoader{
 		openFn: func(context.Context, string, string) (io.ReadCloser, string, error) {
 			*opens++
 			return io.NopCloser(bytes.NewReader(data)), "application/x-tgsticker", nil
@@ -23,7 +23,7 @@ func countingStickerService(t *testing.T, opens *int) *Service {
 		accessPathFn: func(_ context.Context, _, contentHash string) (string, error) {
 			return "/data/" + contentHash, nil
 		},
-	}}
+	}})
 }
 
 // Preparing an image costs real work — an animated sticker is rasterised — and
@@ -125,11 +125,11 @@ func TestFrameCacheEvictsOldestEntries(t *testing.T) {
 // its first frame only, so every attachment stays visible.
 func TestTurnVisionBudgetShedsExpansionFirst(t *testing.T) {
 	data := movingStickerTGS(t)
-	s := &Service{assetLoader: &fakeGatewayAssetLoader{
+	s := wireComponents(&Service{assetLoader: &fakeGatewayAssetLoader{
 		openFn: func(context.Context, string, string) (io.ReadCloser, string, error) {
 			return io.NopCloser(bytes.NewReader(data)), "application/x-tgsticker", nil
 		},
-	}}
+	}})
 	const stickers = 10
 	refs := make([]runreq.ChatAttachment, 0, stickers)
 	for i := range stickers {

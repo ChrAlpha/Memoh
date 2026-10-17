@@ -16,7 +16,7 @@ func TestInternalFeedbackPersistenceSource(t *testing.T) {
 		sdk.UserMessage("another real user input"),
 		sdk.AssistantMessage("done"),
 	}, []int{0})
-	service := &Service{}
+	service := wireComponents(&Service{})
 	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{Query: "original", BotID: "bot", ThreadID: "session"}, messages, "model", storeRoundOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestInternalFeedbackDoesNotClaimMatchingUserQuery(t *testing.T) {
 		sdk.UserMessage("same text"),
 		sdk.UserMessage("same text"),
 	}, []int{0})
-	service := &Service{}
+	service := wireComponents(&Service{})
 	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
 		Query: "same text", BotID: "bot", ThreadID: "session",
 		TurnID: "original-turn", ExternalMessageID: "inbound-event",

@@ -109,7 +109,7 @@ func TestAdmitTriggeredRunInjectsAdmissionView(t *testing.T) {
 	t.Parallel()
 
 	admitter := &fakeTriggeredAdmitter{}
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
 
 	viewFn := func(handle sessionruntime.RunHandle) *sessionruntime.RunAdmissionView {
 		return &sessionruntime.RunAdmissionView{
@@ -148,7 +148,7 @@ func TestAdmitTriggeredRunWithoutViewKeepsEmptyProjection(t *testing.T) {
 	t.Parallel()
 
 	admitter := &fakeTriggeredAdmitter{}
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter})
 
 	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil, outcome.ErrRunStopped)
 	if err != nil {
@@ -181,7 +181,7 @@ func TestScheduleInvocationUsesFireIdentity(t *testing.T) {
 // record, so it is not marked recorded.
 func TestTriggerScheduleBusyIsTheScheduleSentinel(t *testing.T) {
 	t.Parallel()
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: &fakeTriggeredAdmitter{admitErr: sessionruntime.ErrSessionBusy}}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: &fakeTriggeredAdmitter{admitErr: sessionruntime.ErrSessionBusy}})
 
 	_, err := svc.TriggerSchedule(context.Background(), "bot-1", schedule.TriggerPayload{FireID: "fire-1", ID: "schedule-1", SessionID: "session-1", Command: "run"}, "token")
 
@@ -197,7 +197,7 @@ func TestTriggerScheduleBusyIsTheScheduleSentinel(t *testing.T) {
 // its level; the fire returns it marked recorded so its own record is a WARN.
 func TestTriggerScheduleFailureAfterAdmissionIsRecorded(t *testing.T) {
 	t.Parallel()
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: &fakeTriggeredAdmitter{}}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: &fakeTriggeredAdmitter{}})
 
 	_, err := svc.TriggerSchedule(context.Background(), "bot-1", schedule.TriggerPayload{FireID: "fire-1", ID: "schedule-1", SessionID: "session-1", Command: "run"}, "token")
 

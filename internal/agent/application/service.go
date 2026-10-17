@@ -12,24 +12,27 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/background"
+	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
@@ -93,61 +96,57 @@ type compactionRunner interface {
 
 // Service orchestrates chat with the internal agent.
 type Service struct {
-	activeTurns             runreq.ActiveTurnTracker
-	resumeSecret            string
-	teamScopes              runreq.TeamScopes
-	resumeReady             func(context.Context, string, string) error
-	resumeStop              context.CancelFunc
-	resumeDone              chan struct{}
-	agent                   *native.Agent
-	modelsService           *models.Service
-	queries                 dbstore.Queries
-	memoryRegistry          *memprovider.Registry
-	messageService          messagepkg.Service
-	settingsService         *settings.Service
-	accountService          *accounts.Service
-	sessionService          runreq.SessionService
-	externalDrivers         map[string]external.Driver
-	compactionService       compactionRunner
-	eventPublisher          messageevent.Publisher
-	skillLoader             SkillLoader
-	assetLoader             gatewayAssetLoader
-	animationFrames         animationCache
-	platformIdentities      PlatformIdentitySource
-	botPermissions          runreq.BotPermissionChecker
-	workspaceTargets        workspaceTargetResolver
-	workdirs                sessionWorkdirResolver
-	streamHTTPClient        *http.Client
-	compactionHTTPClient    *http.Client
-	streamIdleTimeout       time.Duration
-	streamIdleTimeoutMax    time.Duration
-	bgManager               *background.Manager
-	toolApproval            *toolapproval.Service
-	userInput               userInputService
-	hookService             *hooks.Service
-	memoryContextMu         sync.Mutex
-	memoryContextCache      *memprovider.MemoryContextCache
-	starterPromptFlights    singleflight.Group
-	externalAgentPromptHubs sync.Map
+	activeTurns          runreq.ActiveTurnTracker
+	activePrompts        *activeprompt.Registry
+	botenv               *botenv.Env
+	transcript           *transcript.Reader
+	lifecycle            *lifecycle.Recorder
+	resumeSecret         string
+	teamScopes           runreq.TeamScopes
+	resumeReady          func(context.Context, string, string) error
+	resumeStop           context.CancelFunc
+	resumeDone           chan struct{}
+	agent                *native.Agent
+	modelsService        *models.Service
+	queries              dbstore.Queries
+	memoryRegistry       *memprovider.Registry
+	messageService       messagepkg.Service
+	settingsService      *settings.Service
+	accountService       *accounts.Service
+	sessionService       runreq.SessionService
+	externalDrivers      map[string]external.Driver
+	compactionService    compactionRunner
+	eventPublisher       messageevent.Publisher
+	skillLoader          SkillLoader
+	assetLoader          gatewayAssetLoader
+	animationFrames      animationCache
+	platformIdentities   PlatformIdentitySource
+	botPermissions       runreq.BotPermissionChecker
+	workspaceTargets     workspaceTargetResolver
+	workdirs             sessionWorkdirResolver
+	streamHTTPClient     *http.Client
+	compactionHTTPClient *http.Client
+	streamIdleTimeout    time.Duration
+	streamIdleTimeoutMax time.Duration
+	bgManager            *background.Manager
+	toolApproval         *toolapproval.Service
+	userInput            userInputService
+	memoryContextMu      sync.Mutex
+	memoryContextCache   *memprovider.MemoryContextCache
+	starterPromptFlights singleflight.Group
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error)
-	sessionCompactionMu               sync.Mutex
-	sessionCompactions                map[string]*sessionCompactionGate
-	memorySearchTimeout               time.Duration
-	contextAbsoluteCapTokens          int
-	clockLocation                     *time.Location
-	logger                            *slog.Logger
-	allowedTeam                       string
-	sessionRuntime                    runreq.TurnAdmitter
-	decisionRuntime                   *sessionruntime.Manager
-	abortRuntime                      runtimeAbortController
-	contextLifecycles                 contextLifecycleStore
-	contextLifecyclePersistenceErrors atomic.Uint64
-	contextLifecycleCandidatesMu      sync.Mutex
-	contextLifecycleCandidates        map[contextLifecycleCandidateKey]contextLifecycleCandidate
-	publishTurnEvent                  func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
-	sessionManager                    *sessionruntime.Manager
+	continueUserInputFn func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error)
+	sessionCompactionMu sync.Mutex
+	sessionCompactions  map[string]*sessionCompactionGate
+	memorySearchTimeout time.Duration
+	logger              *slog.Logger
+	allowedTeam         string
+	sessionRuntime      runreq.TurnAdmitter
+	decisionRuntime     *sessionruntime.Manager
+	abortRuntime        runtimeAbortController
+	publishTurnEvent    func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error
+	sessionManager      *sessionruntime.Manager
 	// outputMedia and outputSpeech prepare a run's events on their way to the
 	// subscribers: attachments are stored, speech is synthesized into voice
 	// attachments. Both are optional.
@@ -288,10 +287,6 @@ func New(d Deps) (*Service, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	clockLocation := d.ClockLocation
-	if clockLocation == nil {
-		clockLocation = time.UTC
-	}
 	// Streaming requests keep transport establishment bounded, while the
 	// application idle watchdog owns first-byte and between-event silence. A
 	// client-wide or response-header deadline would otherwise preempt that
@@ -325,40 +320,59 @@ func New(d Deps) (*Service, error) {
 	}
 
 	service := &Service{
-		agent:                    d.Agent,
-		modelsService:            d.Models,
-		queries:                  d.Queries,
-		contextLifecycles:        d.Queries,
-		messageService:           d.Messages,
-		settingsService:          d.Settings,
-		accountService:           d.Accounts,
-		sessionService:           d.Sessions,
-		botPermissions:           d.BotPermissions,
-		workspaceTargets:         d.WorkspaceTargets,
-		toolApproval:             d.ToolApproval,
-		userInput:                d.UserInput,
-		resumeSecret:             d.ResumeSecret,
-		memoryRegistry:           d.Memory,
-		hookService:              d.Hooks,
-		skillLoader:              d.Skills,
-		assetLoader:              d.Assets,
-		platformIdentities:       d.PlatformIdentities,
-		workdirs:                 d.Workdirs,
-		bgManager:                d.Background,
-		eventPublisher:           d.Events,
-		outputMedia:              d.OutputMedia,
-		outputSpeech:             d.OutputSpeech,
-		externalDrivers:          externalDriverMap(d.ExternalRuntimes...),
-		resumeReady:              d.ResumeReadiness,
-		teamScopes:               teamScopes,
-		contextAbsoluteCapTokens: d.ContextFallbackTokens,
-		allowedTeam:              d.AllowedTeam,
-		streamHTTPClient:         streamHTTPClient,
-		compactionHTTPClient:     compactionHTTPClient,
-		memorySearchTimeout:      defaultMemorySearchTimeout,
-		clockLocation:            clockLocation,
-		logger:                   d.Logger.With(slog.String("service", "agent/application")),
+		agent:                d.Agent,
+		modelsService:        d.Models,
+		queries:              d.Queries,
+		messageService:       d.Messages,
+		settingsService:      d.Settings,
+		accountService:       d.Accounts,
+		sessionService:       d.Sessions,
+		botPermissions:       d.BotPermissions,
+		workspaceTargets:     d.WorkspaceTargets,
+		toolApproval:         d.ToolApproval,
+		userInput:            d.UserInput,
+		resumeSecret:         d.ResumeSecret,
+		memoryRegistry:       d.Memory,
+		skillLoader:          d.Skills,
+		assetLoader:          d.Assets,
+		platformIdentities:   d.PlatformIdentities,
+		workdirs:             d.Workdirs,
+		bgManager:            d.Background,
+		eventPublisher:       d.Events,
+		outputMedia:          d.OutputMedia,
+		outputSpeech:         d.OutputSpeech,
+		externalDrivers:      externalDriverMap(d.ExternalRuntimes...),
+		resumeReady:          d.ResumeReadiness,
+		teamScopes:           teamScopes,
+		allowedTeam:          d.AllowedTeam,
+		streamHTTPClient:     streamHTTPClient,
+		compactionHTTPClient: compactionHTTPClient,
+		memorySearchTimeout:  defaultMemorySearchTimeout,
+		logger:               d.Logger.With(slog.String("service", "agent/application")),
 	}
+	service.activePrompts = activeprompt.New()
+	service.botenv = botenv.New(botenv.Deps{
+		Logger:        d.Logger.With(slog.String("service", "agent/botenv")),
+		Queries:       d.Queries,
+		Settings:      d.Settings,
+		Accounts:      d.Accounts,
+		Bridge:        d.Agent.BridgeProvider(),
+		Hooks:         d.Hooks,
+		ClockLocation: d.ClockLocation,
+	})
+	service.transcript = transcript.New(transcript.Deps{
+		Logger:         d.Logger.With(slog.String("service", "agent/transcript")),
+		Messages:       d.Messages,
+		Queries:        d.Queries,
+		Sessions:       d.Sessions,
+		FallbackTokens: d.ContextFallbackTokens,
+	})
+	service.lifecycle = lifecycle.New(lifecycle.Deps{
+		Store:     d.Queries,
+		Runs:      d.Queries,
+		Decisions: service,
+		Logger:    d.Logger.With(slog.String("service", "agent/lifecycle")),
+	})
 	// A typed nil stored in an interface would read as configured.
 	if d.Compaction != nil {
 		service.compactionService = d.Compaction
@@ -370,14 +384,6 @@ func New(d Deps) (*Service, error) {
 	return service, nil
 }
 
-// contextAbsoluteMaxTokens resolves the budget for models without a window.
-func (s *Service) contextAbsoluteMaxTokens() int {
-	if s.contextAbsoluteCapTokens > 0 {
-		return s.contextAbsoluteCapTokens
-	}
-	return contextfrag.DefaultContextFallbackTokens
-}
-
 // effectiveContextTokenBudget derives the per-turn context budget: the model
 // context window, or the configured fallback when the model has none, so a
 // missing window never leaves the context unbounded.
@@ -386,7 +392,7 @@ func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int 
 	if budget > 0 {
 		return budget
 	}
-	fallback := s.contextAbsoluteMaxTokens()
+	fallback := s.transcript.AbsoluteMaxTokens()
 	s.logger.Warn("context budget: model context window missing, applying fallback",
 		slog.String("model_id", chatModel.ID),
 		slog.Int("fallback_tokens", fallback))
@@ -458,7 +464,7 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	if pairMemoryApplies {
 		sessionPrefModelID, sessionPrefEffort = s.sessionModelPreference(ctx, req.ThreadID)
 	}
-	req = s.applySubagentThreadDefaults(ctx, req, sessionPrefModelID != "")
+	req = s.transcript.ApplySubagentDefaults(ctx, req, sessionPrefModelID != "")
 	facts := s.requestRunFacts(ctx, req)
 
 	runCfg, chatModel, provider, err := s.buildBaseRunConfig(ctx, baseRunConfigParams{
@@ -512,7 +518,7 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	contextTokenBudget := s.effectiveContextTokenBudget(chatModel)
 	runCfg.ContextBudgetMaxTokens = contextTokenBudget
 
-	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, contextTokenBudget))
+	assembled, err := s.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeRun, req, contextTokenBudget))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "resolve: assemble context failed",
 			slog.String("bot_id", req.BotID),
@@ -521,8 +527,8 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 		)
 		return runreq.ResolvedContext{}, req, err
 	}
-	forkContext := s.subagentForkContextModelMessages(ctx, req)
-	notice := s.currentWorkspaceContextMessage(ctx, req)
+	forkContext := s.transcript.SubagentForkMessages(ctx, req)
+	notice := s.transcript.CurrentWorkspaceMessage(ctx, req)
 	requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills)
 	var ownMessages []runreq.ModelMessage
 	ownMessages = append(ownMessages, forkContext...)
@@ -558,7 +564,7 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 		// exactly as parent-driven subagent tasks assemble it.
 		messages = append(forkContext, messages...)
 	}
-	messages = normalizeContextMessages(messages)
+	messages = transcript.NormalizeContextMessages(messages)
 	trimmableMessages := len(messages)
 	if notice != nil {
 		messages = append(messages, *notice)
@@ -574,14 +580,14 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	if !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
-	messages = normalizeContextMessages(messages)
+	messages = transcript.NormalizeContextMessages(messages)
 	runCfg.ContextHistoryTokenEstimates = make([]int, len(messages))
 	for index := range messages {
-		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
+		runCfg.ContextHistoryTokenEstimates[index] = transcript.EstimateMessageTokens(messages[index])
 	}
 	runCfg.ContextTrimmableMessages = trimmableMessages
 
-	displayName := s.resolveDisplayName(ctx, req)
+	displayName := s.botenv.ResolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
 
 	tz := runCfg.Identity.TimezoneLocation
@@ -613,9 +619,9 @@ func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	if strings.TrimSpace(modelQuery) != strings.TrimSpace(req.Query) {
 		headerifiedModelQuery = turnpkg.FormatUserHeader(headerInput, modelQuery)
 	}
-	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
+	runCfg.ContextFrags = transcript.ContextFragsForMessages(messages, historyRecords)
 	forkMessages := runreq.NonNilModelMessages(messages)
-	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
+	runCfg.ForkContextSourceMessageIDs = transcript.SourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.Messages = runreq.ModelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if req.ReusePersistedUserMessage {
@@ -703,12 +709,12 @@ type baseRunConfigParams struct {
 // identity and system prompt — everything except Messages/Query/InlineImages.
 // Both resolve() and ResolveRunConfig() delegate to this shared builder.
 func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams) (native.RunConfig, models.GetResponse, sqlc.Provider, error) {
-	botSettings, err := s.loadBotSettings(ctx, p.BotID)
+	botSettings, err := s.botenv.LoadSettings(ctx, p.BotID)
 	if err != nil {
 		return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, err
 	}
-	botInfo, loopDetectionEnabled := s.loadBotRuntimeInfo(ctx, p.BotID)
-	userTimezoneName, userClockLocation := s.resolveTimezone(ctx, p.BotID, p.UserID)
+	botInfo, loopDetectionEnabled := s.botenv.LoadRuntimeInfo(ctx, p.BotID)
+	userTimezoneName, userClockLocation := s.botenv.ResolveTimezone(ctx, p.BotID, p.UserID)
 
 	chatID := p.ChatID
 	if chatID == "" {
@@ -1225,7 +1231,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
 	cfg.ContextHookText = ""
-	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptResult := s.botenv.RunPromptHook(ctx, botenv.PromptView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
@@ -1273,22 +1279,22 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	cfg.System = native.GenerateSystemPrompt(systemParams)
 	var promptHookTexts []string
 	if beforePromptContext != "" {
-		text := formatServiceHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
+		text := botenv.FormatHookContext(hooks.EventBeforePromptBuild, beforePromptContext)
 		promptHookTexts = append(promptHookTexts, text)
 	}
 	beforePromptObservedTexts := append([]string(nil), promptHookTexts...)
 	beforePromptObservedTexts = append(beforePromptObservedTexts, hookSystemSectionTexts(beforePromptResult)...)
-	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
+	afterPromptResult := s.botenv.RunPromptHook(ctx, botenv.PromptView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
 		SessionType:  cfg.SessionType,
 		MessageCount: len(cfg.Messages),
-		SystemBytes:  afterPromptHookSystemBytes(cfg.System, beforePromptObservedTexts),
+		SystemBytes:  botenv.AfterPromptSystemBytes(cfg.System, beforePromptObservedTexts),
 	}, hooks.EventAfterPromptBuild)
 	afterPromptContext := afterPromptResult.AppendContext
 	if afterPromptContext != "" {
-		text := formatServiceHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
+		text := botenv.FormatHookContext(hooks.EventAfterPromptBuild, afterPromptContext)
 		promptHookTexts = append(promptHookTexts, text)
 	}
 	cfg.ContextHookText = strings.Join(promptHookTexts, "\n\n")
@@ -1318,7 +1324,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		}
 		imageParts = append(imageParts, cfg.InlineAttachments...)
 		if len(imageParts) > 0 {
-			currentIndex := validCurrentUserMessageIndex(
+			currentIndex := transcript.ValidCurrentUserMessageIndex(
 				cfg.Messages,
 				cfg.ContextCurrentUserMessageIndex,
 				cfg.ContextMemoryMessageIndex,
@@ -1357,43 +1363,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	)
 	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg.RefreshContextFrag()
-}
-
-func normalizeContextMessages(messages []runreq.ModelMessage) []runreq.ModelMessage {
-	return runreq.RepairToolCallClosures(runreq.SanitizeMessages(messages), runreq.SyntheticToolClosureError)
-}
-
-func validCurrentUserMessageIndex(messages []sdk.Message, currentIndex, memoryIndex *int) *int {
-	if currentIndex != nil && *currentIndex >= 0 && *currentIndex < len(messages) &&
-		messages[*currentIndex].Role == sdk.MessageRoleUser && (memoryIndex == nil || *currentIndex != *memoryIndex) {
-		return runreq.IntPointer(*currentIndex)
-	}
-	return latestUserMessageIndex(messages, optionalIndex(memoryIndex)...)
-}
-
-func latestUserMessageIndex(messages []sdk.Message, excluded ...int) *int {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == sdk.MessageRoleUser && !containsIndex(excluded, i) {
-			return runreq.IntPointer(i)
-		}
-	}
-	return nil
-}
-
-func optionalIndex(index *int) []int {
-	if index == nil {
-		return nil
-	}
-	return []int{*index}
-}
-
-func containsIndex(indexes []int, target int) bool {
-	for _, index := range indexes {
-		if index == target {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {

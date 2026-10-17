@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -207,8 +208,8 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 func newWSStepHistoryHarnessOn(t *testing.T, mode wsStepHistoryModel, backend sessionruntime.Backend) wsStepHistoryHarness {
 	t.Helper()
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	// History rows reference the model that produced them; the model itself
 	// is resolved by the fixture's fake queries.
@@ -245,12 +246,15 @@ func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbst
 	service := fixture.service
 	messages := messagepkg.NewService(service.logger, queries)
 	service.messageService = messages
+	rewireComponents(service)
 	service.streamHTTPClient = &http.Client{Transport: &wsStepHistoryTransport{base: service.streamHTTPClient.Transport, mode: mode}}
 	service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	service.queries = noDecisionQueries{service.queries.(*directLifecycleQueries)}
+	rewireComponents(service)
 	if mode == wsStepHistoryTextLoop {
 		service.queries = loopDetectionQueries{service.queries.(noDecisionQueries)}
+		rewireComponents(service)
 	}
 	return service, messages
 }

@@ -55,7 +55,7 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 					return result, nil
 				}}
 				ch := make(chan runreq.WSStreamEvent, 64)
-				if _, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test"}, ch, make(chan struct{})); err != nil {
+				if _, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "test"}, ch, make(chan struct{})); err != nil {
 					t.Fatal(err)
 				}
 				if len(messages.Deleted) != 0 {
@@ -96,7 +96,7 @@ func assertPersistedRuntimeNotice(t *testing.T, messages *agenttest.RecordingMes
 		}
 		count += len(event.NoticesFromMetadata(input.Metadata))
 		// Exercise the lazy RawMetadata path used by the PostgreSQL history API.
-		rows = append(rows, messagepkg.Message{ID: fmt.Sprintf("message-%d", i), TurnID: lifecycleTestRunID, Role: input.Role, Content: input.Content, RawMetadata: metadata})
+		rows = append(rows, messagepkg.Message{ID: fmt.Sprintf("message-%d", i), TurnID: agenttest.LifecycleRunID, Role: input.Role, Content: input.Content, RawMetadata: metadata})
 	}
 	if count != 1 {
 		t.Fatalf("persisted notices=%d, want exactly one across all assistant rows", count)
@@ -121,7 +121,7 @@ func TestScheduledRuntimeNoticeIsPersistedWithoutInteractiveSubscriber(t *testin
 		input.Sink.EmitStreamEvent(event.StreamEvent{Type: event.RuntimeNotice, NoticeKind: event.NoticeToolsUnavailable, Delta: "public runtime notice"})
 		return external.PromptResult{Text: "done", Output: []sdk.Message{sdk.AssistantMessage("done")}, TurnCompleted: true}, nil
 	}}
-	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{FireID: "fire-1", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "test", OwnerUserID: "user-1"})
+	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{FireID: "fire-1", ID: "schedule-1", SessionID: agenttest.LifecycleSessionID, Command: "test", OwnerUserID: "user-1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/felinics/memoh/internal/agent/activeprompt"
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
@@ -17,6 +18,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
@@ -50,7 +52,7 @@ type CommittedToolApprovalResponse struct {
 	runID              string
 	runHandle          sessionruntime.RunHandle
 	usesDecisionWaiter bool
-	activePrompt       *externalAgentActivePromptSubscription
+	activePrompt       *activeprompt.Subscription
 	ackOnly            bool
 }
 
@@ -112,9 +114,9 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	if err != nil {
 		return CommittedToolApprovalResponse{}, err
 	}
-	var activePrompt *externalAgentActivePromptSubscription
+	var activePrompt *activeprompt.Subscription
 	if isExternalAgent && !input.SuppressActivePromptAttach {
-		activePrompt, _ = s.subscribeExternalAgentActivePrompt(
+		activePrompt, _ = s.activePrompts.Subscribe(
 			runreq.FirstNonEmpty(target.BotID, input.BotID),
 			runreq.FirstNonEmpty(target.SessionID, input.ThreadID),
 		)
@@ -152,7 +154,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	}
 	if err != nil {
 		if activePrompt != nil {
-			activePrompt.release()
+			activePrompt.Release()
 		}
 		return CommittedToolApprovalResponse{}, err
 	}
@@ -234,7 +236,7 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 func (s *Service) toolApprovalContinuation(ctx context.Context, committed CommittedToolApprovalResponse, live bool) decisionContinuation {
 	approval := withLocalWebReplyTarget(committed.request)
 	input := committed.input
-	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, approval.SessionID, committed.runHandle)
+	requestMessageID, reqErr := s.transcript.ContinuationRequestMessageID(ctx, approval.SessionID, committed.runHandle)
 	req := runreq.ChatRequest{
 		RunID:                   runreq.RunID(committed.runID),
 		RunHandle:               committed.runHandle,
@@ -586,8 +588,8 @@ func (s *Service) continueToolApprovalSession(
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
 		resolved.RunConfig,
-		historyScopeFallbackFromToolApprovalRequest(approval),
-		compactionSummaryScope(runreq.FirstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
+		transcript.ScopeFallbackFromToolApprovalRequest(approval),
+		transcript.SummaryScope(runreq.FirstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
 		live,
 	)
 	if err != nil {

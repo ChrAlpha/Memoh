@@ -29,10 +29,10 @@ func (s *continuationTurnRequestResolverService) GetVisibleHistoryTurnRequestMes
 func TestContinuationTurnRequestMessageIDUsesAdmittedTurn(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{messageService: &continuationTurnRequestResolverService{
+	service := wireComponents(&Service{messageService: &continuationTurnRequestResolverService{
 		requestMessageID: "request-message-id",
-	}}
-	got, err := service.continuationTurnRequestMessageID(
+	}})
+	got, err := service.transcript.ContinuationRequestMessageID(
 		context.Background(),
 		"session-id",
 		sessionruntime.RunHandle{TurnID: "turn-id"},
@@ -48,7 +48,7 @@ func TestContinuationTurnRequestMessageIDUsesAdmittedTurn(t *testing.T) {
 func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{userInput: &userinput.Service{}}
+	resolver := wireComponents(&Service{userInput: &userinput.Service{}})
 	staleIndex := 0
 	staleMemoryIndex := 0
 	base := native.RunConfig{
@@ -108,7 +108,7 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 	t.Parallel()
 
 	sentinel := errors.New("artifact projection unavailable")
-	resolver := &Service{queries: &agenttest.RecordingCompactionLog{ListErr: sentinel}}
+	resolver := wireComponents(&Service{queries: &agenttest.RecordingCompactionLog{ListErr: sentinel}})
 	got, err := resolver.prepareContinuationRunConfig(
 		context.Background(),
 		native.RunConfig{Query: "must not survive"},
@@ -126,7 +126,7 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 
 func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) {
 	sentinel := errors.New("session unavailable")
-	service := &Service{queries: &abortLifecycleQueries{pending: true}, sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (sessionpkg.Thread, error) { return sessionpkg.Thread{}, sentinel }}}
+	service := wireComponents(&Service{queries: &agenttest.AbortedLifecycleQueries{Pending: true}, sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (sessionpkg.Thread, error) { return sessionpkg.Thread{}, sentinel }}})
 	got, err := service.PendingRuntimeDecisions(t.Context(), "00000000-0000-0000-0000-000000000001")
 	if !errors.Is(err, sentinel) || got != nil {
 		t.Fatalf("runtime lookup error treated as native: %v %v", got, err)
@@ -138,7 +138,7 @@ func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) 
 func TestPrepareContinuationRunConfigOffersQuestionsOnlyToALiveRun(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{userInput: &agenttest.UserInput{}}
+	resolver := wireComponents(&Service{userInput: &agenttest.UserInput{}})
 	for _, live := range []bool{true, false} {
 		got, err := resolver.prepareContinuationRunConfig(context.Background(), native.RunConfig{}, historyfrag.ScopeFallback{}, contextfrag.Scope{}, live)
 		if err != nil {

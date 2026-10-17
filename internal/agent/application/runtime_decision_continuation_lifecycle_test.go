@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
@@ -74,10 +75,10 @@ var continuationSessions = []struct {
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
 			return service.continueUserInputSession(ctx,
 				userinput.Request{
-					ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+					ID: "user-input", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 					ToolCallID: "ask-user-call", ToolName: "ask_user", SourcePlatform: "web",
 				},
-				UserInputResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
+				UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID},
 				req, false,
 			)
 		},
@@ -87,10 +88,10 @@ var continuationSessions = []struct {
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
 			return service.continueToolApprovalSession(ctx,
 				toolapproval.Request{
-					ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+					ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 					ToolCallID: "approved-tool-call", ToolName: "container_exec", SourcePlatform: "web",
 				},
-				ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID},
+				ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID},
 				req, false,
 			)
 		},
@@ -99,8 +100,8 @@ var continuationSessions = []struct {
 
 func continuationSessionRequest() runreq.ChatRequest {
 	return runreq.ChatRequest{
-		RunID: lifecycleTestRunID, BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID,
-		ThreadID: lifecycleTestSessionID, CurrentChannel: "web", UserMessagePersisted: true,
+		RunID: agenttest.LifecycleRunID, BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID,
+		ThreadID: agenttest.LifecycleSessionID, CurrentChannel: "web", UserMessagePersisted: true,
 	}
 }
 
@@ -126,8 +127,8 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 			if budget != 128000 {
 				t.Fatalf("ContextBudgetMaxTokens seen by agent.Stream = %d, want 128000", budget)
 			}
-			if runID != lifecycleTestRunID {
-				t.Fatalf("RunID seen by agent.Stream = %q, want admitted run ID %q", runID, lifecycleTestRunID)
+			if runID != agenttest.LifecycleRunID {
+				t.Fatalf("RunID seen by agent.Stream = %q, want admitted run ID %q", runID, agenttest.LifecycleRunID)
 			}
 		})
 	}
@@ -145,6 +146,7 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 				err:               errors.New("assistant message store unavailable"),
 			}
 			fixture.service.messageService = messages
+			rewireComponents(fixture.service)
 			req := continuationSessionRequest()
 
 			err := fixture.service.driveUnroutedContinuation(context.Background(), decisionContinuation{
@@ -162,8 +164,8 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 			assertDirectLifecycle(
 				t,
 				fixture.lifecycles,
-				lifecycleTestRunID,
-				contextLifecycleStatusFailedProvider,
+				agenttest.LifecycleRunID,
+				lifecycle.StatusFailedProvider,
 				"",
 			)
 		})

@@ -12,6 +12,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
@@ -295,7 +296,7 @@ func (s *Service) runEndFixedTokens(ctx context.Context, plan compactionPlan) in
 	req.RequiredHistoryMessageID = ""
 	req.PersistedUserMessageID = ""
 	req.UserMessagePersisted = false
-	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeContinuation, req, plan.rc.ContextTokenBudget))
+	assembled, err := s.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeContinuation, req, plan.rc.ContextTokenBudget))
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction: run-end fixed tokens unavailable, using none",
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.Any("error", err))
@@ -372,8 +373,8 @@ func (s *Service) runCompactionSyncFixed(ctx context.Context, req runreq.ChatReq
 	if cutoffID := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoffID != "" {
 		// An unresolved cutoff admits nothing, so the compaction stands down
 		// rather than summarizing rows after the replaced turn.
-		boundary := s.loadCompactionArtifactBoundary(ctx, nil, req.ThreadID, cutoffID)
-		cfg.HistoryCutoff = &compaction.HistoryCutoff{BeforeMs: boundary.cutoffMs}
+		boundary := s.transcript.LoadArtifactBoundary(ctx, nil, req.ThreadID, cutoffID)
+		cfg.HistoryCutoff = &compaction.HistoryCutoff{BeforeMs: boundary.CutoffMs}
 	}
 
 	s.logger.InfoContext(ctx, "compaction sync: running synchronously",
@@ -408,7 +409,7 @@ func (s *Service) runCompactionSyncFixed(ctx context.Context, req runreq.ChatReq
 // context is judged again, since it may have made this pass unnecessary.
 // Failure, cooldown, or a context that still does not fit send the request as
 // it is; the provider's own limit error is the outcome.
-func (s *Service) compactBeforeTurn(ctx context.Context, req runreq.ChatRequest, turnModelID string, contextTokenBudget int, assembled assembledContext, estimate *turnRequestEstimate) (assembledContext, error) {
+func (s *Service) compactBeforeTurn(ctx context.Context, req runreq.ChatRequest, turnModelID string, contextTokenBudget int, assembled transcript.Assembled, estimate *turnRequestEstimate) (transcript.Assembled, error) {
 	if assembled.CompactableTokens == 0 {
 		return assembled, nil
 	}
@@ -416,13 +417,13 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req runreq.ChatRequest,
 	if !needsSyncCompaction(assembled, pressure, contextTokenBudget) {
 		return assembled, nil
 	}
-	assembleAgain := func() (assembledContext, error) {
-		return s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, contextTokenBudget))
+	assembleAgain := func() (transcript.Assembled, error) {
+		return s.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeRun, req, contextTokenBudget))
 	}
 	if s.awaitSessionCompaction(req.BotID, req.ThreadID, strings.TrimSpace(req.RunID)) {
 		var err error
 		if assembled, err = assembleAgain(); err != nil {
-			return assembledContext{}, err
+			return transcript.Assembled{}, err
 		}
 		pressure = estimate.tokens(assembled.Messages)
 		if !needsSyncCompaction(assembled, pressure, contextTokenBudget) {
@@ -446,7 +447,7 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req runreq.ChatRequest,
 	}
 	compacted, err := assembleAgain()
 	if err != nil {
-		return assembledContext{}, err
+		return transcript.Assembled{}, err
 	}
 	if pressure := estimate.tokens(compacted.Messages); needsSyncCompaction(compacted, pressure, contextTokenBudget) {
 		s.logger.WarnContext(ctx, "sync_compaction_insufficient",
@@ -458,7 +459,7 @@ func (s *Service) compactBeforeTurn(ctx context.Context, req runreq.ChatRequest,
 	return compacted, nil
 }
 
-func needsSyncCompaction(assembled assembledContext, pressure, contextTokenBudget int) bool {
+func needsSyncCompaction(assembled transcript.Assembled, pressure, contextTokenBudget int) bool {
 	return assembled.Truncated || compactionNeed(pressure, contextTokenBudget, 0) == compactionSync
 }
 

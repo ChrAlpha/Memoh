@@ -2,30 +2,13 @@ package application
 
 import (
 	"context"
-	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/transcript"
 )
-
-type continuationTurnRequestMessageResolver interface {
-	GetVisibleHistoryTurnRequestMessageIDByTurn(context.Context, string, string) (string, error)
-}
-
-func (s *Service) continuationTurnRequestMessageID(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (string, error) {
-	turnID := strings.TrimSpace(runHandle.TurnID)
-	if turnID == "" || s == nil || s.messageService == nil {
-		return "", nil
-	}
-	resolver, ok := s.messageService.(continuationTurnRequestMessageResolver)
-	if !ok {
-		return "", nil
-	}
-	return resolver.GetVisibleHistoryTurnRequestMessageIDByTurn(ctx, sessionID, turnID)
-}
 
 func (s *Service) prepareContinuationRunConfig(
 	ctx context.Context,
@@ -34,8 +17,8 @@ func (s *Service) prepareContinuationRunConfig(
 	summaryScope contextfrag.Scope,
 	live bool,
 ) (native.RunConfig, error) {
-	assembled, err := s.assembleContext(ctx, contextRequest{
-		Purpose:  contextPurposeContinuation,
+	assembled, err := s.transcript.Assemble(ctx, transcript.Request{
+		Purpose:  transcript.PurposeContinuation,
 		Fallback: fallback,
 		Scope:    summaryScope,
 	})
@@ -46,12 +29,12 @@ func (s *Service) prepareContinuationRunConfig(
 	retained := assembled.Records
 	historyEstimates := make([]int, len(messages))
 	for i := range messages {
-		historyEstimates[i] = estimateMessageTokens(messages[i])
+		historyEstimates[i] = transcript.EstimateMessageTokens(messages[i])
 	}
 	base.ContextHistoryTokenEstimates = historyEstimates
 	base.ContextTrimmableMessages = len(messages)
 
-	base.ContextFrags = historyContextFragsForMessages(messages, retained)
+	base.ContextFrags = transcript.ContextFragsForMessages(messages, retained)
 	// Close any tool call left open by an interrupted turn before the transcript
 	// reaches providers that enforce strict assistant-tool adjacency. A process
 	// restart can orphan a deferred ask_user / tool-approval call while a later

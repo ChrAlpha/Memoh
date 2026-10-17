@@ -127,6 +127,7 @@ func attachACPUserInputAuth(resolver *Service) {
 			}, nil
 		},
 	}
+	rewireComponents(resolver)
 }
 
 func TestUserInputAnswersFromText(t *testing.T) {
@@ -232,7 +233,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 		Resolved: chatResolvedRequest(),
 	}
 	var continued *sdk.ToolResultPart
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(_ context.Context, req userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
 			if req.ID != "input-1" {
@@ -241,7 +242,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 			continued = &result
 			return completedContinuation(), nil
 		},
-	}
+	})
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
 	answers := []userinput.QuestionAnswer{{QuestionID: "q1", OptionIDs: []string{"q1.o1"}}}
@@ -305,7 +306,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	releaseContinuation := make(chan struct{})
 	continuationStarted := make(chan struct{})
 	var continuationStartedOnce sync.Once
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			continuationStartedOnce.Do(func() { close(continuationStarted) })
@@ -319,7 +320,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 				return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
 			})}, nil
 		},
-	}
+	})
 	manager := sessiontest.New(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-1",
 		StateTTL:      time.Minute,
@@ -450,14 +451,14 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 		Resolved: resolved,
 	}
 	var continued *sdk.ToolResultPart
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		agent:     native.New(native.Deps{Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}}),
 		userInput: fake,
 		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ UserInputResponseInput, result sdk.ToolResultPart) (runPlan, error) {
 			continued = &result
 			return completedContinuation(), nil
 		},
-	}
+	})
 
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:    "bot-1",
@@ -505,13 +506,13 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -546,13 +547,13 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("already-decided ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -588,13 +589,13 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the session in this response handler")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -637,19 +638,19 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must resume through the active ACP prompt")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
-	hub := resolver.registerExternalAgentActivePrompt("bot-1", "session-1")
+	hub := resolver.activePrompts.Register("bot-1", "session-1")
 	if hub == nil {
 		t.Fatal("expected active ACP prompt hub")
 	}
-	defer resolver.unregisterExternalAgentActivePrompt("bot-1", "session-1", hub)
+	defer resolver.activePrompts.Unregister("bot-1", "session-1", hub)
 
 	eventCh := make(chan runreq.WSStreamEvent, 8)
 	done := make(chan error, 1)
@@ -667,21 +668,21 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for submit")
 	}
-	hub.emit(native.StreamEvent{
+	hub.Emit(native.StreamEvent{
 		Type:        native.EventUserInputRequest,
 		ToolCallID:  "call-1",
 		ToolName:    userinput.ToolNameAskUser,
 		UserInputID: "input-1",
 		Status:      userinput.StatusSubmitted,
 	})
-	hub.emit(native.StreamEvent{
+	hub.Emit(native.StreamEvent{
 		Type:       native.EventToolCallEnd,
 		ToolCallID: "call-1",
 		ToolName:   userinput.ToolNameAskUser,
 		Result:     map[string]any{"status": userinput.StatusSubmitted},
 	})
-	hub.emit(native.StreamEvent{Type: native.EventTextDelta, Delta: "continuing"})
-	hub.emit(native.StreamEvent{Type: native.EventEnd})
+	hub.Emit(native.StreamEvent{Type: native.EventTextDelta, Delta: "continuing"})
+	hub.Emit(native.StreamEvent{Type: native.EventEnd})
 
 	select {
 	case err := <-done:
@@ -723,19 +724,19 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
-	hub := resolver.registerExternalAgentActivePrompt("bot-1", "session-1")
+	hub := resolver.activePrompts.Register("bot-1", "session-1")
 	if hub == nil {
 		t.Fatal("expected active ACP prompt hub")
 	}
-	defer resolver.unregisterExternalAgentActivePrompt("bot-1", "session-1", hub)
+	defer resolver.activePrompts.Unregister("bot-1", "session-1", hub)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
@@ -772,13 +773,13 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 		RespondAllowedSet: true,
 		RespondAllowed:    false,
 	}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			t.Error("orphaned ACP request must not continue the chat session")
 			return completedContinuation(), nil
 		},
-	}
+	})
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -813,13 +814,13 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 		Resolved: chatResolvedRequest(),
 	}
 	continueCalls := 0
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		userInput: fake,
 		continueUserInputFn: func(context.Context, userinput.Request, UserInputResponseInput, sdk.ToolResultPart) (runPlan, error) {
 			continueCalls++
 			return completedContinuation(), nil
 		},
-	}
+	})
 
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:    "bot-1",

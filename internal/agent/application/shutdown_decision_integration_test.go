@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -36,13 +37,13 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	q := dbsqlc.New(pool)
 	store := postgresstore.NewQueriesWithPool(pool, q)
 	runs := ledger.NewPostgres(q, pool)
 	inputs := userinput.NewService(nil, store)
-	service := &Service{messageService: messagepkg.NewService(nil, store), queries: store, userInput: inputs, sessionService: sessionpkg.NewService(nil, store, nil)}
+	service := wireComponents(&Service{messageService: messagepkg.NewService(nil, store), queries: store, userInput: inputs, sessionService: sessionpkg.NewService(nil, store, nil)})
 	prefix := "shutdown-test:" + uuid.NewString()
 	newManager := func(owner string) *sessionruntime.Manager {
 		backend, err := sessionruntime.NewRedisBackend(ctx, sessionruntime.RedisOptions{URL: redisURL, KeyPrefix: prefix, StateTTL: time.Minute})
@@ -101,7 +102,7 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			return err
 		}
-		requestID, err := service.continuationTurnRequestMessageID(runCtx, sessionID, handle)
+		requestID, err := service.transcript.ContinuationRequestMessageID(runCtx, sessionID, handle)
 		if err != nil {
 			return err
 		}

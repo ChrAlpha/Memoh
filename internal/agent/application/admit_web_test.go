@@ -145,7 +145,7 @@ func newWebTestRuntime(t *testing.T, svc *Service) (*sessionruntime.Manager, *se
 }
 
 func newWebTestService() *Service {
-	return &Service{logger: slog.New(slog.DiscardHandler)}
+	return wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 }
 
 func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *WebAdmission {

@@ -148,6 +148,7 @@ func withDriveRequestRuntime(t *testing.T, fixture directLifecycleFixture) *sess
 	fixture.service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
+	rewireComponents(fixture.service)
 	return manager
 }
 
@@ -226,9 +227,9 @@ func driveWebSend(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t)
 	withDriveRequestRuntime(t, fixture)
 	if _, err := streamWebSend(context.Background(), t, fixture.service, runreq.ChatRequest{
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -248,9 +249,9 @@ func driveIMStartTurn(t *testing.T) []sdk.Request {
 		SchemaVersion:           1,
 		TeamID:                  "drive-request-team",
 		Mode:                    turn.ModeChat,
-		BotID:                   lifecycleTestBotID,
-		ChatID:                  lifecycleTestBotID,
-		ThreadID:                lifecycleTestSessionID,
+		BotID:                   agenttest.LifecycleBotID,
+		ChatID:                  agenttest.LifecycleBotID,
+		ThreadID:                agenttest.LifecycleSessionID,
 		Query:                   directLifecyclePrompt,
 		UserVisibleText:         directLifecyclePrompt,
 		ExternalMessageID:       "im-message-1",
@@ -311,10 +312,10 @@ func driveReplaceableHistory(t *testing.T) *driveHistoryMessages {
 	t.Helper()
 	return &driveHistoryMessages{
 		history: []messagepkg.Message{
-			admissionHistoryMessage(t, driveEarlierUserMessageID, sdk.UserMessage("an earlier question"), nil),
-			admissionHistoryMessage(t, driveEarlierAssistantMessageID, sdk.AssistantMessage("an earlier answer"), nil),
-			admissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
-			admissionHistoryMessage(t, driveReplacedAssistantID, sdk.AssistantMessage("the answer being replaced"), nil),
+			agenttest.AdmissionHistoryMessage(t, driveEarlierUserMessageID, sdk.UserMessage("an earlier question"), nil),
+			agenttest.AdmissionHistoryMessage(t, driveEarlierAssistantMessageID, sdk.AssistantMessage("an earlier answer"), nil),
+			agenttest.AdmissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
+			agenttest.AdmissionHistoryMessage(t, driveReplacedAssistantID, sdk.AssistantMessage("the answer being replaced"), nil),
 		},
 		latest: messagepkg.HistoryTurn{
 			ID:                 driveReplacedTurnID,
@@ -334,9 +335,9 @@ func driveDecisionHistory(t *testing.T, toolName string, result sdk.ToolOutput) 
 		Input:      sdk.ParseToolArguments(`{}`),
 	}}}
 	return &driveHistoryMessages{history: []messagepkg.Message{
-		admissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
-		admissionHistoryMessage(t, driveReplacedAssistantID, call, nil),
-		admissionHistoryMessage(t, driveEarlierAssistantMessageID, sdk.ToolMessage(sdk.ToolResultPart{
+		agenttest.AdmissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
+		agenttest.AdmissionHistoryMessage(t, driveReplacedAssistantID, call, nil),
+		agenttest.AdmissionHistoryMessage(t, driveEarlierAssistantMessageID, sdk.ToolMessage(sdk.ToolResultPart{
 			ToolCallID: driveToolCallID,
 			ToolName:   toolName,
 			Result:     result,
@@ -349,8 +350,8 @@ func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*W
 	t.Helper()
 	withDriveRequestRuntime(t, fixture)
 	admission, err := fixture.service.AdmitWebRun(context.Background(), WebAdmitInput{
-		BotID:        lifecycleTestBotID,
-		SessionID:    lifecycleTestSessionID,
+		BotID:        agenttest.LifecycleBotID,
+		SessionID:    agenttest.LifecycleSessionID,
 		InvocationID: "web-replacement",
 		Payload:      []byte(`{"kind":"replacement"}`),
 	})
@@ -369,10 +370,11 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
+	rewireComponents(fixture.service)
 	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
 		fixture.service.RunWebRetry(admission, RetryLatestMessageInput{
-			BotID:        lifecycleTestBotID,
-			SessionID:    lifecycleTestSessionID,
+			BotID:        agenttest.LifecycleBotID,
+			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,
 		}, delivery)
 	})
@@ -384,10 +386,11 @@ func driveWebEdit(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
+	rewireComponents(fixture.service)
 	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery RunDelivery) {
 		fixture.service.RunWebEdit(admission, EditLatestMessageInput{
-			BotID:        lifecycleTestBotID,
-			SessionID:    lifecycleTestSessionID,
+			BotID:        agenttest.LifecycleBotID,
+			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,
 			Text:         "the edited question",
 		}, delivery)
@@ -413,7 +416,7 @@ func awaitDriveLifecycle(t *testing.T, fixture directLifecycleFixture) {
 func driveFollowUp(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
+	key := sessionruntime.Key{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID}
 	setAllowedTeam(fixture.service, driveTeamID)
 
 	queue := &memoryQueuedInputs{}
@@ -424,9 +427,9 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 		SchemaVersion:           1,
 		TeamID:                  driveTeamID,
 		Mode:                    turn.ModeChat,
-		BotID:                   lifecycleTestBotID,
-		ChatID:                  lifecycleTestBotID,
-		ThreadID:                lifecycleTestSessionID,
+		BotID:                   agenttest.LifecycleBotID,
+		ChatID:                  agenttest.LifecycleBotID,
+		ThreadID:                agenttest.LifecycleSessionID,
 		Query:                   directLifecyclePrompt,
 		UserVisibleText:         directLifecyclePrompt,
 		IdempotencyKey:          "im-message-2",
@@ -463,7 +466,7 @@ func driveResume(t *testing.T) []sdk.Request {
 	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
 		Version:           1,
 		Query:             directLifecyclePrompt,
-		ChatID:            lifecycleTestBotID,
+		ChatID:            agenttest.LifecycleBotID,
 		UserID:            "im-user-1",
 		ChannelIdentityID: "im-sender-1",
 		CurrentChannel:    "telegram",
@@ -476,8 +479,8 @@ func driveResume(t *testing.T) []sdk.Request {
 	done, err := fixture.service.resumeInterruptedSession(context.Background(), sqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty(driveTeamID),
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
-		BotID:     db.ParseUUIDOrEmpty(lifecycleTestBotID),
-		SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID),
+		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
+		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 		InputJson: raw,
 	})
 	if err != nil {
@@ -504,7 +507,7 @@ func driveSchedulePayload(ownerUserID string) schedule.TriggerPayload {
 		Pattern:         "0 9 * * *",
 		MaxCalls:        &maxCalls,
 		Command:         directLifecyclePrompt,
-		SessionID:       lifecycleTestSessionID,
+		SessionID:       agenttest.LifecycleSessionID,
 		OwnerUserID:     ownerUserID,
 		ModelID:         "direct-lifecycle-model",
 		RuntimeModelID:  "external-runtime-model",
@@ -516,7 +519,7 @@ func driveSchedulePayload(ownerUserID string) schedule.TriggerPayload {
 func driveSchedule(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	result, err := fixture.service.TriggerSchedule(context.Background(), lifecycleTestBotID, driveSchedulePayload("schedule-owner"), "")
+	result, err := fixture.service.TriggerSchedule(context.Background(), agenttest.LifecycleBotID, driveSchedulePayload("schedule-owner"), "")
 	if err != nil {
 		t.Fatalf("TriggerSchedule() error = %v", err)
 	}
@@ -556,18 +559,19 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveDecisionHistory(t, "container_exec", sdk.TextOutput("command finished"))
+	rewireComponents(fixture.service)
 	approval := toolapproval.Request{
-		ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+		ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 		ToolCallID: driveToolCallID, ToolName: "container_exec",
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 	}
-	input := ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}
+	input := ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	result := sdk.ToolResultPart{
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
 	}
 	cont := fixture.service.toolApprovalContinuation(context.Background(), CommittedToolApprovalResponse{
-		request: approval, input: input, runID: lifecycleTestRunID,
+		request: approval, input: input, runID: agenttest.LifecycleRunID,
 	}, true)
 	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
 		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
@@ -587,15 +591,16 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveDecisionHistory(t, "ask_user", sdk.TextOutput(`{"answers":[{"text":"blue"}]}`))
+	rewireComponents(fixture.service)
 	answered := userinput.Request{
-		ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+		ID: "user-input", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 		ToolCallID: driveToolCallID, ToolName: "ask_user",
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 		Result: map[string]any{"answers": []any{map[string]any{"text": "blue"}}},
 	}
 	fixture.service.userInput = &agenttest.UserInput{Target: answered, Resolved: answered}
 	committed, err := fixture.service.CommitUserInputResponse(context.Background(), UserInputResponseInput{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, UserInputID: answered.ID,
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, UserInputID: answered.ID,
 	})
 	if err != nil {
 		t.Fatalf("CommitUserInputResponse() error = %v", err)
@@ -710,9 +715,9 @@ func drivePromptWebSend(t *testing.T) []external.PromptInput {
 	t.Helper()
 	service, recorder := newDrivePromptFixture(t)
 	if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -730,9 +735,9 @@ func drivePromptIMStartTurn(t *testing.T) []external.PromptInput {
 		SchemaVersion:           1,
 		TeamID:                  driveTeamID,
 		Mode:                    turn.ModeChat,
-		BotID:                   lifecycleTestBotID,
-		ChatID:                  lifecycleTestBotID,
-		ThreadID:                lifecycleTestSessionID,
+		BotID:                   agenttest.LifecycleBotID,
+		ChatID:                  agenttest.LifecycleBotID,
+		ThreadID:                agenttest.LifecycleSessionID,
 		Query:                   directLifecyclePrompt,
 		UserVisibleText:         directLifecyclePrompt,
 		ExternalMessageID:       "im-message-1",
@@ -754,7 +759,7 @@ func drivePromptIMStartTurn(t *testing.T) []external.PromptInput {
 func drivePromptSchedule(t *testing.T) []external.PromptInput {
 	t.Helper()
 	service, recorder := newDrivePromptFixture(t)
-	result, err := service.TriggerSchedule(context.Background(), lifecycleTestBotID, driveSchedulePayload("user-1"), "")
+	result, err := service.TriggerSchedule(context.Background(), agenttest.LifecycleBotID, driveSchedulePayload("user-1"), "")
 	if err != nil {
 		t.Fatalf("TriggerSchedule() error = %v", err)
 	}

@@ -136,7 +136,7 @@ func (d *recordingDelivery) snapshot() ([]RunEvent, []RunEnded, int) {
 // ---------------------------------------------------------------- table cases
 
 func newDriveService(pub *recordingTurnEventPublisher, admitter runreq.TurnAdmitter) *Service {
-	svc := &Service{logger: slog.New(slog.DiscardHandler)}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 	if pub != nil {
 		svc.publishTurnEvent = pub.publish
 	}
@@ -951,6 +951,7 @@ func TestDriveHookRefusalLeavesAMarkedFailureRow(t *testing.T) {
 	pub := &recordingTurnEventPublisher{}
 	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	svc.messageService = messages
+	rewireComponents(svc)
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(nil, delivery)
 	spec.Req = runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
@@ -982,6 +983,7 @@ func TestDriveNonHookSetupFailureWritesNoRow(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	svc.messageService = messages
+	rewireComponents(svc)
 	spec := scheduledSpec(nil, &recordingDelivery{})
 	spec.Req = runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
 	spec.Input = outcome.InputHeld
@@ -1106,7 +1108,7 @@ func TestRunObserverCleanTerminalClearsAnEarlierError(t *testing.T) {
 // request message is already in history.
 func continuationRequest() runreq.ChatRequest {
 	return runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
 	}
 }
@@ -1119,16 +1121,16 @@ func TestDriveDecisionContinuationNamesTheProviderFailure(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{
+	service := wireComponents(&Service{
 		agent:          native.New(native.Deps{Logger: slog.New(slog.DiscardHandler)}),
 		logger:         slog.New(slog.DiscardHandler),
 		messageService: messages,
-	}
+	})
 	req := continuationRequest()
 	cfg := native.RunConfig{
 		Model:    &sdk.Model{ID: "continuation-model", Provider: rejectingSpawnProvider{}, Type: sdk.ModelTypeChat},
 		Messages: []sdk.Message{sdk.UserMessage("continue after the decision")},
-		Identity: native.SessionContext{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
+		Identity: native.SessionContext{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID},
 	}
 	eventCh := make(chan runreq.WSStreamEvent, 64)
 
@@ -1187,7 +1189,7 @@ func TestDriveDecisionContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
+	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 
 	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req: continuationRequest(),
@@ -1211,7 +1213,7 @@ func TestDriveDecisionContinuationTargetGoneWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
+	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 
 	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req: continuationRequest(),
@@ -1246,7 +1248,7 @@ func TestDriveDecisionContinuationSnapshotWithoutOutputWritesOneRow(t *testing.T
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
+	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 	snapshot, err := json.Marshal([]sdk.Message{sdk.UserMessage("continue after the decision")})
 	if err != nil {
 		t.Fatal(err)
@@ -1293,7 +1295,7 @@ func TestDriveDecisionContinuationCallerLeavingIsAStop(t *testing.T) {
 			},
 		}
 	})
-	service := &Service{logger: slog.New(slog.DiscardHandler)}
+	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 
 	err := service.driveUnroutedContinuation(ctx, decisionContinuation{
 		Req:   continuationRequest(),
@@ -1486,6 +1488,7 @@ func TestDriveIMStartTurnSetupFailureLeavesTheUserMessageAndRow(t *testing.T) {
 			messages := &agenttest.RecordingMessages{}
 			svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 			svc.messageService = messages
+			rewireComponents(svc)
 			spec := scheduledSpec(nil, &recordingDelivery{})
 			spec.Req = runreq.ChatRequest{
 				BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
@@ -1532,6 +1535,7 @@ func TestDriveLinksTheAssetsTheDeliveryEndReports(t *testing.T) {
 		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
 	}
 	svc.messageService = messages
+	rewireComponents(svc)
 	delivery := &reportedAssetsDelivery{}
 	delivery.assets = []runreq.OutboundAssetRef{{ContentHash: "hash:voice", Role: "attachment"}}
 
@@ -1563,6 +1567,7 @@ func TestDriveLinksNothingWithoutReportedAssets(t *testing.T) {
 		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
 	}
 	svc.messageService = messages
+	rewireComponents(svc)
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
@@ -1663,6 +1668,7 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 			messages := &agenttest.RecordingMessages{}
 			svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 			svc.messageService = messages
+			rewireComponents(svc)
 			admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: name,
 				Payload: []byte(`{"kind":"` + tc.entry + `"}`),

@@ -15,7 +15,7 @@ import (
 func TestVoiceAttachmentFallsBackToAnInlinePayload(t *testing.T) {
 	t.Parallel()
 
-	svc := &Service{logger: slog.New(slog.DiscardHandler)}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 	bundle := svc.voiceAttachment(context.Background(), "bot-1", "audio/mpeg", []byte("audio"))
 
 	if bundle.Type != "voice" {
@@ -66,7 +66,7 @@ func TestAttachmentAssetRefCarriesWhatHistoryShows(t *testing.T) {
 func TestPrepareRunEventIngestsAWorkspaceFile(t *testing.T) {
 	t.Parallel()
 
-	svc := &Service{logger: slog.New(slog.DiscardHandler)}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 	svc.outputMedia, svc.outputSpeech = fakeOutputMedia{}, nil
 	assets := newOutboundAssets()
 	prepared := svc.prepareRunEvent(context.Background(), "bot-1", assets, native.StreamEvent{

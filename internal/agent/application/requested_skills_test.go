@@ -26,7 +26,7 @@ func requestedSkillGuardRequest(sessionID string) runreq.ChatRequest {
 }
 
 func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
@@ -38,7 +38,7 @@ func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
 				}, nil
 			},
 		},
-	}
+	})
 
 	req := requestedSkillGuardRequest("session-1")
 	req.InjectCh = make(chan runreq.InjectMessage)
@@ -48,7 +48,7 @@ func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
 }
 
 func TestRejectRequestedSkillsAllowsPersistedSkillActivation(t *testing.T) {
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
@@ -60,7 +60,7 @@ func TestRejectRequestedSkillsAllowsPersistedSkillActivation(t *testing.T) {
 				}, nil
 			},
 		},
-	}
+	})
 
 	req := requestedSkillGuardRequest("session-1")
 	req.UserMessagePersisted = true
@@ -181,7 +181,7 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resolver := &Service{
+			resolver := wireComponents(&Service{
 				sessionService: &agenttest.Sessions{
 					GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 						if sessionID != tc.sessionID {
@@ -190,9 +190,10 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 						return tc.session, nil
 					},
 				},
-			}
+			})
 			if tc.sessionID == "" {
 				resolver.sessionService = nil
+				rewireComponents(resolver)
 			}
 
 			req := requestedSkillGuardRequest(tc.sessionID)
@@ -209,7 +210,7 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 }
 
 func TestResolveRejectsRequestedSkillsBeforeModelResolution(t *testing.T) {
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	_, _, err := resolver.resolve(context.Background(), runreq.ChatRequest{
 		BotID:       "bot-1",
 		ChatID:      "chat-1",
@@ -229,10 +230,10 @@ func TestResolveRejectsRequestedSkillsBeforeModelResolution(t *testing.T) {
 
 func TestWebSendRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 	pool := &recordingACPPrompter{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		logger:         slog.New(slog.DiscardHandler),
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
-	}
+	})
 	registerACPPool(resolver, pool)
 
 	// The refusal is the run's setup failure, recorded under the catalog code

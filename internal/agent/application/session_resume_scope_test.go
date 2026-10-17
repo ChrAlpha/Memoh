@@ -118,7 +118,7 @@ func TestResumeScopeBindingFailsClosed(t *testing.T) {
 	if _, err := runreq.BindTeamScope(ctx, testResumeScopes{broken: true}, uuid.NewString()); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("missing binding=%v", err)
 	}
-	s := &Service{teamScopes: testResumeScopes{}}
+	s := wireComponents(&Service{teamScopes: testResumeScopes{}})
 	if _, err := s.resumeInterruptedSession(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("cross-team row=%v", err)
 	}
@@ -228,6 +228,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	s, admitter := newAdmittedTurnTestService()
 	s.logger = slog.Default()
 	s.queries = q
+	rewireComponents(s)
 	s.teamScopes = scopes
 	scan := sessionResumeScan{}
 	slots := make(chan struct{}, 4)

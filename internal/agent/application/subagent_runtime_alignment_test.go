@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -100,14 +101,14 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
-	service := &Service{contextLifecycles: lifecycles}
+	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
 	service.bindSessionRuntime(manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		ownerCtx,
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
 		"subagent:abort-alignment",
 		[]byte(`{"task":"abort alignment"}`),
 	)
@@ -126,8 +127,8 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		Query:         "abort internally",
 		LoopDetection: tools.SpawnLoopConfig{Enabled: true},
 		Identity: tools.SpawnIdentity{
-			BotID:      lifecycleTestBotID,
-			SessionID:  lifecycleTestSessionID,
+			BotID:      agenttest.LifecycleBotID,
+			SessionID:  agenttest.LifecycleSessionID,
 			IsSubagent: true,
 		},
 	}, func() {})
@@ -145,7 +146,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		Outcome:          tools.SpawnAttemptFailure,
 	})
 
-	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	snapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatalf("runtime snapshot: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	if durable.State != ledger.StateFailed || durable.ErrorCode != string(apperror.CodeAgentResponseInterrupted) {
 		t.Fatalf("durable run = %#v, want failed with an interrupted response", durable)
 	}
-	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusFailedProvider {
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != lifecycle.StatusFailedProvider {
 		t.Fatalf("lifecycle terminal = %#v, want failed_provider", lifecycles.TerminalUpserts)
 	}
 	if errors.Is(runErr, context.Canceled) {
@@ -190,13 +191,13 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := &Service{contextLifecycles: &agenttest.RecordingLifecycleStore{}}
+	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: &agenttest.RecordingLifecycleStore{}})})
 	service.bindSessionRuntime(manager)
 
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		context.Background(),
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
 		"subagent:provider-failure",
 		[]byte(`{"task":"provider failure"}`),
 	)
@@ -211,8 +212,8 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		Model: &sdk.Model{ID: "rejecting-model", Provider: rejectingSpawnProvider{}, Type: sdk.ModelTypeChat},
 		Query: "fail on the provider",
 		Identity: tools.SpawnIdentity{
-			BotID:      lifecycleTestBotID,
-			SessionID:  lifecycleTestSessionID,
+			BotID:      agenttest.LifecycleBotID,
+			SessionID:  agenttest.LifecycleSessionID,
 			IsSubagent: true,
 		},
 	}, func() {})
@@ -230,7 +231,7 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		Outcome:          tools.SpawnAttemptFailure,
 	})
 
-	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	snapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatalf("runtime snapshot: %v", err)
 	}
@@ -256,14 +257,14 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
-	service := &Service{contextLifecycles: lifecycles}
+	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
 	service.bindSessionRuntime(manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		ownerCtx,
-		lifecycleTestBotID,
-		lifecycleTestSessionID,
+		agenttest.LifecycleBotID,
+		agenttest.LifecycleSessionID,
 		"subagent:watchdog-retry",
 		[]byte(`{"task":"watchdog retry"}`),
 	)
@@ -283,8 +284,8 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		},
 		Query: "retry after the watchdog",
 		Identity: tools.SpawnIdentity{
-			BotID:      lifecycleTestBotID,
-			SessionID:  lifecycleTestSessionID,
+			BotID:      agenttest.LifecycleBotID,
+			SessionID:  agenttest.LifecycleSessionID,
 			IsSubagent: true,
 		},
 		Attempt:     1,
@@ -302,7 +303,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	if first == nil || first.ContextLifecycle == nil {
 		t.Fatalf("first attempt result = %#v, want lifecycle snapshot", first)
 	}
-	active, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	active, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatalf("runtime snapshot after retry: %v", err)
 	}
@@ -326,8 +327,8 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		},
 		Query: "retry after the watchdog",
 		Identity: tools.SpawnIdentity{
-			BotID:      lifecycleTestBotID,
-			SessionID:  lifecycleTestSessionID,
+			BotID:      agenttest.LifecycleBotID,
+			SessionID:  agenttest.LifecycleSessionID,
 			IsSubagent: true,
 		},
 		Attempt:     2,
@@ -348,7 +349,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		Outcome:          tools.SpawnAttemptCompleted,
 	})
 
-	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+	snapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 	if err != nil {
 		t.Fatalf("runtime snapshot: %v", err)
 	}
@@ -362,7 +363,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	if durable.State != ledger.StateCompleted || durable.ErrorCode != "" {
 		t.Fatalf("durable run = %#v, want completed terminal", durable)
 	}
-	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusCompleted {
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != lifecycle.StatusCompleted {
 		t.Fatalf("lifecycle terminal = %#v, want completed", lifecycles.TerminalUpserts)
 	}
 }

@@ -380,7 +380,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 	// instruction below carries the original task again. Naming the row lets
 	// context assembly drop the history copy so the model sees the task once.
 	// Without a resolvable row (older records, lookup failure) both stay.
-	requestMessageID, lookupErr := s.continuationTurnRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: runreq.PGUUIDString(row.TurnID)})
+	requestMessageID, lookupErr := s.transcript.ContinuationRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: runreq.PGUUIDString(row.TurnID)})
 	if lookupErr != nil {
 		s.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
 		requestMessageID = ""

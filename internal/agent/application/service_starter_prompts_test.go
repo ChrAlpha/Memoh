@@ -59,13 +59,13 @@ func newStarterPromptService(t *testing.T, titleModelID string) (*Service, *star
 		ID: botID, OwnerUserID: ownerID, Name: "game",
 		DisplayName: pgtype.Text{String: "游戏小帮手", Valid: true},
 	}}
-	svc := &Service{
+	svc := wireComponents(&Service{
 		queries: queries,
 		accountService: accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{
 			ID: starterOwnerID, TitleModelID: titleModelID,
 		}}),
 		logger: slog.New(slog.DiscardHandler),
-	}
+	})
 	return svc, queries
 }
 
@@ -276,7 +276,7 @@ func TestCompleteStarterPromptsParsesModelOutput(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	svc := &Service{logger: slog.New(slog.DiscardHandler)}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 	provider := sqlc.Provider{ClientType: "openai-completions", Config: []byte(`{"base_url":"` + server.URL + `","api_key":"k"}`)}
 	items := svc.completeStarterPrompts(context.Background(), svc.logger, "user-1", models.GetResponse{ModelID: "m"}, provider, "PROMPT-MARKER")
 	if len(items) != 1 || items[0].Title != "查攻略" || items[0].Prompt != "帮我找一份神庙攻略" {

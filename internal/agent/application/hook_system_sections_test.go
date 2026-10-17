@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/botenv"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/hooks"
@@ -208,7 +209,7 @@ func TestHookSystemSectionsSitBetweenBuiltinsAndNonSystemSources(t *testing.T) {
 	currentMessageIndex := 1
 	cfg.ContextCurrentUserMessageIndex = &currentMessageIndex
 	cfg.ContextQueryMaterialized = true
-	legacyHookText := formatServiceHookContext(hooks.EventBeforePromptBuild, "legacy append context")
+	legacyHookText := botenv.FormatHookContext(hooks.EventBeforePromptBuild, "legacy append context")
 	cfg.ContextHookText = legacyHookText
 	frags := buildProviderSourceFrags(
 		context.Background(),
@@ -255,14 +256,14 @@ func TestAfterPromptHookSystemBytesIncludesBothHookChannels(t *testing.T) {
 	t.Parallel()
 
 	system := "base system"
-	turnContext := formatServiceHookContext(hooks.EventBeforePromptBuild, "turn-only")
+	turnContext := botenv.FormatHookContext(hooks.EventBeforePromptBuild, "turn-only")
 	result := hooks.Result{AppendSystemSections: []hooks.SystemSectionOutput{
 		{Text: "system a"},
 		{Text: "system b"},
 	}}
 	hookTexts := append([]string{turnContext}, hookSystemSectionTexts(result)...)
 
-	got := afterPromptHookSystemBytes(system, hookTexts)
+	got := botenv.AfterPromptSystemBytes(system, hookTexts)
 	want := len(system) + len("\n\n") + len(strings.Join(hookTexts, "\n\n"))
 	if got != want {
 		t.Fatalf("system bytes = %d, want %d for both hook channels", got, want)

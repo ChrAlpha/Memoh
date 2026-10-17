@@ -12,14 +12,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/botenv"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -27,6 +32,7 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 	"github.com/felinics/memoh/internal/workspace"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 // stubQueries answers the reads a run's end makes with empty results; any other
@@ -191,15 +197,12 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if service.memoryRegistry != nil || service.hookService != nil || service.skillLoader != nil ||
+	if service.memoryRegistry != nil || service.skillLoader != nil ||
 		service.assetLoader != nil || service.platformIdentities != nil || service.workdirs != nil ||
 		service.compactionService != nil || service.bgManager != nil || service.eventPublisher != nil ||
 		service.outputMedia != nil || service.outputSpeech != nil || service.queue != nil ||
 		service.resumeReady != nil {
 		t.Fatal("optional dependencies must stay nil when absent")
-	}
-	if service.clockLocation != time.UTC {
-		t.Fatalf("clock location = %v, want UTC", service.clockLocation)
 	}
 }
 
@@ -232,8 +235,8 @@ func TestNewCarriesConfigurationAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if service.allowedTeam != "team-x" || service.contextAbsoluteMaxTokens() != 1234 {
-		t.Fatalf("configuration not carried: team=%q budget=%d", service.allowedTeam, service.contextAbsoluteMaxTokens())
+	if service.allowedTeam != "team-x" || service.transcript.AbsoluteMaxTokens() != 1234 {
+		t.Fatalf("configuration not carried: team=%q budget=%d", service.allowedTeam, service.transcript.AbsoluteMaxTokens())
 	}
 	if service.sessionManager != d.SessionRuntime || service.decisionRuntime != d.SessionRuntime ||
 		service.abortRuntime != runtimeAbortController(d.SessionRuntime) || service.sessionRuntime != runreq.TurnAdmitter(d.SessionRuntime) {
@@ -315,7 +318,7 @@ func TestNewRegistersTerminalObserverInOrder(t *testing.T) {
 		SessionRuntime: manager,
 	})
 
-	_, _, finish, err := service.AdmitSubagentRun(context.Background(), lifecycleTestBotID, lifecycleTestSessionID,
+	_, _, finish, err := service.AdmitSubagentRun(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID,
 		"subagent:new-observer", []byte(`{"task":"end"}`))
 	if err != nil {
 		t.Fatalf("admit: %v", err)
@@ -347,4 +350,48 @@ func TestTerminalFanoutRunsInOrder(t *testing.T) {
 func setAllowedTeam(s *Service, teamID string) {
 	s.allowedTeam = teamID
 	s.teamScopes = runreq.SingleTeam(teamID)
+}
+
+// useLifecycleStore routes the lifecycle rows of an already built service to
+// store. The run ledger stays whatever the service reads from.
+func useLifecycleStore(s *Service, store lifecycle.Store) {
+	s.lifecycle = lifecycle.New(lifecycle.Deps{Store: store, Runs: s.queries, Decisions: s, Logger: s.logger})
+}
+
+// wireComponents gives a Service built piecewise the components New would have
+// built from its fields; a component the test installed stays.
+func wireComponents(s *Service) *Service {
+	if s.activePrompts == nil {
+		s.activePrompts = activeprompt.New()
+	}
+	if s.botenv == nil {
+		s.botenv = botenvOf(s)
+	}
+	if s.transcript == nil {
+		s.transcript = transcriptOf(s)
+	}
+	if s.lifecycle == nil {
+		// A Service built from a literal records no lifecycle rows, as before.
+		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s, Logger: s.logger})
+	}
+	return s
+}
+
+// rewireComponents rebuilds the components that copy the dependencies a test
+// replaces after New.
+func rewireComponents(s *Service) {
+	s.botenv = botenvOf(s)
+	s.transcript = transcriptOf(s)
+}
+
+func botenvOf(s *Service) *botenv.Env {
+	var bridgeProvider bridge.Provider
+	if s.agent != nil {
+		bridgeProvider = s.agent.BridgeProvider()
+	}
+	return botenv.New(botenv.Deps{Logger: s.logger, Queries: s.queries, Settings: s.settingsService, Accounts: s.accountService, Bridge: bridgeProvider})
+}
+
+func transcriptOf(s *Service) *transcript.Reader {
+	return transcript.New(transcript.Deps{Logger: s.logger, Messages: s.messageService, Queries: s.queries, Sessions: s.sessionService})
 }

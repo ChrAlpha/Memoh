@@ -131,12 +131,12 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 	t.Parallel()
 
 	pool := &recordingACPPrompter{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		messageService: driveReplaceableHistory(t),
 		sessionRuntime: agenttest.NewScriptedAdmitter(),
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 	registerACPPool(resolver, pool)
 	admission, err := resolver.AdmitWebRun(context.Background(), WebAdmitInput{
 		BotID: "bot-1", SessionID: "session-1", InvocationID: "retry-1", Payload: []byte(`{"kind":"retry_message"}`),
@@ -163,7 +163,7 @@ func TestHookFailureRowUsesAdmittedIdentity(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+	service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
 	position := int64(7)
 	_, err := service.persistFailureRow(context.Background(), runreq.ChatRequest{
 		BotID:        "bot-1",
@@ -196,10 +196,10 @@ func TestPersistTurnFailureSkipsRetryReplacement(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	persisted, err := resolver.persistTurnFailure(
 		context.Background(),
@@ -257,10 +257,10 @@ func TestReplacePersistedTurnErrorsWhenNoReplacementPersisted(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	err := resolver.replacePersistedTurn(
 		context.Background(),
@@ -282,10 +282,10 @@ func TestPersistTerminalSnapshotSkipsUserOnlySnapshot(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -311,10 +311,10 @@ func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -340,10 +340,10 @@ func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testi
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -370,10 +370,10 @@ func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -409,10 +409,10 @@ func TestPersistTerminalSnapshotStoresAssistantOutput(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -441,10 +441,10 @@ func TestPersistTerminalSnapshotPersistsUserWhenPipelineContextContainsCurrentMe
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
@@ -478,12 +478,12 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 	memory := &storeRoundMemoryProvider{afterChat: make(chan memprovider.AfterChatRequest, 2)}
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService:  &agenttest.RecordingMessages{},
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 
 	req := runreq.ChatRequest{
 		BotID:    storeRoundBotID,
@@ -530,10 +530,10 @@ func TestPersistTerminalSnapshotSkillActivationWithoutPromptDoesNotStoreModelMar
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 	activation := &runreq.SkillActivation{
 		Skills: []runreq.SkillActivationSkill{{Name: "alpha", DisplayName: "Alpha", State: "effective"}},
 	}

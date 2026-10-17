@@ -44,11 +44,11 @@ type runtimeContextRenderInput struct {
 }
 
 func (s *Service) buildRuntimeContextSections(ctx context.Context, req runreq.ChatRequest, agentID, projectPath string) ([]contextview.RuntimeSection, *contextfrag.MemoryRecallTrace) {
-	timezoneName, timezoneLocation := s.resolveTimezone(ctx, req.BotID, req.UserID)
+	timezoneName, timezoneLocation := s.botenv.ResolveTimezone(ctx, req.BotID, req.UserID)
 
 	var files []native.SystemFile
 	limits := native.DefaultLimits()
-	if s != nil && s.agent != nil {
+	if s.agent != nil {
 		limits = s.agent.Limits()
 		nowFn := time.Now
 		if timezoneLocation != nil {
@@ -105,7 +105,7 @@ func (s *Service) buildRuntimeContextSections(ctx context.Context, req runreq.Ch
 // runtimeContextBudgetDefault estimates from the bot's default chat model;
 // an External Agent may use a different model and context window.
 func (s *Service) runtimeContextBudgetDefault(ctx context.Context, botID string) int {
-	botSettings, err := s.loadBotSettings(ctx, botID)
+	botSettings, err := s.botenv.LoadSettings(ctx, botID)
 	if err != nil {
 		return 0
 	}

@@ -164,10 +164,10 @@ func TestStoreRoundAttachesReasoningTimingAfterPersistedUserIsSkipped(t *testing
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{
+	service := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 	assistant := sdk.Message{
 		Role: sdk.MessageRoleAssistant,
 		Content: []sdk.MessagePart{

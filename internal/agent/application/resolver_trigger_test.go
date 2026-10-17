@@ -101,7 +101,7 @@ func triggerResolvedRunConfig(provider sdk.Provider, rawQuery string, now time.T
 func runTriggerPromptPipeline(t *testing.T, cfg agentpkg.RunConfig, provider *triggerCaptureProvider) (agentpkg.RunConfig, sdk.Request) {
 	t.Helper()
 	ctx := context.Background()
-	service := &Service{logger: slog.Default()}
+	service := wireComponents(&Service{logger: slog.Default()})
 	cfg = service.prepareRunConfig(ctx, cfg)
 
 	recorder := &triggerViewRecorder{}

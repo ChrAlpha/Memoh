@@ -8,7 +8,7 @@ import (
 func TestSessionCompactionWaitsForEveryOutboundAssetLinker(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	releaseFirst := resolver.DeferSessionCompaction("bot-1", "session-1", "run-1")
 	releaseSecond := resolver.DeferSessionCompaction("bot-1", "session-1", "run-2")
 	compactionEntered := make(chan struct{})
@@ -30,7 +30,7 @@ func TestSessionCompactionWaitsForEveryOutboundAssetLinker(t *testing.T) {
 func TestWaitingSessionCompactionBlocksLaterAssetLinkers(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	releaseFirst := resolver.DeferSessionCompaction("bot-1", "session-1", "run-1")
 	compactionEntered := make(chan struct{})
 	releaseCompaction := make(chan struct{})
@@ -63,7 +63,7 @@ func TestWaitingSessionCompactionBlocksLaterAssetLinkers(t *testing.T) {
 func TestSynchronousSessionCompactionSuspendsOnlyItsOwnAssetLinker(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	releaseCurrent := resolver.DeferSessionCompaction("bot-1", "session-1", "run-current")
 	releaseOther := resolver.DeferSessionCompaction("bot-1", "session-1", "run-other")
 	compactionEntered := make(chan func(), 1)
@@ -95,7 +95,7 @@ func TestSynchronousSessionCompactionSuspendsOnlyItsOwnAssetLinker(t *testing.T)
 func TestConcurrentSynchronousSessionCompactionsDoNotDeadlockUpgradingReaders(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	releaseFirst := resolver.DeferSessionCompaction("bot-1", "session-1", "run-1")
 	releaseSecond := resolver.DeferSessionCompaction("bot-1", "session-1", "run-2")
 	type enteredCompaction struct {

@@ -93,7 +93,7 @@ func runtimeControlFixture(t *testing.T) (*Service, *controlQueries, *controlDri
 	driver := &controlDriver{commands: []external.Command{{Name: "inspect", Kind: external.CommandRead}, {Name: "shrink", Kind: external.CommandOperation}}}
 	admitter := agenttest.NewScriptedAdmitter()
 	request := RuntimeControlRequest{BotID: botID.String(), ThreadID: threadID.String(), ActorID: actorID.String()}
-	svc := &Service{sessionService: session.NewService(nil, q, nil), botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{request.BotID + ":" + request.ActorID + ":" + bots.PermissionWorkspaceExec: true}}, externalDrivers: map[string]external.Driver{"codex": driver}, sessionRuntime: admitter}
+	svc := wireComponents(&Service{sessionService: session.NewService(nil, q, nil), botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{request.BotID + ":" + request.ActorID + ":" + bots.PermissionWorkspaceExec: true}}, externalDrivers: map[string]external.Driver{"codex": driver}, sessionRuntime: admitter})
 	return svc, q, driver, admitter, request
 }
 

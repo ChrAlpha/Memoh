@@ -234,8 +234,8 @@ const (
 func newDiscussEnv(t *testing.T, conversationType string) discussEnv {
 	t.Helper()
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	seedDirectLifecycleModel(t, ctx, pool)
 	env := discussEnv{pool: pool, botID: botID, sessionID: sessionID, routeID: uuid.NewString()}
 	if err := pool.QueryRow(ctx, `SELECT owner_user_id::text FROM bots WHERE id = $1`, botID).Scan(&env.ownerID); err != nil {
@@ -453,7 +453,9 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 	t.Cleanup(func() { _ = manager.Close() })
 	svc.bindSessionRuntime(manager)
 	svc.messageService = messagepkg.NewService(svc.logger, pg)
+	rewireComponents(svc)
 	svc.queries = discussStore{Queries: base, pg: pg}
+	rewireComponents(svc)
 	svc.resumeSecret = discussTestSecret
 	setAllowedTeam(svc, "")
 	svc.sessionService = &agenttest.Sessions{
@@ -465,6 +467,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 			}, nil
 		},
 	}
+	rewireComponents(svc)
 
 	provider := &discussProvider{steps: steps}
 	sender := &discussSender{}
@@ -1007,6 +1010,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	}
 	setAllowedTeam(proc.svc, row.TeamID.String())
 	proc.svc.accountService = accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{ID: env.ownerID, IsActive: true}})
+	rewireComponents(proc.svc)
 	proc.svc.botPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 	resumed, err := proc.svc.resumeInterruptedSession(ctx, row)
 	if err != nil {

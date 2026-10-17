@@ -239,7 +239,7 @@ func TestCharacterizeHistoryFailureMarker(t *testing.T) {
 	t.Parallel()
 	for _, code := range []apperror.Code{apperror.CodeAgentProviderOverloaded, apperror.CodeAgentResponseInterrupted} {
 		messages := &agenttest.RecordingMessages{}
-		service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+		service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
 		if _, err := service.persistTurnFailure(context.Background(),
 			runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
 			runreq.ResolvedContext{}, code); err != nil {
@@ -266,7 +266,7 @@ func TestCharacterizeHistoryFailureMarker(t *testing.T) {
 func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *testing.T) {
 	t.Parallel()
 	messages := &agenttest.RecordingMessages{}
-	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+	service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
 	partial := terminalSnapshot{
 		sdkMessages:   []sdk.Message{sdk.AssistantMessage("partial answer")},
 		visibleOutput: true,
@@ -287,7 +287,7 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 
 	// Without visible output the same partial snapshot becomes the failure marker.
 	hidden := &agenttest.RecordingMessages{}
-	service = &Service{messageService: hidden, logger: slog.New(slog.DiscardHandler)}
+	service = wireComponents(&Service{messageService: hidden, logger: slog.New(slog.DiscardHandler)})
 	partial.visibleOutput = false
 	if _, err := service.persistTerminalSnapshotResult(context.Background(),
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, runreq.ResolvedContext{}, partial); err != nil {
@@ -333,7 +333,7 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 				OwnerID: "owner-finisher", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
 			})
 			t.Cleanup(func() { _ = manager.Close() })
-			service := &Service{logger: slog.New(slog.DiscardHandler)}
+			service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 			service.bindSessionRuntime(manager)
 			admission, err := manager.Admit(context.Background(), sessionruntime.AdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: "invocation-finisher", Payload: []byte(`{}`),

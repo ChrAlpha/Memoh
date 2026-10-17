@@ -70,11 +70,11 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 			Config:     []byte(`{"api_key":"test-key"}`),
 		},
 	}
-	r := &Service{
+	r := wireComponents(&Service{
 		logger:        slog.New(slog.DiscardHandler),
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:       queries,
-	}
+	})
 
 	cfg, err := r.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000403",
@@ -162,11 +162,11 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 			Enable:     true,
 		},
 	}
-	service := &Service{
+	service := wireComponents(&Service{
 		logger:        slog.New(slog.DiscardHandler),
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:       queries,
-	}
+	})
 
 	cfg, err := service.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000413",
@@ -205,11 +205,11 @@ func TestBuildCompactionConfigUsesTurnModelWhenNoOverride(t *testing.T) {
 			Config:     []byte(`{"api_key":"test-key"}`),
 		},
 	}
-	service := &Service{
+	service := wireComponents(&Service{
 		logger:        slog.New(slog.DiscardHandler),
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), queries),
 		queries:       queries,
-	}
+	})
 
 	cfg, err := service.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000433",

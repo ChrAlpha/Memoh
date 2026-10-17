@@ -60,7 +60,7 @@ func TestResolveTurnIDForMessageMapsTheLegacySpelling(t *testing.T) {
 	messages := &replacementOperationMessageService{
 		turnByMsg: messagepkg.HistoryTurn{ID: " turn-old "},
 	}
-	service := &Service{messageService: messages}
+	service := wireComponents(&Service{messageService: messages})
 
 	got, err := service.ResolveTurnIDForMessage(context.Background(), "session-1", " assistant-result ")
 	if err != nil {
@@ -79,7 +79,7 @@ func TestResolveTurnIDForMessageMapsTheLegacySpelling(t *testing.T) {
 }
 
 func TestResolveTurnIDForMessageRejectsAMessageWithoutAVisibleTurn(t *testing.T) {
-	service := &Service{messageService: &replacementOperationMessageService{}}
+	service := wireComponents(&Service{messageService: &replacementOperationMessageService{}})
 
 	if _, err := service.ResolveTurnIDForMessage(context.Background(), "session-1", "assistant-result"); err == nil {
 		t.Fatal("resolve a message with no visible turn: want error")
@@ -95,7 +95,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 				AssistantMessageID: "assistant-first",
 			},
 		}
-		service := &Service{messageService: messages}
+		service := wireComponents(&Service{messageService: messages})
 
 		got, err := service.PrepareRetryLatestTurnOperation(context.Background(), "session-1", "turn-old")
 		if err != nil {
@@ -113,7 +113,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 				RequestMessageID: "user-request",
 			},
 		}
-		service := &Service{messageService: messages}
+		service := wireComponents(&Service{messageService: messages})
 
 		got, err := service.PrepareEditLatestTurnOperation(context.Background(), "session-1", "turn-old")
 		if err != nil {
@@ -134,7 +134,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 				AssistantMessageID: "assistant-first",
 			},
 		}
-		service := &Service{messageService: messages}
+		service := wireComponents(&Service{messageService: messages})
 
 		_, err := service.PrepareRetryLatestTurnOperation(context.Background(), "session-1", "turn-old")
 		if got := apperror.CodeOf(err); got != apperror.CodeSessionTurnNotLatest {
@@ -147,7 +147,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 	})
 
 	t.Run("an unnamed turn is refused before any lookup", func(t *testing.T) {
-		service := &Service{messageService: &replacementOperationMessageService{}}
+		service := wireComponents(&Service{messageService: &replacementOperationMessageService{}})
 
 		if _, err := service.PrepareRetryLatestTurnOperation(context.Background(), "session-1", "  "); err == nil {
 			t.Fatal("prepare retry operation without a turn id: want error")
@@ -161,7 +161,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 				RequestMessageID: "user-request",
 			},
 		}
-		service := &Service{messageService: messages}
+		service := wireComponents(&Service{messageService: messages})
 
 		_, err := service.PrepareRetryLatestTurnOperation(context.Background(), "session-1", "turn-old")
 		if got := apperror.CodeOf(err); got != apperror.CodeSessionTurnIncomplete {
@@ -175,7 +175,7 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 	// The store's own no-rows wording used to reach the composer verbatim.
 	t.Run("a session with no visible turn reports the stale-turn code", func(t *testing.T) {
 		messages := &replacementOperationMessageService{latestErr: messagepkg.ErrNoVisibleTurn}
-		service := &Service{messageService: messages}
+		service := wireComponents(&Service{messageService: messages})
 
 		_, err := service.PrepareRetryLatestTurnOperation(context.Background(), "session-1", "turn-old")
 		if got := apperror.CodeOf(err); got != apperror.CodeSessionTurnNotLatest {
@@ -207,7 +207,7 @@ func TestReplacePersistedTurnMovesForkAnchorMetadata(t *testing.T) {
 		},
 	}
 	var updated map[string]any
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		sessionService: &agenttest.Sessions{
 			GetFn: func(context.Context, string) (session.Thread, error) {
@@ -230,7 +230,7 @@ func TestReplacePersistedTurnMovesForkAnchorMetadata(t *testing.T) {
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if err := resolver.replacePersistedTurn(
 		context.Background(),
@@ -268,11 +268,11 @@ func TestReplacePersistedTurnPublishesReplacementMessageEvent(t *testing.T) {
 
 	messages := &agenttest.RecordingMessages{}
 	events := &recordingEventPublisher{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		eventPublisher: events,
 		logger:         slog.Default(),
-	}
+	})
 
 	err := resolver.replacePersistedTurn(context.Background(), runreq.ChatRequest{
 		BotID:        "bot-1",
@@ -321,7 +321,7 @@ func TestReplacePersistedTurnClearsForkAnchorWhenNoInheritedAssistantRemains(t *
 		},
 	}
 	var updated map[string]any
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		sessionService: &agenttest.Sessions{
 			GetFn: func(context.Context, string) (session.Thread, error) {
@@ -343,7 +343,7 @@ func TestReplacePersistedTurnClearsForkAnchorWhenNoInheritedAssistantRemains(t *
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
-	}
+	})
 
 	if err := resolver.replacePersistedTurn(
 		context.Background(),

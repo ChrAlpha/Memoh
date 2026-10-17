@@ -65,7 +65,7 @@ func TestResolveRunConfigReadsRecordedSessionFacts(t *testing.T) {
 	t.Parallel()
 
 	recorded := sessionfacts.Preset(sessionmode.Chat)
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
@@ -77,7 +77,7 @@ func TestResolveRunConfigReadsRecordedSessionFacts(t *testing.T) {
 				}, nil
 			},
 		},
-	}
+	})
 
 	got, err := resolver.ResolveRunConfig(context.Background(), "bot-1", "session-1", "user-1", "telegram", "", "group", "")
 	if err != nil {
@@ -93,11 +93,11 @@ func TestToolApprovalHandlerLimitsForcedApprovalRejectionReason(t *testing.T) {
 	t.Parallel()
 
 	large := "HEAD\n" + strings.Repeat("rejected detail ", 300) + "\nTAIL"
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		agent: native.New(native.Deps{
 			Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80},
 		}),
-	}
+	})
 	handler := resolver.buildToolApprovalHandler(baseRunConfigParams{
 		BotID:       "bot-1",
 		SessionID:   "session-1",
@@ -129,7 +129,7 @@ func TestToolApprovalPolicyDenyWinsOverHookForcedApproval(t *testing.T) {
 
 	log := slog.New(slog.DiscardHandler)
 	approvalService := toolapproval.NewService(log, nil, denyToolApprovalPolicyProvider{})
-	resolver := &Service{toolApproval: approvalService}
+	resolver := wireComponents(&Service{toolApproval: approvalService})
 	handler := resolver.buildToolApprovalHandler(baseRunConfigParams{
 		BotID:       "11111111-1111-1111-1111-111111111111",
 		SessionID:   "22222222-2222-2222-2222-222222222222",
@@ -170,7 +170,7 @@ func TestToolApprovalHandlerOnlyRecoversMissingWorkspaceTarget(t *testing.T) {
 			log := slog.New(slog.DiscardHandler)
 			approvalService := toolapproval.NewService(log, nil, nil)
 			approvalService.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyErrorResolver{err: tt.resolveErr})
-			resolver := &Service{toolApproval: approvalService, logger: log}
+			resolver := wireComponents(&Service{toolApproval: approvalService, logger: log})
 			handler := resolver.buildToolApprovalHandler(baseRunConfigParams{
 				BotID:       "bot-1",
 				SessionID:   "session-1",
@@ -222,7 +222,7 @@ func TestAgentSessionModesMatchPersistedSessionTypes(t *testing.T) {
 func TestResolveRunConfigSessionTypeUsesStoredSessionType(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
@@ -231,7 +231,7 @@ func TestResolveRunConfigSessionTypeUsesStoredSessionType(t *testing.T) {
 				return session.Thread{ID: sessionID, Type: session.TypeChat}, nil
 			},
 		},
-	}
+	})
 
 	if got := resolver.resolveRunConfigSessionType(context.Background(), "session-1"); got != session.TypeChat {
 		t.Fatalf("session type = %q, want %q", got, session.TypeChat)
@@ -241,13 +241,13 @@ func TestResolveRunConfigSessionTypeUsesStoredSessionType(t *testing.T) {
 func TestResolveRunConfigSessionTypeFallsBackToChat(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(context.Context, string) (session.Thread, error) {
 				return session.Thread{}, errors.New("db unavailable")
 			},
 		},
-	}
+	})
 
 	if got := resolver.resolveRunConfigSessionType(context.Background(), "session-1"); got != session.TypeChat {
 		t.Fatalf("session type = %q, want %q", got, session.TypeChat)
@@ -257,7 +257,7 @@ func TestResolveRunConfigSessionTypeFallsBackToChat(t *testing.T) {
 func TestResolveRunConfigSkipsModelResolutionForACPRuntime(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
@@ -271,7 +271,7 @@ func TestResolveRunConfigSkipsModelResolutionForACPRuntime(t *testing.T) {
 				}, nil
 			},
 		},
-	}
+	})
 
 	got, err := resolver.ResolveRunConfig(context.Background(), "bot-1", "session-1", "user-1", "telegram", "", "group", "")
 	if err != nil {
@@ -309,11 +309,11 @@ func TestApprovalResultMetadata(t *testing.T) {
 func TestServiceLimitToolResultTextUsesAgentLimits(t *testing.T) {
 	t.Parallel()
 
-	r := &Service{
+	r := wireComponents(&Service{
 		agent: native.New(native.Deps{
 			Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80},
 		}),
-	}
+	})
 	large := "HEAD\n" + strings.Repeat("rejected detail ", 300) + "\nTAIL"
 
 	got := r.limitToolResultText(large, "write")
@@ -347,7 +347,7 @@ func TestToolApprovalHandlerPinsWorkspaceTargetOnBypass(t *testing.T) {
 		Name:     "Office Mac",
 		Config:   toolapproval.PolicyConfig{Enabled: true, Read: toolapproval.FilePolicy{Mode: toolapproval.PolicyModeAllow}},
 	}})
-	resolver := &Service{toolApproval: approvalService, logger: log}
+	resolver := wireComponents(&Service{toolApproval: approvalService, logger: log})
 	handler := resolver.buildToolApprovalHandler(baseRunConfigParams{
 		BotID:       "bot-1",
 		SessionID:   "session-1",

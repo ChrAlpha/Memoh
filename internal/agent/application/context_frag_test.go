@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/botenv"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -95,7 +96,7 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 	t.Parallel()
 
 	image := sdk.ImagePart{Image: "data:image/png;base64,abc", MediaType: "image/png"}
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	currentIndex := 0
 	memoryIndex := 1
 	cfg := native.RunConfig{
@@ -153,7 +154,7 @@ func TestPrepareRunConfigPreservesPipelineFileAttachmentBytes(t *testing.T) {
 		ContextCurrentUserMessageIndex: &currentIndex,
 	}
 
-	prepared := (&Service{}).prepareRunConfig(context.Background(), cfg)
+	prepared := (wireComponents(&Service{})).prepareRunConfig(context.Background(), cfg)
 	got := contextview.ApplyProviderRunConfig(context.Background(), nil, prepared)
 	want := []sdk.Message{sdk.UserMessage("pipeline current user", file)}
 
@@ -165,7 +166,7 @@ func TestPrepareRunConfigPreservesPipelineFileAttachmentBytes(t *testing.T) {
 func TestPrepareRunConfigClearsStaleContextHookText(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{}
+	resolver := wireComponents(&Service{})
 	got := resolver.prepareRunConfig(context.Background(), native.RunConfig{
 		Identity:        native.SessionContext{BotID: "bot-1"},
 		ContextHookText: "[Hook Context: BeforePromptBuild]\nstale text",
@@ -184,8 +185,8 @@ func TestBuildProviderSourceFragsPlacesLegacyHookBeforeCurrent(t *testing.T) {
 	t.Parallel()
 	params := native.SystemPromptParams{SessionType: sessionmode.Chat, Timezone: "UTC"}
 	hookTexts := []string{
-		formatServiceHookContext(hooks.EventBeforePromptBuild, "before bytes"),
-		formatServiceHookContext(hooks.EventAfterPromptBuild, "after bytes"),
+		botenv.FormatHookContext(hooks.EventBeforePromptBuild, "before bytes"),
+		botenv.FormatHookContext(hooks.EventAfterPromptBuild, "after bytes"),
 	}
 	system := native.GenerateSystemPrompt(params)
 	messages := []sdk.Message{

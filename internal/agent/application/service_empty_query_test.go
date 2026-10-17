@@ -10,7 +10,7 @@ import (
 // A request with no query and no attachments is refused unless its input is
 // already persisted: the current message is then the history row it names.
 func TestResolveRejectsEmptyQueryUnlessInputIsPersisted(t *testing.T) {
-	svc := &Service{}
+	svc := wireComponents(&Service{})
 
 	_, _, err := svc.resolve(context.Background(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1"})
 	if err == nil || err.Error() != "query or attachments is required" {

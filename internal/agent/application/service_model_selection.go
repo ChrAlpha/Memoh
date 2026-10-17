@@ -167,7 +167,7 @@ func (s *Service) writeBackSessionModelPreference(ctx context.Context, sessionID
 func (s *Service) ReconcileSessionModelPreference(ctx context.Context, botID, modelRef, effort string) (string, string, error) {
 	modelID := strings.TrimSpace(modelRef)
 	if modelID == "" {
-		botSettings, err := s.loadBotSettings(ctx, botID)
+		botSettings, err := s.botenv.LoadSettings(ctx, botID)
 		if err != nil {
 			return "", "", err
 		}

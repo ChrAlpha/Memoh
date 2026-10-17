@@ -494,10 +494,10 @@ func (f *modelSelectionFakeQueries) GetLatestSessionModelID(_ context.Context, _
 
 func newModelSelectionService(t *testing.T, fake *modelSelectionFakeQueries) *Service {
 	t.Helper()
-	return &Service{
+	return wireComponents(&Service{
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), fake),
 		queries:       fake,
-	}
+	})
 }
 
 func modelSelectionProviderRow(t *testing.T, id string, clientType string, enable bool) sqlc.Provider {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -23,7 +24,7 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 		{
 			name:              "completed",
 			events:            []native.StreamEvent{{Type: native.EventAgentEnd}},
-			wantLifecycle:     contextLifecycleStatusCompleted,
+			wantLifecycle:     lifecycle.StatusCompleted,
 			wantRuntimeStatus: sessionruntime.RunStatusCompleted,
 		},
 		{
@@ -32,7 +33,7 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 				{Type: native.EventError, Error: "private provider detail"},
 				{Type: native.EventAgentAbort},
 			},
-			wantLifecycle:     contextLifecycleStatusFailedProvider,
+			wantLifecycle:     lifecycle.StatusFailedProvider,
 			wantRuntimeStatus: sessionruntime.RunStatusErrored,
 		},
 	}
@@ -41,8 +42,8 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 			manager, handle := newWaitingDecisionRuntime(t)
 			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
-			service.contextLifecycles = lifecycles
-			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
+			useLifecycleStore(service, lifecycles)
+			manager.SetTerminalObserver(service.lifecycle.ReconcileTerminal)
 
 			// The run resolves no context of its own, so the terminal write is
 			// what leaves its lifecycle row.
@@ -63,7 +64,7 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 			if bytes.Contains(rows[0].Snapshot, []byte("private provider detail")) {
 				t.Fatalf("lifecycle snapshot leaked private provider detail: %s", rows[0].Snapshot)
 			}
-			runtimeSnapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
+			runtimeSnapshot, err := manager.Snapshot(context.Background(), agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +77,7 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 
 func TestStaleDecisionContinuationDoesNotRecoverLifecycleFromAssistantMetadata(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
-	snapshot, ok := lifecycleTestRunConfig().ContextLifecycle.Snapshot()
+	snapshot, ok := agenttest.LifecycleRunConfig().ContextLifecycle.Snapshot()
 	if !ok {
 		t.Fatal("test lifecycle snapshot is unavailable")
 	}
@@ -88,7 +89,7 @@ func TestStaleDecisionContinuationDoesNotRecoverLifecycleFromAssistantMetadata(t
 	}
 	lifecycles := &agenttest.RecordingLifecycleStore{Metadata: metadata}
 	service := continuationService(manager)
-	service.contextLifecycles = lifecycles
+	useLifecycleStore(service, lifecycles)
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 

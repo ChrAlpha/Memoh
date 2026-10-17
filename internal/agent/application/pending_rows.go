@@ -109,7 +109,7 @@ func (s *Service) precedingUserRow(ctx context.Context, cmd turn.StartTurnComman
 	header := turn.FormatUserHeader(turn.UserMessageHeaderInput{
 		MessageID:          strings.TrimSpace(req.ExternalMessageID),
 		ChannelIdentityID:  strings.TrimSpace(req.SourceChannelIdentityID),
-		DisplayName:        s.resolveDisplayName(ctx, req),
+		DisplayName:        s.botenv.ResolveDisplayName(ctx, req),
 		Channel:            req.CurrentChannel,
 		ConversationType:   strings.TrimSpace(req.ConversationType),
 		ConversationName:   strings.TrimSpace(req.ConversationName),

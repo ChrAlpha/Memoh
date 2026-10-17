@@ -118,9 +118,9 @@ func TestTurnSpanReportsAFailureTheWebSocketStreamDelivered(t *testing.T) {
 	fixture, _ := newScriptedFailureFixture(t, http.StatusServiceUnavailable, http.StatusBadRequest)
 
 	_, err := streamWebSend(context.Background(), t, fixture.service, runreq.ChatRequest{
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})

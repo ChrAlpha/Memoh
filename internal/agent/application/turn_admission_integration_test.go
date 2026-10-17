@@ -4,21 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"os"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
-
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	dbpkg "github.com/felinics/memoh/internal/db"
-	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -31,15 +24,10 @@ import (
 // Manager and the real PostgreSQL ledger, so a break anywhere between wiring,
 // activation, and snapshot delivery fails here rather than in production.
 
-var (
-	turnAdmissionMigrationOnce sync.Once
-	turnAdmissionMigrationErr  error
-)
-
 func TestAdmitTurnRunRequestUserTurnReachesSubscriber(t *testing.T) {
 	ctx := context.Background()
-	pool := openTurnAdmissionPostgres(t, ctx)
-	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
+	pool := agenttest.OpenPostgres(t, ctx)
+	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-turn-admission-test",
@@ -52,7 +40,7 @@ func TestAdmitTurnRunRequestUserTurnReachesSubscriber(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 
-	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: manager}
+	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: manager})
 	cmd := turn.StartTurnCommand{
 		TeamID:                  "team-1",
 		Mode:                    turn.ModeChat,
@@ -116,65 +104,4 @@ func TestAdmitTurnRunRequestUserTurnReachesSubscriber(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for the subscription baseline snapshot")
 	}
-}
-
-func openTurnAdmissionPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
-	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		t.Skip("set TEST_POSTGRES_DSN to run the turn admission PostgreSQL integration")
-	}
-	pool, err := dbpkg.OpenPostgresDSN(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open PostgreSQL pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if os.Getenv("TEST_POSTGRES_BOOTSTRAP_SCHEMA") == "1" {
-		turnAdmissionMigrationOnce.Do(func() {
-			turnAdmissionMigrationErr = dbtest.MigratePostgresUp(dsn)
-		})
-		if turnAdmissionMigrationErr != nil {
-			t.Fatalf("migrate PostgreSQL test database: %v", turnAdmissionMigrationErr)
-		}
-	}
-	return pool
-}
-
-// createTurnAdmissionFixture mirrors the ledger integration fixtures: random
-// identities relying on the default team, cleaned up by deleting the bot
-// (session_runs and bot_sessions cascade) and the user.
-func createTurnAdmissionFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string) {
-	t.Helper()
-	userID := uuid.New()
-	botID := uuid.New()
-	sessionID := uuid.New()
-	name := "turn-admission-" + uuid.NewString()
-	if _, err := pool.Exec(ctx, `
-		WITH created_user AS (
-			INSERT INTO users (id, username, is_active)
-			VALUES ($1, $2, true)
-			RETURNING id
-		)
-		INSERT INTO team_members (user_id, role)
-		SELECT id, 'admin' FROM created_user
-	`, userID, name); err != nil {
-		t.Fatalf("create user fixture: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO bots (id, owner_user_id, name) VALUES ($1, $2, $3)
-	`, botID, userID, name); err != nil {
-		t.Fatalf("create bot fixture: %v", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO bot_sessions (id, bot_id, channel_type, runtime_type)
-		VALUES ($1, $2, 'telegram', 'model')
-	`, sessionID, botID); err != nil {
-		t.Fatalf("create session fixture: %v", err)
-	}
-	cleanupCtx := context.WithoutCancel(ctx)
-	t.Cleanup(func() {
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM bots WHERE id = $1", botID)
-		_, _ = pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", userID)
-	})
-	return botID.String(), sessionID.String()
 }

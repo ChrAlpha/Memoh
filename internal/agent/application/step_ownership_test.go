@@ -20,7 +20,7 @@ func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 		t.Run(cause.Error(), func(t *testing.T) {
 			store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 			owner, cancel := context.WithCancelCause(context.Background())
-			committer := &agentStepCommitter{service: &Service{}, persister: store, ownerContext: owner, req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
+			committer := &agentStepCommitter{service: wireComponents(&Service{}), persister: store, ownerContext: owner, req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
 			cancel(cause)
 			err := committer.interrupt(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("partial")}})
 			if errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
@@ -36,7 +36,7 @@ func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 
 func TestSubagentRejectsRevokedCheckpointWithDetachedCallback(t *testing.T) {
 	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := &Service{messageService: store}
+	service := wireComponents(&Service{messageService: store})
 	owner, cancel := context.WithCancelCause(subagentRunContext("bot", "session", 9))
 	_, checkpoint := service.SubagentStepCommit(owner, "bot", "session", "model", "request", nil, nil)
 	if checkpoint == nil {

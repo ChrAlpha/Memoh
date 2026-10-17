@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
@@ -90,8 +91,8 @@ func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 			// what the run_terminal is read against.
 			service.bindSessionRuntime(manager)
 			cmd := turn.StartTurnCommand{
-				TeamID: "team-1", Mode: turn.ModeChat, BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-				ChatID: lifecycleTestBotID, Query: directLifecyclePrompt, IdempotencyKey: "msg-1",
+				TeamID: "team-1", Mode: turn.ModeChat, BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+				ChatID: agenttest.LifecycleBotID, Query: directLifecyclePrompt, IdempotencyKey: "msg-1",
 			}
 			handle, err := service.StartTurn(context.Background(), cmd)
 			if err != nil {

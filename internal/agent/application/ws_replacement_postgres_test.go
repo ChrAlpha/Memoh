@@ -57,6 +57,7 @@ func newWSReplacementHarness(t *testing.T) wsReplacementHarness {
 	}
 	counter := &countingReplacements{DBService: h.messages}
 	h.service.messageService = counter
+	rewireComponents(h.service)
 	return wsReplacementHarness{wsStepHistoryHarness: h, counter: counter}
 }
 

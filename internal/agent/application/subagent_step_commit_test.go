@@ -33,7 +33,7 @@ func subagentRunContext(botID, sessionID string, token int64) context.Context {
 func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := &Service{messageService: store}
+	service := wireComponents(&Service{messageService: store})
 
 	if commit, interrupt := service.SubagentStepCommit(context.Background(), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
 		t.Fatal("commit enabled without an admitted run handle")
@@ -61,7 +61,7 @@ func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 	if commit, interrupt := service.SubagentStepCommit(subagentRunContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit == nil || interrupt == nil {
 		t.Fatal("commit not enabled for an admitted fenced subagent run")
 	}
-	bare := &Service{messageService: &agenttest.RecordingMessages{}}
+	bare := wireComponents(&Service{messageService: &agenttest.RecordingMessages{}})
 	if commit, interrupt := bare.SubagentStepCommit(subagentRunContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
 		t.Fatal("commit enabled on a message service without step persistence")
 	}
@@ -70,7 +70,7 @@ func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := &Service{messageService: store}
+	service := wireComponents(&Service{messageService: store})
 	ctx := subagentRunContext(botID, sessionID, 9)
 	holder := contextfrag.NewLifecycleHolder()
 	holder.SetManifest(contextfrag.Manifest{
@@ -160,7 +160,7 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := &Service{messageService: store}
+	service := wireComponents(&Service{messageService: store})
 	ctx := subagentRunContext(botID, sessionID, 3)
 	persistedSteps := 0
 	commit, _ := service.SubagentStepCommit(ctx, botID, sessionID, "model", "req-msg-1", nil, func() { persistedSteps++ })
@@ -183,11 +183,11 @@ func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 }
 
 func TestSubagentRunObserverRequiresRuntimeAndHandle(t *testing.T) {
-	service := &Service{}
+	service := wireComponents(&Service{})
 	if got := service.SubagentRunObserver(subagentRunContext(uuid.NewString(), uuid.NewString(), 5)); got != nil {
 		t.Fatal("observer enabled without a session runtime")
 	}
-	withRuntime := &Service{decisionRuntime: &sessionruntime.Manager{}}
+	withRuntime := wireComponents(&Service{decisionRuntime: &sessionruntime.Manager{}})
 	if got := withRuntime.SubagentRunObserver(context.Background()); got != nil {
 		t.Fatal("observer enabled without an admitted run handle")
 	}

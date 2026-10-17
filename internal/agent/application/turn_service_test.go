@@ -26,11 +26,11 @@ func newTurnTestService() *Service {
 
 func newAdmittedTurnTestService() (*Service, *agenttest.ScriptedAdmitter) {
 	admitter := agenttest.NewScriptedAdmitter()
-	return &Service{
+	return wireComponents(&Service{
 		logger:           slog.New(slog.DiscardHandler),
 		sessionRuntime:   admitter,
 		publishTurnEvent: admitter.PublishAgentEvent,
-	}, admitter
+	}), admitter
 }
 
 // chatTurnFixture is the chat entries' test service: a real application service
@@ -50,16 +50,18 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 	fixture.service.sessionRuntime = admitter
 	fixture.service.publishTurnEvent = admitter.PublishAgentEvent
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
+	rewireComponents(fixture.service)
 	// The chat path reads the session for the facts a run executes under, the
 	// same way a hosted service does.
 	fixture.service.sessionService = &agenttest.Sessions{
 		GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{
-				ID: sessionID, BotID: lifecycleTestBotID, Type: sessionpkg.TypeChat,
+				ID: sessionID, BotID: agenttest.LifecycleBotID, Type: sessionpkg.TypeChat,
 				SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
 			}, nil
 		},
 	}
+	rewireComponents(fixture.service)
 	// The composition root compiles the run's context fragments into the
 	// provider-facing request there; without it the routing a run assembled
 	// never reaches the model, and a test could not tell a lost route from an
@@ -77,13 +79,13 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 func (f chatTurnFixture) start(t *testing.T, cmd turn.StartTurnCommand) turn.RunHandle {
 	t.Helper()
 	if cmd.BotID == "" {
-		cmd.BotID = lifecycleTestBotID
+		cmd.BotID = agenttest.LifecycleBotID
 	}
 	if cmd.ThreadID == "" {
-		cmd.ThreadID = lifecycleTestSessionID
+		cmd.ThreadID = agenttest.LifecycleSessionID
 	}
 	if cmd.ChatID == "" {
-		cmd.ChatID = lifecycleTestBotID
+		cmd.ChatID = agenttest.LifecycleBotID
 	}
 	if cmd.Query == "" {
 		cmd.Query = directLifecyclePrompt
@@ -138,7 +140,7 @@ func TestStartTurnRequiresTeamID(t *testing.T) {
 // admission there is no owner, no fencing token, and nothing that would ever
 // drive the run to a terminal state.
 func TestStartTurnRequiresSessionRuntime(t *testing.T) {
-	service := &Service{}
+	service := wireComponents(&Service{})
 	if _, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 		TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s",
 	}); err == nil {
@@ -161,7 +163,7 @@ func TestStartTurnStreamsEvents(t *testing.T) {
 		if event.Seq != int64(i+1) {
 			t.Fatalf("event %d seq = %d, want %d; the port indexes events from one", i, event.Seq, i+1)
 		}
-		if event.RunID != handle.RunID() || event.TeamID != "team-1" || event.ThreadID != lifecycleTestSessionID {
+		if event.RunID != handle.RunID() || event.TeamID != "team-1" || event.ThreadID != agenttest.LifecycleSessionID {
 			t.Fatalf("event %d envelope = %+v, want the run's identity", i, event)
 		}
 	}

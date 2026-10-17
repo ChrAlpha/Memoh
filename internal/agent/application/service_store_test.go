@@ -181,10 +181,10 @@ func TestStoreMessagesUsesToolTailBatch(t *testing.T) {
 	t.Parallel()
 
 	messages := &batchRecordingMessageService{}
-	resolver := &Service{
+	resolver := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	persisted := resolver.storeMessages(context.Background(), runreq.ChatRequest{
 		BotID:       storeRoundBotID,
@@ -213,10 +213,10 @@ func TestStoreMessagesUsesToolTailBatch(t *testing.T) {
 func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
+	service := wireComponents(&Service{
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 	// resolve() replaces ChatRequest.Query with the headerified envelope before
 	// the round is stored; an image with no caption leaves RawQuery empty.
 	headerified := turnpkg.FormatUserHeader(turnpkg.UserMessageHeaderInput{
@@ -252,10 +252,10 @@ func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T)
 func TestBuildPersistInputsLiftsToolCallDiffsToRowMetadata(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{
+	service := wireComponents(&Service{
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
-	}
+	})
 	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
 	parts, err := json.Marshal([]map[string]any{{
 		"type":       "tool-call",
@@ -326,10 +326,10 @@ func TestStoreRoundPersistsLifecycleMetadataOnLastAssistant(t *testing.T) {
 	messages := &lifecycleRecordingMessageService{
 		messageIDs: []string{"user-id", "first-assistant-id", " final-assistant-id "},
 	}
-	service := &Service{
+	service := wireComponents(&Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
-	}
+	})
 
 	err := service.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 		BotID:    "bot-1",
@@ -419,12 +419,12 @@ func TestStoreRoundLogsSkippedLifecycleMetadataReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			messages := &agenttest.RecordingMessages{}
-			service := &Service{
+			service := wireComponents(&Service{
 				messageService: messages,
 				logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
 					Level: slog.LevelDebug,
 				})),
-			}
+			})
 
 			err := service.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 				BotID:    "bot-1",

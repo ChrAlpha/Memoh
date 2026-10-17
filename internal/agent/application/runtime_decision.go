@@ -477,6 +477,6 @@ func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatReq
 		},
 		Req:        req,
 		IdleEffort: reasoningEffortForIdle(cfg),
-		Lifecycle:  s.contextLifecycleTerminal(ctx, cfg),
+		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }

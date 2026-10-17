@@ -12,11 +12,11 @@ import (
 // create.
 func TestR4bLaterRoundReadsCompactedHistoryInOrder(t *testing.T) {
 	s, fixture, recorder := stage4DriveSession(t)
-	s.padding = 3000
-	s.persistConversation("a", 8)
+	s.Padding = 3000
+	s.PersistConversation("a", 8)
 
 	startStage4Turn(t, fixture, "first question")
-	if got := s.summarizer.callCount(); got == 0 {
+	if got := s.Summarizer.CallCount(); got == 0 {
 		t.Fatal("the first round did not compact; the test would assert on a boundary it never built")
 	}
 	afterFirst := len(recorder.recorded())
@@ -28,7 +28,7 @@ func TestR4bLaterRoundReadsCompactedHistoryInOrder(t *testing.T) {
 	}
 
 	body := string(marshalDriveRequests(t, requests[afterFirst:afterFirst+1]))
-	covered, raw := s.compactedLabels()
+	covered, raw := s.CompactedLabels()
 	if len(covered) == 0 {
 		t.Fatalf("the session has nothing compacted to read: covered=%v raw=%v", covered, raw)
 	}

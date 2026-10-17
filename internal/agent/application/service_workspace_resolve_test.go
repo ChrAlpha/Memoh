@@ -67,7 +67,7 @@ func TestResolveWorkspaceWithoutPrincipalSkipsPermissionCheck(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			perm := &countingPermission{}
-			service := &Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm}
+			service := wireComponents(&Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm})
 			if tt.workdir != nil {
 				service = workdirBoundService(*tt.workdir)
 				service.workspaceTargets = kindedTargetResolver{}
@@ -100,7 +100,7 @@ func TestResolveWorkspaceWithPrincipalChecksRemoteTargets(t *testing.T) {
 
 	t.Run("remote request denied", func(t *testing.T) {
 		perm := &countingPermission{allowed: false}
-		service := &Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm}
+		service := wireComponents(&Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm})
 		_, _, err := service.resolveWorkspace(t.Context(), workspaceInput{BotID: "bot-1", RequestedTargetID: "computer-b", Principal: principal})
 		if err == nil || !strings.Contains(err.Error(), "workspace_read") || perm.calls != 1 {
 			t.Fatalf("err = %v, calls = %d, want workspace_read denial after one check", err, perm.calls)
@@ -117,7 +117,7 @@ func TestResolveWorkspaceWithPrincipalChecksRemoteTargets(t *testing.T) {
 		}
 	})
 	t.Run("unidentified principal rejected", func(t *testing.T) {
-		service := &Service{workspaceTargets: kindedTargetResolver{}, botPermissions: &countingPermission{allowed: true}}
+		service := wireComponents(&Service{workspaceTargets: kindedTargetResolver{}, botPermissions: &countingPermission{allowed: true}})
 		_, _, err := service.resolveWorkspace(t.Context(), workspaceInput{BotID: "bot-1", RequestedTargetID: "computer-b", Principal: &workspacePrincipal{}})
 		if err == nil || !strings.Contains(err.Error(), "user id") {
 			t.Fatalf("err = %v, want user id required", err)
@@ -125,7 +125,7 @@ func TestResolveWorkspaceWithPrincipalChecksRemoteTargets(t *testing.T) {
 	})
 	t.Run("native default needs no permission", func(t *testing.T) {
 		perm := &countingPermission{}
-		service := &Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm}
+		service := wireComponents(&Service{workspaceTargets: kindedTargetResolver{}, botPermissions: perm})
 		_, got, err := service.resolveWorkspace(t.Context(), workspaceInput{BotID: "bot-1", Principal: principal})
 		if err != nil || perm.calls != 0 || got.Target == nil || got.Target.Kind != workspace.WorkspaceTargetNative {
 			t.Fatalf("err = %v, calls = %d, target = %#v", err, perm.calls, got.Target)
@@ -135,7 +135,7 @@ func TestResolveWorkspaceWithPrincipalChecksRemoteTargets(t *testing.T) {
 
 func TestResolveWorkspaceBestEffortToleratesOnlyAnUnselectedTarget(t *testing.T) {
 	boom := errors.New("boom")
-	service := &Service{workspaceTargets: kindedTargetResolver{err: boom}}
+	service := wireComponents(&Service{workspaceTargets: kindedTargetResolver{err: boom}})
 
 	if _, got, err := service.resolveWorkspace(t.Context(), workspaceInput{BotID: "bot-1", BestEffort: true}); err != nil || got.Target != nil {
 		t.Fatalf("unselected default: err = %v, target = %#v, want tolerated with no target", err, got.Target)

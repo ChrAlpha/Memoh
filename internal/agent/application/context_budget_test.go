@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -26,8 +27,10 @@ func TestEffectiveContextTokenBudget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := &Service{logger: slog.New(slog.DiscardHandler)}
-			svc.contextAbsoluteCapTokens = tc.fallback
+			svc := wireComponents(&Service{
+				logger:     slog.New(slog.DiscardHandler),
+				transcript: transcript.New(transcript.Deps{FallbackTokens: tc.fallback}),
+			})
 			if got := svc.effectiveContextTokenBudget(tc.model); got != tc.want {
 				t.Fatalf("budget = %d, want %d", got, tc.want)
 			}

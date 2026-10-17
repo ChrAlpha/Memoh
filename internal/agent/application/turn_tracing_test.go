@@ -297,7 +297,7 @@ func spanTestEntries() []spanTestEntry {
 	return []spanTestEntry{
 		{name: "web_send", start: func(t *testing.T, service *Service) (func(), func()) {
 			admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
-				BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
+				BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 				InvocationID: "span-web", Payload: []byte(`{"kind":"message"}`),
 			})
 			if err != nil {
@@ -305,7 +305,7 @@ func spanTestEntries() []spanTestEntry {
 			}
 			delivery := newWebTestDelivery()
 			service.RunWebSend(admission, runreq.ChatRequest{
-				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt,
 			}, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
 			return func() { admission.stop(outcome.ErrRunStopped) }, func() { delivery.wait(t) }
@@ -313,7 +313,7 @@ func spanTestEntries() []spanTestEntry {
 		{name: "im_start_turn", start: func(t *testing.T, service *Service) (func(), func()) {
 			handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 				SchemaVersion: 1, TeamID: driveTeamID, Mode: turn.ModeChat,
-				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt, ExternalMessageID: "span-im", SourceChannelIdentityID: "im-sender-1",
 				UserID: "user-1", CurrentChannel: "telegram", Channels: []string{"telegram"},
 				ReplyTarget: "im-chat-1", ConversationType: "private",
@@ -327,7 +327,7 @@ func spanTestEntries() []spanTestEntry {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				_, _ = service.TriggerSchedule(context.Background(), lifecycleTestBotID, driveSchedulePayload("user-1"), "")
+				_, _ = service.TriggerSchedule(context.Background(), agenttest.LifecycleBotID, driveSchedulePayload("user-1"), "")
 			}()
 			// A routed abort reaches the fire through the cancel the admission
 			// registered.
@@ -338,7 +338,7 @@ func spanTestEntries() []spanTestEntry {
 			const teamID = "00000000-0000-0000-0000-000000000001"
 			setAllowedTeam(service, teamID)
 			raw, err := json.Marshal(map[string]any{"resume": resumeContext{
-				Version: 1, ChatID: lifecycleTestBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
+				Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
 			}})
 			if err != nil {
 				t.Fatal(err)
@@ -346,8 +346,8 @@ func spanTestEntries() []spanTestEntry {
 			done, err := service.resumeInterruptedSession(t.Context(), sqlc.SessionRun{
 				TeamID:    db.ParseUUIDOrEmpty(teamID),
 				RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
-				BotID:     db.ParseUUIDOrEmpty(lifecycleTestBotID),
-				SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID),
+				BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
+				SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 				InputJson: raw,
 			})
 			if err != nil {
@@ -363,7 +363,7 @@ func spanTestEntries() []spanTestEntry {
 			go func() {
 				defer close(done)
 				_ = service.driveUnroutedContinuation(ctx, decisionContinuation{
-					Req: runreq.ChatRequest{BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, Query: directLifecyclePrompt},
+					Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, Query: directLifecyclePrompt},
 					Setup: func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 						return service.externalRunPlan(ctx, req, runSpec{Input: outcome.InputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
 					},
@@ -423,8 +423,8 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 				if got := span.Status().Code; got != want[ending].status {
 					t.Errorf("status = %v, want %v", got, want[ending].status)
 				}
-				if got := spanAttr(span, "agent.bot_id").AsString(); got != lifecycleTestBotID {
-					t.Errorf("agent.bot_id = %q, want %q", got, lifecycleTestBotID)
+				if got := spanAttr(span, "agent.bot_id").AsString(); got != agenttest.LifecycleBotID {
+					t.Errorf("agent.bot_id = %q, want %q", got, agenttest.LifecycleBotID)
 				}
 			})
 		}

@@ -64,7 +64,7 @@ func tgsSticker(t *testing.T) []byte {
 
 func imageInputService(t *testing.T, assets map[string][]byte) *Service {
 	t.Helper()
-	return &Service{
+	return wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(_ context.Context, _, contentHash string) (io.ReadCloser, string, error) {
@@ -78,7 +78,7 @@ func imageInputService(t *testing.T, assets map[string][]byte) *Service {
 				return "/data/.memoh/media/" + contentHash, nil
 			},
 		},
-	}
+	})
 }
 
 // The reported failure: an unusable attachment sitting in pending discussion
@@ -127,7 +127,7 @@ func TestInlineInjectAttachmentsIgnoresMislabeledStickerBytes(t *testing.T) {
 
 func TestInlineInjectAttachmentsLoadsEachAssetOnce(t *testing.T) {
 	opens := 0
-	s := &Service{
+	s := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(context.Context, string, string) (io.ReadCloser, string, error) {
@@ -135,7 +135,7 @@ func TestInlineInjectAttachmentsLoadsEachAssetOnce(t *testing.T) {
 				return io.NopCloser(bytes.NewReader(rasterPNG(t))), "image/png", nil
 			},
 		},
-	}
+	})
 	refs := []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
@@ -194,7 +194,7 @@ func TestGatewayStickerBytesRouteToFileFallback(t *testing.T) {
 // An upload is bytes too: a renamed video must not reach the model just because
 // the browser announced it as a PNG.
 func TestGatewayInlineDataURLWithNonRasterBytesIsWithheld(t *testing.T) {
-	s := &Service{logger: slog.Default()}
+	s := wireComponents(&Service{logger: slog.Default()})
 	item := gatewayAttachment{
 		Type:      "image",
 		Mime:      "image/png",
@@ -211,7 +211,7 @@ func TestGatewayInlineDataURLWithNonRasterBytesIsWithheld(t *testing.T) {
 // reach the data URL: the payload and the MIME field travel to different
 // consumers from here on.
 func TestGatewayInlineDataURLRestampsMislabeledSubtype(t *testing.T) {
-	s := &Service{logger: slog.Default()}
+	s := wireComponents(&Service{logger: slog.Default()})
 	data := rasterPNG(t)
 	item := gatewayAttachment{
 		Type:      "image",
@@ -252,14 +252,14 @@ func (d *dripReader) Read(p []byte) (int, error) {
 
 func TestStoredImageSurvivesShortReads(t *testing.T) {
 	data := rasterPNG(t)
-	s := &Service{
+	s := wireComponents(&Service{
 		logger: slog.Default(),
 		assetLoader: &fakeGatewayAssetLoader{
 			openFn: func(context.Context, string, string) (io.ReadCloser, string, error) {
 				return io.NopCloser(&dripReader{data: bytes.Clone(data)}), "image/png", nil
 			},
 		},
-	}
+	})
 	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
@@ -284,7 +284,7 @@ func TestStoredImageShorterThanSniffWindow(t *testing.T) {
 }
 
 func TestGatewayInlineDataURLKeepsRealImage(t *testing.T) {
-	s := &Service{logger: slog.Default()}
+	s := wireComponents(&Service{logger: slog.Default()})
 	item := gatewayAttachment{
 		Type:      "image",
 		Mime:      "image/png",

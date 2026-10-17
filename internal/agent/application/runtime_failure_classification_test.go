@@ -52,7 +52,7 @@ func TestPersistExternalRoundFailureCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			messages := &agenttest.RecordingMessages{}
-			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+			service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
 			if err := service.persistExternalRound(
 				context.Background(),
 				runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "run"},
@@ -100,7 +100,7 @@ func TestStreamRuntimeExternalAgentFailureCarriesOneCode(t *testing.T) {
 	}}
 	ch := make(chan runreq.WSStreamEvent, 64)
 	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "test",
 	}, ch, make(chan struct{}))
 	if err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
@@ -135,7 +135,7 @@ func TestStreamRuntimeFailureNamesItsRuntime(t *testing.T) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}}, errors.New("driver exit")
 	}}
 	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "test",
 	}, make(chan runreq.WSStreamEvent, 64), make(chan struct{}))
 	if err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
@@ -158,7 +158,7 @@ func TestStreamRuntimeFailureKeepsPartialOutputUnchanged(t *testing.T) {
 	}}
 	ch := make(chan runreq.WSStreamEvent, 64)
 	if _, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "test",
 	}, ch, make(chan struct{})); err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestScheduledRuntimeFailureRoundHasNoFailureText(t *testing.T) {
 			}}
 			if _, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 				FireID: "fire-1", ID: "schedule-1",
-				SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+				SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 			}); apperror.CodeOf(err) != apperror.CodeACPRuntimeBusy {
 				t.Fatalf("schedule error = %v, want %s", err, apperror.CodeACPRuntimeBusy)
 			}
@@ -243,7 +243,7 @@ func TestScheduledRuntimeFailureTextIsItsCode(t *testing.T) {
 	}}
 	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1",
-		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
+		SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 	if err == nil || err.Error() != string(apperror.CodeRuntimePromptFailed) {
 		t.Fatalf("schedule error text = %q, want exactly %q", err, apperror.CodeRuntimePromptFailed)
@@ -265,7 +265,7 @@ func TestWebSendRefusedByRuntimeHandsTheDraftBack(t *testing.T) {
 	}}
 	ch := make(chan runreq.WSStreamEvent, 64)
 	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "inspect",
 	}, ch, make(chan struct{}))
 	if err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
@@ -305,9 +305,9 @@ func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
 		SchemaVersion:     1,
 		TeamID:            driveTeamID,
 		Mode:              turn.ModeChat,
-		BotID:             lifecycleTestBotID,
-		ChatID:            lifecycleTestBotID,
-		ThreadID:          lifecycleTestSessionID,
+		BotID:             agenttest.LifecycleBotID,
+		ChatID:            agenttest.LifecycleBotID,
+		ThreadID:          agenttest.LifecycleSessionID,
 		Query:             "inspect",
 		ExternalMessageID: "im-message-1",
 		CurrentChannel:    "telegram",
@@ -369,7 +369,7 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 					registerExternalDrivers(service, driver)
 					handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 						SchemaVersion: 1, TeamID: driveTeamID, Mode: turn.ModeChat,
-						BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
+						BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 						Query: "inspect", ExternalMessageID: "im-message-1",
 						CurrentChannel: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 					})
@@ -385,7 +385,7 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 					go func() {
 						defer close(done)
 						_, _ = service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
-							BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
+							BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, Query: "inspect",
 						}, make(chan runreq.WSStreamEvent, 64), abort)
 					}()
 					awaitStarted(t, started)
@@ -424,7 +424,7 @@ func historyTurns(t *testing.T, persisted []messagepkg.PersistInput) []chatview.
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows = append(rows, messagepkg.Message{ID: fmt.Sprintf("message-%d", i), TurnID: lifecycleTestRunID, Role: input.Role, Content: input.Content, DisplayContent: input.DisplayText, RawMetadata: metadata})
+		rows = append(rows, messagepkg.Message{ID: fmt.Sprintf("message-%d", i), TurnID: agenttest.LifecycleRunID, Role: input.Role, Content: input.Content, DisplayContent: input.DisplayText, RawMetadata: metadata})
 	}
 	return chatview.ConvertMessagesToUITurns(rows)
 }

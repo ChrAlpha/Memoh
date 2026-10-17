@@ -55,13 +55,13 @@ func approvalAuthorityService(grants map[string][]string) *Service {
 			values["bot-1:"+actor+":"+permission] = true
 		}
 	}
-	return &Service{
+	return wireComponents(&Service{
 		botPermissions: &agenttest.PermissionChecker{Values: values},
 		queries: runInitiatorQueries{initiators: map[string]string{
 			approvalTestRunID:       approvalTestInitiator,
 			approvalTestLegacyRunID: "",
 		}},
-	}
+	})
 }
 
 func TestCanDecideToolApprovalAdmitsInitiatorAndManagerOnly(t *testing.T) {
@@ -157,7 +157,7 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	checker := &recordingToolApprovalPermissionChecker{allow: true}
-	resolver := &Service{botPermissions: checker}
+	resolver := wireComponents(&Service{botPermissions: checker})
 	for _, tc := range []struct {
 		approval  toolapproval.Request
 		principal ToolApprovalPrincipal
@@ -173,7 +173,7 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 	if _, err := resolver.CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID}, ToolApprovalPrincipal{UserID: "user-1"}); err == nil {
 		t.Fatal("unresolvable initiator was treated as absent")
 	}
-	if ok, err := (&Service{}).CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1"}, ToolApprovalPrincipal{UserID: "user-1"}); ok || err == nil {
+	if ok, err := (wireComponents(&Service{})).CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1"}, ToolApprovalPrincipal{UserID: "user-1"}); ok || err == nil {
 		t.Fatalf("missing permission checker = %t, %v; want error", ok, err)
 	}
 }
@@ -183,7 +183,7 @@ func TestCapabilityApprovalRequiresManageAndDoesNotReplay(t *testing.T) {
 	for _, name := range []string{"mcp_manage", "app_manage"} {
 		t.Run(name, func(t *testing.T) {
 			checker := &recordingToolApprovalPermissionChecker{allow: false}
-			service := &Service{botPermissions: checker}
+			service := wireComponents(&Service{botPermissions: checker})
 			target := toolapproval.Request{ID: "approval-1", BotID: "bot-1", ToolName: name, Operation: toolapproval.OperationPermission, Status: toolapproval.StatusApproved}
 			input := ToolApprovalResponseInput{ActorUserID: "user-1"}
 			if err := service.authorizeToolApprovalResponse(context.Background(), target, input); !errors.Is(err, toolapproval.ErrForbidden) || checker.permission != bots.PermissionManage {

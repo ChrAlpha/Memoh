@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
@@ -83,8 +84,8 @@ func TestACPGenericPromptFailurePublishesSanitizedErroredTerminal(t *testing.T) 
 		SchemaVersion: 1,
 		TeamID:        "team-1",
 		Mode:          turn.ModeChat,
-		BotID:         lifecycleTestBotID,
-		ThreadID:      lifecycleTestSessionID,
+		BotID:         agenttest.LifecycleBotID,
+		ThreadID:      agenttest.LifecycleSessionID,
 	})
 	if err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
@@ -144,14 +145,14 @@ func TestACPPersistFailureWithholdsTerminalAndPublishesSanitizedError(t *testing
 	eventCh := make(chan runreq.WSStreamEvent, 16)
 
 	if _, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-		RunID: lifecycleTestRunID, Query: "inspect",
+		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+		RunID: agenttest.LifecycleRunID, Query: "inspect",
 	}, eventCh, make(chan struct{})); err != nil {
 		t.Fatalf("streamACPAgentWS() error = %v", err)
 	}
 	events := drainAgentEvents(t, eventCh)
 	assertACPCommitFailureEvents(t, events, string(apperror.CodeSessionHistoryInconsistent), privateErr.Error())
-	row, _ := requireACPLifecycle(t, lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider)
+	row, _ := requireACPLifecycle(t, lifecycles, agenttest.LifecycleRunID, lifecycle.StatusFailedProvider)
 	if !row.ErrorCode.Valid || row.ErrorCode.String != string(apperror.CodeSessionHistoryInconsistent) {
 		t.Fatalf("lifecycle error code = %#v, want %q", row.ErrorCode, apperror.CodeSessionHistoryInconsistent)
 	}
@@ -183,8 +184,8 @@ func TestACPExplicitCancellationDoesNotPublishProviderError(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-			RunID: lifecycleTestRunID, Query: "inspect",
+			BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+			RunID: agenttest.LifecycleRunID, Query: "inspect",
 		}, eventCh, abortCh))
 	}()
 	<-started
@@ -309,11 +310,12 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
 		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{outcome: "succeeded"}
+		rewireComponents(service)
 		eventCh := make(chan runreq.WSStreamEvent, 16)
 
 		if _, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-			RunID: lifecycleTestRunID, Query: "inspect",
+			BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+			RunID: agenttest.LifecycleRunID, Query: "inspect",
 		}, eventCh, make(chan struct{})); err != nil {
 			t.Fatalf("streamACPAgentWS() error = %v", err)
 		}
@@ -332,11 +334,12 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
 		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{outcome: ""}
+		rewireComponents(service)
 		eventCh := make(chan runreq.WSStreamEvent, 16)
 
 		outcome, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-			RunID: lifecycleTestRunID, Query: "inspect",
+			BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+			RunID: agenttest.LifecycleRunID, Query: "inspect",
 		}, eventCh, make(chan struct{}))
 		if err != nil || apperror.CodeOf(outcome.Cause) != apperror.CodeSessionHistoryInconsistent {
 			t.Fatalf("streamACPAgentWS() = %v, %v, want the run to fail with %s", outcome.Cause, err, apperror.CodeSessionHistoryInconsistent)
@@ -345,7 +348,7 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		if !containsStreamEvent(events, native.EventError) || containsStreamEvent(events, native.EventEnd) {
 			t.Fatalf("proven rollback of a completed turn must surface a sanitized error: %#v", events)
 		}
-		if len(pool.closed) != 1 || pool.closed[0] != lifecycleTestSessionID {
+		if len(pool.closed) != 1 || pool.closed[0] != agenttest.LifecycleSessionID {
 			t.Fatalf("proven rollback must discard the diverged warm runtime once: %v", pool.closed)
 		}
 		assertUserMessageKept(t, messages)
@@ -361,11 +364,12 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 			projectionsSwept: make(chan struct{}, 1),
 		}
 		service.queries = queries
+		rewireComponents(service)
 		eventCh := make(chan runreq.WSStreamEvent, 16)
 
 		outcome, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-			RunID: lifecycleTestRunID, Query: "inspect",
+			BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+			RunID: agenttest.LifecycleRunID, Query: "inspect",
 		}, eventCh, make(chan struct{}))
 		if err != nil || apperror.CodeOf(outcome.Cause) != apperror.CodeSessionHistoryInconsistent {
 			t.Fatalf("unresolved outcome must fail closed, got %v, %v", outcome.Cause, err)
@@ -394,13 +398,14 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		}}
 		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{}
+		rewireComponents(service)
 		eventCh := make(chan runreq.WSStreamEvent, 16)
 		abortCh := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
 			done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
-				BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
-				RunID: lifecycleTestRunID, Query: "inspect",
+				BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+				RunID: agenttest.LifecycleRunID, Query: "inspect",
 			}, eventCh, abortCh))
 		}()
 		<-started

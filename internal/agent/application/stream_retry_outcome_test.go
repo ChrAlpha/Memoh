@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -142,14 +143,15 @@ func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *propo
 	fixture.service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
+	rewireComponents(fixture.service)
 
 	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
 		SchemaVersion:        1,
 		TeamID:               "retry-team",
 		Mode:                 turn.ModeChat,
-		BotID:                lifecycleTestBotID,
-		ChatID:               lifecycleTestBotID,
-		ThreadID:             lifecycleTestSessionID,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
 		Query:                directLifecyclePrompt,
 		UserMessagePersisted: true,
 	})

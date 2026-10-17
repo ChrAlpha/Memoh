@@ -12,6 +12,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -158,7 +160,15 @@ func userMessageHookConfig(t *testing.T, command string) string {
 func newHookChatFixture(t *testing.T, workspace *hookWorkspace) chatTurnFixture {
 	t.Helper()
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
-	fixture.fixture.service.hookService = hooks.NewService(fixture.fixture.service.logger, newHookWorkspaceBridge(t, workspace))
+	service := fixture.fixture.service
+	service.botenv = botenv.New(botenv.Deps{
+		Logger:   service.logger,
+		Queries:  service.queries,
+		Settings: service.settingsService,
+		Accounts: service.accountService,
+		Bridge:   service.agent.BridgeProvider(),
+		Hooks:    hooks.NewService(service.logger, newHookWorkspaceBridge(t, workspace)),
+	})
 	return fixture
 }
 
@@ -202,10 +212,10 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 	service := fixture.fixture.service
 
 	if _, err := service.chatSetup(context.Background(), runreq.ChatRequest{
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
-		RunID:           lifecycleTestRunID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
+		RunID:           agenttest.LifecycleRunID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -224,10 +234,10 @@ func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
 	if _, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
-		BotID:                     lifecycleTestBotID,
-		ChatID:                    lifecycleTestBotID,
-		ThreadID:                  lifecycleTestSessionID,
-		RunID:                     lifecycleTestRunID,
+		BotID:                     agenttest.LifecycleBotID,
+		ChatID:                    agenttest.LifecycleBotID,
+		ThreadID:                  agenttest.LifecycleSessionID,
+		RunID:                     agenttest.LifecycleRunID,
 		Query:                     directLifecyclePrompt,
 		RawQuery:                  directLifecyclePrompt,
 		UserVisibleText:           directLifecyclePrompt,
@@ -267,15 +277,15 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 
 	spec := runSpec{
 		Run: admittedRun{Handle: sessionruntime.RunHandle{
-			BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 1,
+			BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, FencingToken: 1,
 		}},
 		Replacement: &turnReplacement{},
 	}
 	_, err := service.chatSetup(context.Background(), runreq.ChatRequest{
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
-		RunID:           lifecycleTestRunID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
+		RunID:           agenttest.LifecycleRunID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -295,10 +305,10 @@ func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
 	_, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
-		BotID:           lifecycleTestBotID,
-		ChatID:          lifecycleTestBotID,
-		ThreadID:        lifecycleTestSessionID,
-		RunID:           lifecycleTestRunID,
+		BotID:           agenttest.LifecycleBotID,
+		ChatID:          agenttest.LifecycleBotID,
+		ThreadID:        agenttest.LifecycleSessionID,
+		RunID:           agenttest.LifecycleRunID,
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
