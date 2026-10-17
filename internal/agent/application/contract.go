@@ -21,6 +21,9 @@ type ChatRequest struct {
 	// historyViewFrom is when the oldest history row this request loaded was
 	// created; compaction leaves older rows, which the request cannot see.
 	historyViewFrom time.Time
+	// inputInHistory marks a continuation, whose input is already a history
+	// row budgeted with the rest of the history.
+	inputInHistory bool
 	// discussPromptPrefix and discussPromptSuffix wrap the admitted discuss
 	// prompt; a shutdown resume puts its instructions there.
 	discussPromptPrefix string
