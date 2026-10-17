@@ -43,6 +43,7 @@ func (s *Service) prepareContinuationRunConfig(
 	}
 	loaded = pruneHistoryForGateway(loaded)
 	req.historyViewFrom = historyRecordsViewFrom(loaded)
+	req.inputInHistory = true
 	loaded, err = s.replaceCompactedMessages(ctx, summaryScope.SessionID, summaryScope, loaded, compactionArtifactBoundary{})
 	if err != nil {
 		return native.RunConfig{}, err

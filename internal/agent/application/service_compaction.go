@@ -119,11 +119,11 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 	sources := append([]turn.ContextMessageSource(nil), req.discussCurrentSources...)
 	if req.ExternalMessageID != "" {
-		sources = append(sources, turn.ContextMessageSource{Kind: "external", ID: req.ExternalMessageID, Current: true})
+		sources = append(sources, turn.ContextMessageSource{Kind: "external", ID: req.ExternalMessageID, Current: !req.inputInHistory})
 	}
 	for _, id := range []string{req.RequiredHistoryMessageID, req.PersistedUserMessageID} {
 		if id != "" {
-			sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: id, Current: true})
+			sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: id, Current: !req.inputInHistory})
 		}
 	}
 	return sources

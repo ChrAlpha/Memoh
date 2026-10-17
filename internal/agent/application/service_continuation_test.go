@@ -168,8 +168,8 @@ func TestContinuationRecoversBudgetKeepingTheResumedTurn(t *testing.T) {
 	if err != nil || len(runner.configs) == 0 {
 		t.Fatalf("over-budget continuation did not compact: error=%v compactions=%d", err, len(runner.configs))
 	}
-	if want := (turn.ContextMessageSource{Kind: "history", ID: "request-row", Current: true}); !slices.Contains(runner.configs[0].ProtectedSources, want) {
-		t.Fatalf("resumed turn is compactable: %+v", runner.configs[0].ProtectedSources)
+	if want := (turn.ContextMessageSource{Kind: "history", ID: "request-row"}); !slices.Contains(runner.configs[0].ProtectedSources, want) {
+		t.Fatalf("resumed turn must stay verbatim and count as kept history: %+v", runner.configs[0].ProtectedSources)
 	}
 	if countRecoveryText(got.Messages, "compacted history") != 1 {
 		t.Fatalf("continuation did not run on the recovered history: %d messages", len(got.Messages))
