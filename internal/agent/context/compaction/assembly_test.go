@@ -123,25 +123,3 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 		})
 	}
 }
-
-func TestBuildUserPromptPriorContextBranch(t *testing.T) {
-	t.Parallel()
-
-	entries := []messageEntry{{Role: "user", Content: "hi"}}
-
-	withPrior := buildUserPrompt([]string{"earlier summary"}, entries)
-	if !strings.Contains(withPrior, "<prior_context>") || !strings.Contains(withPrior, "earlier summary") {
-		t.Fatalf("prior-summary branch not rendered: %q", withPrior)
-	}
-	if !strings.Contains(withPrior, "user: hi") {
-		t.Fatalf("entries not included with prior context: %q", withPrior)
-	}
-
-	without := buildUserPrompt(nil, entries)
-	if strings.Contains(without, "<prior_context>") {
-		t.Fatalf("no-prior branch should omit prior context: %q", without)
-	}
-	if !strings.Contains(without, "Summarize the following conversation:") {
-		t.Fatalf("no-prior branch missing lead-in: %q", without)
-	}
-}

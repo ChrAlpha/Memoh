@@ -70,7 +70,6 @@ type TriggerConfig struct {
 	HistoryBudgetTokens int
 	ContextWindowTokens int
 	PromptCacheTTL      string
-	AllowFrontierFusion bool
 
 	// Manual marks a user-initiated compaction (slash command, HTTP endpoint).
 	// Such a request bypasses the per-session failure cooldown so a user who
