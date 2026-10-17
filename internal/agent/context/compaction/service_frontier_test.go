@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
-func TestDoCompactionInjectsPriorContext(t *testing.T) {
+func TestDoCompactionRefusesALegacySummaryWithoutSourceRows(t *testing.T) {
 	rows := machineryCorpus(t)
 	stub := &stubModel{summary: "S2"}
 	cfg := machineryConfig(stub, 450)
@@ -28,15 +29,13 @@ func TestDoCompactionInjectsPriorContext(t *testing.T) {
 	}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if !strings.Contains(stub.prompt, "prior_context") || !strings.Contains(stub.prompt, "earlier-segment-summary") {
-		t.Fatalf("prior summary not injected as prior context:\n%s", stub.prompt)
+	_, err := svc.RunCompactionSync(context.Background(), cfg)
+	if !errors.Is(err, errIncompleteAbsorbedCoverage) || stub.calls != 0 || q.created || len(q.backfills) != 0 {
+		t.Fatalf("err=%v calls=%d created=%t backfills=%d, want a refusal before any claim", err, stub.calls, q.created, len(q.backfills))
 	}
 }
 
-func TestDoCompactionPriorContextUsesOnlyActiveArtifactFrontier(t *testing.T) {
+func TestDoCompactionAbsorbsOnlyTheActiveArtifactFrontier(t *testing.T) {
 	parentID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
 	activeID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
 	stub := &stubModel{summary: "S2"}
@@ -73,6 +72,9 @@ func TestDoCompactionPriorContextUsesOnlyActiveArtifactFrontier(t *testing.T) {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "active-frontier-summary") || strings.Contains(stub.prompt, "stale-parent-summary") {
-		t.Fatalf("prior context did not use the active frontier:\n%s", stub.prompt)
+		t.Fatalf("absorbed context did not use the active frontier:\n%s", stub.prompt)
+	}
+	if parents := q.rollupCalls[0].Parents; len(parents) != 1 || parents[0] != activeID {
+		t.Fatalf("rollup parents = %v, want only the active artifact", parents)
 	}
 }

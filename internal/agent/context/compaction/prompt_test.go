@@ -24,14 +24,9 @@ Output ONLY the summary of the new conversation segment. No preamble, no headers
 		t.Fatalf("non-fusion system prompt changed:\n%s", systemPrompt)
 	}
 
-	wantUser := "<prior_context>\n" +
-		"The following are summaries of earlier parts of this conversation. They are provided ONLY as reference context to help you understand the conversation flow. Do NOT include or repeat any of this content in your output summary.\n\n" +
-		"first summary\n---\nsecond summary\n" +
-		"</prior_context>\n\n" +
-		"Now summarize the following conversation segment:\n" +
+	wantUser := "Summarize the following conversation:\n" +
 		"user: new question\nassistant: new answer\n"
 	gotUser := buildUserPrompt(
-		[]string{"first summary", "second summary"},
 		[]messageEntry{{Role: "user", Content: "new question"}, {Role: "assistant", Content: "new answer"}},
 	)
 	if gotUser != wantUser {
@@ -47,7 +42,6 @@ func TestFusionPromptRendersAbsorbedContextWithoutPriorContext(t *testing.T) {
 		{Source: absorbedSourceEarlierSummary, Content: "earlier condensed state"},
 	}
 	prompt := buildFusionUserPrompt(
-		nil,
 		absorbed,
 		[]messageEntry{{Role: "user", Content: "new conversation"}},
 	)
@@ -75,54 +69,6 @@ func TestFusionPromptRendersAbsorbedContextWithoutPriorContext(t *testing.T) {
 		if !strings.Contains(fusionSystemPrompt, want) {
 			t.Fatalf("fusion system prompt missing %q:\n%s", want, fusionSystemPrompt)
 		}
-	}
-}
-
-func TestCapPriorSummariesKeepsNewestWithinBudget(t *testing.T) {
-	t.Parallel()
-
-	big := strings.Repeat("x", 400) // ~100 tokens each
-	summaries := []string{"oldest " + big, "middle " + big, "newest " + big}
-
-	capped := capPriorSummaries(summaries, 220)
-	if len(capped) != 2 {
-		t.Fatalf("capped = %d summaries, want 2", len(capped))
-	}
-	if !strings.HasPrefix(capped[0], "middle") || !strings.HasPrefix(capped[1], "newest") {
-		t.Fatalf("cap must keep the newest summaries in chronological order, got %q", capped)
-	}
-}
-
-func TestCapPriorSummariesAlwaysKeepsTheNewestTruncatedToBudget(t *testing.T) {
-	t.Parallel()
-
-	summaries := []string{"old", strings.Repeat("y", 4000)}
-	capped := capPriorSummaries(summaries, 10)
-	if len(capped) != 1 || !strings.HasPrefix(capped[0], "y") {
-		t.Fatalf("cap must keep at least the newest summary, got %q", capped)
-	}
-	if got := estimateBytesAsTokens(capped[0]) + priorSeparatorTokens; got > 10 {
-		t.Fatalf("the cap is a hard bound, marker included: got ~%d tokens for cap 10", got)
-	}
-}
-
-func TestCapPriorSummariesDropsAllOnNonPositiveBudget(t *testing.T) {
-	t.Parallel()
-
-	if got := capPriorSummaries([]string{"a", "b"}, 0); got != nil {
-		t.Fatalf("non-positive budget must drop all prior context, got %q", got)
-	}
-	if got := capPriorSummaries([]string{"a", "b"}, -5); got != nil {
-		t.Fatalf("negative budget must drop all prior context, got %q", got)
-	}
-}
-
-func TestBuildUserPromptOrdersPriorContextChronologically(t *testing.T) {
-	t.Parallel()
-
-	prompt := buildUserPrompt([]string{"first segment", "second segment"}, []messageEntry{{Role: "user", Content: "now"}})
-	if !strings.Contains(prompt, "first segment\n---\nsecond segment") {
-		t.Fatalf("prior context must stay in chronological order:\n%s", prompt)
 	}
 }
 

@@ -23,7 +23,6 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 
 	stub := &stubModel{}
 	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
 	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
@@ -63,7 +62,6 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 
 	stub := &stubModel{summary: "concise whole frontier replacement"}
 	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 50000
 	cfg.ContextWindowTokens = 10000
 	cfg.SummaryWindowTokens = 50000
@@ -73,10 +71,6 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 	absorbedNewest := "absorbed-newest:" + strings.Repeat("c", 1200)
 	parents := fusionParentLogs(t, cfg, absorbedOldest, absorbedMiddle, absorbedNewest)
 	artifacts := fusionArtifacts(t, parents)
-	retainBudget := frontierRetainBudget(cfg, cfg.MaxCompactTokens)
-	if !shouldFuseFrontier(cfg, artifacts, cfg.MaxCompactTokens) {
-		t.Fatalf("test setup did not cross retain budget: frontier=%d retain=%d", frontierSummaryTokens(artifacts), retainBudget)
-	}
 	expectedInputBudget, err := boundedCompactionInputTokens(cfg, cfg.MaxCompactTokens, maxCompactionSummaryTokens, fusionSystemPrompt)
 	if err != nil {
 		t.Fatalf("bounded fusion input fixture: %v", err)
@@ -149,37 +143,110 @@ func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.
 	}
 }
 
-func TestDoCompactionFusionLegacyCoverageFallsBackToOrdinaryPass(t *testing.T) {
+func TestDoCompactionFoldsTheActiveSummaryIntoOneArtifact(t *testing.T) {
 	t.Parallel()
 
-	stub := &stubModel{summary: "concise new-segment summary"}
-	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
-	cfg.MaxCompactTokens = 4000
-	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
-	parents[1].Coverage = []byte("[]")
-	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
-	svc := newMachineryService(q)
+	for _, tc := range []struct {
+		name      string
+		summaries []string
+		newRows   bool
+		wantFold  bool
+	}{
+		{name: "one parent and new rows", summaries: []string{"earlier decision: ship on friday"}, newRows: true, wantFold: true},
+		{name: "legacy parents without new rows", summaries: []string{"earlier decision: ship on friday", "later decision: freeze on thursday"}, wantFold: true},
+		{name: "one parent without new rows", summaries: []string{"earlier decision: ship on friday"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
+			stub := &stubModel{summary: "one replacement summary"}
+			cfg := machineryConfig(stub, 200)
+			parents := fusionParentLogs(t, cfg, tc.summaries...)
+			q := &fakeQueries{priorLogs: parents}
+			if tc.newRows {
+				q.uncompacted = fusionQualityRows(t, cfg)
+			}
+
+			res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("RunCompactionSync: %v", err)
+			}
+			if !tc.wantFold {
+				if res.Status != StatusNoop || stub.calls != 0 || q.created {
+					t.Fatalf("result = %#v calls=%d created=%t, want a noop without a summarizer call", res, stub.calls, q.created)
+				}
+				return
+			}
+			if res.Status != StatusOK || len(q.rollupCalls) != 1 || len(q.completeCalls) != 0 {
+				t.Fatalf("result = %#v rollups=%d ordinary=%d, want one artifact replacing the frontier", res, len(q.rollupCalls), len(q.completeCalls))
+			}
+			if got := q.rollupCalls[0].Parents; len(got) != len(parents) {
+				t.Fatalf("rollup parents = %v, want every active summary", got)
+			}
+			for _, parent := range parents {
+				if q.parentSuccessors[parent.ID] != q.createdLogID {
+					t.Fatalf("parent %v stayed active beside the new summary", parent.ID)
+				}
+			}
+			for _, summary := range tc.summaries {
+				if !strings.Contains(stub.prompt, summary) {
+					t.Fatalf("summarizer prompt omitted the folded summary %q:\n%s", summary, stub.prompt)
+				}
+			}
+		})
+	}
+}
+
+func TestDoCompactionBackfillsLegacyParentCoverageFromItsRows(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "one replacement summary"}
+	cfg := machineryConfig(stub, 200)
+	parents := fusionParentLogs(t, cfg, "legacy summary")
+	parents[0].Coverage = []byte("[]")
+	legacyRows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"legacy question"`, 10),
+		mkRow(t, "assistant", `"legacy answer"`, 10),
+	}
+	setFusionRowScopeAndTimes(t, cfg, legacyRows)
+	absorbed := make([]sqlc.ListMessagesByCompactIDRow, 0, len(legacyRows))
+	for _, row := range legacyRows {
+		row.CompactID = parents[0].ID
+		absorbed = append(absorbed, sqlc.ListMessagesByCompactIDRow(row))
+	}
+	q := &fakeQueries{
+		uncompacted:  fusionQualityRows(t, cfg),
+		priorLogs:    parents,
+		absorbedRows: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{parents[0].ID: absorbed},
+	}
+
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil || res.Status != StatusOK || len(q.rollupCalls) != 1 {
+		t.Fatalf("result = %#v err=%v rollups=%d, want the legacy parent folded", res, err, len(q.rollupCalls))
+	}
+	coverage, err := DecodeArtifactCoverage(q.rollupCalls[0].Coverage)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("DecodeArtifactCoverage: %v", err)
 	}
-	if res.Status != StatusOK || len(q.completeCalls) != 1 || q.completeCalls[0].Status != "ok" {
-		t.Fatalf("legacy fallback result = %#v ordinary_calls=%#v, want successful ordinary completion", res, q.completeCalls)
+	covered := make(map[string]bool, len(coverage))
+	for _, source := range coverage {
+		covered[source.Ref.StableKey()] = true
 	}
-	if len(q.rollupCalls) != 0 {
-		t.Fatalf("rollup completion calls = %d, want none for legacy parents", len(q.rollupCalls))
+	legacyItems, _ := itemsFromRows(legacyRows)
+	for _, item := range legacyItems {
+		if !covered[item.Record.Ref.StableKey()] {
+			t.Fatalf("rollup coverage %v omitted legacy row %v", coverage, item.ID)
+		}
 	}
-	if stub.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("legacy fallback max output tokens = %d, want ordinary cap %d", stub.maxTokens, maxCompactionSummaryTokens)
+	if len(coverage) != len(legacyItems)+len(q.markedIDs) {
+		t.Fatalf("rollup coverage = %d sources, want %d legacy rows plus %d new rows", len(coverage), len(legacyItems), len(q.markedIDs))
 	}
-	if !strings.Contains(stub.prompt, "<prior_context>") || strings.Contains(stub.prompt, "<absorbed_context>") {
-		t.Fatalf("legacy fallback prompt did not use ordinary mode:\n%s", stub.prompt)
+	if len(q.backfills) != 1 || q.backfills[0].ID != parents[0].ID {
+		t.Fatalf("backfills = %#v, want the legacy parent's coverage persisted before it is superseded", q.backfills)
 	}
-	assertFusionParentsActive(t, q, parents)
-	if _, armed := svc.failedAt[cfg.SessionID]; armed {
-		t.Fatal("successful legacy fallback armed the failure cooldown")
+	persisted, err := DecodeArtifactCoverage(q.backfills[0].Coverage)
+	if err != nil || len(persisted) != len(legacyItems) || q.backfills[0].AnchorStartMs != persisted[0].CreatedAtMs {
+		t.Fatalf("persisted coverage = %v anchor=%d err=%v, want the legacy rows", persisted, q.backfills[0].AnchorStartMs, err)
 	}
 }
 
@@ -188,7 +255,6 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 
 	stub := &stubModel{}
 	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
 	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
@@ -220,7 +286,6 @@ func TestDoCompactionFusionProviderFailureKeepsParentsActiveAndClaimsReclaimable
 
 	failing := &failingModel{}
 	cfg := machineryConfig(&stubModel{}, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
 	cfg.HTTPClient = &http.Client{Transport: failing}
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
@@ -244,7 +309,6 @@ func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimabl
 
 	stub := &stubModel{summary: "concise fused replacement"}
 	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 4000
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 	q := &fakeQueries{
@@ -284,7 +348,6 @@ func TestDoCompactionFusionFinalOverflowFailsBeforeClaimsAndProvider(t *testing.
 
 	stub := &stubModel{summary: "must not run"}
 	cfg := machineryConfig(stub, 100)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 80
 	setFusionRowScopeAndTimes(t, cfg, rows)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 40), strings.Repeat("b", 40))
@@ -311,7 +374,6 @@ func TestDoCompactionFusionManyParentHeadersFailBeforeClaimsAndProvider(t *testi
 
 	stub := &stubModel{summary: "must not run"}
 	cfg := machineryConfig(stub, 200)
-	cfg.AllowFrontierFusion = true
 	cfg.MaxCompactTokens = 100
 	parents := fusionParentLogs(t, cfg,
 		strings.Repeat("a", 32),

@@ -21,7 +21,6 @@ func (*fakeQueries) GetSessionByID(_ context.Context, id pgtype.UUID) (sqlc.BotS
 func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {
 	stub := &stubModel{summary: "short replacement"}
 	cfg := machineryConfig(stub, 800)
-	cfg.AllowFrontierFusion = true
 	cfg.ContextWindowTokens = 2000
 	parents := fusionParentLogs(t, cfg, strings.Repeat("s", 2040), strings.Repeat("t", 2040))
 	rows := fusionQualityRows(t, cfg)
@@ -38,7 +37,6 @@ func TestSummaryRecoveryFailureKeepsParentsActive(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			stub := &stubModel{summary: "short replacement"}
 			cfg := machineryConfig(stub, 800)
-			cfg.AllowFrontierFusion = true
 			cfg.ContextWindowTokens = 2000
 			parents := fusionParentLogs(t, cfg, strings.Repeat("s", 2040), strings.Repeat("t", 2040))
 			q := &fakeQueries{priorLogs: parents}
@@ -64,7 +62,7 @@ func TestSummaryRecoveryFailureKeepsParentsActive(t *testing.T) {
 			if res.Status == StatusOK {
 				t.Fatalf("unsafe replacement accepted: %+v", res)
 			}
-			if failure != "missing_coverage" && err == nil {
+			if err == nil {
 				t.Fatal("expected failed recovery")
 			}
 			if failure == "cancelled" && (!errors.Is(err, context.Canceled) || stub.calls != 0 || q.created) {
@@ -83,7 +81,6 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 		t.Run(strings.Repeat("parent", parentCount), func(t *testing.T) {
 			stub := &stubModel{summary: "short replacement"}
 			cfg := machineryConfig(stub, 800)
-			cfg.AllowFrontierFusion = true
 			cfg.ContextWindowTokens = 2000
 			cfg.MaxCompactTokens = 50000
 			summaries := make([]string, parentCount)
@@ -116,7 +113,6 @@ func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 		cfg := machineryConfig(stub, 200)
 		cfg.HistoryBudgetTokens = 500
 		cfg.SummaryWindowTokens = 128000
-		cfg.AllowFrontierFusion = true
 		parents := fusionParentLogs(t, cfg, strings.Repeat("p", 8000))
 		q := &fakeQueries{priorLogs: parents}
 		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
@@ -228,7 +224,6 @@ func TestProtectedSourcesSurviveTruncatedRead(t *testing.T) {
 		q := &fakeQueries{uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{first, second}}
 		stub := &stubModel{summary: "short summary"}
 		cfg := machineryConfig(stub, 200)
-		cfg.AllowFrontierFusion = true
 		cfg.HistoryBudgetTokens = 500
 		cfg.ProtectedSources = []turn.ContextMessageSource{{Kind: "history", ID: first.ID.String(), Current: true}, {Kind: "history", ID: second.ID.String(), Current: true}}
 		svc := newMachineryService(q)

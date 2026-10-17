@@ -217,6 +217,17 @@ RETURNING compact.id, compact.bot_id, compact.session_id, compact.status, compac
           compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at,
           compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id;
 
+-- name: BackfillCompactionArtifactCoverage :exec
+UPDATE bot_history_message_compacts
+SET coverage = sqlc.arg(coverage),
+    anchor_start_ms = sqlc.arg(anchor_start_ms),
+    anchor_end_ms = sqlc.arg(anchor_end_ms)
+WHERE team_id = public.memoh_current_team_id()
+  AND id = sqlc.arg(id)
+  AND status = 'ok'
+  AND superseded_by IS NULL
+  AND coverage = '[]'::jsonb;
+
 -- name: GetCompactionLogByID :one
 SELECT id, bot_id, session_id, status, summary, message_count, error_message, usage, model_id,
        artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,

@@ -10,9 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -356,7 +353,7 @@ func TestRunCompactionSyncSurfacesCompletionPersistenceFailure(t *testing.T) {
 	}
 }
 
-func TestDoCompactionSharesPromptBudgetWithPriorContext(t *testing.T) {
+func TestDoCompactionSharesPromptBudgetWithAbsorbedContext(t *testing.T) {
 	t.Parallel()
 
 	rows := make([]sqlc.ListUncompactedMessagesBySessionRow, 0, 13)
@@ -376,7 +373,7 @@ func TestDoCompactionSharesPromptBudgetWithPriorContext(t *testing.T) {
 		cfg.MaxCompactTokens = 1000
 		var priorLogs []sqlc.BotHistoryMessageCompact
 		if withPrior {
-			priorLogs = []sqlc.BotHistoryMessageCompact{priorLogFor(t, cfg, strings.Repeat("p", 1200))}
+			priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", 1200))
 		}
 		q := &fakeQueries{uncompacted: rows, priorLogs: priorLogs}
 		svc := newMachineryService(q)
@@ -393,72 +390,7 @@ func TestDoCompactionSharesPromptBudgetWithPriorContext(t *testing.T) {
 	without := run(t, false)
 	with := run(t, true)
 	if with >= without {
-		t.Fatalf("prior context must carve out of the entries budget: marked %d with prior, %d without", with, without)
-	}
-}
-
-func TestDoCompactionSacrificesPriorContextForOversizedEntries(t *testing.T) {
-	t.Parallel()
-
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		textRow(t, "user", 900),
-		textRow(t, "user", 100),
-		mkRow(t, "user", `"current"`, 40),
-	}
-	prior := strings.Repeat("history so far ", 70) // ~262 tokens, within the 1/4 allowance
-	stub := &stubModel{summary: "condensed"}
-	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 1000
-	q := &fakeQueries{
-		uncompacted: rows,
-		priorLogs:   []sqlc.BotHistoryMessageCompact{priorLogFor(t, cfg, prior)},
-	}
-	svc := newMachineryService(q)
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if res.Status != StatusOK {
-		t.Fatalf("status = %q, want %q", res.Status, StatusOK)
-	}
-	if len(q.markedIDs) != 1 || q.markedIDs[0] != rows[0].ID {
-		t.Fatalf("marked = %v, want the oversized first markable turn", q.markedIDs)
-	}
-	// The oversized kept entries exceed their budget share, so the reference
-	// prior context must shrink (truncate) to keep the combined prompt within
-	// MaxCompactTokens instead of stacking on top of it.
-	if strings.Contains(stub.prompt, prior) {
-		t.Fatal("full prior context must not ride along with oversized entries")
-	}
-	// stub.prompt concatenates the fixed system prompt (~190 tokens) and the
-	// user-prompt wrapper (~90 tokens) on top of the budgeted prior+entries;
-	// an additive-budget regression overshoots this bound by the full prior.
-	if got := estimateBytesAsTokens(stub.prompt); got > 1000+320 {
-		t.Fatalf("combined prompt ~%d tokens, want within MaxCompactTokens plus the fixed overhead", got)
-	}
-}
-
-func TestDoCompactionCountsPriorSeparatorsInSharedBudget(t *testing.T) {
-	t.Parallel()
-
-	stub := &stubModel{summary: "condensed"}
-	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 1000
-	priors := make([]sqlc.BotHistoryMessageCompact, 0, 100)
-	for i := 0; i < 100; i++ {
-		priors = append(priors, priorLogFor(t, cfg, "abcd"))
-	}
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		textRow(t, "user", 917),
-		mkRow(t, "user", `"current"`, 40),
-	}
-	q := &fakeQueries{uncompacted: rows, priorLogs: priors}
-	svc := newMachineryService(q)
-	if res, err := svc.RunCompactionSync(context.Background(), cfg); err != nil || res.Status != StatusOK {
-		t.Fatalf("RunCompactionSync = %v, %v", res, err)
-	}
-	if got := estimateBytesAsTokens(stub.prompt); got > 1000+320 {
-		t.Fatalf("combined prompt ~%d tokens: prior separators must count toward the shared budget", got)
+		t.Fatalf("absorbed context must carve out of the entries budget: marked %d with prior, %d without", with, without)
 	}
 }
 
@@ -911,14 +843,3 @@ func TestFailureBackoffCapsBelowExpiryAndPersistsAttempts(t *testing.T) {
 type doneHiddenContext struct{ context.Context }
 
 func (doneHiddenContext) Done() <-chan struct{} { return nil }
-
-func priorLogFor(t *testing.T, cfg TriggerConfig, summary string) sqlc.BotHistoryMessageCompact {
-	t.Helper()
-	return sqlc.BotHistoryMessageCompact{
-		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		BotID:     pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true},
-		SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true},
-		Status:    "ok",
-		Summary:   summary,
-	}
-}
