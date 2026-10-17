@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -45,6 +46,10 @@ type agentStepCommitter struct {
 	// checkpointed means an interrupted step was written: the run already has
 	// a history row for the model call it stopped in.
 	checkpointed bool
+	// stepRowsAt is when each durable step's rows were written, and inputID
+	// the run's input row when its first step wrote it.
+	stepRowsAt map[int]time.Time
+	inputID    string
 }
 
 func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc resolvedContext) *agentStepCommitter {
@@ -113,6 +118,11 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 	if c == nil || cfg == nil {
 		return
+	}
+	// A replacement turn's rows stay hidden until it ends, so nothing of it
+	// can be compacted yet.
+	if c.req.TurnReplacement == nil && c.service.compactionService != nil {
+		cfg.SwitchContext = c.switchContext
 	}
 	if c.queueStep != nil && c.queueStep.steerEnabled {
 		cfg.SteerWake = c.service.sessionManager.SteerWake(c.req.RunHandle)
@@ -224,7 +234,8 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		c.nextStep++
 		return native.StepDirective{}, nil
 	}
-	if (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
+	prepended := (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage
+	if prepended {
 		messages = prependTurnUserMessage(c.req, messages)
 	}
 	storeReq := c.req
@@ -305,6 +316,15 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		c.rc.runConfig.ContextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
 	}
 	c.nextStep++
+	if len(persisted) > 0 {
+		if c.stepRowsAt == nil {
+			c.stepRowsAt = make(map[int]time.Time)
+		}
+		c.stepRowsAt[stepIndex] = persisted[0].CreatedAt
+		if prepended {
+			c.inputID = persisted[0].ID
+		}
+	}
 	for _, message := range persisted {
 		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && !messagepkg.IsInternalFeedback(message.Metadata) {
 			c.turnRequestMessageID = message.ID

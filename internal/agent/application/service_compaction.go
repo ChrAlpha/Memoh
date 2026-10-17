@@ -22,19 +22,11 @@ import (
 // needs to read it all. It reports why when the history could not be folded;
 // a failed pass leaves the history it did not commit as it was.
 func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
-	if s.compactionService == nil || s.settingsService == nil {
-		return errors.New("compaction service unavailable")
-	}
-	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
-	if err != nil {
-		return fmt.Errorf("load compaction settings: %w", err)
-	}
-	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)
+	cfg, err := s.compactionConfig(ctx, req, inputTokens, turnModelID)
 	if err != nil {
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
-	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// The byte budget bounds what a request loads, not what its history is:
 	// rows inside the time window stay candidates after the view slides past.
 	cfg.CandidatesFrom = time.Now().UTC().Add(-time.Duration(defaultMaxContextMinutes) * time.Minute)
@@ -49,7 +41,28 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		cfg.CandidatesBefore = message.CreatedAt
 	}
 	cfg.HistoryBudgetTokens = historyBudget
+	return s.runCompaction(ctx, cfg)
+}
 
+func (s *Service) compactionConfig(ctx context.Context, req ChatRequest, inputTokens int, turnModelID string) (compaction.TriggerConfig, error) {
+	if s.compactionService == nil || s.settingsService == nil {
+		return compaction.TriggerConfig{}, errors.New("compaction service unavailable")
+	}
+	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
+	if err != nil {
+		return compaction.TriggerConfig{}, fmt.Errorf("load compaction settings: %w", err)
+	}
+	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)
+	if err != nil {
+		return compaction.TriggerConfig{}, err
+	}
+	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
+	return cfg, nil
+}
+
+// runCompaction folds in as many passes as the summarizer needs to read the
+// candidates, and fails when it folded nothing.
+func (s *Service) runCompaction(ctx context.Context, cfg compaction.TriggerConfig) error {
 	start := time.Now()
 	passes, folded := 0, false
 	for {
@@ -57,16 +70,16 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		passes++
 		if err != nil {
 			s.logger.WarnContext(ctx, "compaction failed",
-				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+				slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.String("run_id", cfg.RunID),
 				slog.Int("passes", passes), slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
 			return err
 		}
 		folded = folded || res.Status == compaction.StatusOK || res.Status == compaction.StatusProgress
 		if res.Status != compaction.StatusProgress || res.MessageCount == 0 {
 			s.logger.InfoContext(ctx, "compaction finished",
-				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+				slog.String("bot_id", cfg.BotID), slog.String("session_id", cfg.SessionID), slog.String("run_id", cfg.RunID),
 				slog.String("status", res.Status), slog.Int("passes", passes),
-				slog.Int("input_tokens", inputTokens), slog.Int("history_budget_tokens", historyBudget),
+				slog.Int("input_tokens", cfg.TotalInputTokens), slog.Int("history_budget_tokens", cfg.HistoryBudgetTokens),
 				slog.Int64("duration_ms", time.Since(start).Milliseconds()))
 			if !folded {
 				return fmt.Errorf("compaction status %s", res.Status)

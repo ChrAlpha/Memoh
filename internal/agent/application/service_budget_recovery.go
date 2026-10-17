@@ -32,6 +32,13 @@ func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) nativ
 			return recoverBudget(ctx, cfg)
 		}
 	}
+	if switchContext := cfg.SwitchContext; switchContext != nil {
+		cfg.SwitchContext = func(ctx context.Context, input native.ContextSwitchInput) (sdk.Message, error) {
+			idle.Pause()
+			defer idle.Resume()
+			return switchContext(ctx, input)
+		}
+	}
 	return cfg
 }
 
