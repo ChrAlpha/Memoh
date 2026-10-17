@@ -26,6 +26,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -85,7 +86,7 @@ type runtimeSkillResolver interface {
 
 // runtimeControlReader reads the server-owned declarations for this actor/thread.
 type runtimeControlReader interface {
-	RuntimeCommands(context.Context, application.RuntimeControlRequest) ([]external.Command, error)
+	RuntimeCommands(context.Context, turn.RuntimeControlRequest) ([]external.Command, error)
 }
 
 // NewLocalChannelHandler creates a local channel handler.
@@ -358,7 +359,7 @@ func (h *LocalChannelHandler) executeWebPermissionQuickAction(ctx context.Contex
 	if strings.TrimSpace(control.SessionID) == "" {
 		return nil, apperror.New(apperror.CodeRuntimeControlThreadUnavailable, nil)
 	}
-	request := application.RuntimeControlRequest{BotID: strings.TrimSpace(botID), ThreadID: strings.TrimSpace(control.SessionID), ActorID: strings.TrimSpace(control.ActorID), ModeID: control.ModeID, ToolHTTPURL: strings.TrimSpace(control.ToolURL)}
+	request := turn.RuntimeControlRequest{BotID: strings.TrimSpace(botID), ThreadID: strings.TrimSpace(control.SessionID), ActorID: strings.TrimSpace(control.ActorID), ModeID: control.ModeID, ToolHTTPURL: strings.TrimSpace(control.ToolURL)}
 	var state external.ModeState
 	var err error
 	if strings.TrimSpace(control.ModeID) == "" {
@@ -442,7 +443,7 @@ type webSlashDecision struct {
 	RuntimeCommand *external.Command
 }
 
-func (h *LocalChannelHandler) classifyWebSlashForSession(ctx context.Context, text string, hasAttachments bool, request application.RuntimeControlRequest) webSlashDecision {
+func (h *LocalChannelHandler) classifyWebSlashForSession(ctx context.Context, text string, hasAttachments bool, request turn.RuntimeControlRequest) webSlashDecision {
 	decision := h.classifyWebSlash(text, hasAttachments, slash.SurfaceWebWS)
 	selector := exactWebSlashSelector(text)
 	if selector == "" || isReservedWebRuntimeControl(strings.ToLower(selector)) {
@@ -1526,7 +1527,7 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 // session's queue: what the server would start had the session been idle, and
 // the identities the turn's credentials are issued for when it starts. The queue
 // stores neither token.
-func (h *LocalChannelHandler) webQueueTurn(ctx context.Context, botID, sessionID, identityID, invocationID, text string, runtime application.RuntimeSessionExecutionInfo) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
+func (h *LocalChannelHandler) webQueueTurn(ctx context.Context, botID, sessionID, identityID, invocationID, text string, runtime externalrun.SessionExecutionInfo) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
 	if h.sessionService == nil {
 		return turn.StartTurnCommand{}, nil, apperror.New(apperror.CodeQueueAdmissionUnavailable, nil)
 	}
@@ -1851,7 +1852,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				h.failWSCommand(streamBaseCtx, writer, botID, msg, apperror.New(slash.CodeInvalidSkillSlashSyntax, nil))
 				continue
 			}
-			controlRequest := application.RuntimeControlRequest{BotID: botID, ThreadID: sessionID, ActorID: channelIdentityID, ToolHTTPURL: buildExternalAgentToolsURL(c, botID)}
+			controlRequest := turn.RuntimeControlRequest{BotID: botID, ThreadID: sessionID, ActorID: channelIdentityID, ToolHTTPURL: buildExternalAgentToolsURL(c, botID)}
 			decision := h.classifyWebSlashForSession(streamBaseCtx, text, len(msg.Attachments) > 0, controlRequest)
 			if command := decision.RuntimeCommand; command != nil {
 				controlRequest.Command = command.Name
@@ -1860,7 +1861,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 						h.failWSCommand(streamBaseCtx, writer, botID, msg, apperror.New(slash.CodeSlashAttachmentsUnsupported, nil))
 						continue
 					}
-					go func(controlCtx context.Context, request application.RuntimeControlRequest, command external.Command, message wsClientMessage) {
+					go func(controlCtx context.Context, request turn.RuntimeControlRequest, command external.Command, message wsClientMessage) {
 						if command.RunningText != "" || command.Kind == external.CommandOperation {
 							event := commandEvent(message.InvocationID, message.ComposerScope, message.SessionID, request.Command)
 							event.Type = "command_result"
@@ -2453,9 +2454,9 @@ func (h *LocalChannelHandler) wsSessionSupportsRequestedSkills(ctx context.Conte
 	return sessionpkg.SupportsSkillActivation(sess.SessionMode, sess.Type, sess.RuntimeType), nil
 }
 
-func (h *LocalChannelHandler) authorizeWSRuntimeExecution(ctx context.Context, channelIdentityID, botID, sessionID string) (application.RuntimeSessionExecutionInfo, error) {
+func (h *LocalChannelHandler) authorizeWSRuntimeExecution(ctx context.Context, channelIdentityID, botID, sessionID string) (externalrun.SessionExecutionInfo, error) {
 	if h == nil || h.agentService == nil {
-		return application.RuntimeSessionExecutionInfo{}, nil
+		return externalrun.SessionExecutionInfo{}, nil
 	}
 	info, err := h.agentService.RuntimeSessionExecutionInfo(ctx, sessionID)
 	if err != nil || !info.RequiresWorkspaceExec {

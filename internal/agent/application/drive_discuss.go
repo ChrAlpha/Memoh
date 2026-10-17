@@ -183,13 +183,13 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	current, err := s.discussCover(runCtx, pgSessionID)
 	discussRun := drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Discuss}
 	if err != nil {
-		s.driver.FinishRun(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Cause: err}.Resolve(runCtx)))
+		s.driver.Finish(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Cause: err}.Resolve(runCtx)))
 		release()
 		endActiveTurn()
 		return 0, nil, err
 	}
 	if current >= hw {
-		s.driver.FinishRun(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted}))
+		s.driver.Finish(runCtx, discussRun, drive.FromOutcome(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted}))
 		release()
 		endActiveTurn()
 		return DiscussNothingPending, nil, nil

@@ -44,7 +44,7 @@ func admittedForFinish(token int64) AdmittedRun {
 // Every ending the driver names, and every status a caller resolves itself,
 // goes through the one write: a lost run and a run nobody admitted write
 // nothing, a parked run is written without a status.
-func TestFinishRunWritesEachTerminationOnce(t *testing.T) {
+func TestFinishWritesEachTerminationOnce(t *testing.T) {
 	t.Parallel()
 
 	failure := &outcome.RunFailure{Code: apperror.CodeAgentProviderAuthFailed, Args: map[string]string{"k": "v"}, Cause: errors.New("401")}
@@ -85,7 +85,7 @@ func TestFinishRunWritesEachTerminationOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			runtime := &finishRecorder{}
-			terminal := newFinishDriver(runtime).FinishRun(context.Background(), tc.run, tc.term)
+			terminal := newFinishDriver(runtime).Finish(context.Background(), tc.run, tc.term)
 			if len(runtime.writes) != len(tc.wants) {
 				t.Fatalf("writes = %+v, want %+v", runtime.writes, tc.wants)
 			}
@@ -104,11 +104,11 @@ func TestFinishRunWritesEachTerminationOnce(t *testing.T) {
 
 // A driver without a runtime writes nothing: an admitted run's terminal state
 // is the runtime's to record.
-func TestFinishRunWithoutARuntimeWritesNothing(t *testing.T) {
+func TestFinishWithoutARuntimeWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	driver := newFinishDriver(nil)
-	if terminal := driver.FinishRun(context.Background(), admittedForFinish(1), fromEnd(outcome.EndCompleted, nil)); terminal.State != "" {
+	if terminal := driver.Finish(context.Background(), admittedForFinish(1), fromEnd(outcome.EndCompleted, nil)); terminal.State != "" {
 		t.Fatalf("terminal = %+v, want none", terminal)
 	}
 }
@@ -134,7 +134,7 @@ const (
 	fencedRunID     = "00000000-0000-0000-0000-0000000000d1"
 )
 
-func fencedFinishRun(recorder *lifecycle.Recorder) (*Driver, context.Context, AdmittedRun) {
+func fencedFinish(recorder *lifecycle.Recorder) (*Driver, context.Context, AdmittedRun) {
 	d := New(Deps{Logger: slog.New(slog.DiscardHandler), Runtime: observingRuntime{recorder}, Lifecycle: recorder})
 	handle := sessionruntime.RunHandle{BotID: fencedBotID, SessionID: fencedSessionID, RunID: fencedRunID, FencingToken: 3}
 	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: fencedBotID, SessionID: fencedSessionID, Token: 3})
@@ -142,39 +142,39 @@ func fencedFinishRun(recorder *lifecycle.Recorder) (*Driver, context.Context, Ad
 }
 
 // A fenced run that failed before its plan had a lifecycle has its row when
-// FinishRun returns: the candidate is staged before the write, so the terminal
+// Finish returns: the candidate is staged before the write, so the terminal
 // observer inside the write settles it. No reconcile pass runs.
-func TestFinishRunWritesTheLifecycleRowOfASetupFailureBeforeReturning(t *testing.T) {
+func TestFinishWritesTheLifecycleRowOfASetupFailureBeforeReturning(t *testing.T) {
 	t.Parallel()
 
 	store := &agenttest.RecordingLifecycleStore{}
 	recorder := lifecycle.New(lifecycle.Deps{Store: store, Logger: slog.New(slog.DiscardHandler)})
-	d, ctx, run := fencedFinishRun(recorder)
+	d, ctx, run := fencedFinish(recorder)
 
 	cause := apperror.New(apperror.CodeContextBudgetUnsatisfied, nil)
-	d.FinishRun(ctx, run, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: cause}))
+	d.Finish(ctx, run, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: cause}))
 
 	if len(store.TerminalUpserts) != 1 {
-		t.Fatalf("lifecycle rows after FinishRun = %d, want 1 without a reconcile pass", len(store.TerminalUpserts))
+		t.Fatalf("lifecycle rows after Finish = %d, want 1 without a reconcile pass", len(store.TerminalUpserts))
 	}
 	if got := store.TerminalUpserts[0].Status; got != lifecycle.StatusFailedBudget {
 		t.Fatalf("lifecycle status = %q, want the cause's %q", got, lifecycle.StatusFailedBudget)
 	}
 }
 
-// What the plan staged is the complete candidate; the minimal one FinishRun
+// What the plan staged is the complete candidate; the minimal one Finish
 // stages does not replace it.
-func TestFinishRunKeepsTheCandidateThePlanStaged(t *testing.T) {
+func TestFinishKeepsTheCandidateThePlanStaged(t *testing.T) {
 	t.Parallel()
 
 	store := &agenttest.RecordingLifecycleStore{}
 	recorder := lifecycle.New(lifecycle.Deps{Store: store, Logger: slog.New(slog.DiscardHandler)})
-	d, ctx, run := fencedFinishRun(recorder)
+	d, ctx, run := fencedFinish(recorder)
 
 	full := lifecycle.MinimalSnapshot()
 	full.Version = 7
 	recorder.PersistSnapshot(ctx, fencedRunID, fencedBotID, fencedSessionID, &full, nil, true)
-	d.FinishRun(ctx, run, fromEnd(outcome.EndCompleted, nil))
+	d.Finish(ctx, run, fromEnd(outcome.EndCompleted, nil))
 
 	if len(store.TerminalUpserts) != 1 {
 		t.Fatalf("lifecycle rows = %d, want 1", len(store.TerminalUpserts))
@@ -190,7 +190,7 @@ func TestFinishRunKeepsTheCandidateThePlanStaged(t *testing.T) {
 
 // A run without a fence has nothing to stage; its row is written right after
 // the terminal write, and only for a run that ended.
-func TestFinishRunWritesTheLifecycleRowAfterTheWriteWhenThereIsNoFence(t *testing.T) {
+func TestFinishWritesTheLifecycleRowAfterTheWriteWhenThereIsNoFence(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -219,7 +219,7 @@ func TestFinishRunWritesTheLifecycleRowAfterTheWriteWhenThereIsNoFence(t *testin
 				ctx, cancel = context.WithCancelCause(ctx)
 				cancel(context.Canceled)
 			}
-			d.FinishRun(ctx, run, FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
+			d.Finish(ctx, run, FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
 
 			if len(tc.admitter.Finishes) != 1 {
 				t.Fatalf("terminal writes = %d, want 1", len(tc.admitter.Finishes))
@@ -246,7 +246,7 @@ func (r finishRefusing) FinishRunWithFailure(context.Context, sessionruntime.Run
 // failure keeps it for a repair pass under the same fence. The candidate shows
 // in the repair: with it the row says failed_budget, without it the generic
 // failure.
-func TestFinishRunDiscardsTheCandidateOnlyWhenOwnershipIsLost(t *testing.T) {
+func TestFinishDiscardsTheCandidateOnlyWhenOwnershipIsLost(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
@@ -266,7 +266,7 @@ func TestFinishRunDiscardsTheCandidateOnlyWhenOwnershipIsLost(t *testing.T) {
 			ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: fencedBotID, SessionID: fencedSessionID, Token: 3})
 			budget := apperror.New(apperror.CodeContextBudgetUnsatisfied, nil)
 
-			d.FinishRun(ctx, AdmittedRun{Handle: handle, Mode: "chat"}, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: budget}))
+			d.Finish(ctx, AdmittedRun{Handle: handle, Mode: "chat"}, fromEnd(outcome.EndFailed, &outcome.RunFailure{Cause: budget}))
 
 			recorder.ReconcileTerminal(context.Background(), sessionruntime.TerminalRun{
 				RunID: fencedRunID, BotID: fencedBotID, SessionID: fencedSessionID,

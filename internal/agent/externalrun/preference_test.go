@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/botenv"
+	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agentcredential"
@@ -16,6 +18,8 @@ import (
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/providers"
 )
 
 type preferenceCatalogDriver struct {
@@ -41,10 +45,10 @@ func TestDirectModelPreferenceSurvivesServiceRestart(t *testing.T) {
 			const sid = "00000000-0000-0000-0000-000000000610"
 			catalog := external.ModelCatalog{ConfiguredModelID: "default", ConfiguredReasoningEffort: "medium", Models: []external.ModelOption{{ID: "chosen", DefaultReasoningEffort: "medium", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "medium"}, {ID: "high"}}}}}
 			fake := &agenttest.ModelQueries{}
-			svc := newModelSelectionService(t, fake)
-			svc.externalDrivers = map[string]external.Driver{runtimeType: preferenceCatalogDriver{catalog: catalog}}
+			svc := newPreferenceHost(t, fake)
+			svc.drivers = map[string]external.Driver{runtimeType: preferenceCatalogDriver{catalog: catalog}}
 			sess := session.Thread{ID: sid, BotID: "bot", RuntimeType: runtimeType}
-			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen", ReasoningEffort: "high"}, sess)
+			req, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen", ReasoningEffort: "high"}, sess)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,8 +65,8 @@ func TestDirectModelPreferenceSurvivesServiceRestart(t *testing.T) {
 			// A fresh service and fresh view recover exclusively from persisted columns.
 			sess.PreferredExternalModelID = stored.PreferredExternalModelID.String
 			sess.PreferredReasoningEffort = stored.PreferredReasoningEffort.String
-			fresh := newModelSelectionService(t, &agenttest.ModelQueries{})
-			resumed, err := fresh.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
+			fresh := newPreferenceHost(t, &agenttest.ModelQueries{})
+			resumed, err := fresh.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
 			if err != nil || resumed.Model != "chosen" || resumed.ReasoningEffort != "high" {
 				t.Fatalf("resume=%+v err=%v", resumed, err)
 			}
@@ -91,9 +95,9 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 				PreferredExternalModelID: pgtype.Text{String: "A", Valid: true},
 				PreferredReasoningEffort: pgtype.Text{String: "high", Valid: true},
 			}}
-			svc := newModelSelectionService(t, fake)
+			svc := newPreferenceHost(t, fake)
 			var projectPaths []string
-			svc.externalDrivers = map[string]external.Driver{tc.runtime: preferenceCatalogDriver{catalog: catalog, projectPaths: &projectPaths}}
+			svc.drivers = map[string]external.Driver{tc.runtime: preferenceCatalogDriver{catalog: catalog, projectPaths: &projectPaths}}
 			// The picker resolves Default to an explicit ID before either the
 			// PATCH or a send. Both entry points must replace the saved A/high.
 			model, effort := tc.selected, "medium"
@@ -106,7 +110,7 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 			sess := session.Thread{ID: sid, BotID: "bot", RuntimeType: tc.runtime, PreferredExternalModelID: "A", PreferredReasoningEffort: "high"}
 			sess.Metadata = map[string]any{"project_path": "/data/old"}
 			sess.RuntimeMetadata = map[string]any{"project_path": "/data/project"}
-			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: model, ReasoningEffort: effort}, sess)
+			req, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: model, ReasoningEffort: effort}, sess)
 			if err != nil || req.Model != model || req.ReasoningEffort != effort {
 				t.Fatalf("send=%+v err=%v", req, err)
 			}
@@ -119,8 +123,8 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 			stored := fake.UpdatedPrefs[0]
 			sess.PreferredExternalModelID = stored.PreferredExternalModelID.String
 			sess.PreferredReasoningEffort = stored.PreferredReasoningEffort.String
-			fresh := newModelSelectionService(t, &agenttest.ModelQueries{})
-			resumed, err := fresh.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
+			fresh := newPreferenceHost(t, &agenttest.ModelQueries{})
+			resumed, err := fresh.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
 			if err != nil || resumed.Model != model || resumed.ReasoningEffort != effort {
 				t.Fatalf("resume=%+v err=%v", resumed, err)
 			}
@@ -134,20 +138,20 @@ func TestDirectModelSwitchReconcilesAgainstNewModel(t *testing.T) {
 		{ID: "B", DefaultReasoningEffort: "low", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "low"}}},
 		{ID: "no-default", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "low"}, {ID: "max"}}},
 	}}
-	id, effort, err := reconcileDirectPair(catalog, "B", "high")
+	id, effort, err := reconcilePair(catalog, "B", "high")
 	if err != nil || id != "B" || effort != "low" {
 		t.Fatalf("pair=%s/%s err=%v", id, effort, err)
 	}
 	// Without a model default the effort stays unset until a level is picked.
 	for sent, want := range map[string]string{"": "", "max": "max", "high": ""} {
-		if _, effort, err = reconcileDirectPair(catalog, "no-default", sent); err != nil || effort != want {
+		if _, effort, err = reconcilePair(catalog, "no-default", sent); err != nil || effort != want {
 			t.Fatalf("no-default effort %q = %q, want %q (err=%v)", sent, effort, want, err)
 		}
 	}
-	if _, _, err = reconcileDirectPair(catalog, "", ""); err == nil {
+	if _, _, err = reconcilePair(catalog, "", ""); err == nil {
 		t.Fatal("accepted empty model without a configured or advertised default")
 	}
-	if _, _, err = reconcileDirectPair(catalog, "missing", ""); err == nil {
+	if _, _, err = reconcilePair(catalog, "missing", ""); err == nil {
 		t.Fatal("accepted missing model")
 	}
 }
@@ -158,10 +162,10 @@ func TestDirectModelPreferencePreservesClaudeResolvedModel(t *testing.T) {
 	for _, requested := range []string{full, "", "opus"} {
 		t.Run("model="+requested, func(t *testing.T) {
 			fake := &agenttest.ModelQueries{}
-			svc := newModelSelectionService(t, fake)
-			svc.externalDrivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
+			svc := newPreferenceHost(t, fake)
+			svc.drivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
 			sess := session.Thread{ID: "00000000-0000-0000-0000-000000000610", BotID: "bot", RuntimeType: session.RuntimeClaudeCode}
-			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: requested, ReasoningEffort: "high"}, sess)
+			req, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: requested, ReasoningEffort: "high"}, sess)
 			want := requested
 			if want == "" {
 				want = full
@@ -174,7 +178,7 @@ func TestDirectModelPreferencePreservesClaudeResolvedModel(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := reconcileDirectPair(catalog, "unknown", "high"); err == nil {
+	if _, _, err := reconcilePair(catalog, "unknown", "high"); err == nil {
 		t.Fatal("accepted an unadvertised model")
 	}
 }
@@ -186,11 +190,11 @@ func TestDirectModelPreferenceRepeatedPairSkipsCatalog(t *testing.T) {
 	catalog := external.ModelCatalog{Models: []external.ModelOption{{ID: "A", DefaultReasoningEffort: "medium", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "medium"}, {ID: "high"}}}}}
 	calls := 0
 	fake := &agenttest.ModelQueries{}
-	svc := newModelSelectionService(t, fake)
-	svc.externalDrivers = map[string]external.Driver{session.RuntimeCodex: preferenceCatalogDriver{catalog: catalog, calls: &calls}}
+	svc := newPreferenceHost(t, fake)
+	svc.drivers = map[string]external.Driver{session.RuntimeCodex: preferenceCatalogDriver{catalog: catalog, calls: &calls}}
 	sess := session.Thread{ID: "00000000-0000-0000-0000-000000000610", BotID: "bot", RuntimeType: session.RuntimeCodex, PreferredExternalModelID: "A", PreferredReasoningEffort: "high"}
 
-	req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
+	req, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
 	if err != nil || req.Model != "A" || req.ReasoningEffort != "high" {
 		t.Fatalf("request=%+v err=%v", req, err)
 	}
@@ -202,7 +206,7 @@ func TestDirectModelPreferenceRepeatedPairSkipsCatalog(t *testing.T) {
 	}
 
 	// A changed component goes back through the catalog.
-	req, err = svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "medium"}, sess)
+	req, err = svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "medium"}, sess)
 	if err != nil || req.ReasoningEffort != "medium" {
 		t.Fatalf("request=%+v err=%v", req, err)
 	}
@@ -217,11 +221,10 @@ func TestDirectModelPreferenceRepeatedPairSkipsCatalog(t *testing.T) {
 func TestDirectModelPreferenceWriteFailureDoesNotBreakTurn(t *testing.T) {
 	catalog := external.ModelCatalog{ConfiguredModelID: "A", ConfiguredReasoningEffort: "medium", Models: []external.ModelOption{{ID: "A", DefaultReasoningEffort: "medium", ReasoningEfforts: []external.ReasoningEffortOption{{ID: "medium"}, {ID: "high"}}}}}
 	fake := &agenttest.ModelQueries{UpdatePrefErr: errors.New("db down")}
-	svc := newModelSelectionService(t, fake)
-	svc.logger = slog.New(slog.DiscardHandler)
-	svc.externalDrivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
+	svc := newPreferenceHost(t, fake)
+	svc.drivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
 	sess := session.Thread{ID: "00000000-0000-0000-0000-000000000611", BotID: "bot", RuntimeType: session.RuntimeClaudeCode, PreferredExternalModelID: "previous", PreferredReasoningEffort: "medium"}
-	req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
+	req, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
 	if err != nil {
 		t.Fatalf("write-back failure broke the turn: %v", err)
 	}
@@ -253,10 +256,10 @@ func TestDirectModelPreferenceAnswersCatalogFailures(t *testing.T) {
 		{"missing dependency", &external.DependencyMissingError{DependencyID: "codex"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := newModelSelectionService(t, &agenttest.ModelQueries{})
-			svc.externalDrivers = map[string]external.Driver{session.RuntimeCodex: failingCatalogDriver{err: tc.err}}
+			svc := newPreferenceHost(t, &agenttest.ModelQueries{})
+			svc.drivers = map[string]external.Driver{session.RuntimeCodex: failingCatalogDriver{err: tc.err}}
 			sess := session.Thread{ID: "00000000-0000-0000-0000-000000000613", BotID: "bot", RuntimeType: session.RuntimeCodex}
-			_, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen"}, sess)
+			_, err := svc.applyModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen"}, sess)
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("code = %q, want %q: %v", got, tc.code, err)
 			}
@@ -265,4 +268,18 @@ func TestDirectModelPreferenceAnswersCatalogFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// newPreferenceHost is a Host whose store and model catalog are fake.
+func newPreferenceHost(t *testing.T, fake *agenttest.ModelQueries) *Host {
+	t.Helper()
+	logger := slog.New(slog.DiscardHandler)
+	return testHost(t, Deps{
+		Logger: logger,
+		Store:  fake,
+		Runconfig: runconfig.New(runconfig.Deps{
+			Logger: logger, Credentials: providers.NewService(nil, nil, ""), Queries: fake,
+			Models: models.NewService(logger, fake), Bot: botenv.New(botenv.Deps{Logger: logger}),
+		}),
+	})
 }

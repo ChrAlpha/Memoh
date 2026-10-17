@@ -154,7 +154,7 @@ func TestPrepareRunConfigPreservesPipelineFileAttachmentBytes(t *testing.T) {
 		ContextCurrentUserMessageIndex: &currentIndex,
 	}
 
-	prepared := (newBuilder()).Prepare(context.Background(), cfg)
+	prepared := newBuilder().Prepare(context.Background(), cfg)
 	got := contextview.ApplyProviderRunConfig(context.Background(), nil, prepared)
 	want := []sdk.Message{sdk.UserMessage("pipeline current user", file)}
 

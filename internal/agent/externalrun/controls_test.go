@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -13,8 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -30,8 +33,10 @@ type controlQueries struct {
 	stale  bool
 }
 
-func (*controlQueries) SupportsTransactions() bool                                     { return true }
+func (*controlQueries) SupportsTransactions() bool { return true }
+
 func (q *controlQueries) InTx(_ context.Context, fn func(dbstore.Queries) error) error { return fn(q) }
+
 func (*controlQueries) LockBotForSessionWrite(_ context.Context, id pgtype.UUID) (pgtype.UUID, error) {
 	return id, nil
 }
@@ -89,15 +94,20 @@ func (d *controlDriver) SetMode(_ context.Context, _ external.PromptInput, id st
 	return external.ModeState{Supported: true, CurrentModeID: id}, nil
 }
 
-func runtimeControlFixture(t *testing.T) (*Service, *controlQueries, *controlDriver, *agenttest.ScriptedAdmitter, RuntimeControlRequest) {
+func runtimeControlFixture(t *testing.T) (*Host, *controlQueries, *controlDriver, *agenttest.ScriptedAdmitter, turn.RuntimeControlRequest) {
 	t.Helper()
 	botID, threadID, actorID := uuid.New(), uuid.New(), uuid.New()
 	q := &controlQueries{row: sqlc.BotSession{ID: pgtype.UUID{Bytes: threadID, Valid: true}, BotID: pgtype.UUID{Bytes: botID, Valid: true}, CreatedByUserID: pgtype.UUID{Bytes: actorID, Valid: true}, Type: "chat", RuntimeType: "codex", RuntimeMetadata: []byte(`{"keep":"value"}`)}}
 	driver := &controlDriver{commands: []external.Command{{Name: "inspect", Kind: external.CommandRead}, {Name: "shrink", Kind: external.CommandOperation}}}
 	admitter := agenttest.NewScriptedAdmitter()
-	request := RuntimeControlRequest{BotID: botID.String(), ThreadID: threadID.String(), ActorID: actorID.String()}
-	svc := wireComponents(&Service{sessionService: session.NewService(nil, q, nil), botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{request.BotID + ":" + request.ActorID + ":" + bots.PermissionWorkspaceExec: true}}, externalDrivers: map[string]external.Driver{"codex": driver}, sessionRuntime: admitter})
-	return svc, q, driver, admitter, request
+	request := turn.RuntimeControlRequest{BotID: botID.String(), ThreadID: threadID.String(), ActorID: actorID.String()}
+	host := testHost(t, Deps{
+		Sessions:       session.NewService(nil, q, nil),
+		BotPermissions: &agenttest.PermissionChecker{Values: map[string]bool{request.BotID + ":" + request.ActorID + ":" + bots.PermissionWorkspaceExec: true}},
+		Admitter:       admitter,
+	})
+	host.drivers = map[string]external.Driver{"codex": driver}
+	return host, q, driver, admitter, request
 }
 
 func TestRuntimeControlsRejectOtherActorBeforeDispatch(t *testing.T) {
@@ -158,7 +168,7 @@ func (d *planControlDriver) SetPlanMode(ctx context.Context, input external.Prom
 func TestPlanModePersistsWithoutReplacingPermission(t *testing.T) {
 	for _, mode := range []string{"plan", "default"} {
 		svc, q, driver, _, req := runtimeControlFixture(t)
-		svc.externalDrivers["codex"] = &planControlDriver{driver}
+		svc.drivers["codex"] = &planControlDriver{driver}
 		q.row.RuntimeMetadata = []byte(`{"permission_mode":"yolo","keep":"value"}`)
 		req.ModeKind, req.ModeID = "plan", mode
 		if _, err := svc.SetRuntimeMode(t.Context(), req); err != nil {
@@ -180,18 +190,24 @@ func (*failingCompactDriver) Compact(context.Context, external.PromptInput) (ext
 	return external.CompactionResult{}, errors.New("compaction unavailable")
 }
 
+type openFence struct{}
+
+func (openFence) Activate(context.Context, string, string, int64) error { return nil }
+
 // A control command that fails ends its run through the driver's one terminal
 // write, so the run has its lifecycle row without a reconcile pass.
 func TestRuntimeControlFailureLeavesALifecycleRow(t *testing.T) {
 	svc, _, driver, _, req := runtimeControlFixture(t)
-	svc.externalDrivers["codex"] = &failingCompactDriver{driver}
+	svc.drivers["codex"] = &failingCompactDriver{driver}
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
-		OwnerID: "owner-control", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: abortAlignmentFence{},
+		OwnerID: "owner-control", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: openFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	store := &agenttest.RecordingLifecycleStore{}
-	bindRuntime(svc, manager)
-	useLifecycleStore(svc, store)
+	svc.lifecycle = lifecycle.New(lifecycle.Deps{Store: store, Decisions: svc.decider, Logger: svc.logger})
+	svc.driver = drive.New(drive.Deps{Logger: svc.logger, Runtime: manager, Lifecycle: svc.lifecycle, Persist: svc.persist})
+	svc.admitter = manager
+	svc.runtime = manager
 	manager.SetTerminalObserver(svc.lifecycle.ReconcileTerminal)
 
 	req.Command = "shrink"
@@ -200,5 +216,28 @@ func TestRuntimeControlFailureLeavesALifecycleRow(t *testing.T) {
 	}
 	if len(store.TerminalUpserts) != 1 {
 		t.Fatalf("lifecycle rows = %d, want the failed control run's row", len(store.TerminalUpserts))
+	}
+}
+
+func TestRuntimeControlReportsBusySessionAsTurnBusy(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(*agenttest.ScriptedAdmitter)
+	}{
+		{"admission error", func(a *agenttest.ScriptedAdmitter) { a.AdmitErr = sessionruntime.ErrSessionBusy }},
+		{"not started", func(a *agenttest.ScriptedAdmitter) { a.Started = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, driver, admitter, req := runtimeControlFixture(t)
+			tc.prepare(admitter)
+			req.Command = "shrink"
+			_, err := svc.ExecuteRuntimeCommand(t.Context(), req)
+			if got := apperror.CodeOf(err); got != apperror.CodeSessionBusy {
+				t.Fatalf("code = %q (%v), want %q", got, err, apperror.CodeSessionBusy)
+			}
+			if driver.compactCalls != 0 {
+				t.Fatal("busy session dispatched the command")
+			}
+		})
 	}
 }

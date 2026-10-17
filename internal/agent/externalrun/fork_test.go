@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 const (
@@ -19,9 +18,7 @@ const (
 	forkTestTurnID    = "00000000-0000-0000-0000-000000000703"
 )
 
-type forkAnchorQueries struct {
-	dbstore.Queries
-}
+type forkAnchorQueries struct{ Store }
 
 func (forkAnchorQueries) GetTurnAgentTurnID(context.Context, sqlc.GetTurnAgentTurnIDParams) (string, error) {
 	return "runtime-turn-1", nil
@@ -38,7 +35,7 @@ func (d failingForkDriver) ForkThread(context.Context, string, string, map[strin
 
 // A runtime failure while forking reaches the session handler with its public
 // code; other errors are left for the handler to answer.
-func TestPrepareExternalForkAnswersRuntimeFailures(t *testing.T) {
+func TestPrepareForkAnswersRuntimeFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -49,14 +46,14 @@ func TestPrepareExternalForkAnswersRuntimeFailures(t *testing.T) {
 		{"missing dependency", &external.DependencyMissingError{DependencyID: "codex"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := wireComponents(&Service{
-				queries: forkAnchorQueries{},
-				sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
+			svc := testHost(t, Deps{
+				Store: forkAnchorQueries{},
+				Sessions: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 					return session.Thread{ID: forkTestSessionID, BotID: forkTestBotID, BotAgentID: "agent-1", RuntimeType: session.RuntimeCodex}, nil
 				}},
-				externalDrivers: map[string]external.Driver{session.RuntimeCodex: failingForkDriver{err: tc.err}},
 			})
-			_, err := svc.PrepareExternalFork(context.Background(), forkTestBotID, forkTestSessionID, forkTestTurnID)
+			svc.drivers = map[string]external.Driver{session.RuntimeCodex: failingForkDriver{err: tc.err}}
+			_, err := svc.PrepareFork(context.Background(), forkTestBotID, forkTestSessionID, forkTestTurnID)
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("code = %q, want %q: %v", got, tc.code, err)
 			}

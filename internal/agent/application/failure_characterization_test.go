@@ -348,7 +348,7 @@ func TestCharacterizeFinishRunCodes_CurrentBehavior(t *testing.T) {
 			if err != nil {
 				t.Fatalf("admit: %v", err)
 			}
-			service.driver.FinishRun(context.Background(), drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Chat}, drive.FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
+			service.driver.Finish(context.Background(), drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Chat}, drive.FromOutcome(outcome.RunOutcome{Status: tc.status, Cause: tc.cause}))
 			run, err := runs.Get(context.Background(), admission.RunID)
 			if err != nil {
 				t.Fatalf("load run: %v", err)

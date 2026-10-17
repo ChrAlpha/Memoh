@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -16,8 +16,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
-	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
@@ -30,10 +28,6 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-type acpPrompter interface {
-	Prompt(ctx context.Context, input acpagent.PromptInput) (acpclient.PromptResult, error)
-}
-
 type runtimePreparedAttachments struct {
 	Images                   []external.Image
 	Context                  []runreq.ChatAttachment
@@ -41,29 +35,36 @@ type runtimePreparedAttachments struct {
 	CanFallbackImagesToFiles bool
 }
 
-type RuntimeSessionExecutionInfo struct {
+// SessionExecutionInfo says whether a session executes in the workspace and who
+// owns its runtime.
+type SessionExecutionInfo struct {
 	RequiresWorkspaceExec bool
 	BotID                 string
 	RuntimeOwnerAccountID string
 }
 
-func (s *Service) RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (RuntimeSessionExecutionInfo, error) {
-	if s == nil || s.sessionService == nil || strings.TrimSpace(sessionID) == "" {
-		return RuntimeSessionExecutionInfo{}, nil
+// SessionExecutionInfo reads the execution facts of a session; one that is not on an
+// external runtime reports none.
+func (h *Host) SessionExecutionInfo(ctx context.Context, sessionID string) (SessionExecutionInfo, error) {
+	if h.sessions == nil {
+		return SessionExecutionInfo{}, nil
 	}
-	sess, err := s.sessionService.Get(ctx, sessionID)
+	if strings.TrimSpace(sessionID) == "" {
+		return SessionExecutionInfo{}, nil
+	}
+	sess, err := h.sessions.Get(ctx, sessionID)
 	if err != nil {
-		return RuntimeSessionExecutionInfo{}, err
+		return SessionExecutionInfo{}, err
 	}
 	// Direct external runtimes execute in the workspace exactly like ACP
 	// agents; the WS execution gate must cover both, or a
 	// session reached by other means (a fork, a shared session) executes
 	// with only the inherited runtime owner ever checked.
 	if !session.IsACPRuntime(sess) && !session.IsDirectRuntime(sess) {
-		return RuntimeSessionExecutionInfo{}, nil
+		return SessionExecutionInfo{}, nil
 	}
 	runtimeMeta := runreq.RuntimeSessionMeta(sess)
-	return RuntimeSessionExecutionInfo{
+	return SessionExecutionInfo{
 		RequiresWorkspaceExec: true,
 		BotID:                 sess.BotID,
 		RuntimeOwnerAccountID: runreq.MetadataString(runtimeMeta, "runtime_owner_account_id"),
@@ -95,7 +96,7 @@ const (
 // corrupt anything - whereas deleting it after a misclassified rollback would
 // destroy a committed turn. An unanswered user message simply reads as a
 // failed turn to retry.
-func (s *Service) resolveRuntimeRoundPersistFailure(
+func (h *Host) resolveRuntimeRoundPersistFailure(
 	ctx context.Context,
 	req runreq.ChatRequest,
 	persistErr error,
@@ -104,28 +105,28 @@ func (s *Service) resolveRuntimeRoundPersistFailure(
 	if !errors.Is(persistErr, db.ErrCommitOutcomeUnknown) {
 		return runtimeRoundRolledBack
 	}
-	outcome, reconcileErr := s.reconcileRuntimeRoundOutcome(context.WithoutCancel(ctx), req)
+	outcome, reconcileErr := h.reconcileRuntimeRoundOutcome(context.WithoutCancel(ctx), req)
 	if reconcileErr == nil {
 		if outcome == "" {
 			return runtimeRoundRolledBack
 		}
 		return runtimeRoundCommitted
 	}
-	s.logger.ErrorContext(ctx, "failed to reconcile uncertain External Agent round",
+	h.logger.ErrorContext(ctx, "failed to reconcile uncertain External Agent round",
 		slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID), slog.Any("error", reconcileErr))
-	s.retryRuntimeRoundOutcome(context.WithoutCancel(ctx), req, func(reconcileCtx context.Context, _ string) {
+	h.retryRuntimeRoundOutcome(context.WithoutCancel(ctx), req, func(reconcileCtx context.Context, _ string) {
 		cleanupProjectionsIn(reconcileCtx)
 	})
 	return runtimeRoundUnresolved
 }
 
-type runtimeRoundReconcileTx interface {
+type reconcileTx interface {
 	InTx(context.Context, func(dbstore.Queries) error) error
 	SupportsTransactions() bool
 }
 
-func (s *Service) reconcileRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequest) (string, error) {
-	if s == nil || s.queries == nil {
+func (h *Host) reconcileRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequest) (string, error) {
+	if h.store == nil {
 		return "", errors.New("external agent round reconciliation store is unavailable")
 	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
@@ -140,7 +141,7 @@ func (s *Service) reconcileRuntimeRoundOutcome(ctx context.Context, req runreq.C
 	if err != nil {
 		return "", err
 	}
-	txer, ok := s.queries.(runtimeRoundReconcileTx)
+	txer, ok := h.store.(reconcileTx)
 	if !ok || !txer.SupportsTransactions() {
 		return "", errors.New("external agent round reconciliation requires transactions")
 	}
@@ -190,7 +191,7 @@ func (s *Service) reconcileRuntimeRoundOutcome(ctx context.Context, req runreq.C
 // comparison regardless of whether this loop ever resolves.
 const runtimeRoundReconcileBudget = 15 * time.Minute
 
-func (s *Service) retryRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequest, resolved func(context.Context, string)) {
+func (h *Host) retryRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequest, resolved func(context.Context, string)) {
 	retryCtx, cancelRetry := context.WithTimeout(context.WithoutCancel(ctx), runtimeRoundReconcileBudget)
 	go func() {
 		defer cancelRetry()
@@ -199,23 +200,23 @@ func (s *Service) retryRuntimeRoundOutcome(ctx context.Context, req runreq.ChatR
 		defer timer.Stop()
 		for {
 			attemptCtx, cancel := context.WithTimeout(retryCtx, 30*time.Second)
-			outcome, err := s.reconcileRuntimeRoundOutcome(attemptCtx, req)
+			outcome, err := h.reconcileRuntimeRoundOutcome(attemptCtx, req)
 			cancel()
 			if err == nil {
 				resolved(retryCtx, outcome)
 				return
 			}
 			if retryCtx.Err() != nil {
-				s.logger.ErrorContext(ctx, "abandoning uncertain External Agent round reconciliation after budget",
+				h.logger.ErrorContext(ctx, "abandoning uncertain External Agent round reconciliation after budget",
 					slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID), slog.Any("error", err))
 				return
 			}
-			s.logger.ErrorContext(ctx, "retrying uncertain External Agent round reconciliation",
+			h.logger.ErrorContext(ctx, "retrying uncertain External Agent round reconciliation",
 				slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID), slog.Any("error", err))
 			timer.Reset(backoff)
 			select {
 			case <-retryCtx.Done():
-				s.logger.ErrorContext(ctx, "abandoning uncertain External Agent round reconciliation after budget",
+				h.logger.ErrorContext(ctx, "abandoning uncertain External Agent round reconciliation after budget",
 					slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID))
 				return
 			case <-timer.C:
@@ -230,8 +231,8 @@ func (s *Service) retryRuntimeRoundOutcome(ctx context.Context, req runreq.ChatR
 	}()
 }
 
-func (s *Service) reconcileRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (string, error) {
-	if s == nil || s.queries == nil {
+func (h *Host) reconcileRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (string, error) {
+	if h.store == nil {
 		return "", errors.New("external agent leading-user reconciliation store is unavailable")
 	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
@@ -250,7 +251,7 @@ func (s *Service) reconcileRuntimeLeadingUserMessage(ctx context.Context, req ru
 	if err != nil {
 		return "", err
 	}
-	txer, ok := s.queries.(runtimeRoundReconcileTx)
+	txer, ok := h.store.(reconcileTx)
 	if !ok || !txer.SupportsTransactions() {
 		return "", errors.New("external agent leading-user reconciliation requires transactions")
 	}
@@ -285,19 +286,19 @@ func (s *Service) reconcileRuntimeLeadingUserMessage(ctx context.Context, req ru
 	return "", err
 }
 
-func (s *Service) cleanupUncertainRuntimeLeadingUser(ctx context.Context, req runreq.ChatRequest) {
+func (h *Host) cleanupUncertainRuntimeLeadingUser(ctx context.Context, req runreq.ChatRequest) {
 	backoff := 100 * time.Millisecond
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		messageID, err := s.reconcileRuntimeLeadingUserMessage(attemptCtx, req)
+		messageID, err := h.reconcileRuntimeLeadingUserMessage(attemptCtx, req)
 		cancel()
 		if err == nil {
 			if messageID != "" {
-				s.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{{ID: messageID}})
+				h.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{{ID: messageID}})
 			}
 			return
 		}
-		s.logger.ErrorContext(ctx, "retrying uncertain External Agent leading-user cleanup",
+		h.logger.ErrorContext(ctx, "retrying uncertain External Agent leading-user cleanup",
 			slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID), slog.Any("error", err))
 		timer := time.NewTimer(backoff)
 		select {
@@ -315,8 +316,8 @@ func (s *Service) cleanupUncertainRuntimeLeadingUser(ctx context.Context, req ru
 	}
 }
 
-func (s *Service) cleanupRuntimeDecisionProjectionRows(ctx context.Context, req runreq.ChatRequest) {
-	if s == nil || s.queries == nil {
+func (h *Host) cleanupRuntimeDecisionProjectionRows(ctx context.Context, req runreq.ChatRequest) {
+	if h.store == nil {
 		return
 	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
@@ -331,19 +332,19 @@ func (s *Service) cleanupRuntimeDecisionProjectionRows(ctx context.Context, req 
 	if err != nil {
 		return
 	}
-	if _, err := s.queries.DeleteRuntimeDecisionProjectionsByRun(ctx, sqlc.DeleteRuntimeDecisionProjectionsByRunParams{
+	if _, err := h.store.DeleteRuntimeDecisionProjectionsByRun(ctx, sqlc.DeleteRuntimeDecisionProjectionsByRunParams{
 		BotID: botID, SessionID: sessionID, RunID: runID,
 	}); err != nil {
-		s.logger.WarnContext(ctx, "cleanup External Agent decision projections by run failed",
+		h.logger.WarnContext(ctx, "cleanup External Agent decision projections by run failed",
 			slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID), slog.Any("error", err))
 	}
 }
 
-func (s *Service) prepareRuntimeAttachments(ctx context.Context, req runreq.ChatRequest) (runtimePreparedAttachments, error) {
+func (h *Host) prepareAttachments(ctx context.Context, req runreq.ChatRequest) (runtimePreparedAttachments, error) {
 	// An External Agent's image support is discovered when the prompt is sent
 	// — the runtime retries with files on ErrImagePromptUnsupported — so there
 	// is no capability bit to read here and images are always prepared.
-	prepared := s.runconfig.PrepareGatewayAttachments(ctx, req, true)
+	prepared := h.runconfig.PrepareGatewayAttachments(ctx, req, true)
 	result := runtimePreparedAttachments{
 		Images:                   make([]external.Image, 0, len(prepared)),
 		Context:                  make([]runreq.ChatAttachment, 0, len(prepared)),
@@ -434,15 +435,15 @@ func runtimePromptImageFromDataURL(payload, fallbackMime string) (external.Image
 	return external.Image{MimeType: mimeType, Data: data}, nil
 }
 
-func (s *Service) requireRuntimeOwnerWorkspaceExec(ctx context.Context, botID, runtimeOwnerAccountID string) error {
-	if s == nil || s.botPermissions == nil {
+func (h *Host) requireRuntimeOwnerWorkspaceExec(ctx context.Context, botID, runtimeOwnerAccountID string) error {
+	if h.permissions == nil {
 		return errors.New("bot permission checker not configured")
 	}
 	runtimeOwnerAccountID = strings.TrimSpace(runtimeOwnerAccountID)
 	if runtimeOwnerAccountID == "" {
 		return apperror.New(apperror.CodeACPRuntimeOwnerMissing, nil)
 	}
-	ok, err := s.botPermissions.HasBotPermission(ctx, strings.TrimSpace(botID), runtimeOwnerAccountID, bots.PermissionWorkspaceExec)
+	ok, err := h.permissions.HasBotPermission(ctx, strings.TrimSpace(botID), runtimeOwnerAccountID, bots.PermissionWorkspaceExec)
 	if err != nil {
 		return err
 	}
@@ -461,8 +462,8 @@ func isRuntimeDecisionProjectionEvent(ev native.StreamEvent) bool {
 	}
 }
 
-func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, *messagepkg.Message, error) {
-	if req.UserMessagePersisted || s == nil || s.messageService == nil || strings.TrimSpace(req.BotID) == "" {
+func (h *Host) persistRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, *messagepkg.Message, error) {
+	if req.UserMessagePersisted || h.messages == nil || strings.TrimSpace(req.BotID) == "" {
 		return req, nil, nil
 	}
 	displayText := strings.TrimSpace(req.RawQuery)
@@ -481,12 +482,12 @@ func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runr
 		Content: runreq.NewTextContent(contentText),
 	})
 	if err != nil {
-		s.logger.WarnContext(ctx, "persist External Agent leading user message: marshal failed", slog.Any("error", err))
+		h.logger.WarnContext(ctx, "persist External Agent leading user message: marshal failed", slog.Any("error", err))
 		return req, nil, nil
 	}
-	senderChannelIdentityID, senderUserID := s.persist.SenderIDs(ctx, req)
-	sessionMode, runtimeType := s.persist.SessionRuntimeSnapshot(ctx, req)
-	persisted, err := s.messageService.Persist(ctx, messagepkg.PersistInput{
+	senderChannelIdentityID, senderUserID := h.persist.SenderIDs(ctx, req)
+	sessionMode, runtimeType := h.persist.SessionRuntimeSnapshot(ctx, req)
+	persisted, err := h.messages.Persist(ctx, messagepkg.PersistInput{
 		BotID:                   req.BotID,
 		SessionID:               req.ThreadID,
 		SenderChannelIdentityID: senderChannelIdentityID,
@@ -506,19 +507,19 @@ func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runr
 		TurnPosition:            req.TurnPosition,
 	})
 	if err != nil {
-		s.logger.WarnContext(ctx, "persist External Agent leading user message failed",
+		h.logger.WarnContext(ctx, "persist External Agent leading user message failed",
 			slog.String("bot_id", req.BotID),
 			slog.String("session_id", req.ThreadID),
 			slog.Any("error", err))
 		if !errors.Is(err, db.ErrCommitOutcomeUnknown) {
 			return req, nil, nil
 		}
-		messageID, reconcileErr := s.reconcileRuntimeLeadingUserMessage(ctx, req)
+		messageID, reconcileErr := h.reconcileRuntimeLeadingUserMessage(ctx, req)
 		if reconcileErr != nil {
 			// No native prompt has run yet, so fail closed. A background cleanup
 			// removes the eager row if the lost acknowledgement was in fact a
 			// commit; retrying the prompt cannot then collide with an orphan.
-			go s.cleanupUncertainRuntimeLeadingUser(context.WithoutCancel(ctx), req)
+			go h.cleanupUncertainRuntimeLeadingUser(context.WithoutCancel(ctx), req)
 			return req, nil, fmt.Errorf("reconcile uncertain External Agent leading user message: %w", reconcileErr)
 		}
 		if messageID == "" {
@@ -536,19 +537,19 @@ func (s *Service) persistRuntimeLeadingUserMessage(ctx context.Context, req runr
 	return req, &persisted, nil
 }
 
-func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runreq.ChatRequest, ev native.StreamEvent) *messagepkg.Message {
-	if s == nil || s.messageService == nil || strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
+func (h *Host) persistRuntimeDecisionProjection(ctx context.Context, req runreq.ChatRequest, ev native.StreamEvent) *messagepkg.Message {
+	if h.messages == nil || strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
 	output := runreq.SDKMessagesToModelMessages(external.TranscriptFromEvents([]event.StreamEvent{ev}, ""))
-	sessionMode, runtimeType := s.persist.SessionRuntimeSnapshot(ctx, req)
+	sessionMode, runtimeType := h.persist.SessionRuntimeSnapshot(ctx, req)
 	for _, msg := range output {
 		if msg.Role != "assistant" {
 			continue
 		}
 		content, err := historyfrag.MarshalStoredModelMessage(msg)
 		if err != nil {
-			s.logger.WarnContext(ctx, "persist External Agent decision projection: marshal failed",
+			h.logger.WarnContext(ctx, "persist External Agent decision projection: marshal failed",
 				slog.String("tool_call_id", ev.ToolCallID),
 				slog.Any("error", err))
 			return nil
@@ -556,7 +557,7 @@ func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runr
 		metadata := runreq.CloneMetadataMap(persist.RouteMetadata(req))
 		metadata["agent_decision_projection"] = true
 		metadata["agent_decision_tool_call_id"] = strings.TrimSpace(ev.ToolCallID)
-		persisted, err := s.messageService.Persist(ctx, messagepkg.PersistInput{
+		persisted, err := h.messages.Persist(ctx, messagepkg.PersistInput{
 			BotID:                   req.BotID,
 			SessionID:               req.ThreadID,
 			SenderChannelIdentityID: "",
@@ -569,7 +570,7 @@ func (s *Service) persistRuntimeDecisionProjection(ctx context.Context, req runr
 			RunID:                   req.RunID,
 		})
 		if err != nil {
-			s.logger.WarnContext(ctx, "persist External Agent decision projection failed",
+			h.logger.WarnContext(ctx, "persist External Agent decision projection failed",
 				slog.String("bot_id", req.BotID),
 				slog.String("session_id", req.ThreadID),
 				slog.String("tool_call_id", ev.ToolCallID),

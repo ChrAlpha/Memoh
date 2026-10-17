@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -17,47 +17,37 @@ import (
 	session "github.com/felinics/memoh/internal/chat/thread"
 )
 
-// externalDriverMap indexes out-of-process runtime drivers (codex,
-// claude-code, the ACP pool's adapter) by runtime type; a later driver replaces
-// an earlier one of the same type. Sessions whose runtime type has no driver
-// fail with a stable "runtime unavailable" error instead of silently degrading
-// to the built-in model runtime.
-func externalDriverMap(drivers ...external.Driver) map[string]external.Driver {
-	byType := map[string]external.Driver{}
-	for _, driver := range drivers {
-		if driver == nil {
-			continue
-		}
-		byType[strings.TrimSpace(driver.RuntimeType())] = driver
-	}
-	return byType
-}
-
-type runtimeDispatchKind int
+// DispatchKind names where a request's turn runs.
+type DispatchKind int
 
 const (
-	dispatchNative runtimeDispatchKind = iota
-	dispatchExternal
+	// DispatchNative runs the turn on the in-process model runtime.
+	DispatchNative DispatchKind = iota
+	// DispatchExternal runs the turn on an external runtime driver.
+	DispatchExternal
 )
 
-// runtimeDispatch is the resolved execution route for one chat request.
-type runtimeDispatch struct {
-	kind   runtimeDispatchKind
-	driver external.Driver
+// Dispatch is the resolved execution route for one chat request.
+type Dispatch struct {
+	Kind   DispatchKind
+	Driver external.Driver
 }
 
-// resolveRuntimeDispatch decides which runtime executes a request's turn:
+// ResolveDispatch decides which runtime executes a request's turn:
 // the in-process model runtime, the ACP pool, or a direct external driver.
-func (s *Service) resolveRuntimeDispatch(ctx context.Context, req runreq.ChatRequest) (runtimeDispatch, error) {
-	if s == nil || s.sessionService == nil || strings.TrimSpace(req.ThreadID) == "" {
-		return runtimeDispatch{kind: dispatchNative}, nil
+func (h *Host) ResolveDispatch(ctx context.Context, req runreq.ChatRequest) (Dispatch, error) {
+	if strings.TrimSpace(req.ThreadID) == "" {
+		return Dispatch{Kind: DispatchNative}, nil
 	}
-	sess, err := s.sessionService.Get(ctx, req.ThreadID)
+	if h.sessions == nil {
+		return Dispatch{Kind: DispatchNative}, nil
+	}
+	sess, err := h.sessions.Get(ctx, req.ThreadID)
 	if err != nil {
-		return runtimeDispatch{}, err
+		return Dispatch{}, err
 	}
 	if err := runreq.ValidateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
-		return runtimeDispatch{}, err
+		return Dispatch{}, err
 	}
 	runtimeType := ""
 	switch {
@@ -66,13 +56,13 @@ func (s *Service) resolveRuntimeDispatch(ctx context.Context, req runreq.ChatReq
 	case session.IsDirectRuntime(sess):
 		runtimeType = strings.TrimSpace(sess.RuntimeType)
 	default:
-		return runtimeDispatch{kind: dispatchNative}, nil
+		return Dispatch{Kind: DispatchNative}, nil
 	}
-	driver, ok := s.externalDrivers[runtimeType]
+	driver, ok := h.drivers[runtimeType]
 	if !ok {
-		return runtimeDispatch{}, apperror.New(apperror.CodeExternalRuntimeUnavailable, map[string]string{"runtime": runtimeType})
+		return Dispatch{}, apperror.New(apperror.CodeExternalRuntimeUnavailable, map[string]string{"runtime": runtimeType})
 	}
-	return runtimeDispatch{kind: dispatchExternal, driver: driver}, nil
+	return Dispatch{Kind: DispatchExternal, Driver: driver}, nil
 }
 
 // abortSettleWait bounds how long AbortSessionRuns waits for the aborted run
@@ -88,11 +78,11 @@ const abortSettleWait = 30 * time.Second
 // so callers that destroy the session next need the settle, not the signal.
 // A run that cannot settle inside the window fails the call rather than
 // letting the caller proceed over a still-running turn.
-func (s *Service) AbortSessionRuns(ctx context.Context, botID, sessionID string) error {
-	if s == nil || s.decisionRuntime == nil {
+func (h *Host) AbortSessionRuns(ctx context.Context, botID, sessionID string) error {
+	if h.runtime == nil {
 		return nil
 	}
-	snapshot, err := s.decisionRuntime.Snapshot(ctx, botID, sessionID)
+	snapshot, err := h.runtime.Snapshot(ctx, botID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -101,12 +91,12 @@ func (s *Service) AbortSessionRuns(ctx context.Context, botID, sessionID string)
 		return nil
 	}
 	runID := run.RunID
-	if _, err = s.decisionRuntime.Abort(ctx, botID, sessionID, runID); err != nil {
+	if _, err = h.runtime.Abort(ctx, botID, sessionID, runID); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(abortSettleWait)
 	for {
-		snapshot, err := s.decisionRuntime.Snapshot(ctx, botID, sessionID)
+		snapshot, err := h.runtime.Snapshot(ctx, botID, sessionID)
 		if err != nil {
 			return err
 		}
@@ -117,7 +107,7 @@ func (s *Service) AbortSessionRuns(ctx context.Context, botID, sessionID string)
 		// active-prompt registration lives exactly as long as the driver
 		// call, so wait for both.
 		if (current == nil || current.RunID != runID || !activeRuntimeRunStatus(current.Status)) &&
-			!s.activePrompts.Has(botID, sessionID) {
+			!h.prompts.Has(botID, sessionID) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -146,18 +136,18 @@ func activeRuntimeRunStatus(status string) bool {
 // the next prompt restarts from the durable head) gets the callback for
 // completed turns; every other case keeps the runtime session and logs the
 // ghost turn.
-func (s *Service) handleRuntimeRoundRollback(ctx context.Context, driver external.Driver, req runreq.ChatRequest, runtimeType string, turnCompleted bool) {
+func (h *Host) handleRuntimeRoundRollback(ctx context.Context, driver external.Driver, req runreq.ChatRequest, runtimeType string, turnCompleted bool) {
 	if turnCompleted {
 		if handler, ok := driver.(external.RoundRollbackHandler); ok {
 			handler.OnRoundRolledBack(context.WithoutCancel(ctx), req.BotID, req.ThreadID)
 			return
 		}
 	}
-	s.logRuntimeRoundDivergence(req, runtimeType)
+	h.logRuntimeRoundDivergence(req, runtimeType)
 }
 
-func (s *Service) logRuntimeRoundDivergence(req runreq.ChatRequest, runtimeType string) {
-	s.logger.Warn("external runtime remembers a round the visible history lost",
+func (h *Host) logRuntimeRoundDivergence(req runreq.ChatRequest, runtimeType string) {
+	h.logger.Warn("external runtime remembers a round the visible history lost",
 		slog.String("session_id", req.ThreadID),
 		slog.String("run_id", req.RunID),
 		slog.String("runtime", runtimeType),

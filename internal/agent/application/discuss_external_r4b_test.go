@@ -63,8 +63,8 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 			}, nil
 		},
 	}
-	rewireComponents(proc.svc)
 	proc.svc.botPermissions = allowWorkspaceExecForBot(env.botID, env.ownerID)
+	rewireComponents(proc.svc)
 	return proc, pool
 }
 

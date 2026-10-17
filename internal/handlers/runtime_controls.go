@@ -7,7 +7,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -24,12 +23,12 @@ type RuntimeCommandRequest struct {
 }
 type RuntimeCommandResponse = turn.RuntimeCommandResult
 
-func (h *SessionHandler) runtimeControlRequest(c echo.Context) (application.RuntimeControlRequest, error) {
+func (h *SessionHandler) runtimeControlRequest(c echo.Context) (turn.RuntimeControlRequest, error) {
 	actor, err := RequireChannelIdentityID(c)
 	if err != nil {
-		return application.RuntimeControlRequest{}, err
+		return turn.RuntimeControlRequest{}, err
 	}
-	request := application.RuntimeControlRequest{
+	request := turn.RuntimeControlRequest{
 		BotID:    strings.TrimSpace(c.Param("bot_id")),
 		ThreadID: strings.TrimSpace(c.Param("session_id")),
 		ActorID:  actor,

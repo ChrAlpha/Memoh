@@ -1,4 +1,4 @@
-package application
+package title
 
 import (
 	"context"
@@ -15,7 +15,9 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/providers"
 )
 
 const (
@@ -25,7 +27,7 @@ const (
 )
 
 type starterPromptQueries struct {
-	dbstore.Queries
+	Store
 	bot           sqlc.GetBotByIDRow
 	sessions      []sqlc.ListSessionsByBotAndCreatedByUserPagedRow
 	installations []sqlc.BotAppInstallation
@@ -45,7 +47,7 @@ func (q *starterPromptQueries) ListBotAppInstallations(context.Context, pgtype.U
 	return q.installations, nil
 }
 
-func newStarterPromptService(t *testing.T, titleModelID string) (*Service, *starterPromptQueries) {
+func newStarterPromptService(t *testing.T, titleModelID string) (*Generator, *starterPromptQueries) {
 	t.Helper()
 	botID, err := db.ParseUUID(starterBotID)
 	if err != nil {
@@ -59,12 +61,13 @@ func newStarterPromptService(t *testing.T, titleModelID string) (*Service, *star
 		ID: botID, OwnerUserID: ownerID, Name: "game",
 		DisplayName: pgtype.Text{String: "游戏小帮手", Valid: true},
 	}}
-	svc := wireComponents(&Service{
-		queries: queries,
-		accountService: accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{
+	svc := New(Deps{
+		Logger: slog.New(slog.DiscardHandler),
+		Store:  queries,
+		Accounts: accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{
 			ID: starterOwnerID, TitleModelID: titleModelID,
 		}}),
-		logger: slog.New(slog.DiscardHandler),
+		Memory: noMemory{},
 	})
 	return svc, queries
 }
@@ -276,7 +279,7 @@ func TestCompleteStarterPromptsParsesModelOutput(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
+	svc := New(Deps{Logger: slog.New(slog.DiscardHandler), Credentials: providers.NewService(nil, nil, "")})
 	provider := sqlc.Provider{ClientType: "openai-completions", Config: []byte(`{"base_url":"` + server.URL + `","api_key":"k"}`)}
 	items := svc.completeStarterPrompts(context.Background(), svc.logger, "user-1", models.GetResponse{ModelID: "m"}, provider, "PROMPT-MARKER")
 	if len(items) != 1 || items[0].Title != "查攻略" || items[0].Prompt != "帮我找一份神庙攻略" {
@@ -286,3 +289,8 @@ func TestCompleteStarterPromptsParsesModelOutput(t *testing.T) {
 		t.Fatalf("request body did not carry the prompt: %s", gotBody)
 	}
 }
+
+// noMemory is the memory port of a bot with no memory provider.
+type noMemory struct{}
+
+func (noMemory) Provider(context.Context, string) memprovider.Provider { return nil }

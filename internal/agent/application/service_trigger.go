@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -82,7 +83,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	// Runtime sessions (ACP, codex, claude-code) must never silently degrade
 	// to the built-in model: resolve the driver and run the scheduled turn
 	// through it.
-	dispatch, err := s.resolveRuntimeDispatch(runCtx, runreq.ChatRequest{BotID: botID, ThreadID: payload.SessionID})
+	dispatch, err := s.externalrun.ResolveDispatch(runCtx, runreq.ChatRequest{BotID: botID, ThreadID: payload.SessionID})
 	if err != nil {
 		return schedule.TriggerResult{}, errs.Recorded(err)
 	}
@@ -144,7 +145,7 @@ func attachCurrentTurnPrompt(cfg native.RunConfig, prompt string) native.RunConf
 // scheduleSetup resolves one fire's executor: the built-in agent, or the
 // External Agent runtime the session runs on. It resolves around the request
 // the driver handed it, which already carries the per-run wiring.
-func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayload, botID, token string, dispatch externalrun.Dispatch) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 	return func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		req.RunHandle = spec.Run.Handle
 		// The admitted turn's identity travels with the request: the step
@@ -167,8 +168,8 @@ func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayl
 		if err := s.admit.RecordResume(setupCtx, req); err != nil {
 			return drive.RunPlan{}, err
 		}
-		if dispatch.kind == dispatchExternal {
-			return s.externalSchedulePlan(setupCtx, req, spec, payload, dispatch.driver)
+		if dispatch.Kind == externalrun.DispatchExternal {
+			return s.externalSchedulePlan(setupCtx, req, spec, payload, dispatch.Driver)
 		}
 		return s.nativeSchedulePlan(setupCtx, req, payload)
 	}

@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -26,15 +26,15 @@ var ErrExternalForkUnsupported = errors.New("runtime does not support forking")
 // visible history.
 var ErrExternalForkAnchorMissing = errors.New("fork source turn has no runtime turn anchor")
 
-// PrepareExternalFork forks the runtime-side conversation behind an external
+// PrepareFork forks the runtime-side conversation behind an external
 // session and returns the complete runtime metadata the forked Memoh session
 // must carry. The anchor turn's recorded runtime turn id bounds the
 // runtime-side fork to the same cut as the visible history.
-func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
-	if s == nil || s.sessionService == nil {
+func (h *Host) PrepareFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
+	if h.sessions == nil {
 		return nil, errors.New("session service not configured")
 	}
-	sess, err := s.sessionService.Get(ctx, sessionID)
+	sess, err := h.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 		return nil, fmt.Errorf("session %s is not on an external runtime", sessionID)
 	}
 	runtimeType := strings.TrimSpace(sess.RuntimeType)
-	driver, ok := s.externalDrivers[runtimeType]
+	driver, ok := h.drivers[runtimeType]
 	if !ok {
 		return nil, apperror.New(apperror.CodeExternalRuntimeUnavailable, map[string]string{"runtime": runtimeType})
 	}
@@ -53,7 +53,7 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 	if !ok {
 		return nil, ErrExternalForkUnsupported
 	}
-	lastTurnID, err := s.runtimeTurnIDForTurn(ctx, botID, sessionID, turnID)
+	lastTurnID, err := h.runtimeTurnIDForTurn(ctx, botID, sessionID, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,8 +75,8 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 // turn's run. Every external round records one in its round transaction, so
 // a missing anchor is an error rather than a silent fork at the runtime
 // head.
-func (s *Service) runtimeTurnIDForTurn(ctx context.Context, botID, sessionID, turnID string) (string, error) {
-	if s.queries == nil {
+func (h *Host) runtimeTurnIDForTurn(ctx context.Context, botID, sessionID, turnID string) (string, error) {
+	if h.store == nil {
 		return "", errors.New("queries not configured")
 	}
 	pgBotID, err := db.ParseUUID(botID)
@@ -91,7 +91,7 @@ func (s *Service) runtimeTurnIDForTurn(ctx context.Context, botID, sessionID, tu
 	if err != nil {
 		return "", fmt.Errorf("invalid turn id: %w", err)
 	}
-	runtimeTurnID, err := s.queries.GetTurnAgentTurnID(ctx, sqlc.GetTurnAgentTurnIDParams{
+	runtimeTurnID, err := h.store.GetTurnAgentTurnID(ctx, sqlc.GetTurnAgentTurnIDParams{
 		BotID:     pgBotID,
 		SessionID: pgSessionID,
 		TurnID:    pgTurnID,

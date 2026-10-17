@@ -87,7 +87,7 @@ func FromOutcome(ended outcome.RunOutcome) Termination {
 	}
 }
 
-// FinishRun writes a run's terminal state once: the durable row, the live
+// Finish writes a run's terminal state once: the durable row, the live
 // projection, and the run's context lifecycle. It is the only place a run's
 // terminal state is written. It returns the record when this write ended the
 // run, and zero for a parked run, a lost run, a run nobody admitted, or a write
@@ -99,7 +99,7 @@ func FromOutcome(ended outcome.RunOutcome) Termination {
 // observer that runs inside the write settles it; a candidate the run's plan
 // staged already is better and stays. A run that cannot stage one, because it
 // has no fence, gets its row written after the terminal write.
-func (d *Driver) FinishRun(ctx context.Context, run AdmittedRun, t Termination) sessionruntime.TerminalRun {
+func (d *Driver) Finish(ctx context.Context, run AdmittedRun, t Termination) sessionruntime.TerminalRun {
 	if d.runtime == nil || run.Handle.FencingToken <= 0 || t.lost {
 		return sessionruntime.TerminalRun{}
 	}

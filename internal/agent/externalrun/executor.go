@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -26,12 +26,12 @@ import (
 	"github.com/felinics/memoh/internal/schedule"
 )
 
-// externalPlan is everything an External Agent run resolved before its driver
+// Plan is everything an External Agent run resolved before its driver
 // was called: which session it runs in, what context it gets, and the user
 // message a subscriber already saw. One plan serves both the interactive entry
 // and the schedule fire, which is what keeps a runtime's turn the same work
 // whoever started it.
-type externalPlan struct {
+type Plan struct {
 	driver                external.Driver
 	runtimeType           string
 	sess                  session.Thread
@@ -41,49 +41,51 @@ type externalPlan struct {
 	prepared              runtimePreparedAttachments
 	contextMarkdown       string
 	contextURI            string
-	contextManifest       *contextfrag.Manifest
-	memoryTrace           *contextfrag.MemoryRecallTrace
+	// ContextManifest describes the context sections the runtime was given.
+	ContextManifest *contextfrag.Manifest
+	// MemoryTrace is what the run's context sections recalled from memory.
+	MemoryTrace *contextfrag.MemoryRecallTrace
 	// leadingUser is the user message this turn wrote before prompting. It is
 	// handed back only when the runtime never accepted the turn, where no round
 	// exists to carry it.
 	leadingUser *messagepkg.Message
 }
 
-// prepareExternal resolves the shared setup of an External Agent run: the
+// Prepare resolves the shared setup of an External Agent run: the
 // session and its owner, the model preference, the attachments and the context
 // sections. A failure here is a setup failure: nothing has run, so an input the
 // submitter still holds is handed back rather than written.
-func (s *Service) prepareExternal(ctx context.Context, req runreq.ChatRequest, driver external.Driver) (externalPlan, runreq.ChatRequest, error) {
-	plan := externalPlan{
+func (h *Host) Prepare(ctx context.Context, req runreq.ChatRequest, driver external.Driver) (Plan, runreq.ChatRequest, error) {
+	plan := Plan{
 		driver:      driver,
 		runtimeType: strings.TrimSpace(driver.RuntimeType()),
 	}
-	sess, err := s.sessionService.Get(ctx, req.ThreadID)
+	sess, err := h.sessions.Get(ctx, req.ThreadID)
 	if err != nil {
-		return externalPlan{}, req, err
+		return Plan{}, req, err
 	}
 	if err := runreq.ValidateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
-		return externalPlan{}, req, err
+		return Plan{}, req, err
 	}
 	plan.sess = sess
 	plan.runtimeMeta = runreq.RuntimeSessionMeta(sess)
 	plan.projectPath = runreq.MetadataString(plan.runtimeMeta, "project_path")
 	plan.runtimeOwnerAccountID = runreq.MetadataString(plan.runtimeMeta, "runtime_owner_account_id")
-	if err := s.requireRuntimeOwnerWorkspaceExec(ctx, req.BotID, plan.runtimeOwnerAccountID); err != nil {
-		return externalPlan{}, req, err
+	if err := h.requireRuntimeOwnerWorkspaceExec(ctx, req.BotID, plan.runtimeOwnerAccountID); err != nil {
+		return Plan{}, req, err
 	}
-	req, err = s.applyDirectModelPreference(ctx, req, sess)
+	req, err = h.applyModelPreference(ctx, req, sess)
 	if err != nil {
-		return externalPlan{}, req, err
+		return Plan{}, req, err
 	}
 	if req.OnModelPreferenceSettled != nil {
 		req.OnModelPreferenceSettled()
 	}
 	// A concurrent turn never reaches here: admission holds the session's
 	// single active slot upstream.
-	prepared, err := s.prepareRuntimeAttachments(ctx, req)
+	prepared, err := h.prepareAttachments(ctx, req)
 	if err != nil {
-		return externalPlan{}, req, err
+		return Plan{}, req, err
 	}
 	plan.prepared = prepared
 	if req.RawQuery == "" {
@@ -93,30 +95,28 @@ func (s *Service) prepareExternal(ctx context.Context, req runreq.ChatRequest, d
 	contextReq := req
 	contextReq.Attachments = prepared.Context
 	contextReq.ReplyAttachments = nil
-	sections, memoryTrace := s.runconfig.BuildRuntimeContextSections(ctx, contextReq, runconfig.RuntimeContextAgentID(plan.runtimeType, plan.runtimeMeta), plan.projectPath)
-	plan.memoryTrace = memoryTrace
-	plan.contextMarkdown, plan.contextURI, plan.contextManifest = runconfig.RuntimeContextViaContextView(ctx, s.logger, sections, req.Query)
+	sections, memoryTrace := h.runconfig.BuildRuntimeContextSections(ctx, contextReq, runconfig.RuntimeContextAgentID(plan.runtimeType, plan.runtimeMeta), plan.projectPath)
+	plan.MemoryTrace = memoryTrace
+	plan.contextMarkdown, plan.contextURI, plan.ContextManifest = runconfig.RuntimeContextViaContextView(ctx, h.logger, sections, req.Query)
 
 	// The user's message is written before the runtime is prompted, and the
 	// round it belongs to is written at the end. A subscriber sees what was
 	// sent while the turn runs, the runtime a decision projects against is
 	// anchored to a real request row, and a turn the runtime never accepted
 	// hands the message back instead of leaving it behind.
-	req, plan.leadingUser, err = s.persistRuntimeLeadingUserMessage(context.WithoutCancel(ctx), req)
+	req, plan.leadingUser, err = h.persistRuntimeLeadingUserMessage(context.WithoutCancel(ctx), req)
 	if err != nil {
-		return externalPlan{}, req, apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
+		return Plan{}, req, apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
 	}
 	return plan, req, nil
 }
 
-// externalExecutor runs one turn on an External Agent driver.
-type externalExecutor struct {
-	service *Service
-	plan    externalPlan
-	req     runreq.ChatRequest
-	// prompt is what the driver is prompted with; a schedule fire prompts with
-	// the generated schedule prompt rather than the raw command.
-	prompt string
+// Executor runs one turn on an External Agent driver. It is the executor a
+// drive.Driver runs for a run whose session is on an external runtime.
+type Executor struct {
+	host *Host
+	plan Plan
+	req  runreq.ChatRequest
 	// unattended says nobody can answer a decision for this run.
 	unattended bool
 	// input says who holds the run's input, which decides whether the leading
@@ -151,18 +151,48 @@ type externalExecutor struct {
 	projectionsCleanup sync.Once
 }
 
-// execute prompts the driver once and reports how its turn ended. Every event
+// ExecutorSpec is what a plan hands to NewExecutor.
+type ExecutorSpec struct {
+	// Plan is what Prepare resolved, and Req the request it returned.
+	Plan Plan
+	Req  runreq.ChatRequest
+	// Unattended says nobody can answer a decision for this run.
+	Unattended bool
+	// Input says who holds the run's input.
+	Input outcome.InputOwnership
+	// Lifecycle is the run's context lifecycle holder, and RunConfig the config
+	// it is recorded under.
+	Lifecycle *contextfrag.LifecycleHolder
+	RunConfig native.RunConfig
+}
+
+// NewExecutor returns the executor of one external run. What the driver is
+// prompted with is the request's model text.
+func (h *Host) NewExecutor(spec ExecutorSpec) *Executor {
+	return &Executor{
+		host:       h,
+		plan:       spec.Plan,
+		req:        spec.Req,
+		unattended: spec.Unattended,
+		input:      spec.Input,
+		lifecycle:  spec.Lifecycle,
+		timing:     persist.NewReasoningTimingTracker(nil),
+		rc:         runreq.ResolvedContext{RunConfig: spec.RunConfig},
+	}
+}
+
+// Execute prompts the driver once and reports how its turn ended. Every event
 // the driver sinks goes to emit; the terminal event is synthesized here,
 // because an External Agent runtime reports a finished turn rather than a
 // stream that ends.
-func (e *externalExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
-	e.hub = e.service.activePrompts.Register(e.req.BotID, e.req.ThreadID)
-	defer e.service.activePrompts.Unregister(e.req.BotID, e.req.ThreadID, e.hub)
-	if e.service.sessionRuntime != nil {
-		// External drivers block their turn inline on decisions; declare it
-		// before the first prompt so the manager resumes on terminal decision
-		// statuses instead of waiting for a native-style re-entry.
-		e.service.sessionRuntime.MarkInlineDecisionRun(e.req.BotID, e.req.ThreadID, e.req.RunID)
+func (e *Executor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
+	e.hub = e.host.prompts.Register(e.req.BotID, e.req.ThreadID)
+	defer e.host.prompts.Unregister(e.req.BotID, e.req.ThreadID, e.hub)
+	// External drivers block their turn inline on decisions; declare it
+	// before the first prompt so the manager resumes on terminal decision
+	// statuses instead of waiting for a native-style re-entry.
+	if e.host.admitter != nil {
+		e.host.admitter.MarkInlineDecisionRun(e.req.BotID, e.req.ThreadID, e.req.RunID)
 	}
 	emit(native.StreamEvent{Type: native.EventStart})
 
@@ -198,8 +228,8 @@ func (e *externalExecutor) Execute(ctx context.Context, emit func(native.StreamE
 	// forking the conversation permanently. Failing the round keeps state
 	// consistent instead.
 	if len(result.RuntimeMetadata) > 0 {
-		if _, mergeErr := e.service.sessionService.MergeRuntimeMetadata(context.WithoutCancel(ctx), e.req.ThreadID, e.plan.runtimeType, result.RuntimeMetadata); mergeErr != nil {
-			e.service.logger.ErrorContext(ctx, "external runtime metadata merge failed",
+		if _, mergeErr := e.host.sessions.MergeRuntimeMetadata(context.WithoutCancel(ctx), e.req.ThreadID, e.plan.runtimeType, result.RuntimeMetadata); mergeErr != nil {
+			e.host.logger.ErrorContext(ctx, "external runtime metadata merge failed",
 				slog.String("session_id", e.req.ThreadID),
 				slog.String("runtime", e.plan.runtimeType),
 				slog.Any("error", mergeErr))
@@ -239,7 +269,7 @@ func (e *externalExecutor) Execute(ctx context.Context, emit func(native.StreamE
 
 // ending builds what the driver receives: the terminal event, which the driver
 // publishes after this ending's history write, and the write itself.
-func (e *externalExecutor) ending(emit func(native.StreamEvent), eventType native.StreamEventType, reason event.EndReason) drive.ExecEnding {
+func (e *Executor) ending(emit func(native.StreamEvent), eventType native.StreamEventType, reason event.EndReason) drive.ExecEnding {
 	emit(native.StreamEvent{Type: native.EventTextEnd})
 	t := e.terminalFor(eventType, reason)
 	return drive.ExecEnding{
@@ -255,7 +285,7 @@ func (e *externalExecutor) ending(emit func(native.StreamEvent), eventType nativ
 // external runtime has no stream to end, so the driver states the outcome and
 // marks it owner-named: the session runtime takes the driver's word for it
 // instead of re-deriving one from whichever error the live view saw last.
-func (e *externalExecutor) terminalFor(eventType native.StreamEventType, reason event.EndReason) native.StreamEvent {
+func (e *Executor) terminalFor(eventType native.StreamEventType, reason event.EndReason) native.StreamEvent {
 	ev := runtimeTerminalStreamEvent(eventType, e.result)
 	ev.EndReason = reason
 	ev.OwnerNamed = true
@@ -270,14 +300,14 @@ func (e *externalExecutor) terminalFor(eventType native.StreamEventType, reason 
 // before it is published: notices are folded in, the reasoning timing is
 // recorded, a decision the turn projects gets its own row, and the session's
 // active prompt sees the event.
-func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native.StreamEvent), ev native.StreamEvent) {
+func (e *Executor) deliver(deliveryCtx context.Context, emit func(native.StreamEvent), ev native.StreamEvent) {
 	ev = publicRuntimeNotice(ev)
 	if !e.notices.observe(ev) {
 		return
 	}
 	e.timing.Observe(ev)
 	if isRuntimeDecisionProjectionEvent(ev) && e.projections.record(ev.ToolCallID) {
-		e.projections.complete(ev.ToolCallID, e.service.persistRuntimeDecisionProjection(context.WithoutCancel(deliveryCtx), e.req, ev))
+		e.projections.complete(ev.ToolCallID, e.host.persistRuntimeDecisionProjection(context.WithoutCancel(deliveryCtx), e.req, ev))
 	}
 	if e.hub != nil {
 		e.hub.Emit(ev)
@@ -288,14 +318,14 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 // commit writes the run's one round. An External Agent runtime reports a whole
 // turn at once, so this is the run's only history write: the completed round,
 // or the failure row of a turn that wrote none.
-func (e *externalExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
+func (e *Executor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
 	return e.writeRound(ctx, e.req, f, row)
 }
 
 // commitStopped writes the partial transcript of a turn the user stopped. The
 // round carries no failure, and no memory is extracted from it: a stop is not a
 // completed turn, even when the runtime finished in the same instant.
-func (e *externalExecutor) commitStopped(ctx context.Context) (drive.CommitSummary, error) {
+func (e *Executor) commitStopped(ctx context.Context) (drive.CommitSummary, error) {
 	req := e.req
 	req.SkipMemoryExtraction = true
 	return e.writeRound(ctx, req, nil, false)
@@ -303,7 +333,7 @@ func (e *externalExecutor) commitStopped(ctx context.Context) (drive.CommitSumma
 
 // writeRound is the one history write of an External Agent run, for req as the
 // ending wants it written.
-func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatRequest, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
+func (e *Executor) writeRound(ctx context.Context, req runreq.ChatRequest, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
 	summary := drive.CommitSummary{ModelID: strings.TrimSpace(e.req.Model)}
 	ctx = context.WithoutCancel(ctx)
 	if e.roundUnwritable {
@@ -312,7 +342,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 		// left their hands keeps a failure row, because nowhere else records
 		// that the turn did not happen.
 		if row && f != nil {
-			persisted, err := e.service.persist.FailureRow(ctx, e.req, e.rc, *f, "")
+			persisted, err := e.host.persist.FailureRow(ctx, e.req, e.rc, *f, "")
 			if err != nil {
 				return summary, outcome.RuntimeHistoryError(err)
 			}
@@ -320,7 +350,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 		}
 		return summary, nil
 	}
-	err := e.service.persistExternalRound(
+	err := e.host.persistRound(
 		ctx,
 		req,
 		e.plan.runtimeType,
@@ -332,7 +362,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 		persist.TakeTerminalReasoningTiming(e.timing, terminalEventTypeOf(e.completed)),
 	)
 	if err != nil {
-		switch e.service.resolveRuntimeRoundPersistFailure(ctx, e.req, err, e.cleanupProjectionsIn) {
+		switch e.host.resolveRuntimeRoundPersistFailure(ctx, e.req, err, e.cleanupProjectionsIn) {
 		case runtimeRoundCommitted:
 			// The round landed after all; the failure was in the bookkeeping
 			// that followed it, and the run's own outcome stands.
@@ -357,8 +387,8 @@ func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatReques
 // durable state is authoritative keeps its session, and the divergence is
 // logged. Only a turn the runtime completed moved it past the history's head: an
 // interrupted one did not, so there is nothing to repair.
-func (e *externalExecutor) rollback(ctx context.Context) {
-	e.service.handleRuntimeRoundRollback(ctx, e.plan.driver, e.req, e.plan.runtimeType, e.result.TurnCompleted)
+func (e *Executor) rollback(ctx context.Context) {
+	e.host.handleRuntimeRoundRollback(ctx, e.plan.driver, e.req, e.plan.runtimeType, e.result.TurnCompleted)
 }
 
 // cleanup removes what this turn left behind that no history write owns: the
@@ -368,11 +398,11 @@ func (e *externalExecutor) rollback(ctx context.Context) {
 // has left their hands (an IM message, a follow-up) stays, because nowhere else
 // records it, and a round or a failure row is anchored to it besides. A run
 // another owner took is not cleaned up at all: nothing here speaks for it.
-func (e *externalExecutor) cleanup(ctx context.Context) {
-	e.service.decider.CancelPendingApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
+func (e *Executor) cleanup(ctx context.Context) {
+	e.host.decider.CancelPendingApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
 	if e.roundUnwritable && e.input != outcome.InputAccepted && e.plan.leadingUser != nil {
-		e.service.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
+		e.host.persist.CleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
 	}
 }
 
@@ -380,33 +410,33 @@ func (e *externalExecutor) cleanup(ctx context.Context) {
 // decision projection rows it wrote for its run. Neither carries a fence: a
 // turn that lost ownership still cleans up after itself, because a stranded
 // decision row would stay visible and answerable.
-func (e *externalExecutor) cleanupProjections(ctx context.Context) {
+func (e *Executor) cleanupProjections(ctx context.Context) {
 	// The driver cleans once from its endings, and a round whose outcome was
 	// unknown is cleaned again by the reconciliation that resolves it. The rows
 	// are temporary either way, so the second pass is a no-op rather than a
 	// second delete of the same row.
 	e.projectionsCleanup.Do(func() {
-		e.service.persist.CleanupReplacementMessages(ctx, e.projections.snapshot())
-		e.service.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
+		e.host.persist.CleanupReplacementMessages(ctx, e.projections.snapshot())
+		e.host.cleanupRuntimeDecisionProjectionRows(ctx, e.req)
 	})
 }
 
-func (e *externalExecutor) cleanupProjectionsIn(ctx context.Context) { e.cleanupProjections(ctx) }
+func (e *Executor) cleanupProjectionsIn(ctx context.Context) { e.cleanupProjections(ctx) }
 
 // promptInput is the driver call for this run.
-func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.StreamEvent)) external.PromptInput {
+func (e *Executor) promptInput(ctx context.Context, emit func(native.StreamEvent)) external.PromptInput {
 	return external.PromptInput{
-		Steering:                 e.service.runtimeSteering(e.req),
+		Steering:                 e.host.runtimeSteering(e.req),
 		BotID:                    e.req.BotID,
 		BotAgentID:               e.plan.sess.BotAgentID,
 		ChatID:                   e.req.ChatID,
 		ThreadID:                 e.req.ThreadID,
 		RunID:                    e.req.RunID,
 		RouteID:                  e.req.RouteID,
-		Prompt:                   e.prompt,
+		Prompt:                   runreq.ModelQueryText(e.req),
 		ContextMarkdown:          e.plan.contextMarkdown,
 		ContextURI:               e.plan.contextURI,
-		ContextBudgetMaxTokens:   e.service.runconfig.RuntimeContextBudgetDefault(ctx, e.req.BotID),
+		ContextBudgetMaxTokens:   e.host.runconfig.RuntimeContextBudgetDefault(ctx, e.req.BotID),
 		Images:                   e.plan.prepared.Images,
 		AttachmentReferences:     e.plan.prepared.References,
 		CanFallbackImagesToFiles: e.plan.prepared.CanFallbackImagesToFiles,
@@ -424,8 +454,8 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		ChannelIdentityID:        e.req.SourceChannelIdentityID,
 		SessionToken:             e.req.Token,
 		ToolHTTPURL:              e.req.ToolHTTPURL,
-		ToolOutputLimit:          e.service.decider.ToolOutputLimit(),
-		CanRequestUserInput:      !e.unattended && e.service.decider.CanDeliverUserInputStream(),
+		ToolOutputLimit:          e.host.decider.ToolOutputLimit(),
+		CanRequestUserInput:      !e.unattended && e.host.decider.CanDeliverUserInputStream(),
 		Sink:                     external.EventSinkFunc(func(ev native.StreamEvent) { e.deliver(ctx, emit, ev) }),
 	}
 }

@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -25,11 +25,11 @@ type runtimeSteerClaim struct {
 	ref  sessionruntime.SteerClaimRef
 }
 
-func (s *Service) runtimeSteering(req runreq.ChatRequest) external.Steering {
-	if s.sessionManager == nil || req.RunHandle.RunID == "" || req.AgentCommand != "" {
+func (h *Host) runtimeSteering(req runreq.ChatRequest) external.Steering {
+	if h.runtime == nil || req.RunHandle.RunID == "" || req.AgentCommand != "" {
 		return nil
 	}
-	return &runtimeSteering{manager: s.sessionManager, run: req.RunHandle, pending: make(map[string]runtimeSteerClaim)}
+	return &runtimeSteering{manager: h.runtime, run: req.RunHandle, pending: make(map[string]runtimeSteerClaim)}
 }
 
 func (q *runtimeSteering) Enable(ctx context.Context) error { return q.manager.EnableSteer(ctx, q.run) }
@@ -80,8 +80,8 @@ func (q *runtimeSteering) Close(ctx context.Context) error {
 
 // Reconcile provisional steer bubbles to the identities assigned by the normal
 // round transaction before publishing terminal state.
-func (s *Service) publishRuntimeSteerHistory(ctx context.Context, req runreq.ChatRequest, ids []string, persisted []messagepkg.Message) {
-	if len(ids) == 0 || s.sessionManager == nil {
+func (h *Host) publishRuntimeSteerHistory(ctx context.Context, req runreq.ChatRequest, ids []string, persisted []messagepkg.Message) {
+	if len(ids) == 0 || h.runtime == nil {
 		return
 	}
 	var users []chatview.UITurn
@@ -91,15 +91,15 @@ func (s *Service) publishRuntimeSteerHistory(ctx context.Context, req runreq.Cha
 		}
 	}
 	if len(users) < len(ids) {
-		s.logger.ErrorContext(ctx, "runtime steer history identity missing", slog.String("run_id", req.RunID))
+		h.logger.ErrorContext(ctx, "runtime steer history identity missing", slog.String("run_id", req.RunID))
 		return
 	}
 	users = users[len(users)-len(ids):]
 	for i, id := range ids {
-		if err := s.sessionManager.PublishQueueUserTurns(ctx, req.RunHandle, sessionruntime.QueueUserTurnUpdate{
+		if err := h.runtime.PublishQueueUserTurns(ctx, req.RunHandle, sessionruntime.QueueUserTurnUpdate{
 			PersistedTurns: []chatview.UITurn{users[i]}, AppliedSteerItemID: id, AppliedSteerTurn: &users[i],
 		}); err != nil {
-			s.logger.WarnContext(ctx, "runtime steer history projection failed", slog.Any("error", err))
+			h.logger.WarnContext(ctx, "runtime steer history projection failed", slog.Any("error", err))
 			return
 		}
 	}

@@ -1,4 +1,4 @@
-package application
+package title
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 )
 
 type titleModelQueries struct {
-	dbstore.Queries
+	Store
 	bot sqlc.GetBotByIDRow
 }
 
@@ -111,9 +111,9 @@ func TestResolveTitleModelUsesBotOwnerProfile(t *testing.T) {
 	accountService := accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{
 		ID: ownerID.String(), TitleModelID: modelID,
 	}})
-	resolver := wireComponents(&Service{
-		queries:        titleModelQueries{bot: sqlc.GetBotByIDRow{ID: botID, OwnerUserID: ownerID}},
-		accountService: accountService,
+	resolver := New(Deps{
+		Store:    titleModelQueries{bot: sqlc.GetBotByIDRow{ID: botID, OwnerUserID: ownerID}},
+		Accounts: accountService,
 	})
 
 	gotModelID, gotOwnerID, err := resolver.resolveTitleModel(context.Background(), botID.String())

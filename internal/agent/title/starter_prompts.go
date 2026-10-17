@@ -1,4 +1,4 @@
-package application
+package title
 
 import (
 	"context"
@@ -106,8 +106,8 @@ type starterPromptApp struct {
 // share one generation, which outlives a caller that goes away.
 //
 // The caller must have authorized req.UserID to chat with the bot.
-func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest) (StarterPromptsResult, error) {
-	material, ownerUserID, err := s.collectStarterPromptMaterial(ctx, req)
+func (g *Generator) StarterPrompts(ctx context.Context, req StarterPromptsRequest) (StarterPromptsResult, error) {
+	material, ownerUserID, err := g.collectStarterPromptMaterial(ctx, req)
 	if err != nil {
 		return StarterPromptsResult{}, err
 	}
@@ -126,8 +126,8 @@ func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest)
 		prompt += starterPromptsAvoidSection(avoid)
 		key += "\x00refresh\x00" + strings.Join(avoid, "\x00")
 	}
-	value, _, _ := s.starterPromptFlights.Do(key, func() (any, error) {
-		return s.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, prompt), nil
+	value, _, _ := g.starterFlights.Do(key, func() (any, error) {
+		return g.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, prompt), nil
 	})
 	items, _ := value.([]StarterPrompt)
 	if len(items) == 0 {
@@ -139,9 +139,9 @@ func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest)
 // generateStarterPrompts runs the title model on prompt. Every failure, from
 // a missing title model to unparsable output, yields nil: the caller treats
 // that as "no suggestions this time".
-func (s *Service) generateStarterPrompts(ctx context.Context, botID, ownerUserID, prompt string) []StarterPrompt {
-	logger := s.logger.With(slog.String("bot_id", botID))
-	account, err := s.accountService.Get(ctx, ownerUserID)
+func (g *Generator) generateStarterPrompts(ctx context.Context, botID, ownerUserID, prompt string) []StarterPrompt {
+	logger := g.logger.With(slog.String("bot_id", botID))
+	account, err := g.accounts.Get(ctx, ownerUserID)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: load owner account failed", slog.Any("error", err))
 		return nil
@@ -151,16 +151,16 @@ func (s *Service) generateStarterPrompts(ctx context.Context, botID, ownerUserID
 		logger.DebugContext(ctx, "starter prompts: no title model configured")
 		return nil
 	}
-	model, provider, err := s.runconfig.FetchChatModel(ctx, modelID)
+	model, provider, err := g.models.FetchChatModel(ctx, modelID)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: resolve title model failed", slog.Any("error", err))
 		return nil
 	}
-	return s.completeStarterPrompts(ctx, logger, ownerUserID, model, provider, prompt)
+	return g.completeStarterPrompts(ctx, logger, ownerUserID, model, provider, prompt)
 }
 
-func (s *Service) completeStarterPrompts(ctx context.Context, logger *slog.Logger, ownerUserID string, model models.GetResponse, provider sqlc.Provider, prompt string) []StarterPrompt {
-	text, err := s.generateWithTitleModel(ctx, "agent.starter_prompts", ownerUserID, model, provider, prompt)
+func (g *Generator) completeStarterPrompts(ctx context.Context, logger *slog.Logger, ownerUserID string, model models.GetResponse, provider sqlc.Provider, prompt string) []StarterPrompt {
+	text, err := g.generateWithTitleModel(ctx, "agent.starter_prompts", ownerUserID, model, provider, prompt)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: generation failed", slog.Any("error", err))
 		return nil
@@ -175,7 +175,7 @@ func (s *Service) completeStarterPrompts(ctx context.Context, logger *slog.Logge
 // collectStarterPromptMaterial reads everything the suggestions depend on.
 // Memory is best-effort: a memory read that fails is treated as no memory,
 // which changes the hash, so the set is regenerated once memory reads again.
-func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterPromptsRequest) (starterPromptMaterial, string, error) {
+func (g *Generator) collectStarterPromptMaterial(ctx context.Context, req StarterPromptsRequest) (starterPromptMaterial, string, error) {
 	botUUID, err := db.ParseUUID(req.BotID)
 	if err != nil {
 		return starterPromptMaterial{}, "", errs.Wrap(err, "parse bot id")
@@ -184,7 +184,7 @@ func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterP
 	if err != nil {
 		return starterPromptMaterial{}, "", errs.Wrap(err, "parse user id")
 	}
-	bot, err := s.queries.GetBotByID(ctx, botUUID)
+	bot, err := g.store.GetBotByID(ctx, botUUID)
 	if err != nil {
 		return starterPromptMaterial{}, "", errs.Wrap(err, "get bot")
 	}
@@ -196,10 +196,10 @@ func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterP
 		Locale:      normalizeStarterPromptLocale(req.Locale),
 		Name:        bot.Name,
 		DisplayName: strings.TrimSpace(bot.DisplayName.String),
-		Memories:    s.starterPromptMemories(ctx, req.BotID),
+		Memories:    g.starterPromptMemories(ctx, req.BotID),
 	}
 
-	sessions, err := s.queries.ListSessionsByBotAndCreatedByUserPaged(ctx, sqlc.ListSessionsByBotAndCreatedByUserPagedParams{
+	sessions, err := g.store.ListSessionsByBotAndCreatedByUserPaged(ctx, sqlc.ListSessionsByBotAndCreatedByUserPagedParams{
 		BotID:           botUUID,
 		CreatedByUserID: userUUID,
 		Types:           session.AllSessionTypes(),
@@ -216,7 +216,7 @@ func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterP
 		}
 	}
 
-	installations, err := s.queries.ListBotAppInstallations(ctx, botUUID)
+	installations, err := g.store.ListBotAppInstallations(ctx, botUUID)
 	if err != nil {
 		return starterPromptMaterial{}, "", errs.Wrap(err, "list app installations")
 	}
@@ -228,8 +228,8 @@ func (s *Service) collectStarterPromptMaterial(ctx context.Context, req StarterP
 	return material, bot.OwnerUserID.String(), nil
 }
 
-func (s *Service) starterPromptMemories(ctx context.Context, botID string) []string {
-	provider := s.memory.Provider(ctx, botID)
+func (g *Generator) starterPromptMemories(ctx context.Context, botID string) []string {
+	provider := g.memory.Provider(ctx, botID)
 	if provider == nil {
 		return nil
 	}
@@ -244,7 +244,7 @@ func (s *Service) starterPromptMemories(ctx context.Context, botID string) []str
 		NoStats: true,
 	})
 	if err != nil {
-		s.logger.WarnContext(ctx, "starter prompts: read memory failed", slog.String("bot_id", botID), slog.Any("error", err))
+		g.logger.WarnContext(ctx, "starter prompts: read memory failed", slog.String("bot_id", botID), slog.Any("error", err))
 		return nil
 	}
 	memories := make([]string, 0, len(resp.Results))

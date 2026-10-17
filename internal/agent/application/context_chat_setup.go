@@ -7,6 +7,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runconfig"
@@ -34,12 +35,12 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		return drive.RunPlan{}, err
 	}
 
-	dispatch, err := s.resolveRuntimeDispatch(ctx, req)
+	dispatch, err := s.externalrun.ResolveDispatch(ctx, req)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
 
-	if dispatch.kind == dispatchExternal {
+	if dispatch.Kind == externalrun.DispatchExternal {
 		if err := runconfig.RejectExternalAgentWorkspaceTarget(req); err != nil {
 			return drive.RunPlan{}, err
 		}
@@ -52,7 +53,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		// A runtime that owns its conversation context is prompted with what
 		// the entry resolved rather than with a query: discuss hands it the
 		// whole batch, which is history and not a message of its own.
-		return s.externalRunPlan(ctx, req, spec, dispatch.driver)
+		return s.externalRunPlan(ctx, req, spec, dispatch.Driver)
 	}
 
 	ctx, req, err = s.runconfig.BindRequestWorkspace(ctx, req, runconfig.UserPrincipal(req), false)
@@ -93,7 +94,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	req.Query = rc.Query
 	req.RunID = rc.RunConfig.RunID
 
-	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
+	s.title.MaybeGenerate(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.RunConfig
 	cfg.LiveToolStream = true
@@ -147,16 +148,16 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 // lifecycle the run's context sections build, so the lifecycle row of a
 // runtime's turn records what the runtime was given, whoever started it.
 func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, driver external.Driver) (drive.RunPlan, error) {
-	plan, req, err := s.prepareExternal(ctx, req, driver)
+	plan, req, err := s.externalrun.Prepare(ctx, req, driver)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
 	lifecycle := contextfrag.NewLifecycleHolder()
-	if plan.contextManifest != nil {
-		lifecycle.SetManifest(*plan.contextManifest)
+	if plan.ContextManifest != nil {
+		lifecycle.SetManifest(*plan.ContextManifest)
 	}
-	if plan.memoryTrace != nil {
-		lifecycle.SetMemoryRecall(*plan.memoryTrace)
+	if plan.MemoryTrace != nil {
+		lifecycle.SetMemoryRecall(*plan.MemoryTrace)
 	}
 	cfg := native.RunConfig{
 		RunID:            req.RunID,
@@ -164,17 +165,14 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 		ContextLifecycle: lifecycle,
 	}
 	return drive.RunPlan{
-		Exec: &externalExecutor{
-			service:    s,
-			plan:       plan,
-			req:        req,
-			prompt:     runreq.ModelQueryText(req),
-			unattended: spec.Unattended,
-			input:      spec.Input,
-			lifecycle:  lifecycle,
-			timing:     persist.NewReasoningTimingTracker(nil),
-			rc:         runreq.ResolvedContext{RunConfig: cfg},
-		},
+		Exec: s.externalrun.NewExecutor(externalrun.ExecutorSpec{
+			Plan:       plan,
+			Req:        req,
+			Unattended: spec.Unattended,
+			Input:      spec.Input,
+			Lifecycle:  lifecycle,
+			RunConfig:  cfg,
+		}),
 		Req:        req,
 		IdleEffort: req.ReasoningEffort,
 		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),

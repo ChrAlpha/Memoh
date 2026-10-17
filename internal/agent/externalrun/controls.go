@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -22,18 +22,14 @@ import (
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
-// RuntimeControlRequest is scoped to a thread and its current actor.
-// Drivers may query their runtime process for current control state.
-type RuntimeControlRequest = turn.RuntimeControlRequest
-
-func (s *Service) runtimeControlSession(ctx context.Context, request RuntimeControlRequest) (session.Thread, error) {
-	if request.TeamID != "" && s.allowedTeam != "" && request.TeamID != s.allowedTeam {
+func (h *Host) runtimeControlSession(ctx context.Context, request turn.RuntimeControlRequest) (session.Thread, error) {
+	if request.TeamID != "" && h.allowedTeam != "" && request.TeamID != h.allowedTeam {
 		return session.Thread{}, turn.ErrTeamNotServed
 	}
-	if s.sessionService == nil || s.botPermissions == nil {
+	if h.sessions == nil || h.permissions == nil {
 		return session.Thread{}, external.ErrControlUnsupported
 	}
-	sess, err := s.sessionService.Get(ctx, request.ThreadID)
+	sess, err := h.sessions.Get(ctx, request.ThreadID)
 	if err != nil {
 		return sess, err
 	}
@@ -43,12 +39,12 @@ func (s *Service) runtimeControlSession(ctx context.Context, request RuntimeCont
 	return sess, nil
 }
 
-func (s *Service) runtimeControlTarget(ctx context.Context, request RuntimeControlRequest) (session.Thread, external.Driver, external.PromptInput, error) {
-	sess, err := s.runtimeControlSession(ctx, request)
+func (h *Host) runtimeControlTarget(ctx context.Context, request turn.RuntimeControlRequest) (session.Thread, external.Driver, external.PromptInput, error) {
+	sess, err := h.runtimeControlSession(ctx, request)
 	if err != nil {
 		return sess, nil, external.PromptInput{}, err
 	}
-	manage, err := s.botPermissions.HasBotPermission(ctx, request.BotID, request.ActorID, bots.PermissionManage)
+	manage, err := h.permissions.HasBotPermission(ctx, request.BotID, request.ActorID, bots.PermissionManage)
 	if err != nil {
 		return sess, nil, external.PromptInput{}, err
 	}
@@ -60,7 +56,7 @@ func (s *Service) runtimeControlTarget(ctx context.Context, request RuntimeContr
 		if session.UsesDecisionWaiter(sess) {
 			permission = bots.PermissionWorkspaceExec
 		}
-		allowed, err := s.botPermissions.HasBotPermission(ctx, request.BotID, request.ActorID, permission)
+		allowed, err := h.permissions.HasBotPermission(ctx, request.BotID, request.ActorID, permission)
 		if err != nil {
 			return sess, nil, external.PromptInput{}, err
 		}
@@ -68,10 +64,10 @@ func (s *Service) runtimeControlTarget(ctx context.Context, request RuntimeContr
 			return sess, nil, external.PromptInput{}, approval.ErrForbidden
 		}
 	}
-	return sess, s.externalDrivers[sess.RuntimeType], runtimeControlInput(sess, request), nil
+	return sess, h.drivers[sess.RuntimeType], runtimeControlInput(sess, request), nil
 }
 
-func runtimeControlInput(sess session.Thread, request RuntimeControlRequest) external.PromptInput {
+func runtimeControlInput(sess session.Thread, request turn.RuntimeControlRequest) external.PromptInput {
 	meta := runreq.RuntimeSessionMeta(sess)
 	input := external.PromptInput{
 		BotID: sess.BotID, BotAgentID: sess.BotAgentID, ThreadID: sess.ID,
@@ -82,9 +78,9 @@ func runtimeControlInput(sess session.Thread, request RuntimeControlRequest) ext
 	return input
 }
 
-func (s *Service) RuntimeControls(ctx context.Context, request RuntimeControlRequest) (out external.Controls, resultErr error) {
+func (h *Host) RuntimeControls(ctx context.Context, request turn.RuntimeControlRequest) (out external.Controls, resultErr error) {
 	defer func() { resultErr = publicRuntimeControlError(resultErr) }()
-	_, driver, input, err := s.runtimeControlTarget(ctx, request)
+	_, driver, input, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return external.Controls{}, err
 	}
@@ -94,28 +90,28 @@ func (s *Service) RuntimeControls(ctx context.Context, request RuntimeControlReq
 // RuntimeCommands reads declarations without fetching unrelated runtime state.
 // Catalog discovery needs chat access, not ownership of the runtime controls.
 // Executing a declared command still uses the existing control/admission gates.
-func (s *Service) RuntimeCommands(ctx context.Context, request RuntimeControlRequest) (commands []external.Command, err error) {
+func (h *Host) RuntimeCommands(ctx context.Context, request turn.RuntimeControlRequest) (commands []external.Command, err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
-	sess, err := s.runtimeControlSession(ctx, request)
+	sess, err := h.runtimeControlSession(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	allowed, err := s.botPermissions.HasBotPermission(ctx, request.BotID, request.ActorID, bots.PermissionChat)
+	allowed, err := h.permissions.HasBotPermission(ctx, request.BotID, request.ActorID, bots.PermissionChat)
 	if err != nil {
 		return nil, err
 	}
 	if !allowed {
 		return nil, approval.ErrForbidden
 	}
-	if provider, ok := s.externalDrivers[sess.RuntimeType].(external.CommandProvider); ok {
+	if provider, ok := h.drivers[sess.RuntimeType].(external.CommandProvider); ok {
 		return provider.Commands(ctx, runtimeControlInput(sess, request))
 	}
 	return []external.Command{}, nil
 }
 
-func (s *Service) RuntimeGoal(ctx context.Context, request RuntimeControlRequest) (goal *external.Goal, err error) {
+func (h *Host) RuntimeGoal(ctx context.Context, request turn.RuntimeControlRequest) (goal *external.Goal, err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
-	_, driver, input, err := s.runtimeControlTarget(ctx, request)
+	_, driver, input, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -126,9 +122,9 @@ func (s *Service) RuntimeGoal(ctx context.Context, request RuntimeControlRequest
 	return provider.Goal(ctx, input)
 }
 
-func (s *Service) SetRuntimeMode(ctx context.Context, request RuntimeControlRequest) (out external.ModeState, err error) {
+func (h *Host) SetRuntimeMode(ctx context.Context, request turn.RuntimeControlRequest) (out external.ModeState, err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
-	_, driver, _, err := s.runtimeControlTarget(ctx, request)
+	_, driver, _, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return out, err
 	}
@@ -136,7 +132,7 @@ func (s *Service) SetRuntimeMode(ctx context.Context, request RuntimeControlRequ
 		return out, err
 	}
 
-	err = s.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
+	err = h.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
 		read, set, metadataKey, err := runtimeModeAccessors(driver, request.ModeKind)
 		if err != nil {
 			return err
@@ -161,7 +157,7 @@ func (s *Service) SetRuntimeMode(ctx context.Context, request RuntimeControlRequ
 		if err != nil {
 			return err
 		}
-		_, err = s.sessionService.MergeRuntimeMetadata(ctx, sess.ID, sess.RuntimeType, map[string]any{metadataKey: out.CurrentModeID})
+		_, err = h.sessions.MergeRuntimeMetadata(ctx, sess.ID, sess.RuntimeType, map[string]any{metadataKey: out.CurrentModeID})
 		return err
 	})
 	return out, err
@@ -190,9 +186,9 @@ func runtimeModeAccessors(driver external.Driver, kind string) (readRuntimeMode,
 
 // ExecuteRuntimeCommand handles commands which do not create a conversation
 // turn. Turn commands go through the existing chat admission/persistence path.
-func (s *Service) ExecuteRuntimeCommand(ctx context.Context, request RuntimeControlRequest) (result turn.RuntimeCommandResult, resultErr error) {
+func (h *Host) ExecuteRuntimeCommand(ctx context.Context, request turn.RuntimeControlRequest) (result turn.RuntimeCommandResult, resultErr error) {
 	defer func() { resultErr = publicRuntimeControlError(resultErr) }()
-	_, driver, input, err := s.runtimeControlTarget(ctx, request)
+	_, driver, input, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return turn.RuntimeCommandResult{}, err
 	}
@@ -209,7 +205,7 @@ func (s *Service) ExecuteRuntimeCommand(ctx context.Context, request RuntimeCont
 		return turn.RuntimeCommandResult{}, external.ErrCommandUnavailable
 	}
 	if command.Kind == external.CommandRead {
-		controlCtx, err := s.runtimeControlContext(ctx, request)
+		controlCtx, err := h.runtimeControlContext(ctx, request)
 		if err != nil {
 			return turn.RuntimeCommandResult{}, err
 		}
@@ -218,7 +214,7 @@ func (s *Service) ExecuteRuntimeCommand(ctx context.Context, request RuntimeCont
 	if command.Kind != external.CommandOperation {
 		return turn.RuntimeCommandResult{}, external.ErrCommandUnavailable
 	}
-	err = s.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
+	err = h.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
 		provider, ok := driver.(external.CommandProvider)
 		if !ok {
 			return external.ErrCommandUnavailable
@@ -239,23 +235,20 @@ func (s *Service) ExecuteRuntimeCommand(ctx context.Context, request RuntimeCont
 		if err != nil {
 			return err
 		}
-		_, err = s.sessionService.MergeRuntimeMetadata(ctx, sess.ID, sess.RuntimeType, result.RuntimeMetadata)
+		_, err = h.sessions.MergeRuntimeMetadata(ctx, sess.ID, sess.RuntimeType, result.RuntimeMetadata)
 		return err
 	})
 	return turn.RuntimeCommandResult{}, err
 }
 
-func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlRequest, run func(context.Context, session.Thread, external.Driver, external.PromptInput) error) (resultErr error) {
-	if s.sessionRuntime == nil {
-		return external.ErrControlUnsupported
-	}
+func (h *Host) runRuntimeControl(ctx context.Context, request turn.RuntimeControlRequest, run func(context.Context, session.Thread, external.Driver, external.PromptInput) error) (resultErr error) {
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return err
 	}
-	admission, err := s.sessionRuntime.Admit(runCtx, sessionruntime.AdmitInput{
+	admission, err := h.admitter.Admit(runCtx, sessionruntime.AdmitInput{
 		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), InitiatorID: request.ActorID, Payload: payload,
 		Execution: sessionruntime.Execution{
 			ConfigurationOnly: request.ModeID != "",
@@ -286,17 +279,17 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 		if errors.Is(resultErr, context.Canceled) || runCtx.Err() != nil {
 			status = sessionruntime.RunStatusAborted
 		}
-		s.driver.FinishRun(runCtx, drive.AdmittedRun{Handle: handle},
+		h.driver.Finish(runCtx, drive.AdmittedRun{Handle: handle},
 			drive.FromOutcome(outcome.RunOutcome{Status: status, Cause: publicRuntimeControlError(resultErr)}))
 	}()
 	// Re-read after admission: a queued send or another mode change may have
 	// won while this request was validating its initial snapshot.
-	sess, driver, input, err := s.runtimeControlTarget(runCtx, request)
+	sess, driver, input, err := h.runtimeControlTarget(runCtx, request)
 	if err != nil {
 		return err
 	}
 	input.RunID = handle.RunID
-	controlCtx, err := s.runtimeControlContext(runCtx, request)
+	controlCtx, err := h.runtimeControlContext(runCtx, request)
 	if err != nil {
 		return err
 	}
@@ -306,8 +299,8 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 // runtimeControlContext pins the session's workspace target for a runtime
 // command. It carries no principal: the command continues a session whose
 // target was authorized when it was chosen.
-func (s *Service) runtimeControlContext(ctx context.Context, request RuntimeControlRequest) (context.Context, error) {
-	ctx, _, err := s.runconfig.ResolveWorkspace(ctx, runconfig.WorkspaceInput{
+func (h *Host) runtimeControlContext(ctx context.Context, request turn.RuntimeControlRequest) (context.Context, error) {
+	ctx, _, err := h.runconfig.ResolveWorkspace(ctx, runconfig.WorkspaceInput{
 		BotID:      request.BotID,
 		SessionID:  request.ThreadID,
 		BestEffort: true,
@@ -325,12 +318,12 @@ func publicRuntimeControlError(err error) error {
 	return outcome.RuntimeControlError(err)
 }
 
-func (s *Service) ControlRuntimeGoal(ctx context.Context, request RuntimeControlRequest, action string) (err error) {
+func (h *Host) ControlRuntimeGoal(ctx context.Context, request turn.RuntimeControlRequest, action string) (err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
 	if action != "pause" && action != "clear" {
 		return apperror.New(apperror.CodeRuntimeControlRequestInvalid, nil)
 	}
-	_, driver, input, err := s.runtimeControlTarget(ctx, request)
+	_, driver, input, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return err
 	}
@@ -338,7 +331,7 @@ func (s *Service) ControlRuntimeGoal(ctx context.Context, request RuntimeControl
 	if !ok {
 		return external.ErrControlUnsupported
 	}
-	ctx, err = s.runtimeControlContext(ctx, request)
+	ctx, err = h.runtimeControlContext(ctx, request)
 	if err != nil {
 		return err
 	}

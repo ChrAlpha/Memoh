@@ -332,7 +332,7 @@ func (d *Driver) settleRun(
 		d.persist.LinkOutboundAssets(context.WithoutCancel(runCtx), spec.Req.BotID, spec.Req.ThreadID, runreq.OutboundAssetRefsToMessageRefs(reported))
 	}
 	spec.Delivery.Settle()
-	terminal := d.FinishRun(runCtx, spec.Run, fromEnd(end, failure))
+	terminal := d.Finish(runCtx, spec.Run, fromEnd(end, failure))
 	spec.Delivery.Ended(context.WithoutCancel(runCtx), RunEnded{
 		State:     terminal.State,
 		ErrorCode: terminal.ErrorCode,

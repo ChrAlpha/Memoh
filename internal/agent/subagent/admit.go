@@ -88,7 +88,7 @@ func (h *Host) Admit(
 				true,
 			)
 			defer release()
-			h.driver.FinishRun(runCtx, drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Subagent},
+			h.driver.Finish(runCtx, drive.AdmittedRun{Handle: admission.Handle, Mode: sessionmode.Subagent},
 				drive.FromOutcome(outcome.RunOutcome{Status: status, Cause: result.Cause}.Resolve(runCtx)))
 		})
 	}

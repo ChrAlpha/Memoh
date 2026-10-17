@@ -15,7 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -447,9 +447,9 @@ func (h *SessionHandler) ForkSession(c echo.Context) error {
 		override, forkErr := h.agentRuntimes.PrepareExternalFork(c.Request().Context(), bot.ID, sessionID, turnID)
 		if forkErr != nil {
 			switch {
-			case errors.Is(forkErr, application.ErrExternalForkUnsupported):
+			case errors.Is(forkErr, externalrun.ErrExternalForkUnsupported):
 				return echo.NewHTTPError(http.StatusConflict, "this session's runtime does not support forking")
-			case errors.Is(forkErr, application.ErrExternalForkAnchorMissing):
+			case errors.Is(forkErr, externalrun.ErrExternalForkAnchorMissing):
 				return echo.NewHTTPError(http.StatusConflict, "fork source turn has no runtime anchor")
 			default:
 				return forkErr
@@ -1028,7 +1028,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 				return apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
 			}
 			if session.IsDirectRuntime(result) {
-				if errors.Is(prefErr, application.ErrDirectModelUnavailable) {
+				if errors.Is(prefErr, externalrun.ErrDirectModelUnavailable) {
 					return apperror.New(apperror.CodeACPModelUnavailable, nil)
 				}
 				return apperror.Wrap(apperror.CodeACPOperationFailed, prefErr, nil)

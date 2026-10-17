@@ -1,4 +1,4 @@
-package application
+package title
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/providers"
 )
 
 // A title call the provider answers with a server error is made again.
@@ -30,7 +31,7 @@ func TestGenerateTitleRetriesServerError(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	svc := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
+	svc := New(Deps{Logger: slog.New(slog.DiscardHandler), Credentials: providers.NewService(nil, nil, "")})
 	provider := sqlc.Provider{ClientType: "openai-completions", Config: []byte(`{"base_url":"` + server.URL + `","api_key":"k"}`)}
 	title, err := svc.generateTitle(context.Background(), "user-1", models.GetResponse{ModelID: "m"}, provider, "help me plan a trip")
 	if err != nil {

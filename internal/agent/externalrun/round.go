@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -16,11 +16,11 @@ import (
 	"github.com/felinics/memoh/internal/db"
 )
 
-// persistExternalRound writes the one round an External Agent runtime produced.
+// persistRound writes the one round an External Agent runtime produced.
 // An external runtime reports a whole turn at once — there are no step commits —
 // so this round is the run's only history write, and its failure metadata is the
 // failure's code and args rather than a step's.
-func (s *Service) persistExternalRound(
+func (h *Host) persistRound(
 	ctx context.Context,
 	req runreq.ChatRequest,
 	runtimeType, projectPath string,
@@ -132,7 +132,7 @@ func (s *Service) persistExternalRound(
 		publication = &messagepkg.AgentPublication{RunID: req.RunID}
 	}
 	skipMemory := f != nil || req.UserMessagePersisted || req.ReusePersistedUserMessage || req.SkipMemoryExtraction
-	persisted, err := s.persist.StoreRoundResult(ctx, req, round, "", persist.RoundOptions{
+	persisted, err := h.persist.StoreRoundResult(ctx, req, round, "", persist.RoundOptions{
 		AllowPendingToolCalls:             true,
 		SkipMemory:                        skipMemory,
 		AllowEmptyAssistantText:           true,
@@ -153,10 +153,10 @@ func (s *Service) persistExternalRound(
 		err = errors.Join(db.ErrCommitOutcomeUnknown, errors.New("external assistant output was not persisted"))
 	}
 	if err == nil {
-		s.publishRuntimeSteerHistory(ctx, req, result.SteerInputIDs, persisted)
+		h.publishRuntimeSteerHistory(ctx, req, result.SteerInputIDs, persisted)
 	}
 	if err == nil && f == nil && (req.UserMessagePersisted || req.ReusePersistedUserMessage) && !req.SkipMemoryExtraction {
-		s.memory.RoundPersisted(context.WithoutCancel(ctx), req, persisted)
+		h.memory.RoundPersisted(context.WithoutCancel(ctx), req, persisted)
 	}
 	return err
 }

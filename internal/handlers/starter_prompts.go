@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/errs"
@@ -67,8 +68,8 @@ type StarterPromptsResponse struct {
 // @Failure 500 {object} server.Problem
 // @Router /bots/{bot_id}/starter-prompts [get].
 func (h *StarterPromptsHandler) Get(c echo.Context) error {
-	return h.respond(c, func(botID, userID string) application.StarterPromptsRequest {
-		return application.StarterPromptsRequest{
+	return h.respond(c, func(botID, userID string) title.StarterPromptsRequest {
+		return title.StarterPromptsRequest{
 			BotID:     botID,
 			UserID:    userID,
 			Locale:    c.QueryParam("locale"),
@@ -93,8 +94,8 @@ func (h *StarterPromptsHandler) Refresh(c echo.Context) error {
 	if err := c.Bind(&body); err != nil {
 		return apperror.FieldInvalid("body", err)
 	}
-	return h.respond(c, func(botID, userID string) application.StarterPromptsRequest {
-		return application.StarterPromptsRequest{
+	return h.respond(c, func(botID, userID string) title.StarterPromptsRequest {
+		return title.StarterPromptsRequest{
 			BotID:   botID,
 			UserID:  userID,
 			Locale:  body.Locale,
@@ -106,7 +107,7 @@ func (h *StarterPromptsHandler) Refresh(c echo.Context) error {
 
 // respond authorizes the caller to chat with the bot, runs the request the
 // build function makes for it, and writes the response.
-func (h *StarterPromptsHandler) respond(c echo.Context, build func(botID, userID string) application.StarterPromptsRequest) error {
+func (h *StarterPromptsHandler) respond(c echo.Context, build func(botID, userID string) title.StarterPromptsRequest) error {
 	userID, err := RequireChannelIdentityID(c)
 	if err != nil {
 		return err

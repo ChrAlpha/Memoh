@@ -1,9 +1,8 @@
-package application
+package externalrun
 
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
@@ -30,8 +29,8 @@ func TestRuntimeRoundPublishesOnlyCompletedRequestedHead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			messages := &agenttest.RecordingMessages{}
-			service := wireComponents(&Service{messageService: messages, logger: slog.New(slog.DiscardHandler)})
-			err := service.persistExternalRound(
+			service := testHost(t, Deps{Messages: messages})
+			err := service.persistRound(
 				context.Background(),
 				runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", RunID: "run-1", Query: "inspect"},
 				"codex", "/data/app",

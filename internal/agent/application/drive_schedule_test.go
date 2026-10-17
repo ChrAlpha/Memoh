@@ -8,8 +8,10 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -22,7 +24,7 @@ import (
 // for the terminal write.
 func scheduleLifecycleService(
 	t *testing.T,
-	pool acpPrompter,
+	pool acpagent.Prompter,
 	messages messagepkg.Service,
 	lifecycles lifecycle.Store,
 ) (*Service, *agenttest.LifecycleAdmitter) {
@@ -102,7 +104,7 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 	}
 	setup := service.scheduleSetup(spec, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1", SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
-	}, agenttest.LifecycleBotID, "", runtimeDispatch{kind: dispatchExternal, driver: driver})
+	}, agenttest.LifecycleBotID, "", externalrun.Dispatch{Kind: externalrun.DispatchExternal, Driver: driver})
 
 	plan, err := setup(context.Background(), spec.Req)
 	if err != nil {

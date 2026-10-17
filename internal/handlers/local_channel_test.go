@@ -626,7 +626,7 @@ type testRuntimeControlReader struct {
 	statuses map[string]external.Controls
 }
 
-func (r testRuntimeControlReader) RuntimeCommands(_ context.Context, request application.RuntimeControlRequest) ([]external.Command, error) {
+func (r testRuntimeControlReader) RuntimeCommands(_ context.Context, request turn.RuntimeControlRequest) ([]external.Command, error) {
 	return r.statuses[request.ThreadID].Commands, nil
 }
 
@@ -651,18 +651,18 @@ func TestClassifyWebSlashForSessionUsesLiveAgentAuthority(t *testing.T) {
 		}},
 	}
 	raw := `/review:deep   phase one --keep "a  b"`
-	advertised := handler.classifyWebSlashForSession(context.Background(), raw, true, application.RuntimeControlRequest{ThreadID: sessionID})
+	advertised := handler.classifyWebSlashForSession(context.Background(), raw, true, turn.RuntimeControlRequest{ThreadID: sessionID})
 	if advertised.Kind != slash.DecisionNormalChat || advertised.Invocation == nil || advertised.Invocation.RawText != raw {
 		t.Fatalf("advertised decision = %#v, want unchanged Agent prompt", advertised)
 	}
-	unknown := handler.classifyWebSlashForSession(context.Background(), "/Review:deep", false, application.RuntimeControlRequest{ThreadID: sessionID})
+	unknown := handler.classifyWebSlashForSession(context.Background(), "/Review:deep", false, turn.RuntimeControlRequest{ThreadID: sessionID})
 	if unknown.Kind != slash.DecisionUnknownSlash || unknown.Code != slash.CodeUnknownSlash {
 		t.Fatalf("unadvertised decision = %#v, want stable unknown slash", unknown)
 	}
 	// The classifier's path/URL prose carve-out survives in ACP sessions:
 	// text whose head token contains a "/" is chat for the agent, not an
 	// unknown-slash error.
-	prose := handler.classifyWebSlashForSession(context.Background(), "/etc/hosts what does this line mean", false, application.RuntimeControlRequest{ThreadID: sessionID})
+	prose := handler.classifyWebSlashForSession(context.Background(), "/etc/hosts what does this line mean", false, turn.RuntimeControlRequest{ThreadID: sessionID})
 	if prose.Kind != slash.DecisionNormalChat {
 		t.Fatalf("path prose decision = %#v, want normal chat", prose)
 	}
@@ -1739,13 +1739,13 @@ func TestWebQueueSlashClassification(t *testing.T) {
 			h.runtimeControls = testRuntimeControlReader{statuses: map[string]external.Controls{
 				sessionID: liveACPCommandStatus(sessionID, selector),
 			}}
-			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, application.RuntimeControlRequest{ThreadID: sessionID}); decision.AgentCommand != selector {
+			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, turn.RuntimeControlRequest{ThreadID: sessionID}); decision.AgentCommand != selector {
 				t.Fatalf("live ACP authority lost: %#v", decision)
 			}
 			h.runtimeControls = testRuntimeControlReader{statuses: map[string]external.Controls{
 				sessionID: liveACPCommandStatus(sessionID, "other"),
 			}}
-			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, application.RuntimeControlRequest{ThreadID: sessionID}); decision.Kind != slash.DecisionCommandAction {
+			if decision := h.classifyWebSlashForSession(context.Background(), "/"+selector+" args", false, turn.RuntimeControlRequest{ThreadID: sessionID}); decision.Kind != slash.DecisionCommandAction {
 				t.Fatalf("unclaimed queue command misclassified as skill: %#v", decision)
 			}
 		})

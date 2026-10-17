@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -80,16 +78,6 @@ func TestRuntimeControlErrorKeepsExistingCode(t *testing.T) {
 	}
 }
 
-func TestPublicRuntimeControlErrorKeepsExternalAgentCodesAndTeamRouting(t *testing.T) {
-	missing := fmt.Errorf("resolve: %w", acpagent.ErrAgentNotFound)
-	if got := publicRuntimeControlError(missing); apperror.CodeOf(got) != apperror.CodeACPAgentNotFound {
-		t.Fatalf("unknown agent = %v (code %q), want %q", got, apperror.CodeOf(got), apperror.CodeACPAgentNotFound)
-	}
-	if got := publicRuntimeControlError(turn.ErrTeamNotServed); !errors.Is(got, turn.ErrTeamNotServed) {
-		t.Fatalf("team routing sentinel was translated: %v", got)
-	}
-}
-
 func TestSentinelIdentities(t *testing.T) {
 	if !errors.Is(sessionruntime.ErrSessionBusy, ledger.ErrSessionBusy) {
 		t.Fatal("session runtime busy must stay an alias of the ledger value")
@@ -100,28 +88,5 @@ func TestSentinelIdentities(t *testing.T) {
 	if errors.Is(sessionruntime.ErrHistoryResetInProgress, ledger.ErrHistoryResetInProgress) ||
 		errors.Is(ledger.ErrHistoryResetInProgress, sessionruntime.ErrHistoryResetInProgress) {
 		t.Fatal("history reset sentinels must stay two values")
-	}
-}
-
-func TestRuntimeControlReportsBusySessionAsTurnBusy(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		prepare func(*agenttest.ScriptedAdmitter)
-	}{
-		{"admission error", func(a *agenttest.ScriptedAdmitter) { a.AdmitErr = sessionruntime.ErrSessionBusy }},
-		{"not started", func(a *agenttest.ScriptedAdmitter) { a.Started = false }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			svc, _, driver, admitter, req := runtimeControlFixture(t)
-			tc.prepare(admitter)
-			req.Command = "shrink"
-			_, err := svc.ExecuteRuntimeCommand(t.Context(), req)
-			if got := apperror.CodeOf(err); got != apperror.CodeSessionBusy {
-				t.Fatalf("code = %q (%v), want %q", got, err, apperror.CodeSessionBusy)
-			}
-			if driver.compactCalls != 0 {
-				t.Fatal("busy session dispatched the command")
-			}
-		})
 	}
 }

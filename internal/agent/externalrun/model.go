@@ -1,4 +1,4 @@
-package application
+package externalrun
 
 import (
 	"context"
@@ -22,13 +22,13 @@ import (
 // the Agent's configured model and effort, then the catalog default: the
 // chain the Web composer displays. Runtimes that do not choose a model per
 // session report Supported=false.
-func (s *Service) RuntimeModel(ctx context.Context, request RuntimeControlRequest) (out turn.RuntimeModelState, err error) {
+func (h *Host) RuntimeModel(ctx context.Context, request turn.RuntimeControlRequest) (out turn.RuntimeModelState, err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
-	sess, _, _, err := s.runtimeControlTarget(ctx, request)
+	sess, _, _, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return out, err
 	}
-	state, _, err := s.runtimeModelState(ctx, sess)
+	state, _, err := h.runtimeModelState(ctx, sess)
 	return state, err
 }
 
@@ -37,13 +37,13 @@ func (s *Service) RuntimeModel(ctx context.Context, request RuntimeControlReques
 // on a session still following its default pins that default together with
 // the effort, as the Web picker does. Picking a model without an effort takes
 // that model's default effort rather than carrying the previous model's.
-func (s *Service) SetRuntimeModel(ctx context.Context, request RuntimeControlRequest) (out turn.RuntimeModelState, err error) {
+func (h *Host) SetRuntimeModel(ctx context.Context, request turn.RuntimeControlRequest) (out turn.RuntimeModelState, err error) {
 	defer func() { err = publicRuntimeControlError(err) }()
-	sess, _, _, err := s.runtimeControlTarget(ctx, request)
+	sess, _, _, err := h.runtimeControlTarget(ctx, request)
 	if err != nil {
 		return out, err
 	}
-	state, catalog, err := s.runtimeModelState(ctx, sess)
+	state, catalog, err := h.runtimeModelState(ctx, sess)
 	if err != nil || !state.Supported {
 		if err == nil {
 			err = external.ErrControlUnsupported
@@ -57,14 +57,14 @@ func (s *Service) SetRuntimeModel(ctx context.Context, request RuntimeControlReq
 			effort = state.ReasoningEffort
 		}
 	}
-	modelID, effort, err = reconcileDirectPair(catalog, modelID, effort)
+	modelID, effort, err = reconcilePair(catalog, modelID, effort)
 	if err != nil {
 		return out, apperror.Wrap(apperror.CodeACPModelUnavailable, err, nil)
 	}
 	if requested := strings.TrimSpace(request.ReasoningEffort); requested != "" && requested != effort {
 		return out, apperror.New(apperror.CodeACPReasoningUnavailable, nil)
 	}
-	err = s.runconfig.CompareAndSetPreference(ctx, db.ParseUUIDOrEmpty(sess.ID), sess.RuntimeType, pgtype.UUID{},
+	err = h.runconfig.CompareAndSetPreference(ctx, db.ParseUUIDOrEmpty(sess.ID), sess.RuntimeType, pgtype.UUID{},
 		pgtype.Text{String: modelID, Valid: modelID != ""}, effort, sess.ModelPreferenceRevision)
 	if errors.Is(err, runconfig.ErrModelPreferenceConflict) {
 		return out, apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
@@ -78,12 +78,12 @@ func (s *Service) SetRuntimeModel(ctx context.Context, request RuntimeControlReq
 
 // runtimeModelState reads the session's catalog once; the catalog is returned
 // so a write can reconcile against the same snapshot the user was shown.
-func (s *Service) runtimeModelState(ctx context.Context, sess session.Thread) (turn.RuntimeModelState, external.ModelCatalog, error) {
+func (h *Host) runtimeModelState(ctx context.Context, sess session.Thread) (turn.RuntimeModelState, external.ModelCatalog, error) {
 	out := turn.RuntimeModelState{Models: []turn.RuntimeModelOption{}}
 	if !session.IsDirectRuntime(sess) {
 		return out, external.ModelCatalog{}, nil
 	}
-	provider, ok := s.externalDrivers[sess.RuntimeType].(external.ModelCatalogProvider)
+	provider, ok := h.drivers[sess.RuntimeType].(external.ModelCatalogProvider)
 	if !ok {
 		return out, external.ModelCatalog{}, external.ErrModelCatalogUnavailable
 	}
@@ -119,7 +119,7 @@ func (s *Service) runtimeModelState(ctx context.Context, sess session.Thread) (t
 	}
 	// The driver applies the Agent's configured pair when a turn carries
 	// none, so that is what an unremembered session runs with.
-	defaultID, _, _ := reconcileDirectPair(catalog, "", "")
+	defaultID, _, _ := reconcilePair(catalog, "", "")
 	out.ModelID = catalogModelID(catalog, defaultID)
 	out.ReasoningEffort = strings.TrimSpace(catalog.ConfiguredReasoningEffort)
 	if model, ok := out.Model(); ok && (out.ReasoningEffort == "" || !slices.Contains(model.ReasoningEfforts, out.ReasoningEffort)) {

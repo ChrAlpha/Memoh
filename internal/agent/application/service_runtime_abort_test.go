@@ -12,24 +12,12 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 type recordingAbortRuntime struct {
 	applied bool
 	err     error
-}
-
-func TestSetSessionRuntimeConfiguresAbortRuntime(t *testing.T) {
-	manager := &sessionruntime.Manager{}
-	service := wireComponents(&Service{})
-
-	bindRuntime(service, manager)
-
-	if service.abortRuntime != manager {
-		t.Fatalf("abort runtime = %T, want injected session manager", service.abortRuntime)
-	}
 }
 
 func (r *recordingAbortRuntime) AbortControl(
@@ -203,7 +191,7 @@ func waitForLifecycleFailureCount(t *testing.T, service *Service, want uint64) {
 }
 
 func newAbortService(queries *agenttest.AbortedLifecycleQueries) *Service {
-	service := wireComponents(&Service{queries: queries, abortRuntime: &recordingAbortRuntime{applied: true}})
+	service := useAbortRuntime(wireComponents(&Service{queries: queries}), &recordingAbortRuntime{applied: true})
 	useLifecycleStore(service, queries)
 	return service
 }

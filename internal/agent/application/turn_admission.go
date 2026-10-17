@@ -14,7 +14,6 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 	s.sessionRuntime = manager
 	s.sessionManager = manager
 	s.decisionRuntime = manager
-	s.abortRuntime = manager
 	manager.SetDecisionStore(s.decider)
 	manager.SetLostRunDecisionCanceller(s.decider.CancelLostRunDecisions)
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)

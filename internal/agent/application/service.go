@@ -9,7 +9,6 @@ import (
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"golang.org/x/sync/singleflight"
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
@@ -22,6 +21,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -31,6 +31,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/subagent"
+	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -44,35 +45,35 @@ import (
 
 // Service orchestrates chat with the internal agent.
 type Service struct {
-	activeTurns          runreq.ActiveTurnTracker
-	activePrompts        *activeprompt.Registry
-	botenv               *botenv.Env
-	transcript           *transcript.Reader
-	lifecycle            *lifecycle.Recorder
-	persist              *persist.Writer
-	driver               *drive.Driver
-	admit                *admit.Admitter
-	signer               *admit.Signer
-	runconfig            *runconfig.Builder
-	subagent             *subagent.Host
-	teamScopes           runreq.TeamScopes
-	resumeReady          func(context.Context, string, string) error
-	resumeStop           context.CancelFunc
-	resumeDone           chan struct{}
-	agent                *native.Agent
-	modelsService        *models.Service
-	queries              dbstore.Queries
-	messageService       messagepkg.Service
-	settingsService      *settings.Service
-	accountService       *accounts.Service
-	sessionService       runreq.SessionService
-	externalDrivers      map[string]external.Driver
-	eventPublisher       messageevent.Publisher
-	botPermissions       runreq.BotPermissionChecker
-	decider              *decide.Decider
-	memory               *memory.Keeper
-	compact              *compact.Compactor
-	starterPromptFlights singleflight.Group
+	activeTurns     runreq.ActiveTurnTracker
+	activePrompts   *activeprompt.Registry
+	botenv          *botenv.Env
+	transcript      *transcript.Reader
+	lifecycle       *lifecycle.Recorder
+	persist         *persist.Writer
+	driver          *drive.Driver
+	admit           *admit.Admitter
+	signer          *admit.Signer
+	runconfig       *runconfig.Builder
+	subagent        *subagent.Host
+	externalrun     *externalrun.Host
+	title           *title.Generator
+	teamScopes      runreq.TeamScopes
+	resumeReady     func(context.Context, string, string) error
+	resumeStop      context.CancelFunc
+	resumeDone      chan struct{}
+	agent           *native.Agent
+	modelsService   *models.Service
+	queries         dbstore.Queries
+	messageService  messagepkg.Service
+	settingsService *settings.Service
+	accountService  *accounts.Service
+	sessionService  runreq.SessionService
+	eventPublisher  messageevent.Publisher
+	botPermissions  runreq.BotPermissionChecker
+	decider         *decide.Decider
+	memory          *memory.Keeper
+	compact         *compact.Compactor
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn func(ctx context.Context, req userinput.Request, input decide.UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error)
@@ -80,7 +81,6 @@ type Service struct {
 	allowedTeam         string
 	sessionRuntime      runreq.TurnAdmitter
 	decisionRuntime     *sessionruntime.Manager
-	abortRuntime        runtimeAbortController
 	sessionManager      *sessionruntime.Manager
 	// queue is the durable queue of input that met a busy session. It is nil
 	// where the deployment has no database, and then nothing queues.
@@ -232,7 +232,6 @@ func New(d Deps) (*Service, error) {
 		sessionService:  d.Sessions,
 		botPermissions:  d.BotPermissions,
 		eventPublisher:  d.Events,
-		externalDrivers: externalDriverMap(d.ExternalRuntimes...),
 		resumeReady:     d.ResumeReadiness,
 		teamScopes:      teamScopes,
 		allowedTeam:     d.AllowedTeam,
@@ -353,6 +352,35 @@ func New(d Deps) (*Service, error) {
 		ActiveTurns: &service.activeTurns,
 		Events:      d.SessionRuntime,
 		Steps:       steps,
+	})
+	service.externalrun = externalrun.New(externalrun.Deps{
+		Logger:         d.Logger.With(slog.String("service", "agent/externalrun")),
+		Store:          d.Queries,
+		Sessions:       d.Sessions,
+		Messages:       d.Messages,
+		BotPermissions: d.BotPermissions,
+		Admitter:       d.SessionRuntime,
+		Aborter:        d.SessionRuntime,
+		Runtime:        d.SessionRuntime,
+		Persist:        service.persist,
+		Memory:         service.memory,
+		Runconfig:      service.runconfig,
+		Decider:        service.decider,
+		ActivePrompts:  service.activePrompts,
+		Driver:         service.driver,
+		Lifecycle:      service.lifecycle,
+		Drivers:        d.ExternalRuntimes,
+		AllowedTeam:    d.AllowedTeam,
+	})
+	service.title = title.New(title.Deps{
+		Logger:      d.Logger.With(slog.String("service", "agent/title")),
+		Store:       d.Queries,
+		Sessions:    d.Sessions,
+		Accounts:    d.Accounts,
+		Models:      service.runconfig,
+		Memory:      service.memory,
+		Credentials: providers.NewService(nil, d.Queries, ""),
+		Events:      d.Events,
 	})
 	service.bindSessionRuntime(d.SessionRuntime)
 	return service, nil

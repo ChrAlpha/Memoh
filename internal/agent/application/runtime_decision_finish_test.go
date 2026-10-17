@@ -56,7 +56,7 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 				RuntimeFencingToken: pgtype.Int8{Int64: handle.FencingToken, Valid: true},
 			}}
 			input := &finishingInputService{q: q, wantFence: handle.FencingToken, t: t}
-			service := useDecisions(wireComponents(&Service{queries: q, decisionRuntime: manager, abortRuntime: manager, allowedTeam: "team-1"}), func(d *decide.Deps) { d.UserInput = input })
+			service := useAbortRuntime(useDecisions(wireComponents(&Service{queries: q, decisionRuntime: manager, allowedTeam: "team-1"}), func(d *decide.Deps) { d.UserInput = input }), manager)
 			manager.SetDecisionFinalizer(service.decider.FinalizeRuntimeDecisions)
 			manager.SetCommandHandler(func(context.Context, sessionruntime.Command) error {
 				t.Error("stop must not resume the model")

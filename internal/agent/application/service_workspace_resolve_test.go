@@ -11,21 +11,7 @@ import (
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/schedule"
 	"github.com/felinics/memoh/internal/workdir"
-	"github.com/felinics/memoh/internal/workspace"
 )
-
-func TestRuntimeControlContextPinsWorkdirTargetWithoutPrincipal(t *testing.T) {
-	perm := &agenttest.CountingPermission{}
-	service := workdirBoundService(agenttest.RemoteWorkdir(), agenttest.KindedTargetResolver{}, perm)
-
-	ctx, err := service.runtimeControlContext(t.Context(), RuntimeControlRequest{BotID: "bot-1", ThreadID: "s1"})
-	if err != nil {
-		t.Fatalf("runtimeControlContext: %v", err)
-	}
-	if got := workspace.WorkspaceTargetFromContext(ctx); got != "computer-b" || perm.Calls != 0 {
-		t.Fatalf("context target = %q, permission calls = %d", got, perm.Calls)
-	}
-}
 
 // The native schedule entry resolves the workspace itself, ahead of resolve,
 // so a bound target that cannot be reached fails the fire instead of running

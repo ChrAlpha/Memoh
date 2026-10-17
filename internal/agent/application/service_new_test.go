@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -31,6 +33,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/subagent"
+	"github.com/felinics/memoh/internal/agent/title"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -159,17 +162,41 @@ func newTestService(t *testing.T, d Deps) *Service {
 	return service
 }
 
-// registerExternalDrivers adds drivers to a Service built from a literal.
-func registerExternalDrivers(s *Service, drivers ...external.Driver) {
-	if s.externalDrivers == nil {
-		s.externalDrivers = map[string]external.Driver{}
-	}
-	for k, v := range externalDriverMap(drivers...) {
-		s.externalDrivers[k] = v
-	}
+// externalDrivers are the drivers a test registered on a Service built from a
+// literal. They outlive a rewire, which rebuilds the external run host.
+var externalDrivers sync.Map // *Service -> []external.Driver
+
+// abortRuntimes are the abort acknowledgements a test replaced on a Service.
+var abortRuntimes sync.Map // *Service -> externalrun.Aborter
+
+// useAbortRuntime makes aborter acknowledge the aborts of a built service.
+func useAbortRuntime(s *Service, aborter externalrun.Aborter) *Service {
+	abortRuntimes.Store(s, aborter)
+	s.externalrun = externalOf(s)
+	return s
 }
 
-func registerACPPool(s *Service, pool acpPrompter) {
+// externalDriver is the driver a test registered for runtimeType.
+func externalDriver(s *Service, runtimeType string) external.Driver {
+	drivers, _ := externalDrivers.Load(s)
+	var found external.Driver
+	for _, driver := range drivers.([]external.Driver) {
+		if driver.RuntimeType() == runtimeType {
+			found = driver
+		}
+	}
+	return found
+}
+
+// registerExternalDrivers adds drivers to a Service built from a literal.
+func registerExternalDrivers(s *Service, drivers ...external.Driver) {
+	previous, _ := externalDrivers.Load(s)
+	had, _ := previous.([]external.Driver)
+	externalDrivers.Store(s, append(slices.Clone(had), drivers...))
+	s.externalrun = externalOf(s)
+}
+
+func registerACPPool(s *Service, pool acpagent.Prompter) {
 	registerExternalDrivers(s, acpagent.NewDriver(pool))
 }
 
@@ -250,8 +277,8 @@ func TestNewCarriesConfigurationAndRuntime(t *testing.T) {
 		t.Fatalf("configuration not carried: team=%q budget=%d", service.allowedTeam, service.transcript.AbsoluteMaxTokens())
 	}
 	if service.sessionManager != d.SessionRuntime || service.decisionRuntime != d.SessionRuntime ||
-		service.abortRuntime != runtimeAbortController(d.SessionRuntime) || service.sessionRuntime != runreq.TurnAdmitter(d.SessionRuntime) {
-		t.Fatal("session runtime must back all four runtime fields")
+		service.sessionRuntime != runreq.TurnAdmitter(d.SessionRuntime) {
+		t.Fatal("session runtime must back all three runtime fields")
 	}
 }
 
@@ -361,6 +388,7 @@ func TestTerminalFanoutRunsInOrder(t *testing.T) {
 func setAllowedTeam(s *Service, teamID string) {
 	s.allowedTeam = teamID
 	s.teamScopes = runreq.SingleTeam(teamID)
+	s.externalrun = externalOf(s)
 }
 
 // useLifecycleStore routes the lifecycle rows of an already built service to
@@ -413,6 +441,12 @@ func wireComponents(s *Service) *Service {
 	if s.subagent == nil {
 		s.subagent = subagentOf(s)
 	}
+	if s.externalrun == nil {
+		s.externalrun = externalOf(s)
+	}
+	if s.title == nil {
+		s.title = titleOf(s)
+	}
 	return s
 }
 
@@ -454,6 +488,8 @@ var (
 func useRunconfig(s *Service, adjust func(*runconfig.Deps)) *Service {
 	runconfigAdjustments.Store(s, adjust)
 	s.runconfig = runconfigOf(s)
+	s.externalrun = externalOf(s)
+	s.title = titleOf(s)
 	return s
 }
 
@@ -464,6 +500,7 @@ func useDecisions(s *Service, adjust func(*decide.Deps)) *Service {
 	s.decider = decideOf(s)
 	rebindDecisions(s)
 	s.runconfig = runconfigOf(s)
+	s.externalrun = externalOf(s)
 	return s
 }
 
@@ -499,6 +536,8 @@ func rewireRun(s *Service) {
 	s.persist = persistOf(s)
 	s.driver = drive.New(driveDepsOf(s))
 	s.subagent = subagentOf(s)
+	s.externalrun = externalOf(s)
+	s.title = titleOf(s)
 }
 
 // driverAdjustments are the dependency overrides a test named for a service's
@@ -524,6 +563,7 @@ func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
 	s.admit = admitOf(s)
 	s.driver = drive.New(driveDepsOf(s))
 	s.subagent = subagentOf(s)
+	s.externalrun = externalOf(s)
 }
 
 // bindRuntime is bindSessionRuntime for a Service built from a literal: the
@@ -541,6 +581,7 @@ func bindRuntime(s *Service, manager *sessionruntime.Manager) {
 		driverAdjustments.Store(s, adjustments)
 	}
 	rebuildDriver(s, "events", func(d *drive.Deps) { d.Events = manager })
+	s.externalrun = externalOf(s)
 }
 
 func persistOf(s *Service) *persist.Writer {
@@ -650,6 +691,46 @@ func subagentOf(s *Service) *subagent.Host {
 	return subagent.New(d)
 }
 
+func externalOf(s *Service) *externalrun.Host {
+	d := externalrun.Deps{
+		Logger: s.logger, Store: s.queries, Sessions: s.sessionService, Messages: s.messageService,
+		BotPermissions: s.botPermissions, Persist: s.persist, Memory: s.memory, Runconfig: s.runconfig,
+		Decider: s.decider, ActivePrompts: s.activePrompts, Driver: s.driver, Lifecycle: s.lifecycle,
+		AllowedTeam: s.allowedTeam,
+	}
+	if s.sessionRuntime != nil {
+		d.Admitter = s.sessionRuntime
+	}
+	if s.sessionManager != nil {
+		d.Runtime = s.sessionManager
+		d.Aborter = s.sessionManager
+	}
+	if aborter, ok := abortRuntimes.Load(s); ok {
+		d.Aborter = aborter.(externalrun.Aborter)
+	}
+	if drivers, ok := externalDrivers.Load(s); ok {
+		d.Drivers = drivers.([]external.Driver)
+	}
+	return externalrun.New(d)
+}
+
+func titleOf(s *Service) *title.Generator {
+	d := title.Deps{
+		Logger: s.logger, Credentials: providers.NewService(nil, s.queries, ""), Models: s.runconfig,
+		Memory: s.memory, Events: s.eventPublisher,
+	}
+	if s.queries != nil {
+		d.Store = s.queries
+	}
+	if s.sessionService != nil {
+		d.Sessions = s.sessionService
+	}
+	if s.accountService != nil {
+		d.Accounts = s.accountService
+	}
+	return title.New(d)
+}
+
 func admitOf(s *Service) *admit.Admitter {
 	return admit.New(admit.Deps{Runtime: s.sessionRuntime, Queries: s.queries, Signer: s.signer})
 }
@@ -669,4 +750,14 @@ func newModelSelectionService(t *testing.T, fake *agenttest.ModelQueries) *Servi
 		modelsService: models.NewService(slog.New(slog.DiscardHandler), fake),
 		queries:       fake,
 	})
+}
+
+// titleModelAccountStore answers the account lookup with one fixed record.
+type titleModelAccountStore struct {
+	dbstore.AccountStore
+	account dbstore.AccountRecord
+}
+
+func (s titleModelAccountStore) GetByUserID(context.Context, string) (dbstore.AccountRecord, error) {
+	return s.account, nil
 }
