@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -362,5 +363,27 @@ func TestExternalDiscussOriginalPressureUsesFinalHistoryAllowance(t *testing.T) 
 	_, err := service.prepareExternalDiscussContext(t.Context(), req, strings.Repeat("m", 2800), 0)
 	if !errors.Is(err, native.ErrContextRecompose) || len(runner.configs) != 1 {
 		t.Fatalf("ignored final fixed overhead: err=%v calls=%d", err, len(runner.configs))
+	}
+}
+
+// A context that compaction could have made fit is not reported as oversized
+// input when the compaction fails.
+func TestExternalDiscussFailedRecoveryReportsBudgetUnsatisfied(t *testing.T) {
+	service, _ := newControllerPolicyService(t, nil)
+	runner := &recoveryCompactionRunner{run: func() (compaction.Result, error) {
+		return compaction.Result{}, errors.New("summarizer down")
+	}}
+	service.compactionService = runner
+	service.SetContextAbsoluteMaxTokens(1000)
+	service.SetSyncCompactionMode("shadow")
+	_, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{
+		BotID: syncCompactBotID, ThreadID: syncCompactThreadID,
+		discussMessages: []turn.DiscussMessage{
+			{Role: "user", Content: strings.Repeat("s", 3000), CompactionArtifactID: "summary"},
+			{Role: "user", Content: strings.Repeat("c", 1400), Source: &turn.ContextMessageSource{Kind: "external", ID: "current", Current: true}},
+		},
+	}, "", 0)
+	if apperror.CodeOf(err) != apperror.CodeContextBudgetUnsatisfied || len(runner.configs) != 1 {
+		t.Fatalf("failed recovery: err=%v compactions=%d, want budget_unsatisfied after one attempt", err, len(runner.configs))
 	}
 }

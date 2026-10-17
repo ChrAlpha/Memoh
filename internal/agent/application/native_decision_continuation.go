@@ -41,6 +41,7 @@ func (s *Service) runNativeDecisionContinuation(ctx context.Context, req ChatReq
 	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
 	idleCtx, idleCancel := s.withStreamIdleTimeout(ctx, reasoningEffortForIdle(cfg))
 	defer idleCancel.Stop()
+	cfg = pauseIdleDuringBudgetRecovery(cfg, idleCancel)
 	stream := s.agent.Stream(idleCtx, cfg)
 	stored := false
 	failureEventForwarded := false

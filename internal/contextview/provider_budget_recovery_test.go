@@ -3,6 +3,7 @@ package contextview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,17 +77,26 @@ func TestProviderBudgetRecoveryCanCompactBeforeHistoryIsDropped(t *testing.T) {
 }
 
 func TestProviderBudgetRecoveryCannotBypassAdmission(t *testing.T) {
-	for _, recovered := range []bool{false, true} {
-		t.Run(map[bool]string{false: "no compaction", true: "still oversized"}[recovered], func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		recovered bool
+		err       error
+		want      error
+	}{
+		{name: "declined", want: contextfrag.ErrProtectedContextOverflow},
+		{name: "still oversized", recovered: true, want: contextfrag.ErrBudgetUnsatisfied},
+		{name: "compaction failed", err: fmt.Errorf("%w: summarizer down", contextfrag.ErrBudgetUnsatisfied), want: contextfrag.ErrBudgetUnsatisfied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			cfg := recoveryBudgetFixture()
 			calls := 0
 			cfg.RecoverContextBudget = func(_ context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 				calls++
-				return cfg, recovered, nil
+				return cfg, tc.recovered, tc.err
 			}
 			got, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-			if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) || calls != 1 {
-				t.Fatalf("recovery calls=%d error=%v", calls, err)
+			if !errors.Is(err, tc.want) || calls != 1 || (errors.Is(tc.want, contextfrag.ErrBudgetUnsatisfied) && errors.Is(err, contextfrag.ErrProtectedContextOverflow)) {
+				t.Fatalf("recovery calls=%d error=%v, want %v", calls, err, tc.want)
 			}
 			found := false
 			for _, mutation := range got.ContextMutations.Records() {
