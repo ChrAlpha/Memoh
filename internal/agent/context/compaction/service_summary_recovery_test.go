@@ -197,6 +197,14 @@ func TestSummaryRecoveryProtectsCurrentSourcesAndCountsThemOnce(t *testing.T) {
 	if len(q.markedIDs) != 2 {
 		t.Fatalf("old history failed to progress: claims=%v", q.markedIDs)
 	}
+
+	for i := range cfg.ProtectedSources {
+		cfg.ProtectedSources[i].Current = false
+	}
+	stub.calls = 0
+	if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(t.Context(), cfg); !errors.Is(err, errNoSummaryRoom) || stub.calls != 0 {
+		t.Fatalf("err=%v calls=%d, want protected history inside the budget to leave no summary room", err, stub.calls)
+	}
 }
 
 type protectedTruncatedQueries struct{ *fakeQueries }
